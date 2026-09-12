@@ -4,6 +4,7 @@
 #   2. fill empty CLIPROXY_API_KEY / CLIPROXY_MANAGEMENT_KEY with random values
 #   3. render data/cliproxyapi/config.yaml from docker/cliproxyapi/config.example.yaml
 #   4. clone/fast-forward the claude-max-api-proxy sources used to build its image
+#   5. create the bind-mount directories the proxies write to
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,6 +39,16 @@ proxy_dir="${proxy_dir:-./vendor/claude-max-api-proxy}"
 CLAUDE_MAX_PROXY_REPO="$(env_file_get CLAUDE_MAX_PROXY_REPO .env || true)" \
 CLAUDE_MAX_PROXY_REF="$(env_file_get CLAUDE_MAX_PROXY_REF .env || true)" \
   bash docker/claude-max-proxy/sync-checkout.sh "$proxy_dir"
+
+# claude-max-proxy runs as PUID:PGID with these directories as its home and
+# data. Creating them here (as the host user) keeps Docker from creating them
+# root-owned on first start. Same for the gh/git mounts under $HOME.
+mkdir -p data/claude-max-proxy/home/.config data/claude-max-proxy/data
+mkdir -p "$HOME/.config/gh"
+[[ -f "$HOME/.gitconfig" ]] || touch "$HOME/.gitconfig"
+if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
+  warn "gh is not logged in on this host; the coding worker cannot push or open PRs until you run: gh auth login"
+fi
 
 if ! command -v docker >/dev/null 2>&1; then
   warn "docker not found. Install Docker Engine + Compose plugin: https://docs.docker.com/engine/install/"

@@ -33,7 +33,7 @@ cd /opt/agent-ops-kit
 make init                 # 1. .env with generated secrets, proxy config, proxy sources
 make up                   # 2. start Honcho, Ollama, CLIProxyAPI, claude-max-proxy
 make auth-codex           # 3. sign in with the ChatGPT account (device code)
-make auth-claude-proxy    # 4. sign in with the Claude Max account, paste the token into .env
+make auth-claude-proxy    # 4. sign in with the Claude Max account (token is stored in .env)
 $EDITOR .env              # 5. DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS, DISCORD_HOME_CHANNEL
 make hermes-install       # 6. install Hermes, render its config, start the Discord gateway
 make doctor               #    everything green?
@@ -44,9 +44,10 @@ Then `@mention` the bot in Discord, or run `hermes chat` in a terminal.
 ## What each step does
 
 **`make init`** copies `.env.example` to `.env` (mode 600), fills
-`CLIPROXY_API_KEY` and `CLIPROXY_MANAGEMENT_KEY` with random values, renders
-`data/cliproxyapi/config.yaml`, and clones `claude-max-api-proxy` into
-`vendor/` so its image can be built. Safe to re-run.
+`CLIPROXY_API_KEY` and `CLIPROXY_MANAGEMENT_KEY` with random values and
+`PUID`/`PGID` with your uid/gid, renders `data/cliproxyapi/config.yaml`,
+clones `claude-max-api-proxy` into `vendor/` so its image can be built, and
+creates the `data/` directories the containers write to. Safe to re-run.
 
 **`make up`** runs `docker compose up -d --build`. First start pulls the
 Honcho, pgvector, Redis, Ollama and CLIProxyAPI images, builds the Claude proxy
@@ -57,10 +58,12 @@ for that, so the first `make up` takes a few minutes. Watch with `make logs`.
 prints, sign in with the ChatGPT account, and the OAuth state is saved under
 `data/cliproxyapi/auths/`. `make models` should now list GPT models.
 
-**`make auth-claude-proxy`** runs `claude setup-token` inside the proxy
-container. Sign in with the Claude Max account, copy the printed
-`sk-ant-oat01-...` token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, then
-`make restart S=claude-max-proxy`. The token lasts about a year.
+**`make auth-claude-proxy`** runs `claude setup-token` in a one-off proxy
+container. Sign in with the Claude Max account, paste the printed
+`sk-ant-oat01-...` token when asked, and the script stores it in `.env` as
+`CLAUDE_CODE_OAUTH_TOKEN`, recreates the service and waits for it to answer.
+Until then the container idles rather than serving. The token lasts about a
+year.
 
 **`make hermes-install`** runs the official Hermes installer if `hermes` is
 missing, then writes `~/.hermes/config.yaml`, `~/.hermes/.env`,

@@ -30,7 +30,7 @@ cd /opt/agent-ops-kit
 make init                 # .env with secrets, proxy config, proxy sources
 make up                   # Honcho + Ollama + CLIProxyAPI + claude-max-proxy
 make auth-codex           # sign in with the ChatGPT account
-make auth-claude-proxy    # sign in with the Claude Max account, paste token into .env
+make auth-claude-proxy    # sign in with the Claude Max account (token stored in .env)
 $EDITOR .env              # DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS, DISCORD_HOME_CHANNEL
 make hermes-install       # install Hermes, wire it up, start the Discord gateway
 make doctor

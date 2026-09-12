@@ -30,6 +30,8 @@ init: ## Create .env with generated secrets, render proxy config, sync proxy sou
 up: init ## Start (or update) the Docker stack
 	@$(COMPOSE) up -d --build --remove-orphans
 	@echo; echo "Stack is starting. Next: make auth-codex, make auth-claude-proxy, make doctor"
+	@test -n "$(call envval,CLAUDE_CODE_OAUTH_TOKEN)" || \
+	  echo "note: claude-max-proxy idles until you run make auth-claude-proxy"
 
 down: ## Stop the Docker stack (data volumes are kept)
 	@$(COMPOSE) down
@@ -60,11 +62,8 @@ auth-codex: ## Log the ChatGPT/Codex subscription into CLIProxyAPI (device code 
 	@$(COMPOSE) restart cliproxyapi
 	@echo "Verify with: make models"
 
-auth-claude-proxy: ## Generate the long-lived Claude Max token for claude-max-proxy
-	@echo "A login URL will appear. Sign in with your Claude Max account and paste the code back."
-	@echo "Then put the printed sk-ant-oat01-... token into .env as CLAUDE_CODE_OAUTH_TOKEN"
-	@echo "and run: make restart S=claude-max-proxy"
-	@$(COMPOSE) exec -it claude-max-proxy claude setup-token
+auth-claude-proxy: ## Log the Claude Max subscription into claude-max-proxy (stores the token in .env)
+	@COMPOSE="$(COMPOSE)" bash scripts/auth-claude-proxy.sh
 
 models: ## List models exposed by both proxies
 	@echo "== CLIProxyAPI (ChatGPT subscription) http://127.0.0.1:$(or $(call envval,CLIPROXY_PORT),8317)/v1"; \

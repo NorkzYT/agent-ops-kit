@@ -12,7 +12,10 @@ fixes it. Then find the symptom below.
 | deriver logs `response_format` / `json_schema` errors | proxied model rejects strict schemas | `HONCHO_STRUCTURED_OUTPUT_MODE=json_object` in `.env`, `make up` |
 | deriver logs 401 from cliproxyapi | key mismatch after rotation | `make init && make up` re-renders the proxy config |
 | `make models` shows no GPT models | Codex login missing or expired | `make auth-codex` |
-| claude-max-proxy `/v1/models` empty or 401 | no `CLAUDE_CODE_OAUTH_TOKEN` | `make auth-claude-proxy`, paste token, `make restart S=claude-max-proxy` |
+| `honcho-api` restarts with `embedding dim (1536) does not match EMBEDDING_VECTOR_DIMENSIONS` | database created before the kit entrypoint, or dimensions changed after data existed | `make up` (entrypoint now resizes empty tables); if data exists, `make clean && make up` |
+| claude-max-proxy log says `no Claude Max credentials yet` | no `CLAUDE_CODE_OAUTH_TOKEN` | `make auth-claude-proxy` |
+| claude-max-proxy `/v1/models` empty or 401 | token expired or revoked | `make auth-claude-proxy` again |
+| claude-max-proxy `EACCES` / cannot write `~/.claude` | `data/claude-max-proxy` not owned by `PUID` | `sudo chown -R $(id -u):$(id -g) data/claude-max-proxy`; check `PUID`/`PGID` in `.env` |
 | claude-max-proxy build fails | `vendor/claude-max-api-proxy` missing | `make init` (clones it); check `CLAUDE_MAX_PROXY_REPO` |
 | host freezes during coding tasks | proxy limits too high | lower `CLAUDE_MAX_PROXY_CPUS`, `CLAUDE_MAX_PROXY_MEM_LIMIT`, `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS` |
 | a port is already in use | another service on 8317/3456/8000 | change `*_PORT` in `.env`, `make up`, `make hermes-install` |

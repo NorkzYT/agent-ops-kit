@@ -117,7 +117,11 @@ services:
   honcho-api:
     <<: *honcho-common
     container_name: honcho-api
-    entrypoint: ["sh", "docker/entrypoint.sh"]
+    # Kit entrypoint = upstream entrypoint + scripts/configure_embeddings.py, which
+    # resizes the pgvector columns (created as 1536) to EMBEDDING_VECTOR_DIMENSIONS.
+    entrypoint: ["sh", "/agent-ops-kit/entrypoint.sh"]
+    volumes:
+      - ./docker/honcho/entrypoint.sh:/agent-ops-kit/entrypoint.sh:ro
     ports:
       - "${BIND_ADDR:-127.0.0.1}:${HONCHO_PORT:-8000}:8000"
     healthcheck:
@@ -195,6 +199,15 @@ services:
       dockerfile: Dockerfile
     container_name: claude-max-proxy
     restart: unless-stopped
+    # Kit entrypoint: idles with a clear message until Claude Max credentials
+    # exist (make auth-claude-proxy), then starts the proxy. Without it the
+    # proxy exits 1 when unauthenticated and the container crash-loops.
+    entrypoint: ["sh", "/agent-ops-kit/entrypoint.sh"]
+    # The image runs as its own `node` user (uid 1000). Run as the host user
+    # instead so the bind-mounted home and REPOS_DIR are writable whatever
+    # your uid is. `make init` fills PUID/PGID from `id -u` / `id -g`.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    stop_grace_period: 40s
     # Resource and process limits keep a runaway Claude CLI from freezing the host.
     init: true
     cpus: ${CLAUDE_MAX_PROXY_CPUS:-2.0}
@@ -202,10 +215,6 @@ services:
     mem_reservation: 1g
     pids_limit: 1024
     environment:
-      # The proxy's entrypoint starts as root, chowns the volumes to these ids,
-      # then drops privileges. Do not set `user:` here.
-      PUID: ${PUID:-1000}
-      PGID: ${PGID:-1000}
       HOME: /home/node
       HOST: 0.0.0.0
       DB_PATH: /data/conversations.db
@@ -219,9 +228,13 @@ services:
       # Self-restart after N hours of uptime so Docker brings it back clean. Empty disables.
       CLAUDE_PROXY_MAX_UPTIME_HOURS: ${CLAUDE_PROXY_MAX_UPTIME_HOURS:-4}
     volumes:
-      # Container-private Claude CLI state (own credentials, never shared with a host `claude`).
-      - claude-proxy-home:/home/node/.claude
-      - claude-max-proxy-data:/data
+      - ./docker/claude-max-proxy/entrypoint.sh:/agent-ops-kit/entrypoint.sh:ro
+      # The container's whole home, owned by the host user. Holds the Claude
+      # CLI state (~/.claude, ~/.claude.json), private to this container and
+      # never shared with a `claude` installed on the host.
+      - ./data/claude-max-proxy/home:/home/node
+      # Conversation DB, session file, logs.
+      - ./data/claude-max-proxy/data:/data
       # Repos the coding worker may operate on.
       - ${REPOS_DIR:-/opt/repos}:${REPOS_DIR:-/opt/repos}
       # gh auth + git identity for commits/PRs made by the coding worker.
@@ -246,5 +259,3 @@ volumes:
   honcho-pgdata:
   honcho-redis-data:
   ollama-data:
-  claude-max-proxy-data:
-  claude-proxy-home:

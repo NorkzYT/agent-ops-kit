@@ -39,8 +39,14 @@ LLM_OPENAI_API_KEY=${CLIPROXY_API_KEY}
 
 A ChatGPT subscription has no embeddings endpoint, so Ollama serves one
 locally. `HONCHO_EMBED_MODEL` and `HONCHO_EMBED_DIMENSIONS` must agree
-(`nomic-embed-text` = 768). Changing the model after data exists requires
-`make clean` because the vector column width is fixed at creation.
+(`nomic-embed-text` = 768).
+
+Honcho's migrations always create the pgvector columns as `vector(1536)`.
+The kit's `honcho-api` entrypoint (`docker/honcho/entrypoint.sh`) runs
+upstream's `scripts/configure_embeddings.py --yes` after the migrations, which
+resizes the columns to `HONCHO_EMBED_DIMENSIONS` while the tables are empty and
+is a no-op afterwards. Changing the model after data exists therefore requires
+`make clean` (the script refuses to alter populated tables).
 
 ## Identity: peers and workspaces
 

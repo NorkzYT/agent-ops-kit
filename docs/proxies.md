@@ -38,11 +38,15 @@ Built from <https://github.com/NorkzYT/claude-max-api-proxy>, cloned into
 the repos mounted from `REPOS_DIR`.
 
 ```bash
-make auth-claude-proxy                 # prints a login URL, then an sk-ant-oat01-... token
-# paste the token into .env as CLAUDE_CODE_OAUTH_TOKEN
-make restart S=claude-max-proxy
+make auth-claude-proxy                 # login URL -> sk-ant-oat01-... token, stored in .env
 curl -s http://127.0.0.1:3456/v1/models
 ```
+
+`make auth-claude-proxy` runs `claude setup-token` in a one-off container, asks
+you to paste the printed token, writes it to `.env` as
+`CLAUDE_CODE_OAUTH_TOKEN`, recreates the service and waits for `/health`.
+Until a token exists the container stays up but idle (its log says so); it
+does not crash-loop, and `make doctor` reports it as waiting.
 
 Settings in `.env`:
 
@@ -53,9 +57,21 @@ Settings in `.env`:
 - `CLAUDE_PROXY_MAX_UPTIME_HOURS` restarts the process on a schedule so Docker
   brings it back clean.
 
-The container has its own `~/.claude` volume. It never shares credentials with
-a `claude` installed on the host. `gh` auth and `.gitconfig` are mounted so the
-coding worker can push branches and open PRs as you.
+The container runs as your host user (`PUID`/`PGID` from `make init`) with
+`data/claude-max-proxy/home` as its home, so its Claude CLI state is private to
+the container and never shared with a `claude` installed on the host. `gh` auth
+and `.gitconfig` are mounted so the coding worker can push branches and open
+PRs as you; run `gh auth login` on the host once.
+
+### Container or host?
+
+The kit runs the proxy in Docker on purpose: cgroup CPU, memory and pid limits
+are what stop a runaway Claude Code session from freezing the host, the
+uptime-based self-restart comes free with `restart: unless-stopped`, and one
+`make up` brings the whole HTTP half back after a reboot. Upstream also
+supports running it on the host (`npm start` with the host's `claude` login);
+do that only if you would rather manage limits with a systemd unit yourself.
+Hermes does not care either way, it just needs `http://127.0.0.1:3456/v1`.
 
 ## Model names
 

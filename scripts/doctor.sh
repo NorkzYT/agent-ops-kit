@@ -23,6 +23,7 @@ for k in CLIPROXY_API_KEY DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS; do
   [[ -n "$(getenv "$k")" ]] && ok "$k set" || warn_ "$k empty in .env"
 done
 [[ -n "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]] && ok "CLAUDE_CODE_OAUTH_TOKEN set" || warn_ "CLAUDE_CODE_OAUTH_TOKEN empty (make auth-claude-proxy)"
+[[ -d data/claude-max-proxy/home ]] && ok "claude-max-proxy home dir" || warn_ "data/claude-max-proxy/home missing (make init)"
 
 hdr "Docker"
 if have docker; then
@@ -34,7 +35,10 @@ if have docker; then
       st="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$s" 2>/dev/null || echo missing)"
       case "$st" in
         "running healthy"|"running ") ok "$s: $st";;
-        running*) warn_ "$s: $st";;
+        running*)
+          if [[ "$s" == claude-max-proxy && -z "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
+            warn_ "$s: $st (idle, waiting for credentials: make auth-claude-proxy)"
+          else warn_ "$s: $st"; fi;;
         missing) bad "$s: not created (make up)";;
         *) bad "$s: $st";;
       esac
