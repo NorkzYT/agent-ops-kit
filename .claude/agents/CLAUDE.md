@@ -45,7 +45,7 @@ Fix -> Build -> Test -> Confirm -> Deploy -> Verify CI -> Next Issue
 
 | Agent | Lifecycle Role |
 |-------|----------------|
-| `autopilot` | Runs full lifecycle (step 6: build/test/confirm via openclaw-local-workflow.sh) |
+| `autopilot` | Runs full lifecycle (step 6: build/test/confirm via local-workflow.sh) |
 | `autopilot` | Deploys on feature branch (step 8b: commit/push/CI monitor) |
 | `closer` | Verifies lifecycle passed (step 3b: reads workflow-report.local.json) |
 
@@ -53,7 +53,7 @@ Fix -> Build -> Test -> Confirm -> Deploy -> Verify CI -> Next Issue
 
 | Script | Purpose |
 |--------|---------|
-| `.claude/scripts/openclaw-local-workflow.sh` | Runs build -> run -> test -> confirm from TOOLS.md |
+| `.claude/scripts/local-workflow.sh` | Runs build -> run -> test -> confirm from TOOLS.md |
 | `.claude/bootstrap/analyze_repo.sh` | Auto-detects BUILD/TEST/RUN/CONFIRM commands -> TOOLS.md |
 
 ### Issue Lifecycle Skill

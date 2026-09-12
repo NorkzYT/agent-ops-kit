@@ -40,12 +40,14 @@ tmp
 .codex-home/
 .agents/
 
-# Local agent/workspace runtime state (OpenClaw, CrewAI, agent identity files).
-# NOTE: this is the kit's SOURCE repo — .claude/ and AGENTS.md are tracked
-# content here and must never be ignored. The broader installer-appended block
-# (which does ignore them) is for target repos only; install.sh skips it here.
-.crewai/
+# Local agent runtime state and identity files (never commit).
+# NOTE: this is the kit's SOURCE repo — .claude/, AGENTS.md and hermes/ are
+# tracked content here and must never be ignored. The installer-appended block
+# (which does ignore .claude/) is for target repos only; install.sh skips it here.
+.hermes/
+# Leftovers from the previous OpenClaw/CrewAI setup on older checkouts; safe to delete.
 .openclaw/
+.crewai/
 SOUL.md
 USER.md
 IDENTITY.md
@@ -59,3 +61,7 @@ PROJECT.md
 # Eval harness run outputs (keep the dir, ignore generated results)
 .claude/eval/results/*
 !.claude/eval/results/.gitkeep
+
+# Stack runtime (rendered configs, OAuth state, proxy sources, docker data)
+data/
+vendor/

@@ -1,80 +1,118 @@
-# Install and Maintenance
+# Install
 
-This page covers install modes, updates, and common setup files.
+One Linux host runs everything. Hermes is installed on the host (it needs the
+terminal, the browser and your repos). Everything Hermes talks to over HTTP
+runs in Docker.
 
-## Install Options
+```
+Discord ──► Hermes (host, ~/.hermes)
+              ├── model ........... CLIProxyAPI      :8317  (ChatGPT subscription)
+              ├── coding subagents  claude-max-proxy :3456  (Claude Max subscription)
+              ├── memory .......... Honcho API       :8000  (+ deriver, Postgres, Redis, Ollama)
+              └── browser ......... Browser Use      (local Chromium, or Cloud with a key)
+```
 
-### Full bootstrap (Linux)
+## Prerequisites
+
+- Linux host (Ubuntu 22.04+ or Debian 12+ tested), a non-root user with `sudo`
+- Docker Engine 24+ with the Compose plugin (`docker compose version`)
+- `git`, `curl`, `make`
+- A ChatGPT subscription (Plus, Pro or Team) for the orchestrator model
+- A Claude Max subscription for the coding worker
+- A Discord application with a bot user. Enable **Message Content Intent** and
+  **Server Members Intent** under Bot, and invite it to your server with the
+  `bot` and `applications.commands` scopes.
+- 4 CPU / 8 GB RAM minimum. Ollama runs a small embedding model on the CPU.
+
+## Install in six commands
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NorkzYT/claude-code-autopilot/main/install.sh \
-  | bash -s -- --repo NorkzYT/claude-code-autopilot --ref main --force --bootstrap-linux
+git clone https://github.com/NorkzYT/agent-ops-kit.git /opt/agent-ops-kit
+cd /opt/agent-ops-kit
+
+make init                 # 1. .env with generated secrets, proxy config, proxy sources
+make up                   # 2. start Honcho, Ollama, CLIProxyAPI, claude-max-proxy
+make auth-codex           # 3. sign in with the ChatGPT account (device code)
+make auth-claude-proxy    # 4. sign in with the Claude Max account, paste the token into .env
+$EDITOR .env              # 5. DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS, DISCORD_HOME_CHANNEL
+make hermes-install       # 6. install Hermes, render its config, start the Discord gateway
+make doctor               #    everything green?
 ```
 
-### Kit only
+Then `@mention` the bot in Discord, or run `hermes chat` in a terminal.
+
+## What each step does
+
+**`make init`** copies `.env.example` to `.env` (mode 600), fills
+`CLIPROXY_API_KEY` and `CLIPROXY_MANAGEMENT_KEY` with random values, renders
+`data/cliproxyapi/config.yaml`, and clones `claude-max-api-proxy` into
+`vendor/` so its image can be built. Safe to re-run.
+
+**`make up`** runs `docker compose up -d --build`. First start pulls the
+Honcho, pgvector, Redis, Ollama and CLIProxyAPI images, builds the Claude proxy
+image, and Ollama downloads the embedding model (about 270 MB). Honcho waits
+for that, so the first `make up` takes a few minutes. Watch with `make logs`.
+
+**`make auth-codex`** runs CLIProxyAPI's Codex device login. Open the URL it
+prints, sign in with the ChatGPT account, and the OAuth state is saved under
+`data/cliproxyapi/auths/`. `make models` should now list GPT models.
+
+**`make auth-claude-proxy`** runs `claude setup-token` inside the proxy
+container. Sign in with the Claude Max account, copy the printed
+`sk-ant-oat01-...` token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, then
+`make restart S=claude-max-proxy`. The token lasts about a year.
+
+**`make hermes-install`** runs the official Hermes installer if `hermes` is
+missing, then writes `~/.hermes/config.yaml`, `~/.hermes/.env`,
+`~/.hermes/honcho.json`, the orchestrator `SOUL.md`, and the kit skills. If a
+Discord token is set it installs the gateway as a systemd user service
+(`hermes-gateway.service`) and runs `hermes doctor`. Re-run it after changing
+`.env`; an existing `config.yaml` is left alone and the new render is written
+next to it as `config.yaml.agent-ops-kit` (use `--force` to overwrite, a `.bak`
+is kept).
+
+**`make doctor`** checks files, containers, all three HTTP endpoints, the
+Ollama model, and the Hermes configuration and gateway.
+
+## Ports
+
+| Port | Service | Notes |
+|------|---------|-------|
+| 8317 | CLIProxyAPI | OpenAI-compatible, needs `Authorization: Bearer $CLIPROXY_API_KEY` |
+| 3456 | claude-max-proxy | OpenAI-compatible, any non-empty key |
+| 8000 | Honcho API | no auth on the local stack |
+| 1455 | CLIProxyAPI OAuth callback | only during browser-based login |
+
+All bind to `127.0.0.1`. Set `BIND_ADDR=0.0.0.0` in `.env` only when the
+Windows VM worker must reach the stack, and put Tailscale or a firewall in
+front of it (see [windows-vm-worker.md](windows-vm-worker.md)).
+
+## Updating
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NorkzYT/claude-code-autopilot/main/install.sh \
-  | bash -s -- --repo NorkzYT/claude-code-autopilot --ref main --force
+git pull
+make update          # sync proxy sources, pull images, rebuild, restart
+make hermes-install  # re-render Hermes config if templates changed
+hermes update        # Hermes itself
 ```
 
-### Update an existing install
-
-Run the same install command with `--force`.
-
-Use `--with-openclaw` to configure the Docker-only OpenClaw stack and wrapper.
-If you omit `--dest`, the OpenClaw install defaults to `/opt/openclaw-home`.
-Use `--with-crewai` when you want to scaffold or refresh `.crewai/*` assets.
-
-## Installer Flags
-
-| Option | Description |
-|--------|-------------|
-| `--repo <owner/repo>` | Source repo (required) |
-| `--ref <branch\|tag\|sha>` | Git ref (default: `main`) |
-| `--dest <path>` | Destination (default: current directory, or `/opt/openclaw-home` with `--with-openclaw`) |
-| `--force` | Overwrite existing `.claude/` (preserves logs) |
-| `--bootstrap-linux` | Full bootstrap (devtools + extras) |
-| `--no-extras` | Skip wshobson agents/commands |
-| `--with-openclaw` | Configure Docker-only OpenClaw and install the host wrapper |
-| `--with-crewai` | Run CrewAI setup and scaffold `.crewai/` |
-
-## OpenClaw Environment File
-
-The OpenClaw Docker stack uses `.env.example` as the canonical reference. Copy it to `.env` if you need to set:
-
-- `HOST_REPOS_DIR`
-- gateway and viewer ports
-- git author and committer identity
-- `OPENCLAW_MODEL_PRIMARY=claude-max-proxy/claude-opus`
-- `OPENCLAW_THINKING_DEFAULT=high`
-- `OPENCLAW_ANTHROPIC_SETUP_TOKEN`
-- `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`
-- browser width and downloads directory
-
-Discord bot tokens are not part of the global `.env` file. Configure Discord interactively per bot/channel with:
+## Uninstall
 
 ```bash
-bash /opt/openclaw-home/.claude/bootstrap/openclaw_discord_setup.sh
+make down            # stop containers, keep data
+make clean           # stop and delete Honcho memory, Ollama models, proxy state
+hermes gateway uninstall
 ```
 
-By default, the stack automatically uses `~/.openclaw` on the host. Only set `OPENCLAW_HOST_STATE_DIR` if you want to override that default.
+## The Claude Code kit only
 
-If you use the default Docker/OpenClaw install path, the files live under `/opt/openclaw-home`:
+If you only want the `.claude/` bundle (hooks, agents, skills) in another repo:
 
 ```bash
-cp /opt/openclaw-home/.env.example /opt/openclaw-home/.env
-cd /opt/openclaw-home
-openclaw up
+curl -fsSL https://raw.githubusercontent.com/NorkzYT/agent-ops-kit/main/install.sh \
+  | bash -s -- --repo NorkzYT/agent-ops-kit --ref main --force
 ```
 
-## Git Hygiene
-
-Add these to your project `.gitignore` if needed:
-
-```gitignore
-.claude/logs/
-.claude/context/*
-!.claude/context/templates/
-.claude/vendor/
-```
+`--bootstrap-linux` adds developer tooling and the external agent packs;
+`--no-extras` skips the packs. Every install writes `.claude/install.manifest`,
+and `bash .claude/scripts/self-update.sh` replays it later.

@@ -33,13 +33,13 @@ YELLOW='\033[33m'
 DIM='\033[2m'
 RESET='\033[0m'
 
-# OpenClaw indicator
+# Hermes gateway indicator
 OC_STATUS=""
-if command -v openclaw &>/dev/null; then
-    if openclaw gateway status --quiet 2>/dev/null; then
-        OC_STATUS=" ${DIM}|${RESET} ${GREEN}OC:OK${RESET}"
+if command -v hermes &>/dev/null; then
+    if pgrep -f "hermes.*gateway" >/dev/null 2>&1; then
+        OC_STATUS=" ${DIM}|${RESET} ${GREEN}hermes:OK${RESET}"
     else
-        OC_STATUS=" ${DIM}|${RESET} ${YELLOW}OC:OFF${RESET}"
+        OC_STATUS=" ${DIM}|${RESET} ${YELLOW}hermes:OFF${RESET}"
     fi
 fi
 

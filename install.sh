@@ -12,7 +12,7 @@ fi
 
 usage() {
   cat <<'EOF'
-Install .claude/ into a target directory without git clone.
+Install the agent-ops-kit Claude Code bundle (.claude/) into a target repo without git clone.
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/<ref>/install.sh | bash -s -- [options]
@@ -20,19 +20,18 @@ Usage:
 Options:
   --repo <owner/repo>       Source repo (required)
   --ref <branch|tag|sha>    Git ref (default: main)
-  --dest <path>             Destination directory
-                            Default: current directory
-                            With --with-openclaw and no --dest: /opt/openclaw-home
+  --dest <path>             Destination directory (default: current directory)
   --force                   Overwrite existing .claude/ (preserves .claude/logs/)
   --bootstrap-linux         Linux-only: run full bootstrap (devtools + extras)
                             Includes: linux_devtools.sh, install-extras.sh (wshobson agents/commands)
   --no-extras               Skip installing extras (wshobson agents/commands/skills)
-  --with-openclaw           Install and configure OpenClaw integration
-  --with-crewai             Install and configure CrewAI integration
 
-Example (upstream repo, full OpenClaw stack at /opt/openclaw-home):
-  curl -fsSL https://raw.githubusercontent.com/NorkzYT/claude-code-autopilot/main/install.sh \
-    | bash -s -- --repo NorkzYT/claude-code-autopilot --ref main --force --with-openclaw
+Example (upstream repo, into the current repo):
+  curl -fsSL https://raw.githubusercontent.com/NorkzYT/agent-ops-kit/main/install.sh \
+    | bash -s -- --repo NorkzYT/agent-ops-kit --ref main --force
+
+The Hermes + Honcho + proxy stack is NOT installed by this script; clone the
+repo and run `make init && make up && make hermes-install` (see docs/install.md).
 EOF
 }
 
@@ -43,8 +42,6 @@ DEST_EXPLICIT="0"
 FORCE="0"
 BOOTSTRAP_LINUX="0"
 NO_EXTRAS="0"
-export INSTALL_OPENCLAW="0"
-export INSTALL_CREWAI="0"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,8 +51,6 @@ while [[ $# -gt 0 ]]; do
     --force)  FORCE="1"; shift 1;;
     --bootstrap-linux) BOOTSTRAP_LINUX="1"; shift 1;;
     --no-extras) NO_EXTRAS="1"; shift 1;;
-    --with-openclaw) INSTALL_OPENCLAW="1"; shift 1;;
-    --with-crewai) INSTALL_CREWAI="1"; shift 1;;
     -h|--help) usage; exit 0;;
     *) echo "Unknown arg: $1" >&2; usage; exit 2;;
   esac
@@ -191,35 +186,9 @@ else
 fi
 
 if [[ -z "${REPO}" ]]; then
-  echo "ERROR: --repo is required. Example: --repo NorkzYT/claude-code-autopilot" >&2
+  echo "ERROR: --repo is required. Example: --repo NorkzYT/agent-ops-kit" >&2
   exit 1
 fi
-
-# Default OpenClaw workspace location (env-overridable for tests/custom hosts).
-OPENCLAW_HOME_DIR="${OPENCLAW_HOME_DIR:-/opt/openclaw-home}"
-
-if [[ "$INSTALL_OPENCLAW" == "1" && "$DEST_EXPLICIT" != "1" ]]; then
-  DEST="$OPENCLAW_HOME_DIR"
-fi
-
-# Guard the classic footgun: a bare re-run (no --dest / --with-openclaw)
-# installs into the CURRENT directory and silently leaves an existing
-# OpenClaw-home install stale.
-warn_if_probably_wrong_dest() {
-  [[ "$DEST_EXPLICIT" == "1" || "$INSTALL_OPENCLAW" == "1" ]] && return 0
-  [[ -d "$OPENCLAW_HOME_DIR/.claude" ]] || return 0
-  [[ "$(cd "$DEST" 2>/dev/null && pwd)" == "$OPENCLAW_HOME_DIR" ]] && return 0
-  echo "=============================================================="
-  echo "  WARNING: existing install found at $OPENCLAW_HOME_DIR/.claude"
-  echo "  but this run installs into: $(cd "$DEST" 2>/dev/null && pwd || echo "$DEST")"
-  echo "  (no --dest or --with-openclaw given). That install will NOT"
-  echo "  be updated. To refresh it instead, either:"
-  echo "    - re-run with --with-openclaw (dest defaults to $OPENCLAW_HOME_DIR)"
-  echo "    - re-run with --dest $OPENCLAW_HOME_DIR"
-  echo "    - or run: make -C $OPENCLAW_HOME_DIR self-update"
-  echo "=============================================================="
-}
-warn_if_probably_wrong_dest
 
 ensure_destination_dir() {
   local target_dir="$1"
@@ -267,26 +236,6 @@ fi
 
 extract_patterns=('*/.claude/*' '*/.vscode/settings.json')
 
-if [[ "$INSTALL_OPENCLAW" == "1" ]]; then
-  extract_patterns+=(
-    '*/.env.example'
-    '*/Makefile.openclaw'
-    '*/docker-compose.openclaw.yml'
-    '*/docker/openclaw/*'
-    '*/docker/browser-viewer/*'
-    '*/docs/install.md'
-    '*/docs/openclaw.md'
-    '*/docs/docker-openclaw-crewai.md'
-    '*/hooks/*'
-  )
-fi
-
-if [[ "$INSTALL_CREWAI" == "1" ]]; then
-  extract_patterns+=(
-    '*/docs/crewai.md'
-  )
-fi
-
 echo "Extracting install assets ..."
 tar -xzf "$archive" -C "$extract_dir" --wildcards "${extract_patterns[@]}" >/dev/null 2>&1 || true
 
@@ -325,8 +274,9 @@ install_repo_asset() {
 
 ensure_local_agent_gitignore() {
   local gitignore_file="$1/.gitignore"
-  local start_marker="# >>> claude-code-autopilot local agent state >>>"
-  local end_marker="# <<< claude-code-autopilot local agent state <<<"
+  local start_marker="# >>> agent-ops-kit local agent state >>>"
+  local end_marker="# <<< agent-ops-kit local agent state <<<"
+  local legacy_marker="# >>> claude-code-autopilot local agent state >>>"
 
   # Never self-ignore the kit's own source checkout: there .claude/ and
   # AGENTS.md are tracked content, not local agent state. The source repo is
@@ -336,7 +286,7 @@ ensure_local_agent_gitignore() {
     return 0
   fi
 
-  if [[ -f "$gitignore_file" ]] && grep -qF "$start_marker" "$gitignore_file" 2>/dev/null; then
+  if [[ -f "$gitignore_file" ]] && grep -qF -e "$start_marker" -e "$legacy_marker" "$gitignore_file" 2>/dev/null; then
     echo "  Local agent state ignore block already present in $gitignore_file"
     return 0
   fi
@@ -348,7 +298,7 @@ ensure_local_agent_gitignore() {
     echo ".codex/"
     echo ".codex-home/"
     echo ".agents/"
-    echo ".openclaw/"
+    echo ".hermes/"
     echo "AGENTS.md"
     echo "SOUL.md"
     echo "USER.md"
@@ -548,35 +498,6 @@ else
   mkdir -p "$DEST_LOGS"
 fi
 
-if [[ "$INSTALL_OPENCLAW" == "1" ]]; then
-  install_repo_asset ".env.example"
-  install_repo_asset "docker-compose.openclaw.yml"
-  install_repo_asset "docker/openclaw"
-  install_repo_asset "docker/browser-viewer"
-  install_repo_asset "docs/install.md"
-  install_repo_asset "docs/openclaw.md"
-  install_repo_asset "docs/docker-openclaw-crewai.md"
-  install_repo_asset "hooks"
-
-  # Clone or sync claude-max-api-proxy for the Claude Max proxy service.
-  # sync-proxy-checkout.sh owns the branch policy (default: main; override
-  # via CLAUDE_MAX_PROXY_REF) and migrates checkouts off legacy pinned refs.
-  PROXY_DIR="${DEST_ABS}/claude-max-api-proxy"
-  bash "${SRC_ROOT}/docker/openclaw/sync-proxy-checkout.sh" "$PROXY_DIR"
-  INSTALLED_ASSETS+=("$PROXY_DIR")
-
-  # Install Makefile for OpenClaw management
-  if [[ -f "${SRC_ROOT}/Makefile.openclaw" ]]; then
-    cp -f "${SRC_ROOT}/Makefile.openclaw" "${DEST_ABS}/Makefile"
-    INSTALLED_ASSETS+=("${DEST_ABS}/Makefile")
-    echo "  Installed OpenClaw Makefile: ${DEST_ABS}/Makefile"
-  fi
-fi
-
-if [[ "$INSTALL_CREWAI" == "1" ]]; then
-  install_repo_asset "docs/crewai.md"
-fi
-
 # Keep local agent state out of project commits by default.
 ensure_local_agent_gitignore "$DEST_ABS"
 
@@ -584,19 +505,17 @@ ensure_local_agent_gitignore "$DEST_ABS"
 merge_vscode_settings "$SRC_VSCODE_SETTINGS" "$DEST_ABS"
 
 # Record how this install was performed so it can be repeated verbatim by
-# `.claude/scripts/self-update.sh` (or `make self-update` with OpenClaw).
+# `.claude/scripts/self-update.sh`.
 write_install_manifest() {
   local manifest="$DEST_CLAUDE/install.manifest"
   {
-    echo "# claude-code-autopilot install manifest (shell-sourceable)."
+    echo "# agent-ops-kit install manifest (shell-sourceable)."
     echo "# Consumed by .claude/scripts/self-update.sh — do not edit casually."
     echo "CCA_REPO='${REPO}'"
     echo "CCA_REF='${REF}'"
     echo "CCA_DEST='${DEST_ABS}'"
     echo "CCA_BOOTSTRAP_LINUX='${BOOTSTRAP_LINUX}'"
     echo "CCA_NO_EXTRAS='${NO_EXTRAS}'"
-    echo "CCA_WITH_OPENCLAW='${INSTALL_OPENCLAW}'"
-    echo "CCA_WITH_CREWAI='${INSTALL_CREWAI}'"
     echo "CCA_INSTALLED_AT='$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)'"
   } >"$manifest"
   echo "  Wrote install manifest: $manifest"
@@ -743,75 +662,6 @@ if [[ "$BOOTSTRAP_LINUX" == "1" ]]; then
   fi
 fi
 
-run_optional_stack_setup() {
-  local enabled="$1"
-  local stack_name="$2"
-  local stack_script="$3"
-  local stack_env="${4:-}"
-
-  if [[ "$enabled" != "1" ]]; then
-    return 0
-  fi
-
-  if [[ ! -f "$stack_script" ]]; then
-    echo "WARN: ${stack_name} setup script not found at $stack_script"
-    return 0
-  fi
-
-  echo ""
-  echo "Running ${stack_name} setup: $stack_script"
-  chmod +x "$stack_script" 2>/dev/null || true
-
-  local setup_status=0
-  if [[ "$(id -u)" -eq 0 ]]; then
-    if command -v su >/dev/null 2>&1; then
-      if [[ -n "$stack_env" ]]; then
-        su - "$TARGET_USER" -c "$stack_env bash \"$stack_script\" \"$DEST_ABS\"" || setup_status=$?
-      else
-        su - "$TARGET_USER" -c "bash \"$stack_script\" \"$DEST_ABS\"" || setup_status=$?
-      fi
-    else
-      echo "WARN: 'su' not found; running ${stack_name} setup as root."
-      if [[ -n "$stack_env" ]]; then
-        env "$stack_env" bash "$stack_script" "$DEST_ABS" || setup_status=$?
-      else
-        bash "$stack_script" "$DEST_ABS" || setup_status=$?
-      fi
-    fi
-  else
-    if [[ -n "$stack_env" ]]; then
-      env "$stack_env" bash "$stack_script" "$DEST_ABS" || setup_status=$?
-    else
-      bash "$stack_script" "$DEST_ABS" || setup_status=$?
-    fi
-  fi
-
-  if [[ "$setup_status" -ne 0 ]]; then
-    echo "WARN: ${stack_name} setup exited with status ${setup_status}."
-    echo "WARN: You can re-run it manually:"
-    echo "WARN:   bash $stack_script \"$DEST_ABS\""
-  fi
-}
-
-# Optional stack integrations. Keep this registry-style list so adding new
-# stacks only requires one entry here plus a setup script.
-STACK_NAMES=("OpenClaw" "CrewAI")
-STACK_ENABLED=("$INSTALL_OPENCLAW" "$INSTALL_CREWAI")
-STACK_SCRIPTS=(
-  "$DEST_CLAUDE/bootstrap/openclaw_setup.sh"
-  "$DEST_CLAUDE/bootstrap/crewai_setup.sh"
-)
-[[ "$FORCE" == "1" ]] && export OPENCLAW_FORCE=1
-STACK_ENVS=("OPENCLAW_AUTO_REGISTER=1" "")
-
-for idx in "${!STACK_NAMES[@]}"; do
-  run_optional_stack_setup \
-    "${STACK_ENABLED[$idx]}" \
-    "${STACK_NAMES[$idx]}" \
-    "${STACK_SCRIPTS[$idx]}" \
-    "${STACK_ENVS[$idx]}"
-done
-
 echo ""
 echo "Done. Installed .claude/ into ${DEST_ABS} (logs preserved)."
 echo ""
@@ -952,8 +802,6 @@ echo "  - cca                               Launch Claude with terminal naming +
 echo "  - ccx                               Launch Codex with project-local CODEX_HOME (.codex-home)"
 echo "  - .claude/extras/doctor.sh          Validate .claude/ configuration"
 echo "  - .claude/extras/install-extras.sh  Install/update wshobson agents & commands"
-echo "  - .claude/scripts/crewai-local-workflow.sh  Run local CrewAI workflows (if installed)"
-echo "  - .claude/scripts/crewai-cliproxyapi.sh     Manage local CLIProxyAPI Docker stack (if installed)"
 echo ""
 echo "=============================================="
 echo "  EXTERNAL EDITOR (Ctrl+G)"
@@ -979,70 +827,4 @@ echo "  📖 Full guide: ${DEST_ABS}/.claude/docs/plan-mode-tips.md"
 echo ""
 echo "=============================================="
 echo ""
-if [[ "$INSTALL_OPENCLAW" == "1" ]]; then
-  echo "=============================================="
-  echo "  OPENCLAW INTEGRATION"
-  echo "=============================================="
-  echo ""
-  echo "  OpenClaw has been configured for this workspace in Docker-only mode."
-  echo ""
-  echo "  Quick commands (via Makefile - recommended):"
-  echo "    cd ${DEST_ABS}"
-  echo "    make help                # Show all available commands"
-  echo "    make start               # Start OpenClaw containers"
-  echo "    make status              # Check container status + VNC processes"
-  echo "    make restart             # Restart containers"
-  echo "    make logs                # View gateway logs"
-  echo "    make auth-anthropic      # Authenticate Anthropic (interactive)"
-  echo "    make auth-openai         # Authenticate OpenAI Codex (interactive)"
-  echo "    make models              # List available models"
-  echo "    make dashboard-url       # Get dashboard URL with token"
-  echo "    make add-agent AGENT=name REPO=/path  # Register agent/repo"
-  echo "    make setup-discord       # Setup Discord bot"
-  echo "    make setup-discord-scale # Setup Discord lanes + parallelism"
-  echo "    make add-origins         # Configure allowed origins"
-  echo ""
-  echo "  Or use openclaw CLI via docker exec (raw commands):"
-  echo "    docker exec openclaw-gateway gosu node openclaw status"
-  echo "    docker exec openclaw-gateway gosu node openclaw logs"
-  echo "    # Or via wrapper: ~/.local/bin/openclaw status"
-  echo ""
-  echo "  Environment file:"
-  echo "    cp ${DEST_ABS}/.env.example ${DEST_ABS}/.env   # optional, for identity/tokens/port overrides"
-  echo ""
-  echo "  Quick reference:"
-  echo "    ${DEST_ABS}/.claude/README-openclaw.md   # bootstrap scripts + common commands"
-  echo ""
-  echo "=============================================="
-  echo ""
-fi
-if [[ "$INSTALL_CREWAI" == "1" ]]; then
-  echo "=============================================="
-  echo "  CREWAI INTEGRATION"
-  echo "=============================================="
-  echo ""
-  echo "  CrewAI project scaffold has been created at:"
-  echo "    .crewai/"
-  echo ""
-  echo "  Quick start:"
-  echo "    cd ${DEST_ABS}/.crewai"
-  echo "    cp ${DEST_ABS}/.crewai/.env.example ${DEST_ABS}/.crewai/.env"
-  echo "    # add your LLM provider keys/config"
-  echo "    uv sync"
-  echo "    uv run crewai run"
-  echo ""
-  echo "  Local workflow wrapper:"
-  echo "    bash .claude/scripts/crewai-local-workflow.sh --goal \"Subscriber growth plan\""
-  echo "    bash .claude/scripts/crewai-local-workflow.sh --with-proxy --goal \"Subscriber growth plan\""
-  echo ""
-  echo "  CLIProxyAPI (Docker, optional):"
-  echo "    bash .claude/scripts/crewai-cliproxyapi.sh up"
-  echo "    # management UI (if enabled): http://127.0.0.1:8085"
-  echo ""
-  echo "  Guide:"
-  echo "    ${DEST_ABS}/docs/crewai.md"
-  echo ""
-  echo "=============================================="
-  echo ""
-fi
 echo "Open a new shell session to re-index agents/skills/commands."

@@ -47,3 +47,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash .claude/scripts/test_self_update.sh
+
+  guard:
+    name: bash guard hook (test_guard.py)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 .claude/scripts/test_guard.py
+
+  stack:
+    name: Stack config (compose, Hermes templates, JSON)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config
+        run: |
+          cp .env.example .env
+          sed -i 's/^CLIPROXY_API_KEY=$/CLIPROXY_API_KEY=ci/; s/^CLIPROXY_MANAGEMENT_KEY=$/CLIPROXY_MANAGEMENT_KEY=ci/' .env
+          mkdir -p vendor/claude-max-api-proxy && printf 'FROM scratch\n' > vendor/claude-max-api-proxy/Dockerfile
+          docker compose config -q
+      - name: Hermes templates and JSON parse
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re, yaml
+          for f in ["hermes/config.yaml.tmpl", "docker/cliproxyapi/config.example.yaml"]:
+              yaml.safe_load(re.sub(r"__[A-Z0-9_]+__", "x", pathlib.Path(f).read_text()))
+          json.loads(re.sub(r"__[A-Z0-9_]+__", "x", pathlib.Path("hermes/honcho.json.tmpl").read_text()))
+          json.loads(pathlib.Path(".claude/settings.local.json").read_text())
+          json.loads(pathlib.Path(".claude/settings.json").read_text())
+          print("templates ok")
+          PY
+      - name: stack-init renders config offline
+        run: |
+          rm -f .env; CLAUDE_MAX_PROXY_REPO=file:///nonexistent bash scripts/stack-init.sh || true
+          test -f data/cliproxyapi/config.yaml && ! grep -q __CLIPROXY_API_KEY__ data/cliproxyapi/config.yaml

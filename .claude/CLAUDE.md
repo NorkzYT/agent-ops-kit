@@ -35,9 +35,8 @@ Instead of embedding full docs, load on-demand:
 | Hook documentation | Read `.claude/hooks/CLAUDE.md` |
 | Session state | Read `.claude/docs/session-state.md` |
 | Sentinel zones | Read `.claude/docs/sentinel-zones.md` |
-| OpenClaw integration | Read `.claude/docs/openclaw-integration.md` |
-| Browser login patterns | Read `.claude/skills/openclaw-browser/LOGIN_PATTERNS.md` |
-| Extension testing | Read `.claude/skills/openclaw-browser/EXTENSION_TESTING.md` |
+| Browser verification | Read `.claude/skills/browser-automation/SKILL.md` |
+| Hermes stack (Discord, Honcho, proxies) | Read `docs/hermes.md` |
 | Ralph pattern | Read `.claude/docs/ralph-pattern.md` |
 
 ## Hierarchical Context Architecture
@@ -150,10 +149,10 @@ For code handling input/auth/data:
 - Spawn `threat-modeling-expert` for architecture-level concerns
 - Check `.claude/hooks/guard_bash.py` for blocked patterns
 
-## Timed Follow-Up Promises (OpenClaw / Discord)
+## Timed Follow-Up Promises (Discord)
 
 - Do not promise delayed follow-ups in natural language unless a real scheduler job is created.
-- In OpenClaw Discord/chat flows, use `/recheckin <delay> <task>` before saying "I'll check back in X".
+- In Discord flows Hermes owns the scheduler: create the job with `hermes cron create` before saying "I'll check back in X".
 - The same reply must include the cron job ID (or explicitly state the CLI did not return one).
 - If scheduling fails, do not promise a delayed callback. Ask the user to ping again or continue monitoring now.
 

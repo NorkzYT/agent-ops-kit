@@ -30,9 +30,9 @@ Workflow:
    - If UI task: provide a manual verification checklist (click/steps) and ask user to confirm outcomes.
 
 3b. Lifecycle verification:
-    - Check for .openclaw/workflow-report.local.json (or workflow-report.local.json at repo root)
+    - Check for .claude/workflow-report.local.json (or workflow-report.local.json at repo root)
     - If exists: verify all steps passed (build, test, confirm)
-    - If missing: run bash .claude/scripts/openclaw-local-workflow.sh --repo <repo-path>, report results
+    - If missing: run bash .claude/scripts/local-workflow.sh --repo <repo-path>, report results
     - If any step "failed": do NOT output completion promise
 
 4. Security check (if code handles input/auth/data):

@@ -108,24 +108,6 @@ def append_session_summary(context_file: Path, summary: str):
         f.write(summary + "\n")
 
 
-def _sync_to_openclaw(context_dir: Path, task_name: str):
-    """Sync session state to OpenClaw memory directory if available."""
-    try:
-        import shutil as _shutil
-        if not _shutil.which("openclaw"):
-            return  # OpenClaw not installed
-
-        openclaw_home = os.getenv("OPENCLAW_HOME", os.path.expanduser("~/.openclaw"))
-        memory_dir = Path(openclaw_home) / "memory" / "claude-sessions" / task_name
-        memory_dir.mkdir(parents=True, exist_ok=True)
-
-        for filename in ("plan.md", "context.md", "tasks.md"):
-            src = context_dir / filename
-            dst = memory_dir / filename
-            if src.exists():
-                _shutil.copy2(str(src), str(dst))
-    except Exception:
-        pass  # Best-effort sync
 
 
 def main() -> int:
@@ -157,8 +139,6 @@ def main() -> int:
     # Log where state was persisted
     print(f"Session state persisted to: {context_dir}", file=sys.stderr)
 
-    # Sync to OpenClaw memory (if available)
-    _sync_to_openclaw(context_dir, task_name)
 
     return 0
 

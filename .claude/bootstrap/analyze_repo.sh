@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ─────────────────────────────────────────────────────────────
-# analyze_repo.sh — Dynamic repo understanding for OpenClaw agents
+# analyze_repo.sh — Dynamic repo understanding for coding agents (writes TOOLS.md, PROJECT.md)
 #
 # Usage:
 #   bash analyze_repo.sh <workspace-path> [--deep]
@@ -520,8 +520,8 @@ if [[ ! -d "$WORKSPACE" ]]; then
 fi
 
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
-OPENCLAW_DIR="$WORKSPACE/.openclaw"
-mkdir -p "$OPENCLAW_DIR"
+KIT_DIR="$WORKSPACE/.claude"
+mkdir -p "$KIT_DIR"
 
 # ─── Extract project name ───────────────────────────────────
 PROJECT_NAME=""
@@ -1067,7 +1067,7 @@ else
     log "Using fast architecture-first deep scan profile for ${DEEP_TIER} repo (tool-enabled fallback)"
   fi
 
-  DEEP_SCAN_LOG_DIR="$OPENCLAW_DIR/logs"
+  DEEP_SCAN_LOG_DIR="$KIT_DIR/logs"
   mkdir -p "$DEEP_SCAN_LOG_DIR"
   CLAUDE_OUTPUT=""
   CLAUDE_LAST_RC=0

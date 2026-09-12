@@ -15,9 +15,9 @@ import sys
 data = json.load(sys.stdin)
 cmd = (data.get("tool_input", {}) or {}).get("command", "") or ""
 
-# Autonomous mode: activated by OPENCLAW_AUTONOMOUS=1 env var
+# Autonomous mode: activated by AGENT_AUTONOMOUS=1 env var (set by cron/Hermes wrappers only)
 # Selectively promotes specific commands from blocked to allowed
-AUTONOMOUS_MODE = os.getenv("OPENCLAW_AUTONOMOUS", "0") == "1"
+AUTONOMOUS_MODE = os.getenv("AGENT_AUTONOMOUS", "0") == "1"
 
 # -----------------------------------------------------------------------------
 # Allowlist: explicitly permitted npx/pip/npm commands
@@ -42,7 +42,7 @@ ALLOWLISTED_NPM = [
 # -----------------------------------------------------------------------------
 ALWAYS_ALLOWED = [
     # Local workflow execution (project-internal scripts)
-    r"^\s*bash\s+.*\.claude/scripts/openclaw-local-workflow\.sh\b",
+    r"^\s*bash\s+.*\.claude/scripts/local-workflow\.sh\b",
     r"^\s*bash\s+.*\.claude/bootstrap/analyze_repo\.sh\b",
     # CI/CD monitoring (read-only GitHub CLI)
     r"^\s*gh\s+run\s+(list|view|watch)\b",
@@ -69,7 +69,7 @@ AUTONOMOUS_PROMOTED = [
     r"^\s*gh\s+run\s+(list|view|watch)\b",
     r"^\s*gh\s+pr\s+(create|view|list|checks)\b",
     # Local workflow execution
-    r"^\s*bash\s+.*openclaw-local-workflow\.sh\b",
+    r"^\s*bash\s+.*local-workflow\.sh\b",
     r"^\s*bash\s+.*analyze_repo\.sh\b",
 ]
 

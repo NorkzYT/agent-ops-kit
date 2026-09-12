@@ -1,30 +1,27 @@
 # Documentation
 
-Use these docs when you need details that do not belong in the quick-start README.
+The root `README.md` is the fast path. These pages hold the detail.
 
-## Guides
+## The stack
 
-- `docs/setup-guide.md` — **Start here.** Full setup: OpenClaw + multi-crew AI workforce + engineering loop
-- `docs/install.md` — install modes, updates, installer flags, gitignore
-- `docs/workflow.md` — session persistence, notifications, guardrails, customization, plan-mode workflow
-- `docs/editor.md` — external editor (`Ctrl+G`) setup and VS Code remote notes
-- `docs/troubleshooting.md` — common issues and validation commands
-- `docs/openclaw.md` — OpenClaw setup summary and links to the full OpenClaw docs in `.claude/docs/`
-- `docs/crewai.md` — CrewAI setup, engineering planner crew, and engineering-loop driver
-- `docs/docker-openclaw-crewai.md` — Docker Compose guides for OpenClaw-only and CrewAI-only stacks
-- `docs/openclaw-plugin-hooks.md` — how to use OpenClaw hooks and wrapper commands for local workflow automation
-- `docs/roadmap.md` — roadmap for full local engineer workflow enforcement
+| Page | What it covers |
+|------|----------------|
+| [install.md](install.md) | Prerequisites, the six-command install, what each step creates, updating |
+| [hermes.md](hermes.md) | The Hermes orchestrator: config layout, models, Discord, cron, delegation |
+| [honcho.md](honcho.md) | Long-term memory: what Honcho does, how it is wired, peers and workspaces |
+| [proxies.md](proxies.md) | ChatGPT and Claude Max subscriptions as OpenAI-compatible APIs |
+| [browser-use.md](browser-use.md) | Browser automation: local Chromium vs Browser Use Cloud, rules |
+| [profiles-and-teams.md](profiles-and-teams.md) | Specialist agents with their own knowledge, and Kanban teams |
+| [windows-vm-worker.md](windows-vm-worker.md) | The desktop worker inside the Windows VM (computer use) |
+| [troubleshooting.md](troubleshooting.md) | Symptoms, causes, fixes |
 
-## OpenClaw Deep Docs (repo-local)
+## The Claude Code kit (`.claude/`)
 
-These are the OpenClaw-specific references used by the bootstrap scripts:
+Claude Code is the coding worker behind claude-max-proxy. The `.claude/` bundle
+installs into any repo and gives Claude Code its hooks, agents and skills.
 
-- `.claude/README-openclaw.md` — operator quick reference
-- `.claude/docs/openclaw-integration.md` — full setup and operations guide
-- `.claude/docs/openclaw-commands.md` — CLI and slash command reference
-- `.claude/docs/openclaw-remote-commands.md` — Discord pairing, allowlists, bindings, slash commands
-
-## Examples
-
-- `docs/examples/openclaw-workflow-report-check.sh` — report checker for wrapper output
-- `docs/examples/openclaw-workflow-enforcer-plugin/` — OpenClaw plugin hook skeleton (design example)
+| Page | What it covers |
+|------|----------------|
+| [workflow.md](workflow.md) | Session persistence, notifications, guardrails, plan mode |
+| [editor.md](editor.md) | External editor (`Ctrl+G`) and VS Code remote notes |
+| `../.claude/CLAUDE.md` | The constitution the coding worker follows |

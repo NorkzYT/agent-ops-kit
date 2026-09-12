@@ -104,7 +104,7 @@ if ! has npm; then
   warn "npm not found. Installing Node/npm via fnm now..."
   setup_node_fnm || warn "Node/npm install failed. JS/Python LSP binaries will be skipped."
 elif [[ "$NODE_MAJOR_NOW" -lt 22 ]]; then
-  warn "Detected Node $(node -v 2>/dev/null || echo 'unknown') (below 22). Activating fnm LTS for OpenClaw compatibility..."
+  warn "Detected Node $(node -v 2>/dev/null || echo 'unknown') (below 22). Activating fnm LTS (Node 22+ needed by the Claude CLI and Browser Use)..."
   setup_node_fnm || warn "fnm Node activation failed; continuing with system Node."
   skip "npm already installed: $(npm -v)"
 else
@@ -211,13 +211,6 @@ if [ ! -f "$NTFY_CONFIG" ]; then
 else
   NTFY_TOPIC="$(cat "$NTFY_CONFIG")"
   skip "ntfy.sh already configured: $NTFY_TOPIC"
-fi
-
-# ---- 6) OpenClaw (optional, when INSTALL_OPENCLAW=1) ----
-if [[ "${INSTALL_OPENCLAW:-0}" == "1" ]]; then
-  skip "Docker-only OpenClaw mode selected. Host OpenClaw CLI install is skipped."
-else
-  skip "OpenClaw install not requested (use --with-openclaw to enable)."
 fi
 
 log "Done."

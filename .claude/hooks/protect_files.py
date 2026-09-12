@@ -80,9 +80,11 @@ PROTECTED_GLOBS = [
     "**/config/prod/**",
     "**/config/production/**",
 
-    # OpenClaw credential protection
-    "**/.openclaw/credentials/**",
-    "**/.openclaw/**/vault*",
+    # Agent runtime credentials (Hermes, proxies)
+    "**/.hermes/.env",
+    "**/.hermes/auth.json",
+    "**/.hermes/honcho.json",
+    "**/data/cliproxyapi/**",
 ]
 
 

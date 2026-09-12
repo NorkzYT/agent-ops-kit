@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Quick functional test for guard_bash.py ALWAYS_ALLOWED + blocked patterns."""
-import subprocess, json, sys
+import subprocess, json, sys, os
 
-GUARD = "/opt/github/claude-code-autopilot/.claude/hooks/guard_bash.py"
+GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "hooks", "guard_bash.py")
 
 tests = [
     # (command, should_be_blocked)
@@ -10,7 +10,7 @@ tests = [
     ("sudo apt install foo", True),
     # Always-allowed commands - must pass
     ("bash .claude/bootstrap/analyze_repo.sh /tmp/repo", False),
-    ("bash .claude/scripts/openclaw-local-workflow.sh --repo /tmp", False),
+    ("bash .claude/scripts/local-workflow.sh --repo /tmp", False),
     ("gh run list --branch feat --limit 1", False),
     ("gh pr view 123", False),
     ("gh pr checks 42", False),
