@@ -49,6 +49,9 @@ tmp
 .openclaw/
 .crewai/
 SOUL.md
+# ...but hermes/ is this kit's tracked source (see note above): keep its SOUL prompts.
+!hermes/SOUL.md
+!hermes/profiles/*/SOUL.md
 USER.md
 IDENTITY.md
 TOOLS.md

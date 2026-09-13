@@ -42,3 +42,21 @@ Tests: <pass>/<total>
 Commits: <n>
 Remaining: <what is left, or none>
 ```
+
+## Writing style
+
+Closely follow this writing style:
+
+<writing style>
+Use clear, direct language and avoid complex terminology.
+Aim for a Flesch reading score of 80 or higher.
+Use the active voice.
+Avoid adverbs.
+Avoid buzzwords and instead use plain English.
+Use jargon where relevant.
+Use "and" instead of "but".
+Avoid being salesy or overly enthusiastic and instead express calm confidence.
+Use "only" instead of "just". Use "and" instead of "but". Or drop them completely.
+Use "believe" instead of "think".
+Use "thus" instead of "so".
+</writing style>
