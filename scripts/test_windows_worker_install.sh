@@ -28,7 +28,11 @@
 # is therefore a static/source-level test, not a live PowerShell parse or
 # repro. It is intentionally strict about the exact idioms so a live rerun of
 # the collision cannot silently return.
-set -uo pipefail
+# No `pipefail`: checks use `code | grep -Eq …`, and `grep -q` closes the pipe on its
+# first match, which SIGPIPEs the upstream `code` (grep -Ev) — under pipefail that 141
+# would spuriously fail an otherwise-matching check. We want grep's exit status, not the
+# producer's. Each check is a self-contained boolean, so pipefail buys nothing here.
+set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
@@ -138,11 +142,69 @@ ck "throws when the gateway task did not register" \
    "code | grep -Eiq 'throw.*(did not register|register)'"
 
 # Browser tools: config selects browser-use (headed), which needs agent-browser +
-# Chromium. The installer provisions them best-effort (non-fatal).
+# a Playwright Chromium build. The installer provisions them best-effort (non-fatal).
 ck "provisions the agent-browser CLI for browser tools" \
    "code | grep -Eq 'npm install -g agent-browser'"
-ck "installs the Chromium build for browser tools" \
+ck "installs the agent-browser Chromium build" \
    "code | grep -Eq 'agent-browser install'"
+# `hermes doctor` checks for a Playwright "chromium-*" build in the ms-playwright cache,
+# not agent-browser's bundled Chrome. Install the exact Chromium doctor looks for with
+# `npx playwright install chromium`, run from the Hermes repo (matches its Playwright pin).
+ck "installs the Playwright Chromium that doctor checks for" \
+   "code | grep -Eq 'npx.*playwright install chromium'"
+ck "runs the Playwright Chromium install from the Hermes repo dir" \
+   "code | grep -Eq 'Join-Path \\\$HermesHome \"hermes-agent\"' && code | grep -Eq 'Push-Location \\\$hermesRepo'"
+
+# Model provider credentials: the model is a custom OpenAI-compatible endpoint
+# (CLIProxyAPI). `hermes doctor` scans ~/.hermes/.env for KNOWN provider names
+# (OPENAI_API_KEY / OPENAI_BASE_URL, ...); a non-standard CLIPROXY_API_KEY resolves at
+# runtime but makes doctor report "No API key found in ~/.hermes/.env". Assert the .env
+# uses the recognised names and config references them as literal ${VAR} placeholders.
+ck "writes OPENAI_API_KEY into .env (a name doctor recognises)" \
+   "code | grep -Eq '^OPENAI_API_KEY='"
+ck "writes OPENAI_BASE_URL into .env (custom endpoint doctor recognises)" \
+   "code | grep -Eq '^OPENAI_BASE_URL='"
+ck "does not write the non-standard CLIPROXY_API_KEY into .env" \
+   "! code | grep -Eq '^CLIPROXY_API_KEY='"
+# The config here-string must emit a LITERAL ${OPENAI_API_KEY} for Hermes to resolve
+# from .env — a backtick escapes the $ so PowerShell does not interpolate it.
+ck "config references the OPENAI_API_KEY placeholder" \
+   "grep -Eq 'OPENAI_API_KEY}' '$ps1'"
+ck "config api_key placeholder is backtick-escaped (emits a literal env reference)" \
+   "grep -Eq 'api_key: \`\\\$' '$ps1'"
+# Executable code (not the explanatory comments) must be free of CLIPROXY_API_KEY.
+ck "config/.env no longer reference CLIPROXY_API_KEY in executable code" \
+   "! code | grep -Eq 'CLIPROXY_API_KEY'"
+ck "does not put the real key literally in config.yaml (only a placeholder)" \
+   "! code | grep -Eq 'api_key:\s*\\\$CliProxyApiKey'"
+
+# Config migration: plain 'hermes doctor' only REPORTS a version drift; only
+# 'hermes doctor --fix' migrates (migrate_config(interactive=False)). Assert the final
+# health check uses --fix, that it runs AFTER the config.yaml is written, and that no
+# interactive migration path ('hermes config migrate' is interactive) is used.
+ck "runs 'hermes doctor --fix' to migrate the config schema" \
+   "code | grep -Eq 'hermes\s+doctor\s+--fix'"
+ck "config migration runs after config.yaml is written" \
+   "[[ \$(grep -n 'config.yaml' '$ps1' | head -1 | cut -d: -f1) -lt \$(grep -n 'hermes\s\+doctor\s\+--fix' '$ps1' | head -1 | cut -d: -f1) ]]"
+ck "does not use the interactive 'hermes config migrate'" \
+   "! code | grep -Eiq 'hermes\s+config\s+migrate'"
+
+# Shared Honcho (only with -UseHostHoncho): honcho.json must pin the active host with
+# defaultHost AND enable the host block, the installer must flip it on through the CLI
+# when that subcommand exists, verify the provider with non-interactive status checks,
+# and fail clearly (not just warn) when -UseHostHoncho was requested but Honcho is down.
+ck "honcho.json pins defaultHost: hermes (the active host block)" \
+   "grep -Eq '\"defaultHost\":\s*\"hermes\"' '$ps1'"
+ck "honcho.json enables the hermes host block" \
+   "grep -Eq '\"enabled\":\s*true' '$ps1'"
+ck "enables the host Honcho through the CLI (hermes honcho enable)" \
+   "code | grep -Eq 'hermes\s+honcho\s+enable'"
+ck "verifies shared Honcho with 'hermes honcho status'" \
+   "code | grep -Eq 'hermes\s+honcho\s+status'"
+ck "verifies shared Honcho with 'hermes memory status'" \
+   "code | grep -Eq 'hermes\s+memory\s+status'"
+ck "fails clearly (throws) when -UseHostHoncho stays disabled/unreachable" \
+   "code | grep -Eiq 'throw.*Honcho'"
 
 # Usage example demonstrates a trailing backtick continuation before
 # -UseHostHoncho on its own line.

@@ -64,18 +64,33 @@ self-hosts the model API and the script writes its own CLIProxyAPI config right
 after). It pins `HERMES_HOME` to `%USERPROFILE%\.hermes` (Hermes defaults to
 `%LOCALAPPDATA%\hermes` on Windows, so without this the gateway would read a
 different home than the one the script writes to). It writes `config.yaml` (model
-via CLIProxyAPI, `computer_use` on, browser headed), `.env`, copies the
-`windows-operator` persona, installs the computer-use driver and verifies it with
-`hermes computer-use doctor` (repairing once if the runtime comes back degraded),
-provisions the browser tools (`agent-browser` CLI + Chromium, best-effort), and
-registers the logon task with `hermes gateway install --start-on-login
+via CLIProxyAPI, `computer_use` on, browser headed) and `.env`.
+
+The model is a custom OpenAI-compatible endpoint (CLIProxyAPI), so the key and URL
+go into `.env` as `OPENAI_API_KEY` and `OPENAI_BASE_URL` — the exact names
+`hermes doctor` scans for. `config.yaml` references them as literal `${OPENAI_API_KEY}`
+placeholders. A non-standard name like `CLIPROXY_API_KEY` still resolves at runtime
+but makes `hermes doctor` report `No API key found in ~/.hermes/.env` and nudge
+`hermes setup`.
+
+It then copies the `windows-operator` persona, installs the computer-use driver and
+verifies it with `hermes computer-use doctor` (repairing once if the runtime comes
+back degraded), and provisions the browser tools (best-effort): the `agent-browser`
+CLI, plus the **Playwright Chromium** build `hermes doctor` actually checks for, via
+`npx playwright install chromium` run from the Hermes repo. (`agent-browser install`
+alone can leave doctor's `chromium-*` cache check failing; Playwright shares the same
+ms-playwright cache and skips builds already present.)
+
+It registers the logon task with `hermes gateway install --start-on-login
 --start-now`. That is Hermes's own Windows installer: it resolves the full
 `DOMAIN\user` logon identity, registers a Scheduled Task with an explicit
 `InteractiveToken` principal at `LeastPrivilege` (an elevated gateway could not
 drive normal-integrity apps across the Windows UIPI boundary), launches
 `hermes gateway run` through a console-less `wscript.exe` shim, and starts +
-verifies the gateway. It ends with `hermes doctor`, which also migrates the config
-schema to the current version.
+verifies the gateway. It ends with `hermes doctor --fix`, which migrates the config
+schema to the current version (v0 → v44) non-interactively. Plain `hermes doctor`
+only *reports* the drift; only `--fix` runs the migration, and it never launches the
+setup wizard or Nous Portal.
 
 ### Recovery: the installer stopped at a Nous Portal login
 
@@ -120,13 +135,44 @@ by hand from that same elevated, unlocked session:
 $env:HERMES_HOME = "$env:USERPROFILE\.hermes"
 hermes gateway install --start-on-login --start-now
 hermes gateway status          # expect "Scheduled Task registered" + "Gateway process running"
-hermes doctor                  # migrates the config; DISCORD_BOT_TOKEN now resolves
+hermes doctor --fix            # migrates the config (v0 → v44); DISCORD_BOT_TOKEN resolves
 ```
 
 If `hermes doctor` still reports `DISCORD_BOT_TOKEN` missing, confirm the token is
 in `%USERPROFILE%\.hermes\.env` and that `HERMES_HOME` points there for the shell
 you run `hermes` from. `discord.py` showing as missing is expected — the Discord
 gateway installs it on first run; it does not block startup.
+
+### Recovery: doctor reports "No API key found in ~/.hermes/.env"
+
+`hermes doctor` scans `.env` for known provider variable names. The model is a
+custom OpenAI-compatible endpoint, so the key/URL must be `OPENAI_API_KEY` and
+`OPENAI_BASE_URL` (not a bespoke name like `CLIPROXY_API_KEY`, which resolves at
+runtime but is invisible to this check). The current script writes the right names;
+an older `.env` can be fixed by re-running the installer, or by setting them by hand:
+
+```powershell
+# in %USERPROFILE%\.hermes\.env
+OPENAI_API_KEY=<CLIPROXY_API_KEY>
+OPENAI_BASE_URL=http://100.64.0.1:8317/v1
+```
+
+`config.yaml` references them as `${OPENAI_API_KEY}` / `${OPENAI_BASE_URL}`.
+
+### Recovery: doctor reports "Playwright Chromium not installed"
+
+The browser backend needs a Playwright `chromium-*` build in the ms-playwright
+cache — `agent-browser install` alone does not always satisfy doctor's check.
+Install the exact build from the Hermes repo:
+
+```powershell
+cd $env:USERPROFILE\.hermes\hermes-agent
+npx playwright install chromium
+hermes doctor            # "Playwright Chromium" now passes
+```
+
+This does not affect `computer_use`; browser tools are simply hidden from the agent
+until Chromium is present.
 
 ### Recovery: computer use is degraded
 
@@ -139,12 +185,48 @@ and read the health matrix. Telemetry stays off (`cua_telemetry: false`).
 By default the worker uses Hermes's local built-in memory: the script does not
 write `honcho.json` and does not point at the host's Honcho. Add
 `-UseHostHoncho` only when you have chosen to share the host's Honcho over
-Tailscale (see Host side). That flag writes `honcho.json` (same workspace as the
-host, its own `aiPeer`), installs `honcho-ai`, and prints a warning that this
-shares unauthenticated memory.
+Tailscale (see Host side). That flag writes `honcho.json` (with `defaultHost: hermes`
+and `hosts.hermes.enabled: true`, same workspace as the host, its own `aiPeer`),
+sets `memory.provider: honcho` in `config.yaml`, installs `honcho-ai`, enables the
+host block via `hermes honcho enable`, and prints a warning that this shares
+unauthenticated memory. It then **verifies** the provider is live with
+`hermes honcho status` / `hermes memory status` and **fails the install** if shared
+Honcho is disabled or unreachable — because you explicitly asked for shared memory,
+the script does not silently fall back to built-in memory. To recover, confirm the
+host publishes Honcho on its Tailscale IP (`HONCHO_BIND_ADDR`, `make up`) and that
+the worker can reach `http://<host>:8000`, then re-run the installer.
 
 Optional parameters: `-Model`, `-CliProxyPort`, `-HonchoPort`, `-PeerName`,
 `-Workspace`, `-HomeChannel`, `-UseHostHoncho`.
+
+## Reading `hermes doctor`: benign vs blocking
+
+The install ends with `hermes doctor --fix`. Not every warning it prints is a
+problem. What is safe to ignore and what must be fixed:
+
+**Benign (expected on a healthy worker):**
+
+- `discord.py … (optional)` shown as missing — the Discord gateway installs it
+  lazily on first run; it does not block startup.
+- `Nous Portal auth (not logged in)` — this stack self-hosts the model API through
+  CLIProxyAPI and never signs into the Portal.
+- `Croniter (optional)` and other `(optional)` dependency rows.
+- `Config version outdated (v0 → v44)` seen mid-run **before** the `--fix` migration
+  line — `--fix` then prints `Config migrated to latest version`. Only a persistent
+  drift after `--fix` is a problem.
+
+**Blocking (fix before relying on the worker):**
+
+- `No API key found in ~/.hermes/.env` — the model provider credential is missing or
+  under a name doctor does not recognise (see the recovery above; use
+  `OPENAI_API_KEY` / `OPENAI_BASE_URL`).
+- `DISCORD_BOT_TOKEN missing` — the gateway cannot start; check `.env` and
+  `HERMES_HOME`.
+- `Playwright Chromium not installed` — browser tools are hidden until fixed (recovery
+  above). `computer_use` still works.
+- `Computer use … degraded` — desktop control will fail (see recovery below).
+- Config still showing `v0` **after** `--fix` — migration did not run; re-run
+  `hermes doctor --fix` from the pinned `HERMES_HOME`.
 
 ## Use it
 
