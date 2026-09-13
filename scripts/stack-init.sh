@@ -3,8 +3,8 @@
 #   1. create .env from .env.example if missing
 #   2. fill empty CLIPROXY_API_KEY / CLIPROXY_MANAGEMENT_KEY / HONCHO_DB_PASSWORD with random values
 #   3. render data/cliproxyapi/config.yaml from docker/cliproxyapi/config.example.yaml
-#   4. clone/fast-forward the claude-max-api-proxy sources used to build its image
-#   5. create the bind-mount directories the proxies write to
+#   4. create the bind-mount directories the containers write to
+# The Claude proxy (host, not Docker) is set up by scripts/claude-max-proxy/install.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,9 +24,6 @@ ensure_secret CLIPROXY_API_KEY .env
 ensure_secret CLIPROXY_MANAGEMENT_KEY .env
 ensure_secret HONCHO_DB_PASSWORD .env
 
-if [[ -z "$(env_file_get PUID .env || true)" ]]; then env_file_set PUID "$(id -u)" .env; fi
-if [[ -z "$(env_file_get PGID .env || true)" ]]; then env_file_set PGID "$(id -g)" .env; fi
-
 mkdir -p data/cliproxyapi/auths data/cliproxyapi/logs
 api_key="$(env_file_get CLIPROXY_API_KEY .env)"
 mgmt_key="$(env_file_get CLIPROXY_MANAGEMENT_KEY .env)"
@@ -35,18 +32,11 @@ sed -e "s|__CLIPROXY_API_KEY__|${api_key}|" -e "s|__CLIPROXY_MANAGEMENT_KEY__|${
 chmod 600 data/cliproxyapi/config.yaml
 log "rendered data/cliproxyapi/config.yaml"
 
-proxy_dir="$(env_file_get CLAUDE_MAX_PROXY_DIR .env || true)"
-proxy_dir="${proxy_dir:-./vendor/claude-max-api-proxy}"
-CLAUDE_MAX_PROXY_REPO="$(env_file_get CLAUDE_MAX_PROXY_REPO .env || true)" \
-CLAUDE_MAX_PROXY_REF="$(env_file_get CLAUDE_MAX_PROXY_REF .env || true)" \
-  bash docker/claude-max-proxy/sync-checkout.sh "$proxy_dir"
+# Legacy: the proxy container used to run as PUID/PGID with these as its home.
+if [[ -d data/claude-max-proxy/home ]]; then
+  warn "data/claude-max-proxy/home is from the old Docker proxy; safe to delete after make claude-proxy-install"
+fi
 
-# claude-max-proxy runs as PUID:PGID with these directories as its home and
-# data. Creating them here (as the host user) keeps Docker from creating them
-# root-owned on first start. Same for the gh/git mounts under $HOME.
-mkdir -p data/claude-max-proxy/home/.config data/claude-max-proxy/data
-mkdir -p "$HOME/.config/gh"
-[[ -f "$HOME/.gitconfig" ]] || touch "$HOME/.gitconfig"
 if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
   warn "gh is not logged in on this host; the coding worker cannot push or open PRs until you run: gh auth login"
 fi

@@ -13,32 +13,29 @@ bad()  { printf '  [FAIL] %s\n' "$*"; ERR=$((ERR+1)); }
 warn_() { printf '  [WARN] %s\n' "$*"; WARN=$((WARN+1)); }
 hdr()  { printf '\n== %s ==\n' "$*"; }
 getenv() { env_file_get "$1" .env 2>/dev/null || printf '%s' "${2:-}"; }
+export PATH="$HOME/.local/bin:$PATH"
 
 hdr "Files"
 [[ -f .env ]] && ok ".env present" || { bad ".env missing (make init)"; }
 [[ -f data/cliproxyapi/config.yaml ]] && ok "CLIProxyAPI config rendered" || bad "data/cliproxyapi/config.yaml missing (make init)"
-proxy_dir="$(getenv CLAUDE_MAX_PROXY_DIR ./vendor/claude-max-api-proxy)"
-[[ -f "$proxy_dir/Dockerfile" ]] && ok "claude-max-api-proxy sources at $proxy_dir" || bad "proxy sources missing at $proxy_dir (make init)"
 for k in CLIPROXY_API_KEY HONCHO_DB_PASSWORD DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS; do
   [[ -n "$(getenv "$k")" ]] && ok "$k set" || warn_ "$k empty in .env"
 done
-[[ -n "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]] && ok "CLAUDE_CODE_OAUTH_TOKEN set" || warn_ "CLAUDE_CODE_OAUTH_TOKEN empty (make auth-claude-proxy)"
-[[ -d data/claude-max-proxy/home ]] && ok "claude-max-proxy home dir" || warn_ "data/claude-max-proxy/home missing (make init)"
+repos="$(getenv REPOS_DIR /opt/repos)"
+[[ -d "$repos" ]] && ok "REPOS_DIR $repos" || warn_ "REPOS_DIR $repos does not exist"
 
 hdr "Docker"
 if have docker; then
   ok "docker $(docker --version 2>/dev/null | sed 's/Docker version //')"
+  docker ps >/dev/null 2>&1 && ok "docker usable without sudo (coding worker can run containers)" || warn_ "docker needs sudo for $USER (sudo usermod -aG docker $USER, then log out/in)"
   if docker compose version >/dev/null 2>&1; then
     ok "compose plugin"
     if docker compose config -q 2>/tmp/doctor-compose.err; then ok "docker-compose.yml valid"; else bad "docker-compose.yml invalid: $(head -n1 /tmp/doctor-compose.err)"; fi
-    for s in honcho-db honcho-redis ollama cliproxyapi honcho-api honcho-deriver claude-max-proxy; do
+    for s in honcho-db honcho-redis ollama cliproxyapi honcho-api honcho-deriver; do
       st="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' "$s" 2>/dev/null || echo missing)"
       case "$st" in
         "running healthy"|"running ") ok "$s: $st";;
-        running*)
-          if [[ "$s" == claude-max-proxy && -z "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
-            warn_ "$s: $st (idle, waiting for credentials: make auth-claude-proxy)"
-          else warn_ "$s: $st"; fi;;
+        running*) warn_ "$s: $st";;
         missing) bad "$s: not created (make up)";;
         *) bad "$s: $st";;
       esac
@@ -47,6 +44,27 @@ if have docker; then
 else
   bad "docker not installed"
 fi
+
+hdr "claude-max-proxy (host)"
+proxy_dir="$(getenv CLAUDE_MAX_PROXY_DIR ./vendor/claude-max-api-proxy)"
+if have node; then
+  major="$(node -v | sed 's/^v//; s/\..*//')"
+  [[ "$major" -ge 22 ]] && ok "node $(node -v)" || bad "node $(node -v); the proxy needs 22+"
+else bad "node not installed (make claude-proxy-install prints how)"; fi
+have claude && ok "claude CLI $(claude --version 2>/dev/null | head -n1)" || bad "claude CLI missing (make claude-proxy-install)"
+[[ -f "$proxy_dir/dist/server/standalone.js" ]] && ok "proxy built at $proxy_dir ($(git -C "$proxy_dir" log -1 --format=%h 2>/dev/null))" || bad "proxy not built (make claude-proxy-install)"
+[[ -f data/claude-max-proxy/proxy.env ]] && ok "proxy.env rendered" || bad "data/claude-max-proxy/proxy.env missing (make claude-proxy-install)"
+[[ -n "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]] && ok "CLAUDE_CODE_OAUTH_TOKEN set" || warn_ "CLAUDE_CODE_OAUTH_TOKEN empty (make auth-claude-proxy)"
+if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
+  st="$(systemctl --user is-active claude-max-proxy.service 2>/dev/null || true)"
+  if [[ "$st" == "active" ]]; then
+    lim="$(systemctl --user show claude-max-proxy.service -p CPUQuotaPerSecUSec -p MemoryMax -p TasksMax 2>/dev/null | tr '\n' ' ')"
+    ok "service active (${lim% })"
+    systemctl --user is-enabled claude-max-proxy.service >/dev/null 2>&1 || warn_ "service not enabled at login (make claude-proxy-install)"
+    loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q 'Linger=yes' || warn_ "no linger: proxy and Hermes stop at logout (sudo loginctl enable-linger $USER)"
+  else bad "service $st (make claude-proxy-install; logs: make claude-proxy-logs)"; fi
+elif pgrep -f 'dist/server/standalone.js' >/dev/null 2>&1; then ok "proxy process running (no systemd user session)"
+else bad "proxy not running and no systemd user session (see make claude-proxy-install output)"; fi
 
 hdr "Endpoints"
 cp_port="$(getenv CLIPROXY_PORT 8317)"; cm_port="$(getenv CLAUDE_MAX_PROXY_PORT 3456)"; h_port="$(getenv HONCHO_PORT 8000)"
@@ -58,13 +76,13 @@ else bad "CLIProxyAPI not answering on :$cp_port"; fi
 if out="$(curl -fsS -m 10 http://127.0.0.1:"$cm_port"/v1/models 2>/dev/null)"; then
   n="$(grep -o '"id"' <<<"$out" | wc -l | tr -d ' ')"
   if [[ "$n" -gt 0 ]]; then ok "claude-max-proxy :$cm_port exposes $n models"; else warn_ "claude-max-proxy up but no models (make auth-claude-proxy)"; fi
-else bad "claude-max-proxy not answering on :$cm_port"; fi
+elif [[ -z "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]]; then warn_ "claude-max-proxy idle on :$cm_port, waiting for credentials (make auth-claude-proxy)"
+else bad "claude-max-proxy not answering on :$cm_port (make claude-proxy-logs)"; fi
 if have docker && docker exec ollama ollama list 2>/dev/null | grep -q "$(getenv HONCHO_EMBED_MODEL nomic-embed-text)"; then
   ok "Ollama has $(getenv HONCHO_EMBED_MODEL nomic-embed-text)"
 else warn_ "Ollama embedding model not listed yet (first start pulls it; check: make logs S=ollama)"; fi
 
 hdr "Hermes"
-export PATH="$HOME/.local/bin:$PATH"
 HERMES_HOME="$(getenv HERMES_HOME "$HOME/.hermes")"
 if have hermes; then
   ok "hermes installed ($(hermes --version 2>/dev/null | head -n1 || echo version unknown))"

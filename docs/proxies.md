@@ -3,10 +3,10 @@
 No AI-provider API keys are used anywhere in this stack. Two proxies turn the
 subscriptions you already pay for into OpenAI-compatible endpoints.
 
-| Proxy | Subscription | Port | Used by |
-|-------|--------------|------|---------|
-| CLIProxyAPI | ChatGPT (Codex OAuth) | 8317 | Hermes orchestrator, Honcho, Windows worker |
-| claude-max-proxy | Claude Max | 3456 | Hermes coding subagents (Claude Code under the hood) |
+| Proxy | Subscription | Runs | Port | Used by |
+|-------|--------------|------|------|---------|
+| CLIProxyAPI | ChatGPT (Codex OAuth) | Docker | 8317 | Hermes orchestrator, Honcho, Windows worker |
+| claude-max-proxy | Claude Max | host, systemd user service | 3456 | Hermes coding subagents (Claude Code under the hood) |
 
 Both are adapters. If one breaks, the rest of the stack keeps its shape; swap
 the `base_url` and carry on.
@@ -32,64 +32,88 @@ The management API and control panel are disabled in the template; enable
 
 ## claude-max-proxy (Claude Max subscription)
 
-Built from <https://github.com/NorkzYT/claude-max-api-proxy>, cloned into
-`vendor/` by `make init`. Inside the container a real Claude Code CLI serves
-`/v1/chat/completions`, so subagents get the full Claude Code toolchain against
-the repos mounted from `REPOS_DIR`.
+Source <https://github.com/mattschwen/claude-max-api-proxy>, cloned into
+`vendor/` and built with `npm` by `make claude-proxy-install`. The proxy
+launches a real Claude Code CLI per request (`--dangerously-skip-permissions`,
+cwd `REPOS_DIR`) and serves `/v1/chat/completions`, so Hermes subagents get the
+full Claude Code toolchain.
 
 ```bash
-make auth-claude-proxy                 # login URL -> sk-ant-oat01-... token, stored in .env
-curl -s http://127.0.0.1:3456/v1/models
+make claude-proxy-install    # node 22+ check, claude CLI, clone + build, systemd unit, start
+make auth-claude-proxy       # login URL -> sk-ant-oat01-... token, stored in .env, service restarted
+make models                  # opus / sonnet / haiku / fable ...
+make claude-proxy-logs       # journalctl -f
+make claude-proxy-restart
 ```
 
-`make auth-claude-proxy` runs `claude setup-token` in a one-off container, asks
-you to paste the printed token, writes it to `.env` as
-`CLAUDE_CODE_OAUTH_TOKEN`, recreates the service and waits for `/health`.
-Until a token exists the container stays up but idle (its log says so); it
-does not crash-loop, and `make doctor` reports it as waiting.
+### Why on the host and not in Docker
 
-Settings in `.env`:
+The proxy's job is to run Claude Code, and Claude Code's job is to work on
+your repos with your tools. Inside a container that meant mounting the repos,
+baking every toolchain into the image (and losing it on each rebuild), and no
+`docker` at all. On the host the sessions see exactly what you see: `go`,
+`node`, `uv`, `docker`, `gh`, your git identity, your repos. Upstream also
+recommends the host and calls Docker optional.
 
-- `DEFAULT_THINKING_BUDGET` (`off|low|medium|high|xhigh|max`) applied when a
-  client sends none.
-- `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS`: how many Claude Code sessions the
-  proxy runs at once. Each is a full CLI process (about 1 GB RAM, a core when
-  busy) and they all draw on the same Claude Max 5-hour window. 2-3 fits the
-  default `CLAUDE_MAX_PROXY_CPUS=2.0` / `MEM_LIMIT=8g`; raise all three
-  together. Extra requests queue rather than fail.
-- `CLAUDE_PROXY_MAX_UPTIME_HOURS` (default 12): the kit's entrypoint restarts
-  the proxy after that many hours, but only once nothing is active or queued
-  (it polls `/ops/snapshot`), and Docker brings it straight back. This clears
-  leaked CLI subprocesses and stale OAuth state. Upstream `main` does not
-  implement the variable itself. Empty or 0 disables.
+The one thing the container gave you, hard limits so a runaway session cannot
+freeze the host, the systemd unit keeps: `CPUQuota`, `MemoryMax` and
+`TasksMax` apply to the proxy and every process it spawns (cgroup v2). Set
+them in `.env`:
 
-The container runs as your host user (`PUID`/`PGID` from `make init`) with
-`data/claude-max-proxy/home` as its home, so its Claude CLI state is private to
-the container and never shared with a `claude` installed on the host. `gh` auth
-and `.gitconfig` are mounted so the coding worker can push branches and open
-PRs as you; run `gh auth login` on the host once.
+| `.env` | Unit setting | Default |
+|--------|--------------|---------|
+| `CLAUDE_MAX_PROXY_CPUS` | `CPUQuota` (x100%) | 4 |
+| `CLAUDE_MAX_PROXY_MEM_LIMIT` | `MemoryMax` | 12G |
+| `CLAUDE_MAX_PROXY_TASKS_MAX` | `TasksMax` | 4096 |
+| `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS` | proxy queue width | 3 |
 
-### Container or host?
+Sizing: about one core and 4 GB per concurrent session, `CPUS ~ 1.3 x
+sessions`, `MEM ~ 4G x sessions`. All sessions share the Claude Max 5-hour
+window, which caps usefulness well before the hardware does. Suggested
+values are in `.env.example`; re-run `make claude-proxy-install` after
+changing them (it re-renders the unit and restarts the service).
 
-The kit runs the proxy in Docker on purpose: cgroup CPU, memory and pid limits
-are what stop a runaway Claude Code session from freezing the host, the
-idle-aware uptime restart relies on `restart: unless-stopped`, and one
-`make up` brings the whole HTTP half back after a reboot. Upstream also
-supports running it on the host (`npm start` with the host's `claude` login);
-do that only if you would rather manage limits with a systemd unit yourself.
-Hermes does not care either way, it just needs `http://127.0.0.1:3456/v1`.
+### How it is wired
+
+- `~/.config/systemd/user/claude-max-proxy.service`, rendered from
+  `scripts/claude-max-proxy/claude-max-proxy.service.tmpl`. `WorkingDirectory`
+  is `REPOS_DIR`; `PATH` is captured from the shell that ran the install, so
+  tools you can run, the subagents can run. Installed a new tool? Run
+  `make claude-proxy-install` again from a shell that has it.
+- `data/claude-max-proxy/proxy.env`: the proxy's environment, rendered from
+  `.env` (token, port, `HOST=BIND_ADDR`, thinking budget, concurrency).
+- `data/claude-max-proxy/claude/`: the proxy's private `CLAUDE_CONFIG_DIR`.
+  Its login and session state never touch your own `~/.claude`.
+- `data/claude-max-proxy/data/`: conversation DB and session map.
+- `scripts/claude-max-proxy/run.sh` is the unit's `ExecStart`. With no token
+  it idles and logs `run make auth-claude-proxy` instead of crash-looping.
+  With `CLAUDE_PROXY_MAX_UPTIME_HOURS` (default 12) it restarts the proxy
+  after that long, but only once nothing is active or queued (it polls
+  `/ops/snapshot`); systemd brings it straight back. Upstream does not
+  implement that variable itself. Empty or 0 disables.
+
+Other `.env` settings: `DEFAULT_THINKING_BUDGET` (`off|low|medium|high|xhigh|max`)
+applied when a client sends none. Timeouts are built into the proxy per model
+family (Opus and Fable: 120 s stall, 30 min hard, x3 when thinking is on).
+
+The operator dashboard at `http://127.0.0.1:3456/` works; its banner images
+404 because the proxy serves them relative to its cwd, which is `REPOS_DIR`
+here rather than the checkout. Cosmetic.
+
+Boot without a login session needs lingering enabled once:
+`sudo loginctl enable-linger $USER` (the same requirement as the Hermes
+gateway).
 
 ## Model names
 
 - CLIProxyAPI: whatever `make models` lists (for example `gpt-5.5`). Set
   `HERMES_MODEL` and `HONCHO_MODEL`.
-- claude-max-proxy: `opus`, `sonnet`, `haiku`, `default`, or an exact id from
-  its `/v1/models` (Fable appears there when the account has it). Set
-  `HERMES_CODING_MODEL`.
+- claude-max-proxy: `opus`, `sonnet`, `haiku`, `fable`, `best`, `default`, or
+  an exact id from its `/v1/models`. Set `HERMES_CODING_MODEL`.
 
 ## Reaching the proxies from the Windows VM
 
 Set `BIND_ADDR` in `.env` to the host's Tailscale address (or `0.0.0.0` with a
-firewall), `make up`, and point the worker at `http://<host>:8317/v1`. The
-Windows installer does this for you (see
+firewall), then `make up && make claude-proxy-install`, and point the worker at
+`http://<host>:8317/v1`. The Windows installer does this for you (see
 [windows-vm-worker.md](windows-vm-worker.md)).

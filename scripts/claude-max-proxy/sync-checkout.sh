@@ -2,36 +2,41 @@
 #
 # Keep the claude-max-api-proxy source checkout current so `make update`
 # actually ships new proxy code (new models, fixes) instead of rebuilding
-# the same sources from cache.
+# the same sources.
 #
-# Runs on the HOST (called by `make init` and `make update`), never inside a
-# container. It is conservative by design:
+# Called by scripts/claude-max-proxy/install.sh (`make claude-proxy-install`,
+# `make update`). It is conservative by design:
 #   - clones the default ref on a fresh machine
 #   - fast-forwards the current branch when it is clean
 #   - migrates a checkout still on a LEGACY kit-pinned branch to the default ref
+#   - migrates a checkout still pointing at a LEGACY kit-pinned remote (the old
+#     NorkzYT fork) to the configured remote, moving a clean worktree onto it
 #   - respects a user-chosen branch (only fast-forwards it, with a note)
-#   - never touches a dirty worktree, never force-pulls, never resets
+#   - never touches a dirty worktree, never force-pulls user changes
 #   - network/divergence problems warn and exit 0 so updates keep working
 #     offline with the sources already present
 #
 # Usage:
-#   sync-proxy-checkout.sh [proxy-dir]
+#   sync-checkout.sh [proxy-dir]
 #
 # Env:
 #   CLAUDE_MAX_PROXY_DIR   checkout location   (default: ./vendor/claude-max-api-proxy)
-#   CLAUDE_MAX_PROXY_REPO  clone URL           (default: NorkzYT/claude-max-api-proxy)
+#   CLAUDE_MAX_PROXY_REPO  clone URL           (default: mattschwen/claude-max-api-proxy, upstream)
 #   CLAUDE_MAX_PROXY_REF   branch to track     (default: main)
 #
 set -euo pipefail
 
 PROXY_DIR="${1:-${CLAUDE_MAX_PROXY_DIR:-./vendor/claude-max-api-proxy}}"
-REPO_URL="${CLAUDE_MAX_PROXY_REPO:-https://github.com/NorkzYT/claude-max-api-proxy.git}"
+REPO_URL="${CLAUDE_MAX_PROXY_REPO:-https://github.com/mattschwen/claude-max-api-proxy.git}"
 REF="${CLAUDE_MAX_PROXY_REF:-main}"
 
 # Branches the kit pinned in older installs. A checkout sitting on one of
 # these was put there by install.sh, not by the user, so it is safe to move
 # it to the current default ref.
 LEGACY_REFS=("fix/oauth-refresh-race")
+# Remotes older kits cloned from. The NorkzYT fork's Fable/timeout work landed
+# upstream (mattschwen #21), so a checkout still on the fork is moved over.
+LEGACY_REMOTES=("https://github.com/NorkzYT/claude-max-api-proxy")
 
 TAG="sync-proxy"
 log() { echo "[$TAG] $*"; }
@@ -55,13 +60,32 @@ if [[ ! -d "$PROXY_DIR/.git" ]]; then
   exit 0
 fi
 
-if ! git -C "$PROXY_DIR" fetch origin 2>/dev/null; then
-  log "WARN: fetch failed (offline?); building existing sources: $(describe_head)" >&2
+if [[ -n "$(git -C "$PROXY_DIR" status --porcelain 2>/dev/null)" ]]; then
+  log "WARN: local changes in $PROXY_DIR; leaving sources untouched: $(describe_head)" >&2
   exit 0
 fi
 
-if [[ -n "$(git -C "$PROXY_DIR" status --porcelain 2>/dev/null)" ]]; then
-  log "WARN: local changes in $PROXY_DIR; leaving sources untouched: $(describe_head)" >&2
+# Kit-pinned legacy remote -> configured remote (clean worktree only, see above).
+current_remote="$(git -C "$PROXY_DIR" remote get-url origin 2>/dev/null || echo '')"
+if [[ "${current_remote%.git}" != "${REPO_URL%.git}" ]]; then
+  for legacy in "${LEGACY_REMOTES[@]}"; do
+    if [[ "${current_remote%.git}" == "${legacy%.git}" ]]; then
+      log "moving remote from $current_remote to $REPO_URL"
+      git -C "$PROXY_DIR" remote set-url origin "$REPO_URL"
+      if git -C "$PROXY_DIR" fetch origin "$REF" 2>/dev/null; then
+        git -C "$PROXY_DIR" checkout -q -B "$REF" "origin/$REF"
+        log "checkout now on $REPO_URL '$REF': $(describe_head)"
+      else
+        log "WARN: fetch from the new remote failed (offline?); building existing sources: $(describe_head)" >&2
+        exit 0
+      fi
+      break
+    fi
+  done
+fi
+
+if ! git -C "$PROXY_DIR" fetch origin 2>/dev/null; then
+  log "WARN: fetch failed (offline?); building existing sources: $(describe_head)" >&2
   exit 0
 fi
 

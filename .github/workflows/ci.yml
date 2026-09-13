@@ -63,8 +63,7 @@ jobs:
       - name: docker compose config
         run: |
           cp .env.example .env
-          sed -i 's/^CLIPROXY_API_KEY=$/CLIPROXY_API_KEY=ci/; s/^CLIPROXY_MANAGEMENT_KEY=$/CLIPROXY_MANAGEMENT_KEY=ci/; s/^HONCHO_DB_PASSWORD=$/HONCHO_DB_PASSWORD=ci/' .env
-          mkdir -p vendor/claude-max-api-proxy && printf 'FROM scratch\n' > vendor/claude-max-api-proxy/Dockerfile
+          sed -i "s/^CLIPROXY_API_KEY=$/CLIPROXY_API_KEY=ci/; s/^CLIPROXY_MANAGEMENT_KEY=$/CLIPROXY_MANAGEMENT_KEY=ci/; s/^HONCHO_DB_PASSWORD=$/HONCHO_DB_PASSWORD=ci/; s#^REPOS_DIR=.*#REPOS_DIR=$RUNNER_TEMP/repos#" .env
           docker compose config -q
       - name: Hermes templates and JSON parse
         run: |
@@ -81,3 +80,12 @@ jobs:
         run: |
           rm -f .env; CLAUDE_MAX_PROXY_REPO=file:///nonexistent bash scripts/stack-init.sh || true
           test -f data/cliproxyapi/config.yaml && ! grep -q __CLIPROXY_API_KEY__ data/cliproxyapi/config.yaml
+      - name: claude-max-proxy unit and proxy.env render offline
+        run: |
+          export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
+          sed -i "s#^REPOS_DIR=.*#REPOS_DIR=$RUNNER_TEMP/repos#" .env
+          bash scripts/claude-max-proxy/install.sh --render-only
+          unit="$HOME/.config/systemd/user/claude-max-proxy.service"
+          test -f "$unit" && ! grep -q '__[A-Z_]*__' "$unit"
+          grep -q '^CPUQuota=400%$' "$unit" && grep -q '^MemoryMax=12G$' "$unit"
+          test -f data/claude-max-proxy/proxy.env && grep -q '^CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS=3$' data/claude-max-proxy/proxy.env

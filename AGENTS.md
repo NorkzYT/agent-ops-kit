@@ -7,8 +7,9 @@
 
 Two things live here:
 
-1. **The stack.** `docker-compose.yml` (Honcho, Ollama, CLIProxyAPI,
-   claude-max-proxy), `Makefile`, `scripts/` and `hermes/` install and configure
+1. **The stack.** `docker-compose.yml` (Honcho, Ollama, CLIProxyAPI),
+   `scripts/claude-max-proxy/` (the Claude proxy as a host systemd user
+   service), `Makefile`, `scripts/` and `hermes/` install and configure
    a Hermes agent that runs from Discord. Hermes is installed on the host by
    `scripts/hermes-install.sh`; the compose file is the HTTP half.
 2. **The Claude Code kit.** `.claude/` is a portable bundle (Python hooks,
@@ -25,7 +26,8 @@ bash .claude/extras/doctor.sh                 # kit structure, settings JSON, ho
 python3 .claude/scripts/test_guard.py         # bash guard allow/block behaviour
 bash .claude/scripts/test_self_update.sh      # installer manifest replay
 docker compose config -q                      # after editing docker-compose.yml (needs .env)
-bash -n scripts/*.sh                          # after editing scripts
+bash -n scripts/*.sh scripts/claude-max-proxy/*.sh   # after editing scripts
+bash scripts/claude-max-proxy/install.sh --render-only   # unit + proxy.env render (needs .env)
 make doctor                                   # on a host with the stack running
 ```
 

@@ -15,13 +15,16 @@ fixes it. Then find the symptom below.
 | `honcho-api` restarts with `embedding dim (1536) does not match EMBEDDING_VECTOR_DIMENSIONS` | database created before the kit entrypoint, or dimensions changed after data existed | `make up` (entrypoint now resizes empty tables); if data exists, `make clean && make up` |
 | `honcho-api` logs `password authentication failed for user "postgres"` | database volume created before `HONCHO_DB_PASSWORD` existed (or the value changed) | empty database: `make clean && make up`. With data: `docker exec honcho-db psql -U postgres -c "ALTER USER postgres PASSWORD '<value from .env>'"` then `make restart S=honcho-api` |
 | `honcho-db` logs `POSTGRES_HOST_AUTH_METHOD has been set to "trust"` | volume initialised by an older kit version | harmless on a local stack; to close it: `docker exec honcho-db sed -i 's/^host all all all trust$/host all all all scram-sha-256/' /var/lib/postgresql/data/pgdata/pg_hba.conf && make restart S=honcho-db` after setting the password as above |
-| claude-max-proxy restarts by itself every few hours | `CLAUDE_PROXY_MAX_UPTIME_HOURS` (idle-only restart, by design) | raise it or set it empty in `.env`, `make up` |
-| claude-max-proxy log says `no Claude Max credentials yet` | no `CLAUDE_CODE_OAUTH_TOKEN` | `make auth-claude-proxy` |
+| claude-max-proxy restarts by itself every few hours | `CLAUDE_PROXY_MAX_UPTIME_HOURS` (idle-only restart, by design) | raise it or set it empty in `.env`, `make claude-proxy-install` |
+| `make claude-proxy-logs` says `no Claude Max credentials yet` | no `CLAUDE_CODE_OAUTH_TOKEN` | `make auth-claude-proxy` |
 | claude-max-proxy `/v1/models` empty or 401 | token expired or revoked | `make auth-claude-proxy` again |
-| claude-max-proxy `EACCES` / cannot write `~/.claude` | `data/claude-max-proxy` not owned by `PUID` | `sudo chown -R $(id -u):$(id -g) data/claude-max-proxy`; check `PUID`/`PGID` in `.env` |
-| claude-max-proxy build fails | `vendor/claude-max-api-proxy` missing | `make init` (clones it); check `CLAUDE_MAX_PROXY_REPO` |
-| host freezes during coding tasks | proxy limits too high | lower `CLAUDE_MAX_PROXY_CPUS`, `CLAUDE_MAX_PROXY_MEM_LIMIT`, `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS` |
-| a port is already in use | another service on 8317/3456/8000 | change `*_PORT` in `.env`, `make up`, `make hermes-install` |
+| `make claude-proxy-install` says `node not found` / `needs Node.js 22+` | no Node on the host | install Node 22+ (NodeSource, fnm or nvm), open a new shell, re-run |
+| service `failed`, journal shows `claude: not found` | `claude` not on the PATH captured at install time | run `make claude-proxy-install` from a shell where `claude --version` works |
+| service `failed`, journal shows `EACCES` under `data/claude-max-proxy` | leftover root-owned files from the old Docker proxy | `sudo chown -R $(id -u):$(id -g) data/claude-max-proxy` |
+| subagent cannot find `go`, `docker`, `uv`... | tool installed after the unit captured PATH, or only in a shell rc | `make claude-proxy-install` again from a shell that has it |
+| host freezes during coding tasks | proxy limits too high for the box | lower `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS`, `CLAUDE_MAX_PROXY_CPUS`, `CLAUDE_MAX_PROXY_MEM_LIMIT`; `make claude-proxy-install` |
+| `systemctl --user show` reports `CPUQuotaPerSecUSec=infinity` | cgroup v2 CPU controller not delegated to user services (old systemd) | limits still apply for memory and pids; upgrade systemd (>= 252) or accept it |
+| a port is already in use | another service on 8317/3456/8000 | change `*_PORT` in `.env`, then `make up`, `make claude-proxy-install`, `make hermes-install` |
 
 ## Hermes
 
@@ -69,7 +72,8 @@ Validate the bundle itself with `bash .claude/extras/doctor.sh` and
 ## Reset everything
 
 ```bash
-make clean               # deletes Honcho memory, Ollama models, proxy OAuth state
+make clean               # deletes Honcho memory and the Ollama model
+systemctl --user disable --now claude-max-proxy.service
 rm -rf data vendor .env
 make init && make up
 ```

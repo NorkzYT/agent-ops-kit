@@ -28,8 +28,9 @@ On a Linux host with Docker:
 git clone https://github.com/NorkzYT/agent-ops-kit.git /opt/agent-ops-kit
 cd /opt/agent-ops-kit
 make init                 # .env with secrets, proxy config, proxy sources
-make up                   # Honcho + Ollama + CLIProxyAPI + claude-max-proxy
+make up                   # Honcho + Ollama + CLIProxyAPI (Docker)
 make auth-codex           # sign in with the ChatGPT account
+make claude-proxy-install # claude-max-proxy on the host, as a systemd user service
 make auth-claude-proxy    # sign in with the Claude Max account (token stored in .env)
 $EDITOR .env              # DISCORD_BOT_TOKEN, DISCORD_ALLOWED_USERS, DISCORD_HOME_CHANNEL
 make hermes-install       # install Hermes, wire it up, start the Discord gateway
@@ -46,7 +47,7 @@ Then @mention the bot in Discord. Full walkthrough: [docs/install.md](docs/insta
 | Honcho | Docker | long-term memory of you, self-hosted, reasoning via your ChatGPT subscription |
 | Ollama | Docker | local embedding model for Honcho, so no embeddings API key |
 | CLIProxyAPI | Docker `:8317` | ChatGPT subscription as an OpenAI-compatible API |
-| claude-max-proxy | Docker `:3456` | Claude Max subscription as an OpenAI-compatible API, with Claude Code inside |
+| claude-max-proxy | host, systemd user service `:3456` | Claude Max subscription as an OpenAI-compatible API; runs Claude Code on the host, so subagents get your repos, toolchains, docker and gh |
 | Browser Use | host (or Cloud) | the browser backend Hermes drives |
 | Windows worker | your VM | a second Hermes with computer use for GUI-only tasks |
 | `.claude/` kit | any repo | hooks, agents and skills that make Claude Code a careful coding worker |
@@ -78,10 +79,10 @@ hermes kanban create "Positioning for the new plan" --assignee marketing
 ## Repository layout
 
 ```
-docker-compose.yml        Honcho, Ollama, CLIProxyAPI, claude-max-proxy
-Makefile                  init, up, auth-*, models, doctor, hermes-install, hermes-profile
+docker-compose.yml        Honcho, Ollama, CLIProxyAPI
+Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile
 .env.example              every setting, commented
-scripts/                  stack-init, hermes-install, hermes-profile, doctor, windows-vm/
+scripts/                  stack-init, hermes-install, hermes-profile, doctor, claude-max-proxy/ (host install), windows-vm/
 hermes/                   config templates, SOUL.md, profiles/, teams/, skills/, cron-jobs.md
 docker/                   cliproxyapi config template, honcho init, ollama entrypoint
 docs/                     install, hermes, honcho, proxies, browser-use, profiles, windows, troubleshooting
@@ -93,7 +94,7 @@ docs/                     install, hermes, honcho, proxies, browser-use, profile
 - [docs/install.md](docs/install.md), [docs/troubleshooting.md](docs/troubleshooting.md)
 - [docs/hermes.md](docs/hermes.md), [docs/honcho.md](docs/honcho.md), [docs/proxies.md](docs/proxies.md)
 - [docs/browser-use.md](docs/browser-use.md), [docs/profiles-and-teams.md](docs/profiles-and-teams.md), [docs/windows-vm-worker.md](docs/windows-vm-worker.md)
-- Upstream: [Hermes](https://hermes-agent.nousresearch.com/docs), [Honcho](https://honcho.dev/docs), [Browser Use](https://docs.browser-use.com), [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [claude-max-api-proxy](https://github.com/NorkzYT/claude-max-api-proxy)
+- Upstream: [Hermes](https://hermes-agent.nousresearch.com/docs), [Honcho](https://honcho.dev/docs), [Browser Use](https://docs.browser-use.com), [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [claude-max-api-proxy](https://github.com/mattschwen/claude-max-api-proxy)
 
 ## The Claude Code kit
 

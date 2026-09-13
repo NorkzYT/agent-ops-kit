@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# install.sh — run claude-max-proxy on this host as a systemd user service.
+#
+#   1. Node.js 22+ and the Claude Code CLI (installed to ~/.local/bin if missing)
+#   2. sources: clone/fast-forward vendor/claude-max-api-proxy, npm ci, npm run build
+#   3. data/claude-max-proxy/proxy.env rendered from .env
+#   4. ~/.config/systemd/user/claude-max-proxy.service rendered from the template,
+#      enabled, (re)started, then /health is polled
+#
+# Idempotent: `make claude-proxy-install` again after editing .env or to pull
+# newer proxy sources (`make update` does the same plus the Docker images).
+#
+# Usage: install.sh [--deps-only | --render-only]
+#   --deps-only    step 1 only (used by make auth-claude-proxy before login)
+#   --render-only  steps 3-4 without systemd (CI / dry run)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$ROOT"
+# shellcheck source=../lib.sh
+. "$ROOT/scripts/lib.sh"
+
+MODE="${1:-}"
+[[ -f .env ]] || die ".env not found. Run: make init"
+getenv() { env_file_get "$1" .env 2>/dev/null || printf '%s' "${2:-}"; }
+
+export PATH="$HOME/.local/bin:$PATH"
+PROXY_DIR="$(getenv CLAUDE_MAX_PROXY_DIR ./vendor/claude-max-api-proxy)"
+case "$PROXY_DIR" in /*) ;; *) PROXY_DIR="$ROOT/${PROXY_DIR#./}" ;; esac
+DATA_DIR="$ROOT/data/claude-max-proxy"
+ENV_FILE="$DATA_DIR/proxy.env"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UNIT="$UNIT_DIR/claude-max-proxy.service"
+PORT="$(getenv CLAUDE_MAX_PROXY_PORT 3456)"
+
+# ------------------------------------------------------------- 1. deps ---
+ensure_deps() {
+  if [[ "$MODE" == "--render-only" ]]; then return 0; fi
+  if have node; then
+    major="$(node -v | sed 's/^v//; s/\..*//')"
+    [[ "$major" -ge 22 ]] || die "node $(node -v) found; the proxy needs Node.js 22+. Install: https://nodejs.org/en/download (NodeSource or fnm), then re-run"
+    log "node $(node -v)"
+  else
+    die "node not found; the proxy needs Node.js 22+. Ubuntu/Debian: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs"
+  fi
+  have npm || die "npm not found (comes with Node.js)"
+  if ! have claude; then
+    log "installing the Claude Code CLI to ~/.local/bin"
+    curl -fsSL https://claude.ai/install.sh | bash
+    export PATH="$HOME/.local/bin:$PATH"
+    have claude || die "claude still not on PATH after install; open a new shell and re-run"
+  fi
+  log "claude $(claude --version 2>/dev/null | head -n1 || echo present)"
+}
+
+# ---------------------------------------------------------- 2. sources ---
+build_sources() {
+  CLAUDE_MAX_PROXY_REPO="$(getenv CLAUDE_MAX_PROXY_REPO)" \
+  CLAUDE_MAX_PROXY_REF="$(getenv CLAUDE_MAX_PROXY_REF)" \
+    bash scripts/claude-max-proxy/sync-checkout.sh "$PROXY_DIR"
+  [[ -f "$PROXY_DIR/package.json" ]] || die "proxy sources missing at $PROXY_DIR (offline?)"
+  local head; head="$(git -C "$PROXY_DIR" rev-parse HEAD 2>/dev/null || echo none)"
+  if [[ -f "$PROXY_DIR/dist/server/standalone.js" && "$(cat "$PROXY_DIR/.agent-ops-kit-built" 2>/dev/null)" == "$head" ]]; then
+    log "proxy already built at $(git -C "$PROXY_DIR" log -1 --format='%h %s' 2>/dev/null)"
+  else
+    log "building the proxy (npm ci && npm run build)"
+    (cd "$PROXY_DIR" && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent)
+    printf '%s\n' "$head" > "$PROXY_DIR/.agent-ops-kit-built"
+    log "built $(git -C "$PROXY_DIR" log -1 --format='%h %s' 2>/dev/null)"
+  fi
+}
+
+# ------------------------------------------------------- 3. proxy.env ---
+render_env() {
+  mkdir -p "$DATA_DIR/claude" "$DATA_DIR/data"
+  local tmp; tmp="$(mktemp)"
+  cat > "$tmp" <<ENV
+# Rendered from .env by scripts/claude-max-proxy/install.sh. Do not edit.
+HOST=$(getenv BIND_ADDR 127.0.0.1)
+CLAUDE_MAX_PROXY_PORT=$PORT
+# Claude CLI state private to the proxy, never shared with your own \`claude\`.
+CLAUDE_CONFIG_DIR=$DATA_DIR/claude
+DB_PATH=$DATA_DIR/data/conversations.db
+SESSION_FILE=$DATA_DIR/data/sessions.json
+CLAUDE_CODE_OAUTH_TOKEN=$(getenv CLAUDE_CODE_OAUTH_TOKEN)
+DEFAULT_THINKING_BUDGET=$(getenv DEFAULT_THINKING_BUDGET)
+CLAUDE_PROXY_ENABLE_ADMIN_API=true
+CLAUDE_PROXY_SAME_CONVERSATION_POLICY=queue
+CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS=$(getenv CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS 3)
+CLAUDE_PROXY_MAX_UPTIME_HOURS=$(getenv CLAUDE_PROXY_MAX_UPTIME_HOURS 12)
+ENV
+  install -m 600 "$tmp" "$ENV_FILE"; rm -f "$tmp"
+  log "wrote $ENV_FILE"
+}
+
+# ------------------------------------------------------------ 4. unit ---
+render_unit() {
+  local cpus mem tasks
+  cpus="$(getenv CLAUDE_MAX_PROXY_CPUS 4)"
+  mem="$(getenv CLAUDE_MAX_PROXY_MEM_LIMIT 12G | tr '[:lower:]' '[:upper:]')"
+  tasks="$(getenv CLAUDE_MAX_PROXY_TASKS_MAX 4096)"
+  # systemd: 1 CPU = 100%. Accepts 8, 2.0, 0.5.
+  export CPU_QUOTA; CPU_QUOTA="$(awk -v c="$cpus" 'BEGIN { printf "%d%%", c * 100 }')"
+  export MEMORY_MAX="$mem" TASKS_MAX="$tasks"
+  export REPOS_DIR; REPOS_DIR="$(getenv REPOS_DIR /opt/repos)"
+  export ENV_FILE RUN_SH="$ROOT/scripts/claude-max-proxy/run.sh" PROXY_DIR
+  # Prepend ~/.local/bin (claude, hermes); % is a systemd specifier, escape it.
+  export SERVICE_PATH; SERVICE_PATH="${PATH//%/%%}"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) SERVICE_PATH="$HOME/.local/bin:$SERVICE_PATH" ;; esac
+  mkdir -p "$UNIT_DIR" "$REPOS_DIR" 2>/dev/null || true
+  [[ -d "$REPOS_DIR" ]] || die "REPOS_DIR=$REPOS_DIR does not exist and could not be created"
+  render_template scripts/claude-max-proxy/claude-max-proxy.service.tmpl "$UNIT"
+  log "wrote $UNIT (CPUQuota=$CPU_QUOTA MemoryMax=$MEMORY_MAX TasksMax=$TASKS_MAX, cwd $REPOS_DIR)"
+}
+
+start_unit() {
+  if ! have systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
+    warn "no systemd user session; start the proxy by hand:"
+    warn "  set -a; . $ENV_FILE; set +a; cd $(getenv REPOS_DIR /opt/repos) && bash $ROOT/scripts/claude-max-proxy/run.sh $PROXY_DIR"
+    return 0
+  fi
+  systemctl --user daemon-reload
+  systemctl --user enable --now claude-max-proxy.service >/dev/null 2>&1 || systemctl --user enable claude-max-proxy.service
+  systemctl --user restart claude-max-proxy.service
+  if have loginctl; then
+    loginctl show-user "$USER" -p Linger 2>/dev/null | grep -q 'Linger=yes' || \
+      warn "run once so the proxy starts at boot without a login:  sudo loginctl enable-linger $USER"
+  fi
+  if [[ -z "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]]; then
+    warn "no CLAUDE_CODE_OAUTH_TOKEN yet: the service is up but idle. Next: make auth-claude-proxy"
+    return 0
+  fi
+  printf '[agent-ops-kit] waiting for http://127.0.0.1:%s/health ' "$PORT"
+  for _ in $(seq 1 40); do
+    if curl -fsS -m 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
+      echo; log "claude-max-proxy is up. Models: make models   Logs: make claude-proxy-logs"
+      return 0
+    fi
+    printf '.'; sleep 3
+  done
+  echo
+  warn "not healthy yet (first start probes every model, ~1 min). Check: make claude-proxy-logs"
+}
+
+case "$MODE" in
+  --deps-only)   ensure_deps ;;
+  --render-only) render_env; render_unit ;;
+  "")            ensure_deps; build_sources; render_env; render_unit; start_unit ;;
+  *)             die "usage: install.sh [--deps-only | --render-only]" ;;
+esac
