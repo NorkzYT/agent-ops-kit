@@ -22,9 +22,19 @@
         -DiscordBotToken <token> -AllowedUsers 282100214024896522 `
         -UseHostHoncho
 
-  The host must publish CLIProxyAPI on that address over Tailscale: set
-  CLIPROXY_BIND_ADDR to the host's Tailscale IP in .env (not 0.0.0.0), then
-  `make up`. Keep every other service, including Honcho, on loopback.
+  Host prerequisites (do these on the Linux host, NOT here — this script never
+  configures the host's Tailscale):
+    - The stack is up with Docker bound to 127.0.0.1 (the default): `make up`.
+    - CLIProxyAPI (and Honcho, only if you pass -UseHostHoncho) are published to
+      the tailnet with Tailscale Serve: `make windows-vm-network`. That keeps the
+      containers on loopback and forwards :8317 (and :8000) over the tailnet.
+    - This VM's Tailscale node is allowed by the host's ACLs to reach :8317
+      (and :8000 for host Honcho).
+  Do NOT bind Docker to the Tailscale IP or 0.0.0.0. See docs/windows-vm-worker.md.
+
+  Before any expensive setup, this script probes HostAddress:CliProxyPort (and
+  HostAddress:HonchoPort when -UseHostHoncho) and stops with a clear message if
+  the host is not reachable, so you fix the host once rather than after a long install.
 #>
 param(
   [Parameter(Mandatory = $true)] [string] $HostAddress,
@@ -54,6 +64,32 @@ $KitRoot    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 # is also immune to the interactive account's %USERPROFILE% drifting (e.g. a
 # Default-profile fallback like C:\Users\default.<HOST>).
 $env:HERMES_HOME = $HermesHome
+
+# Probe the host's tailnet endpoints BEFORE any expensive setup (Hermes install,
+# cua driver, browser build). The host publishes these with `make windows-vm-network`
+# (Docker on 127.0.0.1 + Tailscale Serve); this script does not configure the host's
+# Tailscale. A TCP connect is enough — we do not authenticate and never send or print
+# the API key. Fail clearly and early so the host is fixed once, not after a long install.
+function Test-HostPort([string] $Address, [int] $Port, [int] $TimeoutMs = 4000) {
+  try {
+    $client = New-Object System.Net.Sockets.TcpClient
+    $iar = $client.BeginConnect($Address, $Port, $null, $null)
+    $ok = $iar.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+    if ($ok -and $client.Connected) { $client.EndConnect($iar); return $true }
+    return $false
+  } catch { return $false }
+  finally { if ($client) { $client.Close() } }
+}
+Write-Host "[agent-ops-kit] probing host $HostAddress`:$CliProxyPort (CLIProxyAPI) over Tailscale"
+if (-not (Test-HostPort $HostAddress $CliProxyPort)) {
+  throw "Cannot reach the model API at ${HostAddress}:$CliProxyPort. On the Linux host: bring the stack up (make up, Docker stays on 127.0.0.1), publish it over Tailscale (make windows-vm-network), and allow this VM in your Tailscale ACLs. Verify on the host with: make windows-vm-network-status. Do NOT bind Docker to the Tailscale IP. See docs/windows-vm-worker.md."
+}
+if ($UseHostHoncho) {
+  Write-Host "[agent-ops-kit] probing host $HostAddress`:$HonchoPort (Honcho) over Tailscale"
+  if (-not (Test-HostPort $HostAddress $HonchoPort)) {
+    throw "Cannot reach the host Honcho at ${HostAddress}:$HonchoPort, but -UseHostHoncho was requested. On the host: publish it with `make windows-vm-network` (forwards :$HonchoPort from loopback) and allow this VM in your ACLs, then re-run. Or drop -UseHostHoncho to use the worker's local built-in memory."
+  }
+}
 
 if (-not (Get-Command hermes -ErrorAction SilentlyContinue)) {
   Write-Host "[agent-ops-kit] installing Hermes"

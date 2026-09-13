@@ -13,9 +13,10 @@
 #   Claude Code sessions it spawns see your repos, toolchains, docker and gh.
 #
 #   Each service binds its OWN address (all default 127.0.0.1): CLIPROXY_BIND_ADDR
-#   for cliproxyapi, HONCHO_BIND_ADDR for the Honcho API. Open only the one a
-#   remote worker needs (usually just CLIPROXY_BIND_ADDR); Honcho runs with auth
-#   disabled and must stay loopback-only.
+#   for cliproxyapi, HONCHO_BIND_ADDR for the Honcho API. Keep both on loopback.
+#   To reach a service from the Windows VM worker, publish the loopback port to
+#   your tailnet with Tailscale Serve (make windows-vm-network) — do not bind
+#   Docker to a routable address. Honcho runs with auth disabled: loopback-only.
 #
 #   Usage:  make init && make up      (see Makefile / docs/install.md)
 

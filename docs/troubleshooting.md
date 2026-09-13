@@ -53,7 +53,9 @@ fixes it. Then find the symptom below.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| cannot reach the model | host binds to 127.0.0.1 | `CLIPROXY_BIND_ADDR=<tailscale ip>` (and `HONCHO_BIND_ADDR` if needed) in `.env`, `make up`; check the firewall |
+| cannot reach the model from the VM | Docker on loopback but not published to the tailnet | keep Docker on `127.0.0.1`; on the host run `make windows-vm-network` (Tailscale Serve forwards :8317/:8000), then `make windows-vm-network-status`; confirm the VM is allowed by your Tailscale ACLs |
+| `make doctor` / host Hermes can't reach a service after opening it to the VM | Docker was bound to a Tailscale IP or `0.0.0.0` instead of loopback | set `CLIPROXY_BIND_ADDR`/`HONCHO_BIND_ADDR` back to `127.0.0.1`, `make up`, then `make windows-vm-network` (loopback + Serve is the supported path) |
+| `tailscale serve` says "access denied" | Tailscale operator not set | run once: `sudo tailscale set --operator=$USER` (or let `make windows-vm-network` escalate via sudo) |
 | computer use does nothing | desktop locked or RDP disconnected | keep the console session open; disable lock/sleep |
 | cannot click an admin window | Windows integrity levels | run the gateway task elevated for that job, or do the admin step yourself |
 | scheduled task not starting | registered under another user | re-run `install-worker.ps1` from the agent's account |

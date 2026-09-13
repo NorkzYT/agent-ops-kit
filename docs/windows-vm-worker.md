@@ -25,22 +25,58 @@ desktop at the same time.
 ## Host side
 
 The worker strictly needs one thing from the host: the model API (CLIProxyAPI on
-`:8317`). Run all worker↔host traffic over Tailscale. In `.env` set
-`CLIPROXY_BIND_ADDR` to the host's Tailscale IP (not `0.0.0.0`), then `make up`.
-The VM then reaches `http://<host>:8317` (models) over the tailnet, and no other
-service is exposed. Each bind is separate: opening one leaves every other service
-on loopback.
+`:8317`). Run all worker↔host traffic over Tailscale.
+
+**Keep the Docker services bound to `127.0.0.1` and publish them to the tailnet
+with Tailscale Serve.** This is the canonical path. Docker never binds a routable
+address, so the host's own Hermes, `make doctor` and every loopback probe keep
+reaching `127.0.0.1:<port>` unchanged; Tailscale Serve terminates TLS on the
+tailnet and forwards raw TCP back to that same loopback port. From the repo root:
+
+```bash
+make windows-vm-network         # forward :8317 (models) and :8000 (Honcho) over Tailscale Serve
+make windows-vm-network-status  # verify: loopback services up + both forwarders live
+make windows-vm-network-off     # remove just those two forwarders
+```
+
+Under the hood that runs the current Tailscale CLI:
+
+```bash
+tailscale serve --bg --yes --tcp=8317 tcp://127.0.0.1:8317
+tailscale serve --bg --yes --tcp=8000 tcp://127.0.0.1:8000
+```
+
+`--bg` persists the forwarders across reboots and Tailscale restarts. Access is
+**tailnet-only** (Serve, not Funnel) and your Tailscale ACLs still govern which
+tailnet peers may reach these ports — the VM's node must be allowed to reach the
+host on `:8317` (and `:8000` if it uses host Honcho). The VM then points at
+`http://<host-tailnet-name-or-IP>:8317/v1`. Serve needs the Tailscale operator
+set once (`sudo tailscale set --operator=$USER`) or it runs under `sudo`; the
+script handles both and tells you which.
+
+Do **not** set `CLIPROXY_BIND_ADDR` / `HONCHO_BIND_ADDR` to the host's Tailscale
+IP or `0.0.0.0`. A non-loopback Docker bind breaks the loopback forward target
+and makes `make doctor` and the host Hermes (which probe `127.0.0.1`) disagree
+with what the VM reaches. `make windows-vm-network` refuses to run if `.env` asks
+for a non-loopback bind.
+
+If this host already runs an **unrelated** Tailscale Serve or Funnel config
+(e.g. a public site on `:443`), it is separate and untouched: these targets add
+and remove only the two `--tcp` listeners above — they never run
+`tailscale serve reset` and never touch Funnel.
 
 Memory is a separate choice. By default the worker uses Hermes's local built-in
-memory, so it needs nothing from the host for memory and you leave
-`HONCHO_BIND_ADDR` on loopback. This is the recommended path.
+memory, so it needs nothing from the host for memory. In that case you can skip
+the Honcho forwarder; the CLIProxyAPI forward on `:8317` is all the worker needs.
+This is the recommended path.
 
-Honcho ships with auth disabled. Sharing the host's Honcho is acceptable only
-when both hold:
+Honcho ships with auth disabled. Sharing the host's Honcho (the `:8000` forwarder
+plus `-UseHostHoncho` on the worker) is acceptable only when both hold:
 
-- the worker reaches it strictly over Tailscale — set `HONCHO_BIND_ADDR` to the
-  host's Tailscale IP, never `0.0.0.0` or a bare LAN, and
-- you accept that anyone on the tailnet can read and write that memory.
+- the worker reaches it strictly over Tailscale (Serve keeps it tailnet-only;
+  Docker stays on `127.0.0.1`), and
+- you accept that anyone on the tailnet allowed by your ACLs can read and write
+  that memory.
 
 Otherwise keep Honcho loopback-only and use local memory on the worker (the
 install script's default). Shared Honcho over Tailscale is the opt-in.
@@ -193,8 +229,9 @@ unauthenticated memory. It then **verifies** the provider is live with
 `hermes honcho status` / `hermes memory status` and **fails the install** if shared
 Honcho is disabled or unreachable — because you explicitly asked for shared memory,
 the script does not silently fall back to built-in memory. To recover, confirm the
-host publishes Honcho on its Tailscale IP (`HONCHO_BIND_ADDR`, `make up`) and that
-the worker can reach `http://<host>:8000`, then re-run the installer.
+host publishes Honcho over Tailscale Serve (`make windows-vm-network`, which forwards
+`:8000` from loopback; verify with `make windows-vm-network-status`) and that the
+worker can reach `http://<host>:8000`, then re-run the installer.
 
 Optional parameters: `-Model`, `-CliProxyPort`, `-HonchoPort`, `-PeerName`,
 `-Workspace`, `-HomeChannel`, `-UseHostHoncho`.

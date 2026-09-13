@@ -22,6 +22,7 @@ endef
 .PHONY: help init up down restart pull update ps status logs \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs \
 	    models honcho-health doctor \
+	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-profile hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
 help: ## Show this help
@@ -84,6 +85,15 @@ honcho-health: ## Check the Honcho API
 
 doctor: ## Check the whole stack (containers, both proxies, Honcho, Hermes)
 	@bash scripts/doctor.sh
+
+windows-vm-network: ## Publish CLIProxyAPI (:8317) + Honcho (:8000) to the Windows VM over Tailscale Serve (Docker stays on 127.0.0.1)
+	@bash scripts/windows-vm-network.sh apply
+
+windows-vm-network-status: ## Verify the loopback services and the two Tailscale Serve forwarders for the Windows VM
+	@bash scripts/windows-vm-network.sh status
+
+windows-vm-network-off: ## Remove only the two Tailscale Serve forwarders (unrelated Serve/Funnel config is left intact)
+	@bash scripts/windows-vm-network.sh off
 
 hermes-install: ## Install Hermes on this host and wire it to Discord, Honcho, both proxies, Browser Use
 	@bash scripts/hermes-install.sh

@@ -100,12 +100,15 @@ login, run once: `sudo loginctl enable-linger $USER`.
 | 8000 | Honcho API | no auth on the local stack |
 | 1455 | CLIProxyAPI OAuth callback | only during browser-based login |
 
-All bind to `127.0.0.1` by default, each via its own variable. To let the
-Windows VM worker reach a service, set that one service's bind
-(`CLIPROXY_BIND_ADDR`, and `HONCHO_BIND_ADDR` if the worker uses host Honcho) to
-`0.0.0.0` or the Tailscale IP, keep the rest loopback, and put Tailscale or a
-firewall in front (see [windows-vm-worker.md](windows-vm-worker.md)). Honcho has
-no auth, so only ever expose it over a private tunnel.
+All bind to `127.0.0.1` by default, each via its own variable, and they stay
+there. To let the Windows VM worker reach a service, keep the loopback bind and
+publish that port to your tailnet with Tailscale Serve: `make windows-vm-network`
+forwards CLIProxyAPI (`:8317`) and Honcho (`:8000`) tailnet-only while Docker
+stays on loopback (verify with `make windows-vm-network-status`, remove with
+`make windows-vm-network-off`). Do not bind Docker to a Tailscale IP or `0.0.0.0`
+— the host's own Hermes and `make doctor` probe `127.0.0.1`. Honcho has no auth,
+so only ever share it over the tailnet, and only when you accept that (see
+[windows-vm-worker.md](windows-vm-worker.md)).
 
 ## Updating
 

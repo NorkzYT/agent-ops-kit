@@ -137,11 +137,15 @@ gateway).
 
 ## Reaching the proxies from the Windows VM
 
-Open only the services the worker needs, per service. Set `CLIPROXY_BIND_ADDR`
-(and, if the worker uses host Honcho, `HONCHO_BIND_ADDR`) in `.env` to the
-host's Tailscale address (or `0.0.0.0` behind a firewall), then
-`make up && make claude-proxy-install`, and point the worker at
-`http://<host>:8317/v1`. Leave every other bind at `127.0.0.1`. If you expose
-the host claude-max-proxy itself, set `CLAUDE_MAX_PROXY_API_KEY` — it refuses a
-non-loopback bind without one. The Windows installer wires this for you (see
-[windows-vm-worker.md](windows-vm-worker.md)).
+Keep the Docker binds on `127.0.0.1` and publish the ports the worker needs to
+your tailnet with Tailscale Serve. After `make up && make claude-proxy-install`,
+run `make windows-vm-network` — it forwards CLIProxyAPI (`:8317`) and Honcho
+(`:8000`) over Tailscale Serve (tailnet-only, `--bg` so they persist across
+reboots) while Docker stays on loopback, then point the worker at
+`http://<host-tailnet>:8317/v1`. `make windows-vm-network-status` verifies it and
+`make windows-vm-network-off` removes just those two forwarders. Do **not** set
+`CLIPROXY_BIND_ADDR`/`HONCHO_BIND_ADDR` to a Tailscale IP or `0.0.0.0`: the host's
+own Hermes and `make doctor` probe `127.0.0.1`, and a non-loopback bind breaks
+both and the forward. An unrelated Serve/Funnel config on the host (e.g. a public
+`:443` site) is separate and left untouched. The Windows installer probes the
+host for you (see [windows-vm-worker.md](windows-vm-worker.md)).
