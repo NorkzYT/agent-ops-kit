@@ -3,18 +3,22 @@
   Install the Hermes "windows-operator" worker inside the Windows VM.
 
 .DESCRIPTION
-  Installs Hermes, points it at the stack on your Linux host (CLIProxyAPI for
-  the model, Honcho for memory), enables the computer_use toolset, installs the
-  cua driver, seeds the windows-operator persona and registers a logon task
-  that starts the Discord gateway on the interactive desktop.
+  Installs Hermes, points it at the model API on your Linux host (CLIProxyAPI),
+  enables the computer_use toolset, installs the cua driver, seeds the
+  windows-operator persona and registers a logon task that starts the Discord
+  gateway on the interactive desktop.
+
+  Memory defaults to Hermes's local built-in memory. Pass -UseHostHoncho only
+  when you have chosen to share the host's unauthenticated Honcho over Tailscale.
 
   Run from an elevated PowerShell in the VM's console/RDP session (not SSH):
     Set-ExecutionPolicy -Scope Process Bypass -Force
     .\install-worker.ps1 -HostAddress 100.64.0.1 -CliProxyApiKey <key> `
         -DiscordBotToken <token> -AllowedUsers 282100214024896522
 
-  The host must publish the stack on that address: BIND_ADDR=0.0.0.0 in .env
-  (Tailscale address recommended), then `make up`.
+  The host must publish CLIProxyAPI on that address over Tailscale: set
+  CLIPROXY_BIND_ADDR to the host's Tailscale IP in .env (not 0.0.0.0), then
+  `make up`. Keep every other service, including Honcho, on loopback.
 #>
 param(
   [Parameter(Mandatory = $true)] [string] $HostAddress,
@@ -26,7 +30,8 @@ param(
   [int]    $HonchoPort = 8000,
   [string] $PeerName = "me",
   [string] $Workspace = "agent-ops",
-  [string] $HomeChannel = ""
+  [string] $HomeChannel = "",
+  [switch] $UseHostHoncho
 )
 $ErrorActionPreference = "Stop"
 
@@ -39,6 +44,12 @@ if (-not (Get-Command hermes -ErrorAction SilentlyContinue)) {
   $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH"
 }
 New-Item -ItemType Directory -Force -Path $HermesHome, (Join-Path $HermesHome "memories") | Out-Null
+
+if ($UseHostHoncho) {
+  $memoryProvider = "  provider: honcho"
+} else {
+  $memoryProvider = "  # local built-in memory (no external Honcho)"
+}
 
 @"
 # Rendered by scripts/windows-vm/install-worker.ps1 — the Windows desktop worker.
@@ -65,7 +76,7 @@ browser:
 memory:
   memory_enabled: true
   user_profile_enabled: true
-  provider: honcho
+$memoryProvider
 
 discord:
   require_mention: true
@@ -84,6 +95,8 @@ DISCORD_REQUIRE_MENTION=true
 CLIPROXY_API_KEY=$CliProxyApiKey
 "@ | Set-Content -Path (Join-Path $HermesHome ".env") -Encoding UTF8
 
+if ($UseHostHoncho) {
+  Write-Warning "-UseHostHoncho shares the host's Honcho, which runs with auth disabled. Use it only when the worker reaches the host strictly over Tailscale and you accept that anyone on the tailnet can read and write this memory."
 @"
 {
   "baseUrl": "http://$HostAddress`:$HonchoPort",
@@ -92,6 +105,9 @@ CLIPROXY_API_KEY=$CliProxyApiKey
   }
 }
 "@ | Set-Content -Path (Join-Path $HermesHome "honcho.json") -Encoding UTF8
+} else {
+  Write-Host "[agent-ops-kit] using Hermes local built-in memory (no external Honcho)"
+}
 
 $soulSrc = Join-Path $KitRoot "hermes\profiles\windows-operator\SOUL.md"
 if (Test-Path $soulSrc) { Copy-Item $soulSrc (Join-Path $HermesHome "SOUL.md") -Force }
@@ -100,8 +116,10 @@ else { Write-Warning "SOUL.md not found at $soulSrc; copy hermes/profiles/window
 Write-Host "[agent-ops-kit] installing the computer-use driver"
 hermes computer-use install
 
-$venvPy = Join-Path $HermesHome "hermes-agent\venv\Scripts\python.exe"
-if (Test-Path $venvPy) { & $venvPy -m pip install -q honcho-ai }
+if ($UseHostHoncho) {
+  $venvPy = Join-Path $HermesHome "hermes-agent\venv\Scripts\python.exe"
+  if (Test-Path $venvPy) { & $venvPy -m pip install -q honcho-ai }
+}
 
 # Gateway must run on the interactive desktop (Session 1+), so register a logon task.
 $exe = (Get-Command hermes).Source

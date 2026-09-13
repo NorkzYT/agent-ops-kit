@@ -47,7 +47,6 @@ User Prompt → PreToolUse → Tool Execution → PostToolUse → Response
 |------|---------|
 | `log_assistant.py` | Logs assistant responses |
 | `persist_session.py` | Saves session state to context directory |
-| `ralph_loop_hook.py` | Ralph Wiggum iterative loop - blocks exit until completion promise fulfilled |
 
 ### Notification Hooks
 
@@ -142,45 +141,3 @@ ALLOWLISTED_NPX = [
 ]
 ```
 
-## Ralph Wiggum Iterative Loops
-
-There are two Ralph modes. **Multi-Session Ralph** (external bash loop, fresh sessions) is the recommended default. **Session Ralph** (this hook) is useful for quick in-session iteration.
-
-See `.claude/docs/ralph-pattern.md` for the full reference including decision matrix.
-
-### Session Ralph (This Hook)
-
-The `ralph_loop_hook.py` implements in-session iterative loops. It blocks session exit and re-injects the prompt for the next iteration within the **same session**. This is prone to context rot in long runs but is fast for quick 1-2 iteration fixes.
-
-**How It Works:**
-1. **Setup**: Use `/ralph-loop` command or `setup-ralph-loop.sh` script to create state file
-2. **Iteration**: On each Stop event, the hook checks if the completion promise was fulfilled
-3. **Continuation**: If not complete, blocks exit (exit code 2) and injects the prompt for next iteration
-4. **Completion**: When `<promise>DONE</promise>` is output, loop ends and session exits normally
-5. **Idle Detection**: If agent outputs 3 consecutive idle responses (e.g., ".", "Standing by"), loop auto-exits
-
-**Commands:**
-- `/ralph-loop [max_iter] [promise] "task"` - Start a session loop
-- `/cancel-ralph` - Cancel any active loop
-
-### Multi-Session Ralph (Recommended)
-
-External bash scripts that run `claude -p` in a loop. Each iteration starts a **fresh session**, reads a PRD + progress file, completes ONE task, commits, and exits. No context rot.
-
-**Commands:**
-- `/ship "task"` - Fire-and-forget (generates PRD, launches loop)
-- `/afk-ralph N "task"` - Explicit loop with N iterations
-- `/ralph-once` - Single iteration for human review
-- `/ralph-status` - Check loop progress
-- `/cancel-ralph` - Stop any active loop
-
-**Scripts:**
-- `.claude/scripts/ralph-once.sh` - Single iteration
-- `.claude/scripts/afk-ralph.sh` - Full AFK loop
-- `.claude/scripts/ralph-docker.sh` - Docker sandbox wrapper
-
-### Completion Promise Protocol
-
-- Session Ralph: `<promise>TASK_COMPLETE</promise>` (or custom promise text)
-- Multi-Session Ralph: `<promise>COMPLETE</promise>` in stdout
-- The closer agent is the final gate for Session Ralph

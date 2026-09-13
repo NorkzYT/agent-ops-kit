@@ -171,11 +171,6 @@
           },
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ralph_loop_hook.py\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/tool_audit.py\"",
             "timeout": 10
           }
@@ -199,11 +194,6 @@
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/persist_session.py\"",
             "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/ralph_loop_hook.py\"",
-            "timeout": 10
           },
           {
             "type": "command",

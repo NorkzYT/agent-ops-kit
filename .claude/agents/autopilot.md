@@ -45,25 +45,7 @@ Execution Model: For each sub-task, follow Reason -> Act -> Observe -> Repeat:
 
 Workflow:
 
-0. **Auto-setup Ralph loop** (ensures iterative completion):
-   - Read `.claude/ralph-loop.local.md` to check if it exists AND has `active: true`
-   - If NO active loop exists, use the Write tool to create `.claude/ralph-loop.local.md` with:
-     ```
-     ---
-     active: true
-     iteration: 1
-     max_iterations: 30
-     completion_promise: "TASK_COMPLETE"
-     consecutive_idle: 0
-     started_at: "<current ISO timestamp>"
-     ---
-
-     [ORIGINAL TASK FROM INPUT]
-     ```
-   - This ensures the task will iterate until DoD is met
-   - Do NOT use bash/scripts/heredocs for this -- use the Write tool directly
-
-0b. **Automatic complexity router**:
+0. **Automatic complexity router**:
    - Before implementation, create a short triage (1-5 bullets) and classify the task as:
      - `simple`: 1-2 files, clear existing pattern, low regression risk
      - `medium`: bounded work -- multi-file and/or several small deliverables, but no architectural change or major regression risk
@@ -147,7 +129,7 @@ Workflow:
    - Spawn `security-auditor` agent for deeper analysis.
    - For architecture-level security concerns, spawn `threat-modeling-expert`.
 
-8. Quality assurance (scale to the tier from 0b):
+8. Quality assurance (scale to the tier from 0):
    - `complex`: spawn the `review-chain` agent (Task tool with subagent_type=review-chain) with changed files + DoD; it handles review -> fix -> re-review (max 2 cycles). If BLOCKERS_REMAIN: note in the closing summary as risks.
    - `medium`: spawn `surgical-reviewer` ONCE (Task tool with subagent_type=surgical-reviewer) with changed files + DoD; fix any blocker-level findings, then continue — no re-review cycle.
    - `simple`: skip the multi-agent chain. You already re-read every changed file in 5b — do a quick inline self-review (correctness, no regressions, no leftover debug code) instead.
@@ -178,8 +160,8 @@ Workflow:
      - If any item not met, fix it (max 1 pass to avoid infinite loop)
      - This is your last chance to catch mistakes before the closer runs
 
-11. Closing pass (scale to the tier from 0b):
-    - `complex`: spawn the `closer` subagent (Task tool with subagent_type=closer) with the DoD from step 2, the changed-files list, the review-chain verdict from step 8 (if available), and any notes. The closer confirms the work, produces the PR-ready summary, and is the final gate for Ralph completion.
+11. Closing pass (scale to the tier from 0):
+    - `complex`: spawn the `closer` subagent (Task tool with subagent_type=closer) with the DoD from step 2, the changed-files list, the review-chain verdict from step 8 (if available), and any notes. The closer confirms the work, produces the PR-ready summary, and is the final gate for completion.
     - `simple`/`medium`: skip the closer subagent. Verify the DoD yourself item by item (you already did 5b self-verify + 6 lifecycle checks, plus the reviewer pass for `medium`), then write a short PR-ready summary inline. You are the completion gate.
 
 12. Summarize:
@@ -242,47 +224,6 @@ When a task has multiple independent components, use these patterns:
    - Wait for all to complete
    - Merge results and resolve any conflicts
    - Run final verification
-
-## Automatic Ralph Loop Integration
-
-Autopilot **automatically enables Ralph loops** to ensure 100% task completion.
-
-### What happens at startup (Step 0):
-1. Check if `.claude/ralph-loop.local.md` exists with `active: true`
-2. If no active loop, create one with defaults: 30 iterations, TASK_COMPLETE promise
-3. The original task becomes the loop prompt
-
-### During execution:
-1. **Check for ralph state**: Read `.claude/ralph-loop.local.md` if it exists
-2. **Continue previous work**: If iteration > 1, review what was done in prior iterations
-3. **Output completion promise ONLY when**:
-   - All verification passes (tests, lint, build)
-   - DoD is fully met (confirmed by the `closer` for complex, or by you for simple/medium)
-   - No blocking issues remain
-4. **Completion signal**: Output `<promise>TASK_COMPLETE</promise>` at the very end of your response when truly done
-
-### What this means for users:
-- Just paste the task template and autopilot handles the rest
-- No need to manually invoke `/ship` or `/ralph-loop`
-- Tasks iterate automatically until DoD is met
-- Loop exits when `<promise>TASK_COMPLETE</promise>` is output
-
-### Ralph Completion Protocol
-
-```
-IF ralph loop active:
-  IF all checks pass AND DoD met (even if follow-up questions exist):
-    Output: <promise>TASK_COMPLETE</promise>
-    THEN ask any follow-up questions
-  ELSE IF waiting for user input with no more autonomous work to do:
-    Output: <promise>TASK_COMPLETE</promise>
-    (User can start new loop for follow-up tasks)
-  ELSE:
-    Summarize progress and remaining work
-    Loop will continue automatically
-```
-
-If your reply would just be filler ("." / "Standing by" / "Ready when you are"), the task is done — output `<promise>TASK_COMPLETE</promise>` instead, so the loop exits.
 
 INPUT
 <<<

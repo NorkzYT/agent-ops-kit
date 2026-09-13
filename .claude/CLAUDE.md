@@ -46,7 +46,6 @@ Instead of embedding full docs, load on-demand:
 | Sentinel zones | Read `.claude/docs/sentinel-zones.md` |
 | Browser verification | Read `.claude/skills/browser-automation/SKILL.md` |
 | Hermes stack (Discord, Honcho, proxies) | Read `docs/hermes.md` |
-| Ralph pattern | Read `.claude/docs/ralph-pattern.md` |
 
 ## Hierarchical Context Architecture
 
@@ -69,42 +68,15 @@ Instead of embedding full docs, load on-demand:
         └── tasks.md       # Granular checklist
 ```
 
-## High-Success Execution (Ralph Loops)
+## Execution Model (Hermes Delegation + Kanban)
 
-For guaranteed task completion, use **Ralph loops** as the default execution mode.
-
-### Multi-Session Ralph (Primary — no context rot)
-
-Fresh `claude -p` session per iteration. Each reads a PRD + progress file, does ONE task, commits, exits.
-
-**Recommended**: Use `/ship` for fire-and-forget execution:
-```
-/ship "Build a REST API with tests"
-```
-
-Or explicitly control iterations:
-```
-/afk-ralph 20 "Build REST API with auth"
-/ralph-once                  # Single iteration, human review
-/ralph-status                # Check progress
-/cancel-ralph                # Stop loop
-```
-
-### Session Ralph (Secondary — quick in-session iteration)
-
-Hook-based loop in the same session. Useful for quick 1-2 iteration fixes.
+Complex work is delegated to specialist profiles rather than run inline. Create a task on the shared Kanban board and assign it to the profile that fits:
 
 ```
-/ralph-loop 10 TESTS_PASS "Make all tests pass"
+hermes kanban create "Build a REST API with tests" --assignee coder
 ```
 
-### Completion Promise Protocol
-
-- Multi-Session: `<promise>COMPLETE</promise>` in stdout exits the loop
-- Session: `<promise>TASK_COMPLETE</promise>` fulfills the hook
-- The closer agent is the final gate for Session Ralph
-
-See `.claude/docs/ralph-pattern.md` for the full reference (decision matrix, PRD writing guide, troubleshooting).
+The `coder` profile picks up the task and runs the full pipeline: plan → implement → verify → commit → report. For finer control, the `delegate_task` tool hands a scoped unit of work to a specialist profile and returns its result. The `closer` agent is the final gate for completion.
 
 ## Default Agents
 

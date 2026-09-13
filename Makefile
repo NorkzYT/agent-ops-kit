@@ -88,8 +88,8 @@ doctor: ## Check the whole stack (containers, both proxies, Honcho, Hermes)
 hermes-install: ## Install Hermes on this host and wire it to Discord, Honcho, both proxies, Browser Use
 	@bash scripts/hermes-install.sh
 
-hermes-profile: ## Create a Hermes profile from hermes/profiles/<NAME> (make hermes-profile NAME=marketing)
-	@test -n "$(NAME)" || { echo "usage: make hermes-profile NAME=<profile>"; exit 2; }
+hermes-profile: ## Create/refresh a Hermes profile and sync its books from data/knowledge/<NAME> (NAME=marketing [KNOWLEDGE_ROOT=/mnt/books/knowledge])
+	@test -n "$(NAME)" || { echo "usage: make hermes-profile NAME=<profile> [KNOWLEDGE_ROOT=<dir>]"; exit 2; }
 	@bash scripts/hermes-profile.sh "$(NAME)"
 
 hermes-restart: ## Restart the Hermes gateway (Discord bot)

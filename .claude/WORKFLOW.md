@@ -15,7 +15,7 @@ This file is for **my own reference**: how I start Claude Code sessions, when I 
 
 ## Full Engineering Lifecycle
 
-When using `/ship`, the autopilot now executes the full engineering lifecycle:
+When you run the autopilot subagent (or delegate a task to the `coder` profile via Hermes), it executes the full engineering lifecycle:
 
 1. **Fix**     -- Write the code change
 2. **Build**   -- Run BUILD_CMD from TOOLS.md (via `local-workflow.sh`)

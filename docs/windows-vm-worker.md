@@ -3,8 +3,8 @@
 Some work needs a real desktop: BrowserStack App Live screenshots of an iPad
 app, dashboards without an API, Windows-only tools. A second Hermes runs
 inside a Windows VM with the `computer_use` toolset. It has its own Discord
-bot, uses the same proxies and Honcho as the host, and takes Kanban tasks
-assigned to `windows-operator`.
+bot, reaches the host's model API over Tailscale, keeps its own local memory,
+and takes Kanban tasks assigned to `windows-operator`.
 
 ChatGPT Desktop can also be installed in the same VM for you to use by hand.
 It is not driven by Hermes: the subscription proxy gives Hermes the GPT
@@ -24,11 +24,26 @@ desktop at the same time.
 
 ## Host side
 
-In `.env` set `CLIPROXY_BIND_ADDR` and `HONCHO_BIND_ADDR` to the host's Tailscale
-IP (or `0.0.0.0` behind a firewall), then `make up`. The VM must reach
-`http://<host>:8317` (models) and `http://<host>:8000` (Honcho). Honcho runs
-with auth disabled, so only expose it over Tailscale/VPN, never a bare LAN. Each
-bind is separate: opening these two leaves every other service on loopback.
+The worker strictly needs one thing from the host: the model API (CLIProxyAPI on
+`:8317`). Run all worker↔host traffic over Tailscale. In `.env` set
+`CLIPROXY_BIND_ADDR` to the host's Tailscale IP (not `0.0.0.0`), then `make up`.
+The VM then reaches `http://<host>:8317` (models) over the tailnet, and no other
+service is exposed. Each bind is separate: opening one leaves every other service
+on loopback.
+
+Memory is a separate choice. By default the worker uses Hermes's local built-in
+memory, so it needs nothing from the host for memory and you leave
+`HONCHO_BIND_ADDR` on loopback. This is the recommended path.
+
+Honcho ships with auth disabled. Sharing the host's Honcho is acceptable only
+when both hold:
+
+- the worker reaches it strictly over Tailscale — set `HONCHO_BIND_ADDR` to the
+  host's Tailscale IP, never `0.0.0.0` or a bare LAN, and
+- you accept that anyone on the tailnet can read and write that memory.
+
+Otherwise keep Honcho loopback-only and use local memory on the worker (the
+install script's default). Shared Honcho over Tailscale is the opt-in.
 
 ## Install the worker
 
@@ -44,14 +59,20 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 ```
 
 The script installs Hermes, writes `config.yaml` (model via CLIProxyAPI,
-`computer_use` on, browser headed), `.env`, `honcho.json` (same peer and
-workspace as the host, its own `aiPeer`), copies the `windows-operator`
+`computer_use` on, browser headed), `.env`, copies the `windows-operator`
 persona, runs `hermes computer-use install`, and registers a logon scheduled
 task that starts `hermes gateway` on the interactive desktop. It ends with
 `hermes doctor`.
 
+By default the worker uses Hermes's local built-in memory: the script does not
+write `honcho.json` and does not point at the host's Honcho. Add
+`-UseHostHoncho` only when you have chosen to share the host's Honcho over
+Tailscale (see Host side). That flag writes `honcho.json` (same workspace as the
+host, its own `aiPeer`), installs `honcho-ai`, and prints a warning that this
+shares unauthenticated memory.
+
 Optional parameters: `-Model`, `-CliProxyPort`, `-HonchoPort`, `-PeerName`,
-`-Workspace`, `-HomeChannel`.
+`-Workspace`, `-HomeChannel`, `-UseHostHoncho`.
 
 ## Use it
 
@@ -62,6 +83,12 @@ Optional parameters: `-Model`, `-CliProxyPort`, `-HonchoPort`, `-PeerName`,
 
 The worker screenshots before and after each action and attaches evidence. It
 waits for you on logins and MFA.
+
+## Workflows
+
+For the plan-first workflow (audit, propose, wait for approval, apply, verify,
+report), Discord server organization over REST, Super Productivity handling and
+setup examples, see [Windows operator workflows](windows-operator-workflows.md).
 
 ## Limits to know
 

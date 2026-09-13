@@ -15,7 +15,6 @@ from pathlib import Path
 
 
 CHECKPOINT_STATE_FILE = ".claude/checkpoint-state.local.json"
-RALPH_STATE_FILE = ".claude/ralph-loop.local.md"
 DEFAULT_INTERVAL = 10
 
 
@@ -41,20 +40,6 @@ def _read_file_safe(path: Path) -> str:
         return path.read_text() if path.exists() else ""
     except OSError:
         return ""
-
-
-def _parse_ralph_state(content: str) -> dict:
-    """Parse YAML frontmatter from ralph-loop state file."""
-    fm = {}
-    if content.startswith("---"):
-        parts = content.split("---", 2)
-        if len(parts) >= 3:
-            for line in parts[1].strip().split("\n"):
-                line = line.strip()
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    fm[key.strip()] = value.strip().strip('"').strip("'")
-    return fm
 
 
 def _find_context_dir(project_dir: Path) -> Path | None:
@@ -128,13 +113,6 @@ def main() -> int:
         key_context = context_content.strip()[:500] if context_content else ""
         completed, remaining = _extract_tasks(tasks_content)
 
-    # Ralph loop state
-    ralph_content = _read_file_safe(project_dir / RALPH_STATE_FILE)
-    ralph_fm = _parse_ralph_state(ralph_content)
-    ralph_info = ""
-    if ralph_fm.get("active", "").lower() == "true":
-        ralph_info = f"iteration {ralph_fm.get('iteration', '?')}/{ralph_fm.get('max_iterations', '?')}"
-
     # Build output
     lines = [
         "",
@@ -150,8 +128,6 @@ def main() -> int:
         lines.append(f"REMAINING: {'; '.join(remaining[:5])}")
     if key_context:
         lines.append(f"KEY CONTEXT: {key_context[:200]}")
-    if ralph_info:
-        lines.append(f"RALPH LOOP: {ralph_info}")
 
     lines.append("")
     lines.append("-" * 30 + " PASTE AFTER /clear " + "-" * 30)

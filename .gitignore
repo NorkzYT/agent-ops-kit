@@ -22,7 +22,6 @@ __pycache__/
 
 # Ephemeral local state files
 .claude/checkpoint-state.local.json
-.claude/ralph-loop.local.md
 .claude/terminal-identity.local.json
 
 # Local environment files
