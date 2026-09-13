@@ -19,7 +19,7 @@ $(shell sed -n 's/^$(1)=//p' $(ENV_FILE) 2>/dev/null | tail -n1 | tr -d '"' | tr
 endef
 
 .PHONY: help init up down restart pull update ps status logs \
-	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-restart claude-proxy-logs \
+	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs \
 	    models honcho-health doctor \
 	    hermes-install hermes-profile hermes-restart hermes-logs clean
 
@@ -42,10 +42,10 @@ restart: ## Restart all containers, or one with S=<service>
 pull: ## Pull newer images
 	@$(COMPOSE) pull
 
-update: ## Pull images, restart containers, pull + rebuild + restart the Claude proxy
+update: ## Pull images, restart containers, refresh + rebuild + restart the Claude proxy
 	@$(COMPOSE) pull
 	@$(COMPOSE) up -d --remove-orphans
-	@bash scripts/claude-max-proxy/install.sh
+	@$(MAKE) --no-print-directory claude-proxy-update
 
 ps status: ## Container status
 	@$(COMPOSE) ps
@@ -59,7 +59,11 @@ auth-codex: ## Log the ChatGPT/Codex subscription into CLIProxyAPI (device code 
 	@$(COMPOSE) restart cliproxyapi
 	@echo "Verify with: make models"
 
-claude-proxy-install: ## Build claude-max-proxy from source and run it as a systemd user service (re-run after editing .env)
+claude-proxy-install: ## Build claude-max-proxy from the vendored sources and run it as a systemd user service (re-run after editing .env)
+	@bash scripts/claude-max-proxy/install.sh
+
+claude-proxy-update: ## Refresh vendor/claude-max-api-proxy from upstream if reachable (else keep the vendored copy), rebuild, restart
+	@bash scripts/claude-max-proxy/sync-upstream.sh
 	@bash scripts/claude-max-proxy/install.sh
 
 auth-claude-proxy: ## Log the Claude Max subscription into claude-max-proxy (token stored in .env, service restarted)

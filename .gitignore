@@ -62,6 +62,11 @@ PROJECT.md
 .claude/eval/results/*
 !.claude/eval/results/.gitkeep
 
-# Stack runtime (rendered configs, OAuth state, proxy sources, docker data)
+# Stack runtime (rendered configs, OAuth state, docker data)
 data/
-vendor/
+# vendor/claude-max-api-proxy is committed (see its UPSTREAM file); only its
+# build output and local state stay out.
+vendor/claude-max-api-proxy/node_modules/
+vendor/claude-max-api-proxy/dist/
+vendor/claude-max-api-proxy/.agent-ops-kit-built
+vendor/claude-max-api-proxy/.env

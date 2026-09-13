@@ -27,7 +27,7 @@ On a Linux host with Docker:
 ```bash
 git clone https://github.com/NorkzYT/agent-ops-kit.git /opt/agent-ops-kit
 cd /opt/agent-ops-kit
-make init                 # .env with secrets, proxy config, proxy sources
+make init                 # .env with secrets, CLIProxyAPI config
 make up                   # Honcho + Ollama + CLIProxyAPI (Docker)
 make auth-codex           # sign in with the ChatGPT account
 make claude-proxy-install # claude-max-proxy on the host, as a systemd user service
@@ -83,6 +83,7 @@ docker-compose.yml        Honcho, Ollama, CLIProxyAPI
 Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile
 .env.example              every setting, commented
 scripts/                  stack-init, hermes-install, hermes-profile, doctor, claude-max-proxy/ (host install), windows-vm/
+vendor/claude-max-api-proxy  vendored proxy sources (UPSTREAM pins the commit; make claude-proxy-update)
 hermes/                   config templates, SOUL.md, profiles/, teams/, skills/, cron-jobs.md
 docker/                   cliproxyapi config template, honcho init, ollama entrypoint
 docs/                     install, hermes, honcho, proxies, browser-use, profiles, windows, troubleshooting

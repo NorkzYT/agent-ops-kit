@@ -52,7 +52,7 @@ if have node; then
   [[ "$major" -ge 22 ]] && ok "node $(node -v)" || bad "node $(node -v); the proxy needs 22+"
 else bad "node not installed (make claude-proxy-install prints how)"; fi
 have claude && ok "claude CLI $(claude --version 2>/dev/null | head -n1)" || bad "claude CLI missing (make claude-proxy-install)"
-[[ -f "$proxy_dir/dist/server/standalone.js" ]] && ok "proxy built at $proxy_dir ($(git -C "$proxy_dir" log -1 --format=%h 2>/dev/null))" || bad "proxy not built (make claude-proxy-install)"
+[[ -f "$proxy_dir/dist/server/standalone.js" ]] && ok "proxy built at $proxy_dir (upstream $(env_file_get commit "$proxy_dir/UPSTREAM" 2>/dev/null | cut -c1-7))" || bad "proxy not built (make claude-proxy-install)"
 [[ -f data/claude-max-proxy/proxy.env ]] && ok "proxy.env rendered" || bad "data/claude-max-proxy/proxy.env missing (make claude-proxy-install)"
 [[ -n "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]] && ok "CLAUDE_CODE_OAUTH_TOKEN set" || warn_ "CLAUDE_CODE_OAUTH_TOKEN empty (make auth-claude-proxy)"
 if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then

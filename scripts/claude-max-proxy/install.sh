@@ -2,13 +2,15 @@
 # install.sh — run claude-max-proxy on this host as a systemd user service.
 #
 #   1. Node.js 22+ and the Claude Code CLI (installed to ~/.local/bin if missing)
-#   2. sources: clone/fast-forward vendor/claude-max-api-proxy, npm ci, npm run build
+#   2. sources: the vendored tree at vendor/claude-max-api-proxy (committed to this
+#      repo; refreshed from upstream only by `make claude-proxy-update`), npm ci, npm run build
 #   3. data/claude-max-proxy/proxy.env rendered from .env
 #   4. ~/.config/systemd/user/claude-max-proxy.service rendered from the template,
 #      enabled, (re)started, then /health is polled
 #
-# Idempotent: `make claude-proxy-install` again after editing .env or to pull
-# newer proxy sources (`make update` does the same plus the Docker images).
+# Idempotent: `make claude-proxy-install` again after editing .env. Newer proxy
+# sources: `make claude-proxy-update` (or `make update`, which also pulls the
+# Docker images); it falls back to the vendored copy when upstream is gone.
 #
 # Usage: install.sh [--deps-only | --render-only]
 #   --deps-only    step 1 only (used by make auth-claude-proxy before login)
@@ -55,18 +57,22 @@ ensure_deps() {
 
 # ---------------------------------------------------------- 2. sources ---
 build_sources() {
+  # Report only (current / newer upstream / unreachable); never modifies the tree.
   CLAUDE_MAX_PROXY_REPO="$(getenv CLAUDE_MAX_PROXY_REPO)" \
   CLAUDE_MAX_PROXY_REF="$(getenv CLAUDE_MAX_PROXY_REF)" \
-    bash scripts/claude-max-proxy/sync-checkout.sh "$PROXY_DIR"
-  [[ -f "$PROXY_DIR/package.json" ]] || die "proxy sources missing at $PROXY_DIR (offline?)"
-  local head; head="$(git -C "$PROXY_DIR" rev-parse HEAD 2>/dev/null || echo none)"
-  if [[ -f "$PROXY_DIR/dist/server/standalone.js" && "$(cat "$PROXY_DIR/.agent-ops-kit-built" 2>/dev/null)" == "$head" ]]; then
-    log "proxy already built at $(git -C "$PROXY_DIR" log -1 --format='%h %s' 2>/dev/null)"
+    bash scripts/claude-max-proxy/sync-upstream.sh --check "$PROXY_DIR"
+  [[ -f "$PROXY_DIR/package.json" ]] || die "proxy sources missing at $PROXY_DIR"
+  local rev stamp
+  rev="$(env_file_get commit "$PROXY_DIR/UPSTREAM" 2>/dev/null | cut -c1-7 || echo local)"
+  # Rebuild when any source file changed, whatever changed it.
+  stamp="$(cd "$PROXY_DIR" && find src package.json package-lock.json tsconfig.json -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)"
+  if [[ -f "$PROXY_DIR/dist/server/standalone.js" && "$(cat "$PROXY_DIR/.agent-ops-kit-built" 2>/dev/null)" == "$stamp" ]]; then
+    log "proxy already built (upstream $rev)"
   else
-    log "building the proxy (npm ci && npm run build)"
+    log "building the proxy (npm ci && npm run build, upstream $rev)"
     (cd "$PROXY_DIR" && npm ci --no-audit --no-fund --loglevel=error && npm run build --silent)
-    printf '%s\n' "$head" > "$PROXY_DIR/.agent-ops-kit-built"
-    log "built $(git -C "$PROXY_DIR" log -1 --format='%h %s' 2>/dev/null)"
+    printf '%s\n' "$stamp" > "$PROXY_DIR/.agent-ops-kit-built"
+    log "built (upstream $rev)"
   fi
 }
 

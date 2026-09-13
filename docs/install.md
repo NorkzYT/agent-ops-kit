@@ -61,13 +61,14 @@ prints, sign in with the ChatGPT account, and the OAuth state is saved under
 `data/cliproxyapi/auths/`. `make models` should now list GPT models.
 
 **`make claude-proxy-install`** checks for Node.js 22+, installs the Claude
-Code CLI to `~/.local/bin` if missing, clones
+Code CLI to `~/.local/bin` if missing, builds the vendored
 [claude-max-api-proxy](https://github.com/mattschwen/claude-max-api-proxy)
-into `vendor/`, builds it, renders `data/claude-max-proxy/proxy.env` and
+sources in `vendor/`, renders `data/claude-max-proxy/proxy.env` and
 `~/.config/systemd/user/claude-max-proxy.service` (with the CPU, memory and
 task limits from `.env`), enables and starts the service. Without a token the
-service idles. Re-run it after changing the proxy settings in `.env` or to pull
-newer proxy sources. Details in [proxies.md](proxies.md).
+service idles. Re-run it after changing the proxy settings in `.env`. Newer
+proxy sources: `make claude-proxy-update` (uses the vendored copy when
+upstream is unreachable). Details in [proxies.md](proxies.md).
 
 **`make auth-claude-proxy`** runs `claude setup-token` on the host against
 the proxy's private config dir. Sign in with the Claude Max account, paste the

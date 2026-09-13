@@ -32,19 +32,42 @@ The management API and control panel are disabled in the template; enable
 
 ## claude-max-proxy (Claude Max subscription)
 
-Source <https://github.com/mattschwen/claude-max-api-proxy>, cloned into
-`vendor/` and built with `npm` by `make claude-proxy-install`. The proxy
+Source <https://github.com/mattschwen/claude-max-api-proxy>, vendored into
+`vendor/claude-max-api-proxy` and built with `npm` by
+`make claude-proxy-install`. The proxy
 launches a real Claude Code CLI per request (`--dangerously-skip-permissions`,
 cwd `REPOS_DIR`) and serves `/v1/chat/completions`, so Hermes subagents get the
 full Claude Code toolchain.
 
 ```bash
-make claude-proxy-install    # node 22+ check, claude CLI, clone + build, systemd unit, start
+make claude-proxy-install    # node 22+ check, claude CLI, build, systemd unit, start
 make auth-claude-proxy       # login URL -> sk-ant-oat01-... token, stored in .env, service restarted
 make models                  # opus / sonnet / haiku / fable ...
 make claude-proxy-logs       # journalctl -f
 make claude-proxy-restart
+make claude-proxy-update     # newer upstream sources if reachable, rebuild, restart
 ```
+
+### Vendored sources
+
+The proxy's source tree is committed to this repo (MIT licence kept alongside)
+so the kit does not depend on the upstream repository staying online.
+`vendor/claude-max-api-proxy/UPSTREAM` records the upstream commit it matches.
+
+- `make claude-proxy-install` builds what is in the repo. It asks upstream
+  once whether there is something newer and only prints the answer.
+- `make claude-proxy-update` (also part of `make update`) replaces the
+  vendored tree with upstream's current `main` when upstream is reachable,
+  rewrites `UPSTREAM`, rebuilds and restarts. The change is left uncommitted
+  for you to review (`git diff --stat -- vendor/`) and commit as
+  `chore(proxy): sync claude-max-api-proxy to <sha>`. It refuses to overwrite
+  uncommitted edits under `vendor/`.
+- If upstream is unreachable or deleted, both targets say so and carry on
+  with the vendored copy. Nothing breaks.
+
+Build output (`dist/`, `node_modules/`) is ignored; the sources and
+`package-lock.json` are tracked, so `npm ci` reproduces the same build.
+To follow a fork instead, set `CLAUDE_MAX_PROXY_REPO` / `_REF` in `.env`.
 
 ### Why on the host and not in Docker
 

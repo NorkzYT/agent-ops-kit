@@ -80,6 +80,14 @@ jobs:
         run: |
           rm -f .env; CLAUDE_MAX_PROXY_REPO=file:///nonexistent bash scripts/stack-init.sh || true
           test -f data/cliproxyapi/config.yaml && ! grep -q __CLIPROXY_API_KEY__ data/cliproxyapi/config.yaml
+      - name: vendored proxy sync degrades to the vendored copy offline
+        run: |
+          test -f vendor/claude-max-api-proxy/UPSTREAM && ! test -e vendor/claude-max-api-proxy/.git
+          out="$(CLAUDE_MAX_PROXY_REPO=https://127.0.0.1:9/gone.git bash scripts/claude-max-proxy/sync-upstream.sh --check)"
+          echo "$out"; grep -q 'using the vendored copy' <<<"$out"
+          out="$(CLAUDE_MAX_PROXY_REPO=https://127.0.0.1:9/gone.git bash scripts/claude-max-proxy/sync-upstream.sh)"
+          echo "$out"; grep -q 'using the vendored copy' <<<"$out"
+          git diff --quiet -- vendor/
       - name: claude-max-proxy unit and proxy.env render offline
         run: |
           export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
@@ -89,3 +97,13 @@ jobs:
           test -f "$unit" && ! grep -q '__[A-Z_]*__' "$unit"
           grep -q '^CPUQuota=400%$' "$unit" && grep -q '^MemoryMax=12G$' "$unit"
           test -f data/claude-max-proxy/proxy.env && grep -q '^CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS=3$' data/claude-max-proxy/proxy.env
+
+  claude-max-proxy:
+    name: claude-max-proxy builds from the vendored sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd vendor/claude-max-api-proxy && npm ci --no-audit --no-fund && npm run build && test -f dist/server/standalone.js

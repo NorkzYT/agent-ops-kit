@@ -1,0 +1,127 @@
+<svg width="1280" height="360" viewBox="0 0 1280 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Claw Proxy banner">
+  <title>Claw Proxy - OpenAI-compatible, Claude-first, multi-provider gateway</title>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f7f5ff"/>
+      <stop offset="50%" stop-color="#eef7ff"/>
+      <stop offset="100%" stop-color="#f8eefb"/>
+    </linearGradient>
+    <radialGradient id="pinkGlow" cx="18%" cy="44%" r="48%">
+      <stop offset="0%" stop-color="#ff4acb" stop-opacity="0.20"/>
+      <stop offset="55%" stop-color="#ff4acb" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#ff4acb" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cyanGlow" cx="85%" cy="20%" r="44%">
+      <stop offset="0%" stop-color="#35e9ff" stop-opacity="0.18"/>
+      <stop offset="58%" stop-color="#35e9ff" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#35e9ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="frame" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0fb8ff"/>
+      <stop offset="100%" stop-color="#ff3fb0"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0b2554"/>
+      <stop offset="48%" stop-color="#10214a"/>
+      <stop offset="100%" stop-color="#5d1153"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#17c8ff"/>
+      <stop offset="50%" stop-color="#7a69ff"/>
+      <stop offset="100%" stop-color="#ff3fb0"/>
+    </linearGradient>
+    <pattern id="grid" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#10214a" stroke-opacity="0.08" stroke-width="1"/>
+    </pattern>
+    <pattern id="scan" x="0" y="0" width="12" height="12" patternUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="12" height="1" fill="#10214a" fill-opacity="0.03"/>
+    </pattern>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="360" fill="url(#bg)"/>
+  <rect width="1280" height="360" fill="url(#grid)"/>
+  <rect width="1280" height="360" fill="url(#scan)"/>
+  <rect width="1280" height="360" fill="url(#pinkGlow)"/>
+  <rect width="1280" height="360" fill="url(#cyanGlow)"/>
+
+  <path d="M0 298 L340 118 L690 118 L1058 40 L1280 40" stroke="#1ac8ff" stroke-opacity="0.16" stroke-width="2" fill="none"/>
+  <path d="M0 318 L298 156 L674 156 L1004 100 L1280 100" stroke="#ff3fb0" stroke-opacity="0.13" stroke-width="2" fill="none"/>
+  <path d="M1008 0 L1008 360" stroke="#1ac8ff" stroke-opacity="0.12" stroke-width="2"/>
+
+  <g transform="translate(78 60)">
+    <path d="M28 0 H204 L244 40 V212 L212 244 H28 L0 216 V28 Z" fill="#ffffff" fill-opacity="0.74" stroke="url(#frame)" stroke-width="2.5"/>
+    <path d="M42 18 H188 L220 50 V198 L194 224 H44 L20 200 V42 Z" fill="none" stroke="#10214a" stroke-opacity="0.10" stroke-width="1.5"/>
+    <rect x="18" y="18" width="208" height="208" fill="url(#grid)" opacity="0.45"/>
+    <circle cx="122" cy="122" r="88" fill="#ff4acb" fill-opacity="0.06"/>
+    <circle cx="148" cy="100" r="82" fill="#35e9ff" fill-opacity="0.07"/>
+
+    <path d="M78 84
+             C66 84 58 92 58 104
+             L58 116
+             C58 124 52 130 44 130
+             C52 130 58 136 58 144
+             L58 156
+             C58 168 66 176 78 176"
+          fill="none" stroke="#14bfff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" filter="url(#softGlow)"/>
+    <path d="M166 84
+             C178 84 186 92 186 104
+             L186 116
+             C186 124 192 130 200 130
+             C192 130 186 136 186 144
+             L186 156
+             C186 168 178 176 166 176"
+          fill="none" stroke="#ff3fb0" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" filter="url(#softGlow)"/>
+
+    <g transform="translate(122 130)" filter="url(#softGlow)">
+      <path d="M0,-50 L10,-10 L50,0 L10,10 L0,50 L-10,10 L-50,0 L-10,-10 Z" fill="url(#accent)"/>
+      <path d="M0,-50 L10,-10 L0,0 L-10,-10 Z" fill="#ffffff" fill-opacity="0.18"/>
+    </g>
+
+    <path d="M84 44 L160 44" stroke="#14bfff" stroke-opacity="0.45" stroke-width="2"/>
+    <path d="M84 212 L160 212" stroke="#ff3fb0" stroke-opacity="0.45" stroke-width="2"/>
+  </g>
+
+  <g transform="translate(352 0)">
+    <g transform="translate(0 74)">
+      <rect x="0" y="0" width="202" height="30" rx="15" fill="#ffffff" fill-opacity="0.86" stroke="#14bfff" stroke-opacity="0.36" stroke-width="1.2"/>
+      <text x="16" y="20" font-family="ui-monospace, Menlo, Monaco, monospace" font-size="11.5" fill="#125a85" letter-spacing="0.8">NEON://LOCALHOST:3456</text>
+    </g>
+    <g transform="translate(218 74)">
+      <rect x="0" y="0" width="210" height="30" rx="15" fill="#ffffff" fill-opacity="0.86" stroke="#ff3fb0" stroke-opacity="0.36" stroke-width="1.2"/>
+      <text x="16" y="20" font-family="ui-monospace, Menlo, Monaco, monospace" font-size="11.5" fill="#8d1f69" letter-spacing="0.8">CLAUDE-FIRST ROUTING</text>
+    </g>
+
+    <text x="0" y="166" font-family="ui-sans-serif, 'Segoe UI', sans-serif" font-size="78" font-weight="800" letter-spacing="2" fill="url(#title)">CLAW PROXY</text>
+    <text x="4" y="198" font-family="ui-monospace, Menlo, Monaco, monospace" font-size="15" fill="#6f6f87" letter-spacing="1.1">repo://claude-max-api-proxy</text>
+    <text x="2" y="236" font-family="ui-sans-serif, 'Segoe UI', sans-serif" font-size="24" fill="#283768">OpenAI-compatible edge. Claude-first core. Explicit external routes.</text>
+    <text x="2" y="270" font-family="ui-sans-serif, 'Segoe UI', sans-serif" font-size="17" fill="#5d5f79">Dynamic model routing. Session continuity. Metrics and operations built in.</text>
+
+    <g transform="translate(0 294)" font-family="ui-monospace, Menlo, Monaco, monospace" font-size="12">
+      <g>
+        <rect x="0" y="0" width="132" height="28" rx="8" fill="#ffffff" fill-opacity="0.84" stroke="#14bfff" stroke-opacity="0.28" stroke-width="1"/>
+        <text x="16" y="18" fill="#125a85">OPENAI COMPAT</text>
+      </g>
+      <g transform="translate(144 0)">
+        <rect x="0" y="0" width="124" height="28" rx="8" fill="#ffffff" fill-opacity="0.84" stroke="#ff3fb0" stroke-opacity="0.28" stroke-width="1"/>
+        <text x="14" y="18" fill="#8d1f69">DYNAMIC MODELS</text>
+      </g>
+      <g transform="translate(280 0)">
+        <rect x="0" y="0" width="124" height="28" rx="8" fill="#ffffff" fill-opacity="0.84" stroke="#14bfff" stroke-opacity="0.28" stroke-width="1"/>
+        <text x="16" y="18" fill="#125a85">SESSION RESUME</text>
+      </g>
+      <g transform="translate(416 0)">
+        <rect x="0" y="0" width="120" height="28" rx="8" fill="#ffffff" fill-opacity="0.84" stroke="#ff3fb0" stroke-opacity="0.28" stroke-width="1"/>
+        <text x="19" y="18" fill="#8d1f69">DOCKER OPTIONAL</text>
+      </g>
+    </g>
+  </g>
+
+  <rect x="0" y="356" width="1280" height="4" fill="url(#accent)"/>
+</svg>
