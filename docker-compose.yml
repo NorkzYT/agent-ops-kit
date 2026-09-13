@@ -194,16 +194,15 @@ services:
       - ./data/cliproxyapi/auths:/root/.cli-proxy-api
       - ./data/cliproxyapi/logs:/CLIProxyAPI/logs
     healthcheck:
-      # Real liveness: the port must answer HTTP. curl without -f treats ANY
-      # response (including 401 from the auth-gated API) as success and returns
-      # non-zero only on connection refused / timeout, so a dead proxy is caught
-      # instead of masked. wget is the fallback when the image lacks curl.
-      # (Regression: scripts/test_healthcheck.sh.)
-      test: ["CMD-SHELL", "curl -s -o /dev/null --max-time 5 http://127.0.0.1:8317/v1/models || wget -q -O /dev/null --timeout=5 http://127.0.0.1:8317/v1/models || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:8317/healthz >/dev/null || exit 1"
+        ]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 10s
 
 volumes:
   honcho-pgdata:
