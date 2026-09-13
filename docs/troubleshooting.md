@@ -13,6 +13,9 @@ fixes it. Then find the symptom below.
 | deriver logs 401 from cliproxyapi | key mismatch after rotation | `make init && make up` re-renders the proxy config |
 | `make models` shows no GPT models | Codex login missing or expired | `make auth-codex` |
 | `honcho-api` restarts with `embedding dim (1536) does not match EMBEDDING_VECTOR_DIMENSIONS` | database created before the kit entrypoint, or dimensions changed after data existed | `make up` (entrypoint now resizes empty tables); if data exists, `make clean && make up` |
+| `honcho-api` logs `password authentication failed for user "postgres"` | database volume created before `HONCHO_DB_PASSWORD` existed (or the value changed) | empty database: `make clean && make up`. With data: `docker exec honcho-db psql -U postgres -c "ALTER USER postgres PASSWORD '<value from .env>'"` then `make restart S=honcho-api` |
+| `honcho-db` logs `POSTGRES_HOST_AUTH_METHOD has been set to "trust"` | volume initialised by an older kit version | harmless on a local stack; to close it: `docker exec honcho-db sed -i 's/^host all all all trust$/host all all all scram-sha-256/' /var/lib/postgresql/data/pgdata/pg_hba.conf && make restart S=honcho-db` after setting the password as above |
+| claude-max-proxy restarts by itself every few hours | `CLAUDE_PROXY_MAX_UPTIME_HOURS` (idle-only restart, by design) | raise it or set it empty in `.env`, `make up` |
 | claude-max-proxy log says `no Claude Max credentials yet` | no `CLAUDE_CODE_OAUTH_TOKEN` | `make auth-claude-proxy` |
 | claude-max-proxy `/v1/models` empty or 401 | token expired or revoked | `make auth-claude-proxy` again |
 | claude-max-proxy `EACCES` / cannot write `~/.claude` | `data/claude-max-proxy` not owned by `PUID` | `sudo chown -R $(id -u):$(id -g) data/claude-max-proxy`; check `PUID`/`PGID` in `.env` |

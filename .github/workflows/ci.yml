@@ -63,7 +63,7 @@ jobs:
       - name: docker compose config
         run: |
           cp .env.example .env
-          sed -i 's/^CLIPROXY_API_KEY=$/CLIPROXY_API_KEY=ci/; s/^CLIPROXY_MANAGEMENT_KEY=$/CLIPROXY_MANAGEMENT_KEY=ci/' .env
+          sed -i 's/^CLIPROXY_API_KEY=$/CLIPROXY_API_KEY=ci/; s/^CLIPROXY_MANAGEMENT_KEY=$/CLIPROXY_MANAGEMENT_KEY=ci/; s/^HONCHO_DB_PASSWORD=$/HONCHO_DB_PASSWORD=ci/' .env
           mkdir -p vendor/claude-max-api-proxy && printf 'FROM scratch\n' > vendor/claude-max-api-proxy/Dockerfile
           docker compose config -q
       - name: Hermes templates and JSON parse

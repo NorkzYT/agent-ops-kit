@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # stack-init.sh — one-time (idempotent) preparation of the Docker half.
 #   1. create .env from .env.example if missing
-#   2. fill empty CLIPROXY_API_KEY / CLIPROXY_MANAGEMENT_KEY with random values
+#   2. fill empty CLIPROXY_API_KEY / CLIPROXY_MANAGEMENT_KEY / HONCHO_DB_PASSWORD with random values
 #   3. render data/cliproxyapi/config.yaml from docker/cliproxyapi/config.example.yaml
 #   4. clone/fast-forward the claude-max-api-proxy sources used to build its image
 #   5. create the bind-mount directories the proxies write to
@@ -22,6 +22,7 @@ fi
 
 ensure_secret CLIPROXY_API_KEY .env
 ensure_secret CLIPROXY_MANAGEMENT_KEY .env
+ensure_secret HONCHO_DB_PASSWORD .env
 
 if [[ -z "$(env_file_get PUID .env || true)" ]]; then env_file_set PUID "$(id -u)" .env; fi
 if [[ -z "$(env_file_get PGID .env || true)" ]]; then env_file_set PGID "$(id -g)" .env; fi

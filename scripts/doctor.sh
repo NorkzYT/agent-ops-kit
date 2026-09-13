@@ -19,7 +19,7 @@ hdr "Files"
 [[ -f data/cliproxyapi/config.yaml ]] && ok "CLIProxyAPI config rendered" || bad "data/cliproxyapi/config.yaml missing (make init)"
 proxy_dir="$(getenv CLAUDE_MAX_PROXY_DIR ./vendor/claude-max-api-proxy)"
 [[ -f "$proxy_dir/Dockerfile" ]] && ok "claude-max-api-proxy sources at $proxy_dir" || bad "proxy sources missing at $proxy_dir (make init)"
-for k in CLIPROXY_API_KEY DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS; do
+for k in CLIPROXY_API_KEY HONCHO_DB_PASSWORD DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS; do
   [[ -n "$(getenv "$k")" ]] && ok "$k set" || warn_ "$k empty in .env"
 done
 [[ -n "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]] && ok "CLAUDE_CODE_OAUTH_TOKEN set" || warn_ "CLAUDE_CODE_OAUTH_TOKEN empty (make auth-claude-proxy)"

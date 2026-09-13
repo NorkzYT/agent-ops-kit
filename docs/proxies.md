@@ -52,10 +52,16 @@ Settings in `.env`:
 
 - `DEFAULT_THINKING_BUDGET` (`off|low|medium|high|xhigh|max`) applied when a
   client sends none.
-- `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS` and the container's CPU/memory limits
-  keep a runaway session from starving the host.
-- `CLAUDE_PROXY_MAX_UPTIME_HOURS` restarts the process on a schedule so Docker
-  brings it back clean.
+- `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS`: how many Claude Code sessions the
+  proxy runs at once. Each is a full CLI process (about 1 GB RAM, a core when
+  busy) and they all draw on the same Claude Max 5-hour window. 2-3 fits the
+  default `CLAUDE_MAX_PROXY_CPUS=2.0` / `MEM_LIMIT=8g`; raise all three
+  together. Extra requests queue rather than fail.
+- `CLAUDE_PROXY_MAX_UPTIME_HOURS` (default 12): the kit's entrypoint restarts
+  the proxy after that many hours, but only once nothing is active or queued
+  (it polls `/ops/snapshot`), and Docker brings it straight back. This clears
+  leaked CLI subprocesses and stale OAuth state. Upstream `main` does not
+  implement the variable itself. Empty or 0 disables.
 
 The container runs as your host user (`PUID`/`PGID` from `make init`) with
 `data/claude-max-proxy/home` as its home, so its Claude CLI state is private to
@@ -67,7 +73,7 @@ PRs as you; run `gh auth login` on the host once.
 
 The kit runs the proxy in Docker on purpose: cgroup CPU, memory and pid limits
 are what stop a runaway Claude Code session from freezing the host, the
-uptime-based self-restart comes free with `restart: unless-stopped`, and one
+idle-aware uptime restart relies on `restart: unless-stopped`, and one
 `make up` brings the whole HTTP half back after a reboot. Upstream also
 supports running it on the host (`npm start` with the host's `claude` login);
 do that only if you would rather manage limits with a systemd unit yourself.
