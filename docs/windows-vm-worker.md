@@ -58,11 +58,31 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
     -DiscordBotToken <worker bot token> -AllowedUsers <your discord id>
 ```
 
-The script installs Hermes, writes `config.yaml` (model via CLIProxyAPI,
-`computer_use` on, browser headed), `.env`, copies the `windows-operator`
-persona, runs `hermes computer-use install`, and registers a logon scheduled
-task that starts `hermes gateway` on the interactive desktop. It ends with
+The script installs Hermes non-interactively (it passes `-SkipSetup` to the
+official installer so the Nous Portal sign-in wizard never runs — this stack
+self-hosts the model API and the script writes its own CLIProxyAPI config right
+after). It writes `config.yaml` (model via CLIProxyAPI, `computer_use` on,
+browser headed), `.env`, copies the `windows-operator` persona, installs the
+computer-use driver and verifies it with `hermes computer-use doctor` (repairing
+once if the runtime comes back degraded), and registers a logon scheduled task
+that starts `hermes gateway` on the interactive desktop. It ends with
 `hermes doctor`.
+
+### Recovery: the installer stopped at a Nous Portal login
+
+If you ran an older copy of the script and it paused on the Nous Portal
+sign-in wizard, do not sign in. Press `Ctrl+C` to cancel the wizard, then
+re-run `install-worker.ps1` (now with `-SkipSetup`). The worker's own
+`config.yaml` is what points Hermes at the host's CLIProxyAPI; the portal
+account is not used by this stack.
+
+### Recovery: computer use is degraded
+
+The install verifies the driver with `hermes computer-use doctor`. If it warns
+that computer use is not healthy, fix it from an elevated interactive session on
+the **unlocked** desktop (a locked session or disconnected RDP fails the X/GUI
+checks): run `hermes computer-use install`, then `hermes computer-use doctor`
+and read the health matrix. Telemetry stays off (`cua_telemetry: false`).
 
 By default the worker uses Hermes's local built-in memory: the script does not
 write `honcho.json` and does not point at the host's Honcho. Add

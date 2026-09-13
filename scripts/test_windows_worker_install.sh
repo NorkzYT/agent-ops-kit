@@ -53,6 +53,38 @@ ck "creates a scriptblock from the fetched text" \
 ck "invokes the scriptblock with the call operator (&)" \
    "grep -Eq '&\s*\(\s*\[scriptblock\]::Create\(' '$ps1'"
 
+# The official installer runs its setup wizard (Nous Portal sign-in) unless
+# -SkipSetup is passed. This stack self-hosts the model API and writes its own
+# CLIProxyAPI config.yaml right after, so the wizard must never run: it would
+# stall the unattended install on an interactive portal login. Assert the
+# fetched installer scriptblock is invoked WITH -SkipSetup.
+ck "invokes the installer scriptblock with -SkipSetup" \
+   "grep -Eq '\[scriptblock\]::Create\([^)]*\)\)\s+-SkipSetup' '$ps1'"
+ck "-SkipSetup is present in executable code" \
+   "code | grep -Eq '\-SkipSetup'"
+
+# Nothing on our path may launch the setup wizard or the Nous Portal: no
+# 'hermes setup', 'hermes portal', or 'hermes login' anywhere in executable code.
+ck "no 'hermes setup' invocation in executable code" \
+   "! code | grep -Eiq 'hermes\s+setup\b'"
+ck "no 'hermes portal' invocation in executable code" \
+   "! code | grep -Eiq 'hermes\s+portal\b'"
+ck "no 'hermes login' invocation in executable code" \
+   "! code | grep -Eiq 'hermes\s+login\b'"
+
+# Computer use must be installed AND verified. The official installer's own
+# cua-driver step is best-effort and its "install succeeded but runtime is not
+# compatible" warning is easy to miss, so our path installs then checks the
+# health matrix with 'hermes computer-use doctor', and telemetry stays off.
+ck "installs the computer-use driver" \
+   "code | grep -Eq 'hermes\s+computer-use\s+install'"
+ck "verifies computer use with the doctor" \
+   "code | grep -Eq 'hermes\s+computer-use\s+doctor'"
+ck "keeps cua telemetry disabled in rendered config" \
+   "grep -Eq 'cua_telemetry:\s*false' '$ps1'"
+ck "surfaces an unhealthy computer-use result (does not hide it)" \
+   "grep -Eiq 'Write-Warning.*[Cc]omputer' '$ps1'"
+
 # The worker still manages its own Hermes home (the variable that collided).
 ck "worker still defines its own \$HermesHome" \
    "grep -Eq '\\\$HermesHome\s*=\s*Join-Path' '$ps1'"

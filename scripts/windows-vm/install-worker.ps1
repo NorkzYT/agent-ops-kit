@@ -54,8 +54,14 @@ if (-not (Get-Command hermes -ErrorAction SilentlyContinue)) {
   # with the call operator (&) gives the installer a private local scope, so its
   # $HermesHome (and every other local) can never collide with ours. Env/PATH
   # changes it makes still propagate because those live on the process.
+  #
+  # -SkipSetup is required. The official installer runs its setup wizard (the
+  # Nous Portal sign-in) unless told to skip it, which would stall this
+  # unattended install on an interactive login. This stack self-hosts the model
+  # API and writes its own CLIProxyAPI config.yaml below, so the wizard has
+  # nothing to configure — skip it and let our config win.
   $installerScript = Invoke-RestMethod https://hermes-agent.nousresearch.com/install.ps1
-  & ([scriptblock]::Create($installerScript))
+  & ([scriptblock]::Create($installerScript)) -SkipSetup
   $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH"
 }
 New-Item -ItemType Directory -Force -Path $HermesHome, (Join-Path $HermesHome "memories") | Out-Null
@@ -128,8 +134,30 @@ $soulSrc = Join-Path $KitRoot "hermes\profiles\windows-operator\SOUL.md"
 if (Test-Path $soulSrc) { Copy-Item $soulSrc (Join-Path $HermesHome "SOUL.md") -Force }
 else { Write-Warning "SOUL.md not found at $soulSrc; copy hermes/profiles/windows-operator/SOUL.md to $HermesHome manually" }
 
-Write-Host "[agent-ops-kit] installing the computer-use driver"
-hermes computer-use install
+# Computer use (cua-driver): install, then verify. The official installer's own
+# cua-driver step is best-effort — it can print "install succeeded" and still
+# hand back an incompatible runtime, and that warning is easy to miss in a long
+# log. So provision it explicitly here and confirm with the health matrix.
+# Telemetry stays off (config.yaml sets cua_telemetry: false above). Run this
+# from the elevated interactive session so the driver's runtime is exercised now
+# rather than deferred to first tool use. Best-effort but never hidden: if it
+# stays unhealthy we warn loudly with a recovery step instead of failing silently.
+Write-Host "[agent-ops-kit] installing and verifying the computer-use driver"
+$cuaHealthy = $false
+foreach ($attempt in 1, 2) {
+  try { hermes computer-use install } catch { Write-Warning "computer-use install (attempt $attempt) errored: $($_.Exception.Message)" }
+  # status prints the on-PATH driver; doctor runs cua-driver's health_report,
+  # which starts the runtime and returns non-zero when anything is degraded.
+  try { hermes computer-use status } catch {}
+  hermes computer-use doctor
+  if ($LASTEXITCODE -eq 0) { $cuaHealthy = $true; break }
+  Write-Warning "[agent-ops-kit] computer-use doctor reported a degraded runtime (attempt $attempt); repairing."
+}
+if ($cuaHealthy) {
+  Write-Host "[agent-ops-kit] computer use verified healthy"
+} else {
+  Write-Warning "[agent-ops-kit] Computer use is NOT healthy after install and one repair. The worker will still start, but desktop control will fail until this is fixed. From an elevated interactive session on the unlocked desktop, run: hermes computer-use install; then hermes computer-use doctor."
+}
 
 if ($UseHostHoncho) {
   $venvPy = Join-Path $HermesHome "hermes-agent\venv\Scripts\python.exe"

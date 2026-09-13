@@ -129,6 +129,7 @@ jobs:
             scripts/hermes-profile.sh scripts/knowledge-sync.sh scripts/claude-max-proxy/install.sh \
             scripts/test_hermes_ui.sh scripts/test_healthcheck.sh scripts/test_hermes_install.sh \
             scripts/test_stack_render.sh scripts/test_knowledge_sync.sh scripts/test_hermes_profile.sh \
+            scripts/test_windows_worker_install.sh \
             install.sh .claude/scripts/test_install.sh \
             .claude/bootstrap/linux_devtools.sh
 
@@ -143,4 +144,5 @@ jobs:
       - run: bash scripts/test_hermes_install.sh
       - run: bash scripts/test_knowledge_sync.sh
       - run: bash scripts/test_hermes_profile.sh
+      - run: bash scripts/test_windows_worker_install.sh
       - run: bash .claude/scripts/test_install.sh
