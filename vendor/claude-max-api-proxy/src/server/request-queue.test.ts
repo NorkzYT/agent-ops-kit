@@ -3,6 +3,7 @@ import test from "node:test";
 import type { LogEntry, LogEvent } from "../logger.js";
 import {
   ConversationRequestQueue,
+  GlobalQueueFullError,
   QueueFullError,
   RequestCancelledError,
 } from "./request-queue.js";
@@ -593,6 +594,52 @@ test("submit enforces queue depth atomically", async () => {
   assert.ok(rejected instanceof QueueFullError);
   releaseBlocker();
   await Promise.all([blocker, accepted]);
+});
+
+test("submit enforces a global queue cap across conversations", async () => {
+  // One concurrent slot, so the blocker occupies it and everything else queues.
+  const queue = new ConversationRequestQueue({
+    debugQueues: () => false,
+    sameConversationPolicy: () => "queue",
+    maxConcurrent: 1,
+    maxGlobalQueued: 2,
+    log: noopLog,
+  });
+
+  let releaseBlocker!: () => void;
+  let blockerStartedResolve!: () => void;
+  const blockerStarted = new Promise<void>((resolve) => {
+    blockerStartedResolve = resolve;
+  });
+  const blocker = queue.enqueue(
+    "conv-blocker",
+    "req-blocker",
+    async () => {
+      blockerStartedResolve();
+      await new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      });
+    },
+    1000,
+  );
+  await blockerStarted;
+
+  const submitOptions = { hardTimeoutMs: 1000, policy: "queue" as const };
+  // Two distinct conversations fill the global queue (total queued == 2).
+  const first = queue.submit("conv-a", "req-a", async () => {}, submitOptions);
+  const second = queue.submit("conv-b", "req-b", async () => {}, submitOptions);
+  assert.equal(queue.getTotalQueuedRequests(), 2);
+
+  // A third distinct conversation is rejected even though its own depth is 0.
+  const rejected = await queue
+    .submit("conv-c", "req-c", async () => {}, submitOptions)
+    .catch((error) => error);
+  assert.ok(rejected instanceof GlobalQueueFullError);
+  assert.equal(rejected.code, "global_queue_full");
+  assert.ok(rejected instanceof QueueFullError);
+
+  releaseBlocker();
+  await Promise.all([blocker, first, second]);
 });
 
 test("cancelRequest cancels queued and active work by request id", async () => {

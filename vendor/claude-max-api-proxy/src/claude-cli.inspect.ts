@@ -146,11 +146,21 @@ export function parseClaudeJsonOutput(raw: string): ClaudeCliMessage[] {
 
 export function parseAuthStatus(raw: string): ClaudeAuthStatus | null {
   try {
-    const parsed = JSON.parse(raw.trim()) as ClaudeAuthStatus;
-    if (typeof parsed.loggedIn !== "boolean") {
+    const parsed = JSON.parse(raw.trim()) as Record<string, unknown>;
+    if (typeof parsed?.loggedIn !== "boolean") {
       return null;
     }
-    return parsed;
+    // Only expose an allowlisted view. The raw `claude auth status` payload can
+    // carry account identifiers/emails that must not reach callers such as the
+    // /health and /ops/snapshot surfaces (F16).
+    const status: ClaudeAuthStatus = { loggedIn: parsed.loggedIn };
+    if (typeof parsed.authMethod === "string") {
+      status.authMethod = parsed.authMethod;
+    }
+    if (typeof parsed.apiProvider === "string") {
+      status.apiProvider = parsed.apiProvider;
+    }
+    return status;
   } catch {
     return null;
   }

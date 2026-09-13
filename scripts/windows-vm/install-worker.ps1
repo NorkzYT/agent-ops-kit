@@ -21,7 +21,7 @@ param(
   [Parameter(Mandatory = $true)] [string] $CliProxyApiKey,
   [Parameter(Mandatory = $true)] [string] $DiscordBotToken,
   [Parameter(Mandatory = $true)] [string] $AllowedUsers,
-  [string] $Model = "gpt-5.5",
+  [string] $Model = "gpt-5.6-sol",
   [int]    $CliProxyPort = 8317,
   [int]    $HonchoPort = 8000,
   [string] $PeerName = "me",

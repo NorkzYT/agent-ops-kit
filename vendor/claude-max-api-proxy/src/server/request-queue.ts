@@ -41,6 +41,7 @@ interface RequestQueueOptions {
   debugQueues?: () => boolean;
   sameConversationPolicy?: () => SameConversationPolicy;
   maxConcurrent?: number;
+  maxGlobalQueued?: number;
   log?: typeof log;
   now?: () => number;
   latestHistoryTtlMs?: number;
@@ -80,7 +81,7 @@ export class RequestCancelledError extends Error {
 }
 
 export class QueueFullError extends Error {
-  readonly code = "queue_full";
+  readonly code: string = "queue_full";
 
   constructor(
     public readonly conversationId: string,
@@ -90,6 +91,21 @@ export class QueueFullError extends Error {
       `Too many queued requests for conversation '${conversationId}' (${depth}).`,
     );
     this.name = "QueueFullError";
+  }
+}
+
+/**
+ * Raised when the global queue cap (total queued items across all
+ * conversations) is exceeded. Extends QueueFullError so the route layer keeps
+ * mapping it to HTTP 429 without a new branch (F10).
+ */
+export class GlobalQueueFullError extends QueueFullError {
+  readonly code = "global_queue_full";
+
+  constructor(public readonly totalQueued: number) {
+    super("*", totalQueued);
+    this.name = "GlobalQueueFullError";
+    this.message = `Too many queued requests globally (${totalQueued}).`;
   }
 }
 
@@ -103,6 +119,7 @@ export class ConversationRequestQueue {
   private readonly isDebugQueuesEnabled: () => boolean;
   private readonly getSameConversationPolicy: () => SameConversationPolicy;
   private readonly maxConcurrent: number;
+  private readonly maxGlobalQueued: number;
   private readonly latestSubmissions = new Map<
     string,
     {
@@ -128,6 +145,10 @@ export class ConversationRequestQueue {
     this.maxConcurrent = Math.max(
       1,
       options.maxConcurrent ?? runtimeConfig.maxConcurrentRequests,
+    );
+    this.maxGlobalQueued = Math.max(
+      1,
+      options.maxGlobalQueued ?? runtimeConfig.maxGlobalQueuedRequests,
     );
     this.latestHistoryTtlMs = Math.max(
       1,
@@ -214,6 +235,13 @@ export class ConversationRequestQueue {
     const maxQueueDepth = options.maxQueueDepth ?? MAX_QUEUE_DEPTH;
     if (depth >= maxQueueDepth) {
       return Promise.reject(new QueueFullError(conversationId, depth));
+    }
+
+    // Global backpressure: cap total queued items across all conversations so a
+    // fan-out of distinct conversationIds can't grow the queue unbounded (F10).
+    const totalQueued = this.getTotalQueuedRequests();
+    if (totalQueued >= this.maxGlobalQueued) {
+      return Promise.reject(new GlobalQueueFullError(totalQueued));
     }
 
     // Queue-policy requests still establish the newest admitted arrival. This
@@ -438,6 +466,19 @@ export class ConversationRequestQueue {
 
   getQueueDepth(conversationId: string): number {
     return this.conversationQueues.get(conversationId)?.queue.length ?? 0;
+  }
+
+  /** Total queued (not yet running) items across all conversations. */
+  getTotalQueuedRequests(): number {
+    let total = 0;
+    for (const entry of this.conversationQueues.values()) {
+      total += entry.queue.length;
+    }
+    return total;
+  }
+
+  getMaxGlobalQueued(): number {
+    return this.maxGlobalQueued;
   }
 
   getQueueEntries(): Iterable<[string, QueueEntryLike]> {

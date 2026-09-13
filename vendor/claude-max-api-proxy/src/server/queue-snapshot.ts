@@ -37,7 +37,9 @@ export function buildQueueSnapshot(
   entries: Iterable<[string, QueueEntryLike]>,
   now = Date.now(),
 ): QueueSnapshot {
-  const queueStatus: Record<string, QueueStatusEntry> = {};
+  // Null-prototype map so a conversationId such as "__proto__" can never
+  // corrupt the snapshot object's prototype (defense-in-depth for F17).
+  const queueStatus: Record<string, QueueStatusEntry> = Object.create(null);
   let queuedRequests = 0;
   let queuedConversations = 0;
   let oldestQueueWaitMs = 0;

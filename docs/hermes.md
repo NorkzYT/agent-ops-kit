@@ -25,7 +25,7 @@ directly and `hermes gateway restart`.
 ```yaml
 model:                       # the orchestrator
   provider: custom
-  default: gpt-5.5           # HERMES_MODEL in .env
+  default: gpt-5.6-sol       # HERMES_MODEL in .env
   base_url: http://127.0.0.1:8317/v1
   api_key: ${CLIPROXY_API_KEY}
 

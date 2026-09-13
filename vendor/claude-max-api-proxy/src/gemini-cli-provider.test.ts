@@ -2,12 +2,40 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildGeminiCliChatCompletion,
+  buildGeminiCliEnv,
   buildGeminiCliErrorResponse,
   buildGeminiCliPrompt,
   GeminiCliProvider,
   readGeminiCliJsonUsage,
   readGeminiCliStreamUsage,
 } from "./gemini-cli-provider.js";
+
+test("buildGeminiCliEnv scrubs Claude credentials and unrelated API keys", () => {
+  const env = buildGeminiCliEnv({
+    PATH: "/usr/bin",
+    HOME: "/home/proxy",
+    GEMINI_API_KEY: "keep-gemini",
+    GOOGLE_API_KEY: "keep-google",
+    GOOGLE_CLOUD_PROJECT: "keep-project",
+    CLAUDE_CODE_OAUTH_TOKEN: "leak-oauth",
+    ANTHROPIC_API_KEY: "leak-anthropic",
+    OPENAI_API_KEY: "leak-openai",
+    ZAI_API_KEY: "leak-zai",
+  });
+
+  // Baseline + Gemini/Google keys survive.
+  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.HOME, "/home/proxy");
+  assert.equal(env.GEMINI_API_KEY, "keep-gemini");
+  assert.equal(env.GOOGLE_API_KEY, "keep-google");
+  assert.equal(env.GOOGLE_CLOUD_PROJECT, "keep-project");
+
+  // Claude OAuth token and unrelated *_API_KEY vars are stripped.
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(env.OPENAI_API_KEY, undefined);
+  assert.equal(env.ZAI_API_KEY, undefined);
+});
 
 test("buildGeminiCliPrompt serializes system, user, and assistant turns", () => {
   const prompt = buildGeminiCliPrompt([

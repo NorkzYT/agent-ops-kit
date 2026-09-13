@@ -76,10 +76,11 @@ jobs:
           json.loads(pathlib.Path(".claude/settings.json").read_text())
           print("templates ok")
           PY
-      - name: stack-init renders config offline
+      - name: stack-init renders config offline and generates the proxy key
         run: |
           rm -f .env; CLAUDE_MAX_PROXY_REPO=file:///nonexistent bash scripts/stack-init.sh || true
           test -f data/cliproxyapi/config.yaml && ! grep -q __CLIPROXY_API_KEY__ data/cliproxyapi/config.yaml
+          grep -qE '^CLAUDE_MAX_PROXY_API_KEY=.+' .env
       - name: vendored proxy sync degrades to the vendored copy offline
         run: |
           test -f vendor/claude-max-api-proxy/UPSTREAM && ! test -e vendor/claude-max-api-proxy/.git
@@ -97,13 +98,46 @@ jobs:
           test -f "$unit" && ! grep -q '__[A-Z_]*__' "$unit"
           grep -q '^CPUQuota=400%$' "$unit" && grep -q '^MemoryMax=12G$' "$unit"
           test -f data/claude-max-proxy/proxy.env && grep -q '^CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS=3$' data/claude-max-proxy/proxy.env
+          grep -q '^HOST=127.0.0.1$' data/claude-max-proxy/proxy.env
+          grep -qE '^CLAUDE_MAX_PROXY_API_KEY=.+' data/claude-max-proxy/proxy.env
 
   claude-max-proxy:
-    name: claude-max-proxy builds from the vendored sources
+    name: claude-max-proxy builds and tests from the vendored sources
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - run: cd vendor/claude-max-api-proxy && npm ci --no-audit --no-fund && npm run build && test -f dist/server/standalone.js
+          node-version: 24
+      - name: Build the vendored proxy
+        run: cd vendor/claude-max-api-proxy && npm ci --no-audit --no-fund && npm run build && test -f dist/server/standalone.js
+      - name: Run the vendored proxy test suite (auth/CORS/queue regressions)
+        run: cd vendor/claude-max-api-proxy && npm test
+
+  shellcheck:
+    name: ShellCheck (touched operator scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure shellcheck
+        run: command -v shellcheck || (sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck)
+      - name: Lint
+        run: |
+          shellcheck -x --severity=warning \
+            scripts/lib.sh scripts/stack-init.sh scripts/doctor.sh scripts/hermes-install.sh \
+            scripts/envval.sh scripts/models.sh scripts/hermes-ui.sh scripts/auth-claude-proxy.sh \
+            scripts/hermes-profile.sh scripts/claude-max-proxy/install.sh \
+            scripts/test_hermes_ui.sh scripts/test_healthcheck.sh scripts/test_hermes_install.sh \
+            scripts/test_stack_render.sh install.sh .claude/scripts/test_install.sh \
+            .claude/bootstrap/linux_devtools.sh
+
+  shell-tests:
+    name: Make targets, installer, healthcheck, render, hermes-install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/test_hermes_ui.sh
+      - run: bash scripts/test_healthcheck.sh
+      - run: bash scripts/test_stack_render.sh
+      - run: bash scripts/test_hermes_install.sh
+      - run: bash .claude/scripts/test_install.sh

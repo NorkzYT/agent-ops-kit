@@ -23,12 +23,16 @@ fi
 ensure_secret CLIPROXY_API_KEY .env
 ensure_secret CLIPROXY_MANAGEMENT_KEY .env
 ensure_secret HONCHO_DB_PASSWORD .env
+# Bearer secret for the host claude-max-proxy (auth on /v1/* and admin/ops).
+ensure_secret CLAUDE_MAX_PROXY_API_KEY .env
 
 mkdir -p data/cliproxyapi/auths data/cliproxyapi/logs
-api_key="$(env_file_get CLIPROXY_API_KEY .env)"
-mgmt_key="$(env_file_get CLIPROXY_MANAGEMENT_KEY .env)"
-sed -e "s|__CLIPROXY_API_KEY__|${api_key}|" -e "s|__CLIPROXY_MANAGEMENT_KEY__|${mgmt_key}|" \
-  docker/cliproxyapi/config.example.yaml > data/cliproxyapi/config.yaml
+# render_template (lib.sh) escapes | \ & in the substituted values, so a key
+# that happens to contain sed metacharacters cannot break out of the s/// or
+# trigger GNU sed's `e` command. Do not hand-roll sed here.
+CLIPROXY_API_KEY="$(env_file_get CLIPROXY_API_KEY .env)" \
+CLIPROXY_MANAGEMENT_KEY="$(env_file_get CLIPROXY_MANAGEMENT_KEY .env)" \
+  render_template docker/cliproxyapi/config.example.yaml data/cliproxyapi/config.yaml
 chmod 600 data/cliproxyapi/config.yaml
 log "rendered data/cliproxyapi/config.yaml"
 

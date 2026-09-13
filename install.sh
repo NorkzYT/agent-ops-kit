@@ -38,7 +38,6 @@ EOF
 REPO=""
 REF="main"
 DEST="."
-DEST_EXPLICIT="0"
 FORCE="0"
 BOOTSTRAP_LINUX="0"
 NO_EXTRAS="0"
@@ -47,7 +46,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)   REPO="${2:-}"; shift 2;;
     --ref)    REF="${2:-}"; shift 2;;
-    --dest)   DEST="${2:-}"; DEST_EXPLICIT="1"; shift 2;;
+    --dest)   DEST="${2:-}"; shift 2;;
     --force)  FORCE="1"; shift 1;;
     --bootstrap-linux) BOOTSTRAP_LINUX="1"; shift 1;;
     --no-extras) NO_EXTRAS="1"; shift 1;;
@@ -225,7 +224,7 @@ archive="$tmpdir/repo.tgz"
 extract_dir="$tmpdir/extract"
 mkdir -p "$extract_dir"
 
-TARBALL_URL="https://github.com/${REPO}/archive/${REF}.tar.gz"
+TARBALL_URL="${CCA_TARBALL_URL:-https://github.com/${REPO}/archive/${REF}.tar.gz}"
 
 echo "Downloading ${REPO}@${REF} ..."
 if [[ "$DL" == "curl" ]]; then
@@ -545,10 +544,10 @@ if [[ "$(id -u)" -eq 0 ]]; then
   fi
 fi
 
-# Ensure logs dir exists and is writable by any user (sticky bit like /tmp)
+# Ensure logs dir exists with private, owner-only permissions.
 mkdir -p "$DEST_LOGS"
-chmod 1777 "$DEST_LOGS" || true
-find "$DEST_LOGS" -maxdepth 1 -type f -exec chmod 666 {} \; 2>/dev/null || true
+chmod 700 "$DEST_LOGS" || true
+find "$DEST_LOGS" -maxdepth 1 -type f -exec chmod 600 {} \; 2>/dev/null || true
 
 # --- Install claude-editor wrapper script (dynamic VS Code / terminal editor) ---
 EDITOR_SCRIPT="$DEST_CLAUDE/scripts/claude-editor.sh"
@@ -587,26 +586,43 @@ fi
 # --- Optional: Linux bootstrap (Claude Code + notify-send + LSP binaries + plugins) ---
 if [[ "$BOOTSTRAP_LINUX" == "1" ]]; then
   if [[ "$(uname -s 2>/dev/null || echo '')" == "Linux" ]]; then
-    # Step 0: Install Docker if not present
-    if ! command -v docker &>/dev/null; then
-      echo "Installing Docker..."
-      # Use python3 urllib to download (guard_bash blocks curl in agent context)
-      python3 -c "import urllib.request; urllib.request.urlretrieve('https://get.docker.com', '/tmp/get-docker.sh')" 2>/dev/null || true
-      if [[ -f "/tmp/get-docker.sh" ]]; then
-        if [[ "$(id -u)" -eq 0 ]]; then
-          sh /tmp/get-docker.sh
-          usermod -aG docker "$TARGET_USER" 2>/dev/null || true
-        else
-          if command -v sudo >/dev/null 2>&1; then
-            sudo sh /tmp/get-docker.sh
-            sudo usermod -aG docker "$TARGET_USER" 2>/dev/null || true
-          else
-            echo "WARN: Not root and sudo not available. Skipping Docker install."
-          fi
-        fi
-        rm -f /tmp/get-docker.sh
+    # Step 0: Install Docker if not present (best-effort, via distro packages).
+    # We deliberately do NOT pipe a remote script to a shell as root; install
+    # from the detected system package manager instead, and fall back to
+    # printing the official instructions if that is not possible.
+    if ! command -v docker >/dev/null 2>&1; then
+      echo "Installing Docker via system package manager (best-effort)..."
+
+      docker_pfx=""
+      if [[ "$(id -u)" -ne 0 ]] && command -v sudo >/dev/null 2>&1; then
+        docker_pfx="sudo "
+      fi
+
+      docker_installed=0
+      if [[ "$(id -u)" -ne 0 && -z "$docker_pfx" ]]; then
+        echo "WARN: Not root and sudo not available. Skipping Docker install."
+      elif command -v apt-get >/dev/null 2>&1; then
+        if ${docker_pfx}apt-get update -qq && ${docker_pfx}apt-get install -y -qq docker.io; then docker_installed=1; fi
+      elif command -v dnf >/dev/null 2>&1; then
+        if ${docker_pfx}dnf install -y -q docker; then docker_installed=1; fi
+      elif command -v yum >/dev/null 2>&1; then
+        if ${docker_pfx}yum install -y -q docker; then docker_installed=1; fi
+      elif command -v apk >/dev/null 2>&1; then
+        if ${docker_pfx}apk add --quiet docker; then docker_installed=1; fi
+      elif command -v pacman >/dev/null 2>&1; then
+        if ${docker_pfx}pacman -Sy --noconfirm --quiet docker; then docker_installed=1; fi
+      elif command -v zypper >/dev/null 2>&1; then
+        if ${docker_pfx}zypper install -y --quiet docker; then docker_installed=1; fi
       else
-        echo "WARN: Failed to download Docker install script."
+        echo "WARN: No supported package manager found for Docker."
+      fi
+
+      if [[ "$docker_installed" -eq 1 ]]; then
+        ${docker_pfx}usermod -aG docker "$TARGET_USER" 2>/dev/null || true
+        echo "  Docker installed via package manager: $(docker --version 2>/dev/null || echo 'unknown')"
+      else
+        echo "WARN: Could not install Docker automatically; continuing without it."
+        echo "  Install it manually: https://docs.docker.com/engine/install/"
       fi
     else
       echo "Docker already installed: $(docker --version 2>/dev/null || echo 'unknown')"
@@ -681,13 +697,54 @@ USER_CLAUDE_MD="$USER_CLAUDE_DIR/CLAUDE.md"
 echo "Setting up user-level autopilot default..."
 mkdir -p "$USER_CLAUDE_DIR"
 
-cat > "$USER_CLAUDE_MD" << 'AUTOPILOT_EOF'
+# Autopilot policy lives inside a clearly delimited managed block so we never
+# clobber a user's pre-existing global CLAUDE.md. Behavior:
+#   - file absent      -> create it containing just the managed block
+#   - file, no block   -> append the block, preserving existing content
+#   - file, has block  -> replace only the block's contents (idempotent)
+CLAUDE_MD_START="# >>> agent-ops-kit managed block >>>"
+CLAUDE_MD_END="# <<< agent-ops-kit managed block <<<"
+
+managed_block="$tmpdir/claude_md_block"
+{
+  echo "$CLAUDE_MD_START"
+  cat << 'AUTOPILOT_EOF'
 Cost-optimized routing policy:
 - Default to Opus; start every task with a short plan/triage.
 - Downshift simple mechanical tasks (1-3 files, existing patterns) to Sonnet and work directly.
 - If the session is on a smaller model, escalate complex multi-file or architectural tasks to the autopilot-opus subagent (Task tool with subagent_type=autopilot-opus).
 - Run build/test before completion and avoid Co-Authored-By commit trailers.
 AUTOPILOT_EOF
+  echo "$CLAUDE_MD_END"
+} > "$managed_block"
+
+if [[ ! -f "$USER_CLAUDE_MD" ]]; then
+  cp -f "$managed_block" "$USER_CLAUDE_MD"
+  echo "  Created: $USER_CLAUDE_MD"
+elif grep -qF "$CLAUDE_MD_START" "$USER_CLAUDE_MD" 2>/dev/null; then
+  # Replace only the existing block's contents; leave everything else intact.
+  merged_md="$tmpdir/claude_md_merged"
+  awk -v start="$CLAUDE_MD_START" -v end="$CLAUDE_MD_END" -v blockfile="$managed_block" '
+    $0 == start {
+      while ((getline line < blockfile) > 0) print line
+      close(blockfile)
+      skip = 1
+      next
+    }
+    skip && $0 == end { skip = 0; next }
+    skip { next }
+    { print }
+  ' "$USER_CLAUDE_MD" > "$merged_md"
+  cp -f "$merged_md" "$USER_CLAUDE_MD"
+  echo "  Updated managed block in: $USER_CLAUDE_MD"
+else
+  # Preserve existing user content; append the managed block after it.
+  {
+    echo ""
+    cat "$managed_block"
+  } >> "$USER_CLAUDE_MD"
+  echo "  Appended managed block to: $USER_CLAUDE_MD"
+fi
 
 # Fix ownership if running as root
 if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" ]]; then
@@ -695,7 +752,6 @@ if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" ]]; then
   chown -R "${TARGET_USER}" "$USER_CLAUDE_DIR" 2>/dev/null || true
 fi
 
-echo "  Created: $USER_CLAUDE_MD"
 echo ""
 
 # --- Setup cca alias in shell rc files ---

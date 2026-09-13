@@ -29,6 +29,34 @@ test("parseAuthStatus returns null for invalid JSON", () => {
   assert.equal(parseAuthStatus("not json"), null);
 });
 
+test("parseAuthStatus exposes only the allowlisted auth fields", () => {
+  // The raw `claude auth status` payload can contain account identifiers,
+  // emails, or tokens. Only the routing-relevant fields may reach callers
+  // (health / ops snapshot), so everything else must be dropped (F16).
+  const parsed = parseAuthStatus(
+    JSON.stringify({
+      loggedIn: true,
+      authMethod: "oauth_token",
+      apiProvider: "firstParty",
+      email: "user@example.test",
+      accountUuid: "sensitive-account-id",
+      oauthToken: "sensitive-token",
+    }),
+  );
+  assert.deepEqual(parsed, {
+    loggedIn: true,
+    authMethod: "oauth_token",
+    apiProvider: "firstParty",
+  });
+  assert.equal(Object.keys(parsed ?? {}).length, 3);
+});
+
+test("parseAuthStatus omits absent optional fields", () => {
+  assert.deepEqual(parseAuthStatus('{"loggedIn":false}'), {
+    loggedIn: false,
+  });
+});
+
 test("parseClaudeJsonOutput parses array output", () => {
   const messages = parseClaudeJsonOutput(
     '[{"type":"result","subtype":"success","is_error":false,"duration_ms":1,"duration_api_ms":1,"num_turns":1,"result":"OK","session_id":"abc","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1},"modelUsage":{}}]',

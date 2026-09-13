@@ -18,7 +18,7 @@ fixes it. Then find the symptom below.
 | claude-max-proxy restarts by itself every few hours | `CLAUDE_PROXY_MAX_UPTIME_HOURS` (idle-only restart, by design) | raise it or set it empty in `.env`, `make claude-proxy-install` |
 | `make claude-proxy-logs` says `no Claude Max credentials yet` | no `CLAUDE_CODE_OAUTH_TOKEN` | `make auth-claude-proxy` |
 | claude-max-proxy `/v1/models` empty or 401 | token expired or revoked | `make auth-claude-proxy` again |
-| `make claude-proxy-install` says `node not found` / `needs Node.js 22+` | no Node on the host | install Node 22+ (NodeSource, fnm or nvm), open a new shell, re-run |
+| `make claude-proxy-install` says `node not found` / `needs Node.js 24+` | no Node on the host | install Node 24+ (NodeSource, fnm or nvm), open a new shell, re-run |
 | service `failed`, journal shows `claude: not found` | `claude` not on the PATH captured at install time | run `make claude-proxy-install` from a shell where `claude --version` works |
 | service `failed`, journal shows `EACCES` under `data/claude-max-proxy` | leftover root-owned files from the old Docker proxy | `sudo chown -R $(id -u):$(id -g) data/claude-max-proxy` |
 | subagent cannot find `go`, `docker`, `uv`... | tool installed after the unit captured PATH, or only in a shell rc | `make claude-proxy-install` again from a shell that has it |
@@ -53,7 +53,7 @@ fixes it. Then find the symptom below.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| cannot reach the model | host binds to 127.0.0.1 | `BIND_ADDR=<tailscale ip>` in `.env`, `make up`; check the firewall |
+| cannot reach the model | host binds to 127.0.0.1 | `CLIPROXY_BIND_ADDR=<tailscale ip>` (and `HONCHO_BIND_ADDR` if needed) in `.env`, `make up`; check the firewall |
 | computer use does nothing | desktop locked or RDP disconnected | keep the console session open; disable lock/sleep |
 | cannot click an admin window | Windows integrity levels | run the gateway task elevated for that job, or do the admin step yourself |
 | scheduled task not starting | registered under another user | re-run `install-worker.ps1` from the agent's account |

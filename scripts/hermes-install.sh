@@ -23,9 +23,12 @@ cd "$ROOT"
 FORCE=0
 [[ "${1:-}" == "--force" ]] && FORCE=1
 
-[[ -f .env ]] || die ".env not found. Run: make init"
+# ENV_FILE defaults to ./.env; overridable so tests can point at a fixture
+# instead of the operator's real .env (which must never be rewritten by a test).
+ENV_FILE="${ENV_FILE:-.env}"
+[[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run: make init"
 
-getenv() { env_file_get "$1" .env 2>/dev/null || printf '%s' "${2:-}"; }
+getenv() { env_file_get "$1" "$ENV_FILE" 2>/dev/null || printf '%s' "${2:-}"; }
 
 export PATH="$HOME/.local/bin:$PATH"
 HERMES_HOME="$(getenv HERMES_HOME "$HOME/.hermes")"
@@ -45,11 +48,11 @@ log "hermes: $(hermes --version 2>/dev/null | head -n1 || echo present)"
 mkdir -p "$HERMES_HOME" "$HERMES_HOME/memories" "$HERMES_HOME/skills"
 
 # --------------------------------------------------------- 2. config.yaml ---
-export HERMES_MODEL="$(getenv HERMES_MODEL gpt-5.5)"
-export HERMES_CODING_MODEL="$(getenv HERMES_CODING_MODEL opus)"
-export CLIPROXY_BASE_URL="http://127.0.0.1:$(getenv CLIPROXY_PORT 8317)/v1"
-export CLAUDE_MAX_PROXY_BASE_URL="http://127.0.0.1:$(getenv CLAUDE_MAX_PROXY_PORT 3456)/v1"
-export REPOS_DIR="$(getenv REPOS_DIR /opt/repos)"
+HERMES_MODEL="$(getenv HERMES_MODEL gpt-5.6-sol)"; export HERMES_MODEL
+HERMES_CODING_MODEL="$(getenv HERMES_CODING_MODEL opus)"; export HERMES_CODING_MODEL
+CLIPROXY_BASE_URL="http://127.0.0.1:$(getenv CLIPROXY_PORT 8317)/v1"; export CLIPROXY_BASE_URL
+CLAUDE_MAX_PROXY_BASE_URL="http://127.0.0.1:$(getenv CLAUDE_MAX_PROXY_PORT 3456)/v1"; export CLAUDE_MAX_PROXY_BASE_URL
+REPOS_DIR="$(getenv REPOS_DIR /opt/repos)"; export REPOS_DIR
 
 cfg="$HERMES_HOME/config.yaml"
 if [[ -f "$cfg" && "$FORCE" != "1" ]]; then
@@ -71,15 +74,18 @@ for key in DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS DISCORD_HOME_CHANNEL DISCORD_
   env_file_set "$key" "$(getenv "$key")" "$henv"
 done
 env_file_set DISCORD_REQUIRE_MENTION true "$henv"
-env_file_set CLAUDE_MAX_PROXY_API_KEY local "$henv"
+# Delegation sends this as the bearer to claude-max-proxy; it must match the
+# key rendered into proxy.env. Falls back to "local" only for a legacy .env with
+# no key (the proxy then runs unauthenticated on loopback and accepts any string).
+env_file_set CLAUDE_MAX_PROXY_API_KEY "$(getenv CLAUDE_MAX_PROXY_API_KEY local)" "$henv"
 log "wrote $henv"
 [[ -n "$(getenv DISCORD_BOT_TOKEN)" ]] || warn "DISCORD_BOT_TOKEN is empty; the Discord gateway will not start until you set it in .env and re-run"
 [[ -n "$(getenv DISCORD_ALLOWED_USERS)" ]] || warn "DISCORD_ALLOWED_USERS is empty; nobody can talk to the bot yet"
 
 # ----------------------------------------------------------- 4. honcho.json ---
-export HONCHO_BASE_URL="http://127.0.0.1:$(getenv HONCHO_PORT 8000)"
-export HONCHO_PEER_NAME="$(getenv HONCHO_PEER_NAME me)"
-export HONCHO_WORKSPACE="$(getenv HONCHO_WORKSPACE agent-ops)"
+HONCHO_BASE_URL="http://127.0.0.1:$(getenv HONCHO_PORT 8000)"; export HONCHO_BASE_URL
+HONCHO_PEER_NAME="$(getenv HONCHO_PEER_NAME me)"; export HONCHO_PEER_NAME
+HONCHO_WORKSPACE="$(getenv HONCHO_WORKSPACE agent-ops)"; export HONCHO_WORKSPACE
 hj="$HERMES_HOME/honcho.json"
 [[ -f "$hj" ]] && cp -f "$hj" "$hj.bak.$(date +%Y%m%d%H%M%S)"
 render_template hermes/honcho.json.tmpl "$hj"

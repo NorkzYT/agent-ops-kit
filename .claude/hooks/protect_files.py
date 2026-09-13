@@ -13,9 +13,17 @@ import json
 import os
 import re
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from typing import List, Optional, Tuple
+
+from _pathguard import (
+    ALLOWED_PATTERNS,
+    PROTECTED_GLOBS,
+    is_allowed,
+    is_protected,
+    to_project_relative,
+)
 
 # Temporary escape hatch (set before starting claude):
 #   export CLAUDE_ALLOW_PROTECTED_EDITS=1
@@ -37,96 +45,10 @@ CODE_EXTENSIONS = {
     ".sh", ".bash", ".zsh", ".fish",
 }
 
-# Allowlist: these patterns are safe to edit even if they match protected globs
-ALLOWED_PATTERNS = [
-    "**/.env.example",
-    "**/.env.sample",
-    "**/.env.template",
-    # docker-compose prod files are safe to edit (tracked in git)
-    "**/docker-compose.prod*.yml",
-    "**/docker-compose.production*.yml",
-]
-
-# Conservative defaults. Tune to your org.
-PROTECTED_GLOBS = [
-    # .env and variants (but .env.example/.env.sample/.env.template are allowed above)
-    "**/.env",
-    "**/.env.*",
-
-    # Common key/cert material
-    "**/*.pem",
-    "**/*.key",
-    "**/*.p12",
-    "**/*.pfx",
-    "**/id_rsa",
-    "**/id_rsa.*",
-    "**/id_ed25519",
-    "**/id_ed25519.*",
-
-    # Common secret files
-    "**/*secret*",
-    "**/*secrets*",
-    "**/.aws/**",
-    "**/.ssh/**",
-    "**/*kubeconfig*",
-
-    # Common prod config patterns
-    "**/docker-compose.prod*.yml",
-    "**/docker-compose.production*.yml",
-    "**/.github/workflows/*deploy*.yml",
-    "**/infra/prod/**",
-    "**/k8s/prod/**",
-    "**/terraform/prod/**",
-    "**/config/prod/**",
-    "**/config/production/**",
-
-    # Agent runtime credentials (Hermes, proxies)
-    "**/.hermes/.env",
-    "**/.hermes/auth.json",
-    "**/.hermes/honcho.json",
-    "**/data/cliproxyapi/**",
-]
-
-
-def to_project_relative(path_str: str, project_dir: str) -> str:
-    """
-    Convert an absolute path to project-relative (POSIX style) if possible.
-    Keep as-is (normalized) if not under project dir.
-    """
-    p = Path(path_str)
-    proj = Path(project_dir)
-
-    try:
-        rp = p.resolve()
-        rproj = proj.resolve()
-        if str(rp).startswith(str(rproj) + os.sep) or rp == rproj:
-            rel = rp.relative_to(rproj).as_posix()
-            return rel
-    except Exception:
-        pass
-
-    # Fall back: normalize separators
-    return p.as_posix().lstrip("./")
-
-
-def is_allowed(rel_posix: str) -> bool:
-    """Check if file matches an allowed pattern (takes precedence over protected)."""
-    rel = PurePosixPath(rel_posix)
-    for pat in ALLOWED_PATTERNS:
-        if rel.match(pat):
-            return True
-    return False
-
-
-def is_protected(rel_posix: str) -> bool:
-    # Allowlist takes precedence
-    if is_allowed(rel_posix):
-        return False
-    rel = PurePosixPath(rel_posix)
-    for pat in PROTECTED_GLOBS:
-        if rel.match(pat):
-            return True
-    return False
+# Protected/allowed globs and the path-matching helpers now live in the shared
+# _pathguard module (imported above) so guard_bash.py and protect_files.py agree
+# on exactly one protection policy. ALLOWED_PATTERNS / PROTECTED_GLOBS /
+# is_allowed / is_protected / to_project_relative are imported from there.
 
 
 def is_code_file(file_path: str) -> bool:

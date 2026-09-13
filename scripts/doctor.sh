@@ -3,7 +3,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 # shellcheck source=lib.sh
 . "$ROOT/scripts/lib.sh"
 
@@ -49,7 +49,7 @@ hdr "claude-max-proxy (host)"
 proxy_dir="$(getenv CLAUDE_MAX_PROXY_DIR ./vendor/claude-max-api-proxy)"
 if have node; then
   major="$(node -v | sed 's/^v//; s/\..*//')"
-  [[ "$major" -ge 22 ]] && ok "node $(node -v)" || bad "node $(node -v); the proxy needs 22+"
+  [[ "$major" -ge 24 ]] && ok "node $(node -v)" || bad "node $(node -v); the proxy needs 24+ (node:sqlite)"
 else bad "node not installed (make claude-proxy-install prints how)"; fi
 have claude && ok "claude CLI $(claude --version 2>/dev/null | head -n1)" || bad "claude CLI missing (make claude-proxy-install)"
 [[ -f "$proxy_dir/dist/server/standalone.js" ]] && ok "proxy built at $proxy_dir (upstream $(env_file_get commit "$proxy_dir/UPSTREAM" 2>/dev/null | cut -c1-7))" || bad "proxy not built (make claude-proxy-install)"
@@ -73,7 +73,7 @@ if out="$(curl -fsS -m 10 -H "Authorization: Bearer $(getenv CLIPROXY_API_KEY)" 
   n="$(grep -o '"id"' <<<"$out" | wc -l | tr -d ' ')"
   if [[ "$n" -gt 0 ]]; then ok "CLIProxyAPI :$cp_port exposes $n models"; else warn_ "CLIProxyAPI up but no models (make auth-codex)"; fi
 else bad "CLIProxyAPI not answering on :$cp_port"; fi
-if out="$(curl -fsS -m 10 http://127.0.0.1:"$cm_port"/v1/models 2>/dev/null)"; then
+if out="$(curl -fsS -m 10 -H "Authorization: Bearer $(getenv CLAUDE_MAX_PROXY_API_KEY)" http://127.0.0.1:"$cm_port"/v1/models 2>/dev/null)"; then
   n="$(grep -o '"id"' <<<"$out" | wc -l | tr -d ' ')"
   if [[ "$n" -gt 0 ]]; then ok "claude-max-proxy :$cm_port exposes $n models"; else warn_ "claude-max-proxy up but no models (make auth-claude-proxy)"; fi
 elif [[ -z "$(getenv CLAUDE_CODE_OAUTH_TOKEN)" ]]; then warn_ "claude-max-proxy idle on :$cm_port, waiting for credentials (make auth-claude-proxy)"

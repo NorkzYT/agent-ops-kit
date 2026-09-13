@@ -61,6 +61,19 @@ test("conversation identity rejects unsafe or oversized values", () => {
   );
 });
 
+test("conversation identity rejects prototype-pollution keys", () => {
+  // A caller-supplied conversationId is used as an object key in queue and
+  // snapshot maps. Reject __proto__/constructor/prototype so it cannot corrupt
+  // those objects (F17).
+  const req = requestWithHeaders({});
+  for (const dangerous of ["__proto__", "constructor", "prototype"]) {
+    assert.equal(
+      resolveConversationId(req, { conversation_id: dangerous }, "fallback"),
+      "fallback",
+    );
+  }
+});
+
 test("idempotency keys provide a stable opaque scope without explicit identity", () => {
   const first = resolveConversationId(
     requestWithHeaders({ "idempotency-key": "retry-secret" }),

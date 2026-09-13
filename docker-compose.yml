@@ -12,8 +12,10 @@
 #   HOST too, as a systemd user service (make claude-proxy-install), so the
 #   Claude Code sessions it spawns see your repos, toolchains, docker and gh.
 #
-#   All ports bind to BIND_ADDR (default 127.0.0.1). Set BIND_ADDR=0.0.0.0 in .env
-#   only when a remote worker (the Windows VM) must reach the stack.
+#   Each service binds its OWN address (all default 127.0.0.1): CLIPROXY_BIND_ADDR
+#   for cliproxyapi, HONCHO_BIND_ADDR for the Honcho API. Open only the one a
+#   remote worker needs (usually just CLIPROXY_BIND_ADDR); Honcho runs with auth
+#   disabled and must stay loopback-only.
 #
 #   Usage:  make init && make up      (see Makefile / docs/install.md)
 
@@ -30,7 +32,7 @@ x-honcho-common: &honcho-common
     ollama:
       condition: service_healthy
     cliproxyapi:
-      condition: service_started
+      condition: service_healthy
   environment: &honcho-env
     LOG_LEVEL: ${HONCHO_LOG_LEVEL:-INFO}
     DB_CONNECTION_URI: postgresql+psycopg://postgres:${HONCHO_DB_PASSWORD:?run make init}@honcho-db:5432/postgres
@@ -44,7 +46,7 @@ x-honcho-common: &honcho-common
     # key below is the cliproxyapi client key from .env.
     LLM_OPENAI_API_KEY: ${CLIPROXY_API_KEY}
     DERIVER_MODEL_CONFIG__TRANSPORT: openai
-    DERIVER_MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    DERIVER_MODEL_CONFIG__MODEL: ${HONCHO_MODEL:?set HONCHO_MODEL in .env (make init)}
     DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
     SUMMARY_MODEL_CONFIG__TRANSPORT: openai
     SUMMARY_MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
@@ -127,7 +129,7 @@ services:
     volumes:
       - ./docker/honcho/entrypoint.sh:/agent-ops-kit/entrypoint.sh:ro
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${HONCHO_PORT:-8000}:8000"
+      - "${HONCHO_BIND_ADDR:-127.0.0.1}:${HONCHO_PORT:-8000}:8000"
     healthcheck:
       test:
         [
@@ -155,7 +157,7 @@ services:
       ollama:
         condition: service_healthy
       cliproxyapi:
-        condition: service_started
+        condition: service_healthy
 
   ollama:
     image: ollama/ollama:latest
@@ -184,7 +186,7 @@ services:
     container_name: cliproxyapi
     restart: unless-stopped
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:${CLIPROXY_PORT:-8317}:8317"
+      - "${CLIPROXY_BIND_ADDR:-127.0.0.1}:${CLIPROXY_PORT:-8317}:8317"
       # OAuth browser-callback port used by `-codex-login` (not by device login).
       - "127.0.0.1:1455:1455"
     volumes:
@@ -192,10 +194,16 @@ services:
       - ./data/cliproxyapi/auths:/root/.cli-proxy-api
       - ./data/cliproxyapi/logs:/CLIProxyAPI/logs
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8317/ >/dev/null 2>&1 || curl -fsS http://127.0.0.1:8317/ >/dev/null 2>&1 || exit 0"]
+      # Real liveness: the port must answer HTTP. curl without -f treats ANY
+      # response (including 401 from the auth-gated API) as success and returns
+      # non-zero only on connection refused / timeout, so a dead proxy is caught
+      # instead of masked. wget is the fallback when the image lacks curl.
+      # (Regression: scripts/test_healthcheck.sh.)
+      test: ["CMD-SHELL", "curl -s -o /dev/null --max-time 5 http://127.0.0.1:8317/v1/models || wget -q -O /dev/null --timeout=5 http://127.0.0.1:8317/v1/models || exit 1"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
+      start_period: 20s
 
 volumes:
   honcho-pgdata:

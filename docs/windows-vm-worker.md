@@ -24,9 +24,11 @@ desktop at the same time.
 
 ## Host side
 
-In `.env` set `BIND_ADDR` to the host's Tailscale IP (or `0.0.0.0` behind a
-firewall), then `make up`. The VM must reach `http://<host>:8317` and
-`http://<host>:8000`.
+In `.env` set `CLIPROXY_BIND_ADDR` and `HONCHO_BIND_ADDR` to the host's Tailscale
+IP (or `0.0.0.0` behind a firewall), then `make up`. The VM must reach
+`http://<host>:8317` (models) and `http://<host>:8000` (Honcho). Honcho runs
+with auth disabled, so only expose it over Tailscale/VPN, never a bare LAN. Each
+bind is separate: opening these two leaves every other service on loopback.
 
 ## Install the worker
 

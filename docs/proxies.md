@@ -40,7 +40,7 @@ cwd `REPOS_DIR`) and serves `/v1/chat/completions`, so Hermes subagents get the
 full Claude Code toolchain.
 
 ```bash
-make claude-proxy-install    # node 22+ check, claude CLI, build, systemd unit, start
+make claude-proxy-install    # node 24+ check, claude CLI, build, systemd unit, start
 make auth-claude-proxy       # login URL -> sk-ant-oat01-... token, stored in .env, service restarted
 make models                  # opus / sonnet / haiku / fable ...
 make claude-proxy-logs       # journalctl -f
@@ -104,7 +104,8 @@ changing them (it re-renders the unit and restarts the service).
   tools you can run, the subagents can run. Installed a new tool? Run
   `make claude-proxy-install` again from a shell that has it.
 - `data/claude-max-proxy/proxy.env`: the proxy's environment, rendered from
-  `.env` (token, port, `HOST=BIND_ADDR`, thinking budget, concurrency).
+  `.env` (token, port, `HOST=CLAUDE_MAX_PROXY_BIND`, the `CLAUDE_MAX_PROXY_API_KEY`
+  bearer, thinking budget, concurrency).
 - `data/claude-max-proxy/claude/`: the proxy's private `CLAUDE_CONFIG_DIR`.
   Its login and session state never touch your own `~/.claude`.
 - `data/claude-max-proxy/data/`: conversation DB and session map.
@@ -129,14 +130,18 @@ gateway).
 
 ## Model names
 
-- CLIProxyAPI: whatever `make models` lists (for example `gpt-5.5`). Set
+- CLIProxyAPI: whatever `make models` lists (for example `gpt-5.6-sol`). Set
   `HERMES_MODEL` and `HONCHO_MODEL`.
 - claude-max-proxy: `opus`, `sonnet`, `haiku`, `fable`, `best`, `default`, or
   an exact id from its `/v1/models`. Set `HERMES_CODING_MODEL`.
 
 ## Reaching the proxies from the Windows VM
 
-Set `BIND_ADDR` in `.env` to the host's Tailscale address (or `0.0.0.0` with a
-firewall), then `make up && make claude-proxy-install`, and point the worker at
-`http://<host>:8317/v1`. The Windows installer does this for you (see
+Open only the services the worker needs, per service. Set `CLIPROXY_BIND_ADDR`
+(and, if the worker uses host Honcho, `HONCHO_BIND_ADDR`) in `.env` to the
+host's Tailscale address (or `0.0.0.0` behind a firewall), then
+`make up && make claude-proxy-install`, and point the worker at
+`http://<host>:8317/v1`. Leave every other bind at `127.0.0.1`. If you expose
+the host claude-max-proxy itself, set `CLAUDE_MAX_PROXY_API_KEY` — it refuses a
+non-loopback bind without one. The Windows installer wires this for you (see
 [windows-vm-worker.md](windows-vm-worker.md)).

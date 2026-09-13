@@ -506,6 +506,12 @@ function defaultMaxConcurrentRequests(): number {
 }
 
 export interface ProxyRuntimeConfig {
+  /** Shared secret required as `Authorization: Bearer <key>` when set (F1). */
+  apiKey: string | undefined;
+  /** Extra Host header values accepted beyond loopback (anti DNS-rebind, F2). */
+  allowedHosts: string[];
+  /** Origins allowed to receive CORS reflection; empty disables CORS (F2). */
+  allowedOrigins: string[];
   requireClaude: boolean;
   sameConversationPolicy: SameConversationPolicy;
   debugQueues: boolean;
@@ -514,6 +520,7 @@ export interface ProxyRuntimeConfig {
   defaultAgent: string | undefined;
   systemPromptFile: string | undefined;
   maxConcurrentRequests: number;
+  maxGlobalQueuedRequests: number;
   modelFallbacks: string[];
   geminiCliFallback: GeminiCliFallbackConfig | null;
   externalFallback: OpenAICompatFallbackConfig | null;
@@ -575,6 +582,9 @@ export function readRuntimeConfig(
   const hasExternalProvider =
     geminiCliFallback !== null || externalProviders.length > 0;
   return {
+    apiKey: parseNonEmptyString(env.CLAUDE_MAX_PROXY_API_KEY),
+    allowedHosts: parseCsvList(env.CLAUDE_MAX_PROXY_ALLOWED_HOSTS),
+    allowedOrigins: parseCsvList(env.CLAUDE_MAX_PROXY_ALLOWED_ORIGINS),
     requireClaude: parseBoolean(
       env.CLAUDE_PROXY_REQUIRE_CLAUDE,
       !hasExternalProvider,
@@ -590,6 +600,13 @@ export function readRuntimeConfig(
     maxConcurrentRequests: parsePositiveInt(
       env.CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS,
       defaultMaxConcurrentRequests(),
+    ),
+    // Global backpressure cap on total queued (not yet running) requests across
+    // all conversations, so a burst of distinct conversationIds can't grow the
+    // queue unbounded. Exceeding it yields HTTP 429 (F10).
+    maxGlobalQueuedRequests: parsePositiveInt(
+      env.CLAUDE_PROXY_MAX_GLOBAL_QUEUED_REQUESTS,
+      100,
     ),
     modelFallbacks: parseCsvList(env.CLAUDE_PROXY_MODEL_FALLBACKS),
     geminiCliFallback,

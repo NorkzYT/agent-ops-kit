@@ -17,7 +17,7 @@ Discord ──► Hermes (host, ~/.hermes)
 - Linux host (Ubuntu 22.04+ or Debian 12+ tested), a non-root user with `sudo`
   and in the `docker` group
 - Docker Engine 24+ with the Compose plugin (`docker compose version`)
-- Node.js 22+ (`node -v`), `git`, `curl`, `make`
+- Node.js 24+ (`node -v`), `git`, `curl`, `make`
 - A ChatGPT subscription (Plus, Pro or Team) for the orchestrator model
 - A Claude Max subscription for the coding worker
 - A Discord application with a bot user. Enable **Message Content Intent** and
@@ -60,7 +60,7 @@ takes a few minutes. Watch with `make logs`.
 prints, sign in with the ChatGPT account, and the OAuth state is saved under
 `data/cliproxyapi/auths/`. `make models` should now list GPT models.
 
-**`make claude-proxy-install`** checks for Node.js 22+, installs the Claude
+**`make claude-proxy-install`** checks for Node.js 24+, installs the Claude
 Code CLI to `~/.local/bin` if missing, builds the vendored
 [claude-max-api-proxy](https://github.com/mattschwen/claude-max-api-proxy)
 sources in `vendor/`, renders `data/claude-max-proxy/proxy.env` and
@@ -100,9 +100,12 @@ login, run once: `sudo loginctl enable-linger $USER`.
 | 8000 | Honcho API | no auth on the local stack |
 | 1455 | CLIProxyAPI OAuth callback | only during browser-based login |
 
-All bind to `127.0.0.1`. Set `BIND_ADDR=0.0.0.0` in `.env` only when the
-Windows VM worker must reach the stack, and put Tailscale or a firewall in
-front of it (see [windows-vm-worker.md](windows-vm-worker.md)).
+All bind to `127.0.0.1` by default, each via its own variable. To let the
+Windows VM worker reach a service, set that one service's bind
+(`CLIPROXY_BIND_ADDR`, and `HONCHO_BIND_ADDR` if the worker uses host Honcho) to
+`0.0.0.0` or the Tailscale IP, keep the rest loopback, and put Tailscale or a
+firewall in front (see [windows-vm-worker.md](windows-vm-worker.md)). Honcho has
+no auth, so only ever expose it over a private tunnel.
 
 ## Updating
 

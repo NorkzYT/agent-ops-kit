@@ -43,7 +43,9 @@ test("buildQueueSnapshot summarizes queue pressure and wait times", () => {
   assert.equal(snapshot.queuedRequests, 3);
   assert.equal(snapshot.queuedConversations, 2);
   assert.equal(snapshot.oldestQueueWaitMs, 200);
-  assert.deepEqual(snapshot.queueStatus, {
+  // queueStatus is a null-prototype object (prototype-pollution hardening),
+  // so the expected value must also be null-proto for deepStrictEqual.
+  assert.deepEqual(snapshot.queueStatus, Object.assign(Object.create(null), {
     conv_a: {
       queued: 2,
       processing: true,
@@ -56,7 +58,7 @@ test("buildQueueSnapshot summarizes queue pressure and wait times", () => {
       waitMs: 50,
       queuedRequestIds: ["req-c-1"],
     },
-  });
+  }));
 });
 
 test("buildQueueSnapshot exposes only bounded safe opaque request ids", () => {

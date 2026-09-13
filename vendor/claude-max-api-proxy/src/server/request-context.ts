@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 
 const MAX_IDENTIFIER_LENGTH = 256;
 
+// Conversation identifiers become object keys in queue/snapshot maps. Reject the
+// keys that would let a caller-supplied id corrupt an object's prototype (F17).
+const FORBIDDEN_IDENTIFIERS = new Set(["__proto__", "constructor", "prototype"]);
+
 interface HeaderReader {
   header(name: string): string | undefined;
 }
@@ -16,6 +20,7 @@ function normalizeIdentifier(value: unknown): string | undefined {
   const normalized = value.trim();
   if (
     !normalized ||
+    FORBIDDEN_IDENTIFIERS.has(normalized) ||
     normalized.length > MAX_IDENTIFIER_LENGTH ||
     /[\u0000-\u001f\u007f]/.test(normalized)
   ) {

@@ -39,6 +39,12 @@ import {
 import "../subprocess/pool.js";
 import "../store/conversation.js";
 import { requireAdminAccess } from "./admin-access.js";
+import { requireApiKey } from "./api-auth.js";
+import {
+  assertSafeBind,
+  isAllowedHost,
+  resolveCorsOrigin,
+} from "./http-guard.js";
 import {
   startFeatureScanner,
   stopFeatureScanner,
@@ -103,29 +109,70 @@ export function createApp(): express.Application {
     next();
   });
 
-  app.use((_req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader(
-      "Access-Control-Allow-Methods",
-      "GET, POST, PUT, DELETE, OPTIONS",
-    );
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      [
-        "Content-Type",
-        "Authorization",
-        "Idempotency-Key",
-        "X-Admin-Token",
-        "X-Conversation-Id",
-        "X-Conversation-Policy",
-        "X-Thinking-Budget",
-      ].join(", "),
-    );
+  // Health/liveness must stay reachable without Host validation or auth so
+  // local health checks and the systemd /health poll keep working (F1/F2).
+  const isHealthPath = (path: string): boolean =>
+    path === "/health" || path === "/healthz" || path === "/livez";
+
+  const CORS_ALLOWED_HEADERS = [
+    "Content-Type",
+    "Authorization",
+    "Idempotency-Key",
+    "X-Admin-Token",
+    "X-Conversation-Id",
+    "X-Conversation-Policy",
+    "X-Thinking-Budget",
+  ].join(", ");
+
+  // Anti DNS-rebinding: reject requests whose Host header is neither loopback
+  // nor an explicitly configured host. Health checks are exempt (F2).
+  app.use((req, res, next) => {
+    if (isHealthPath(req.path)) {
+      next();
+      return;
+    }
+    if (!isAllowedHost(req.header("host"), runtimeConfig.allowedHosts)) {
+      res.status(403).json({
+        error: {
+          message: "Host not allowed.",
+          type: "invalid_request_error",
+          code: "host_not_allowed",
+        },
+      });
+      return;
+    }
     next();
   });
 
-  app.options(/.*/, (_req, res) => {
-    res.sendStatus(200);
+  // CORS is opt-in: only an origin in the configured allowlist is reflected,
+  // and CORS headers are otherwise omitted (no wildcard). Preflight requests
+  // for disallowed origins are rejected rather than blindly approved (F2).
+  app.use((req, res, next) => {
+    const allowedOrigin = resolveCorsOrigin(
+      req.header("origin"),
+      runtimeConfig.allowedOrigins,
+    );
+    if (allowedOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, OPTIONS",
+      );
+      res.setHeader("Access-Control-Allow-Headers", CORS_ALLOWED_HEADERS);
+    }
+
+    if (req.method === "OPTIONS") {
+      // A cross-origin preflight (has Origin) is approved only when the origin
+      // is allowlisted; same-origin/no-Origin OPTIONS get a plain 204.
+      if (req.header("origin") && !allowedOrigin) {
+        res.sendStatus(403);
+        return;
+      }
+      res.sendStatus(204);
+      return;
+    }
+    next();
   });
 
   app.use("/assets", express.static(path.join(process.cwd(), "assets")));
@@ -144,6 +191,11 @@ export function createApp(): express.Application {
   app.get("/ops/conversations/:conversationId", handleOpsConversation);
   app.get("/health", handleHealth);
   app.get("/metrics", handleMetrics);
+  // Bearer auth (when CLAUDE_MAX_PROXY_API_KEY is set) guards the full OpenAI
+  // surface and the admin mutation surface. Registered before those routes so
+  // one middleware covers them all rather than per-route checks (F1).
+  app.use("/v1", requireApiKey);
+  app.use("/admin", requireApiKey);
   app.get("/v1/models", handleModels);
   app.get("/v1/capabilities", handleCapabilities);
   app.get("/v1/agents", handleAgents);
@@ -214,6 +266,9 @@ export function createApp(): express.Application {
 
 export async function startServer(config: ServerConfig): Promise<Server> {
   const { port, host = "127.0.0.1" } = config;
+  // Fail fast rather than silently exposing an unauthenticated proxy on a
+  // non-loopback interface (F1).
+  assertSafeBind(host, runtimeConfig.apiKey);
   if (serverInstance) {
     console.log("[Server] Already running, returning existing instance");
     return serverInstance;

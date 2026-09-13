@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 
-function isLoopbackAddress(address: string | undefined): boolean {
+export function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false;
   const normalized = address.toLowerCase().replace(/^::ffff:/, "");
   return (
@@ -11,7 +11,12 @@ function isLoopbackAddress(address: string | undefined): boolean {
   );
 }
 
-function safeTokenEquals(provided: string, expected: string): boolean {
+/**
+ * Constant-time token comparison. Guards against timingSafeEqual throwing on a
+ * length mismatch by short-circuiting on unequal lengths (the length itself is
+ * not secret).
+ */
+export function safeTokenEquals(provided: string, expected: string): boolean {
   const left = Buffer.from(provided);
   const right = Buffer.from(expected);
   return left.length === right.length && timingSafeEqual(left, right);

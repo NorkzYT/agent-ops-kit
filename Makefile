@@ -13,15 +13,16 @@ ENV_FILE ?= .env
 S ?=
 NAME ?=
 
-# Read a value from .env without exporting the whole file.
+# Read a value from .env using the same parser the scripts use (scripts/lib.sh
+# via scripts/envval.sh), so Make and the scripts never disagree on quoting.
 define envval
-$(shell sed -n 's/^$(1)=//p' $(ENV_FILE) 2>/dev/null | tail -n1 | tr -d '"' | tr -d "'")
+$(shell bash scripts/envval.sh $(1) $(ENV_FILE))
 endef
 
 .PHONY: help init up down restart pull update ps status logs \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs \
 	    models honcho-health doctor \
-	    hermes-install hermes-profile hermes-restart hermes-logs clean
+	    hermes-install hermes-profile hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-22s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
@@ -75,14 +76,8 @@ claude-proxy-restart: ## Restart the claude-max-proxy service
 claude-proxy-logs: ## Tail claude-max-proxy logs
 	@journalctl --user -u claude-max-proxy.service -n 200 -f
 
-models: ## List models exposed by both proxies
-	@echo "== CLIProxyAPI (ChatGPT subscription) http://127.0.0.1:$(or $(call envval,CLIPROXY_PORT),8317)/v1"; \
-	curl -fsS -H "Authorization: Bearer $(call envval,CLIPROXY_API_KEY)" \
-	  http://127.0.0.1:$(or $(call envval,CLIPROXY_PORT),8317)/v1/models \
-	  | sed -e 's/},{/},\n{/g' | grep -o '"id":"[^"]*"' | sed 's/"id"://' || echo "  (not reachable: run make auth-codex)"
-	@echo; echo "== claude-max-proxy (Claude Max) http://127.0.0.1:$(or $(call envval,CLAUDE_MAX_PROXY_PORT),3456)/v1"; \
-	curl -fsS http://127.0.0.1:$(or $(call envval,CLAUDE_MAX_PROXY_PORT),3456)/v1/models \
-	  | sed -e 's/},{/},\n{/g' | grep -o '"id":"[^"]*"' | sed 's/"id"://' || echo "  (not reachable: run make auth-claude-proxy)"
+models: ## List models exposed by both proxies (distinguishes down from empty)
+	@bash scripts/models.sh
 
 honcho-health: ## Check the Honcho API
 	@curl -fsS http://127.0.0.1:$(or $(call envval,HONCHO_PORT),8000)/health && echo
@@ -102,6 +97,15 @@ hermes-restart: ## Restart the Hermes gateway (Discord bot)
 
 hermes-logs: ## Tail Hermes gateway logs
 	@tail -n 200 -f "$${HERMES_HOME:-$$HOME/.hermes}/logs/gateway.log"
+
+hermes-ui: ## Start the Hermes dashboard (config/keys web UI) on 127.0.0.1 (HERMES_UI_PORT, default 9119)
+	@bash scripts/hermes-ui.sh start
+
+hermes-ui-status: ## Show whether the Hermes dashboard is running
+	@bash scripts/hermes-ui.sh status
+
+hermes-ui-stop: ## Stop the Hermes dashboard
+	@bash scripts/hermes-ui.sh stop
 
 clean: ## Stop the Docker half AND delete its volumes: Honcho memory, Ollama models (asks first)
 	@read -r -p "This deletes Honcho memory and the Ollama model. Type 'yes' to continue: " a; \

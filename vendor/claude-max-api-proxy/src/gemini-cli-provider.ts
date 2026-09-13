@@ -41,6 +41,45 @@ interface GeminiCliExecutionResult {
 
 const KILL_ESCALATION_MS = 3000;
 
+// Baseline vars the Gemini CLI needs to locate its binary, config, and OAuth
+// credentials (~/.gemini). Everything else is dropped.
+const GEMINI_ENV_BASELINE_KEYS = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "LANG",
+  "LC_ALL",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME",
+] as const;
+
+/**
+ * Build a minimal allowlisted environment for the Gemini CLI child process.
+ *
+ * The child previously inherited the proxy's full `process.env`, which leaked
+ * CLAUDE_CODE_OAUTH_TOKEN and unrelated API-key secrets (e.g. ANTHROPIC, OPENAI,
+ * ZAI) into an unrelated third-party binary (F9). Only PATH/HOME-style baseline
+ * vars plus GEMINI_ / GOOGLE_ prefixed keys are forwarded, so any other
+ * credential (including the Claude OAuth token) is stripped.
+ */
+export function buildGeminiCliEnv(
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of GEMINI_ENV_BASELINE_KEYS) {
+    if (base[key] !== undefined) {
+      env[key] = base[key];
+    }
+  }
+  for (const [key, value] of Object.entries(base)) {
+    if (value === undefined) continue;
+    if (/^(?:GEMINI|GOOGLE)_/i.test(key)) {
+      env[key] = value;
+    }
+  }
+  return env;
+}
+
 function normalizeRequestedModel(model: string): string {
   return stripModelProviderPrefix(model).trim().toLowerCase();
 }
@@ -477,7 +516,7 @@ export class GeminiCliProvider implements ExternalChatProvider {
       let abortCleanup: (() => void) | undefined;
       const child = spawn(this.config.command, this.buildArgs(model, "json"), {
         cwd: this.config.workdir,
-        env: process.env,
+        env: buildGeminiCliEnv(),
         stdio: ["pipe", "pipe", "pipe"],
       });
 
@@ -667,7 +706,7 @@ export class GeminiCliProvider implements ExternalChatProvider {
         try {
           child = spawn(command, this.buildArgs(model, "stream-json"), {
             cwd: workdir,
-            env: process.env,
+            env: buildGeminiCliEnv(),
             stdio: ["pipe", "pipe", "pipe"],
           });
         } catch (error) {
