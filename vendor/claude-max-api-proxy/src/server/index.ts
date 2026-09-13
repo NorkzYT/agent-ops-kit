@@ -176,8 +176,15 @@ export function createApp(): express.Application {
   });
 
   app.use("/assets", express.static(path.join(process.cwd(), "assets")));
-  app.get("/", handleOpsDashboard);
+  // Bearer auth (when CLAUDE_MAX_PROXY_API_KEY is set) also guards the ops
+  // dashboard, metrics and conversation observability surfaces, so a non-loopback
+  // deployment never leaks operational data without Authorization (F1). When no
+  // key is configured these stay open for local dev, matching /v1. Health probes
+  // are registered outside these gates below and stay unauthenticated.
+  app.get("/", requireApiKey, handleOpsDashboard);
   app.get("/launch", handleLauncher);
+  app.use("/ops", requireApiKey);
+  app.use("/dashboard", requireApiKey);
   app.get("/ops", handleOpsDashboard);
   app.get("/dashboard", handleOpsDashboard);
   app.get("/ops/legacy", (_req, res) => {
@@ -190,7 +197,7 @@ export function createApp(): express.Application {
   app.get("/ops/stream", handleOpsStream);
   app.get("/ops/conversations/:conversationId", handleOpsConversation);
   app.get("/health", handleHealth);
-  app.get("/metrics", handleMetrics);
+  app.get("/metrics", requireApiKey, handleMetrics);
   // Bearer auth (when CLAUDE_MAX_PROXY_API_KEY is set) guards the full OpenAI
   // surface and the admin mutation surface. Registered before those routes so
   // one middleware covers them all rather than per-route checks (F1).

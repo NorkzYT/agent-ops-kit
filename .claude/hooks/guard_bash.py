@@ -201,6 +201,56 @@ def split_segments(command: str) -> list:
     return [p.strip() for p in parts if p.strip()]
 
 
+# Leading `VAR=value` environment assignments and benign command wrappers are
+# stripped so a dangerous command cannot hide behind them, e.g.
+# `FOO=bar sudo whoami` or `env FOO=bar curl ...`. The wrapper/assignment itself
+# is harmless; what matters is the command it ultimately runs, so segments are
+# tested both raw and with the prefix removed (the raw check keeps prior matches
+# intact). Wrappers here only ever consume assignments or dash-flags before the
+# real command, so stripping them never drops a real argument.
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+_COMMAND_WRAPPERS = {
+    "env", "command", "nohup", "setsid", "stdbuf", "ionice",
+    "eval", "exec", "xargs",
+}
+
+
+def strip_command_prefix(segment: str) -> str:
+    """Drop leading env-assignments and benign wrappers from a segment."""
+    try:
+        toks = shlex.split(segment)
+    except ValueError:
+        toks = segment.split()
+    i = 0
+    changed = False
+    while i < len(toks):
+        tok = toks[i]
+        if _ENV_ASSIGN_RE.match(tok):
+            i += 1
+            changed = True
+            continue
+        if os.path.basename(tok) in _COMMAND_WRAPPERS:
+            i += 1
+            changed = True
+            # wrappers take dash-flags (env -i, ionice -c2) before the command
+            while i < len(toks) and toks[i].startswith("-"):
+                i += 1
+            continue
+        break
+    if not changed:
+        return segment
+    return " ".join(toks[i:])
+
+
+def segment_variants(segment: str) -> list:
+    """Return the raw segment plus its prefix-stripped form (when different)."""
+    variants = [segment]
+    stripped = strip_command_prefix(segment)
+    if stripped and stripped != segment:
+        variants.append(stripped)
+    return variants
+
+
 def _strip_quotes(tok: str) -> str:
     if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
         return tok[1:-1]
@@ -324,18 +374,22 @@ for segment in split_segments(cmd):
     if is_always_allowed(segment):
         continue
 
+    # Test the raw segment and its prefix-stripped form so a dangerous command
+    # cannot hide behind leading env-assignments or wrappers (FOO=bar sudo ...).
+    variants = segment_variants(segment)
+
     for pattern, name in blocked:
-        if re.search(pattern, segment, re.IGNORECASE):
-            if AUTONOMOUS_MODE and is_autonomous_promoted(segment):
+        if any(re.search(pattern, v, re.IGNORECASE) for v in variants):
+            if AUTONOMOUS_MODE and any(is_autonomous_promoted(v) for v in variants):
                 break
             print(f"BLOCKED: '{name}' command not allowed. Pattern: {pattern}", file=sys.stderr)
             sys.exit(2)
 
     for pattern, name, allowlist in blocked_supply_chain:
-        if re.search(pattern, segment, re.IGNORECASE):
-            if is_allowlisted(segment, allowlist):
+        if any(re.search(pattern, v, re.IGNORECASE) for v in variants):
+            if any(is_allowlisted(v, allowlist) for v in variants):
                 continue
-            if AUTONOMOUS_MODE and is_autonomous_promoted(segment):
+            if AUTONOMOUS_MODE and any(is_autonomous_promoted(v) for v in variants):
                 continue
             print(f"BLOCKED: '{name}' - add to allowlist in guard_bash.py if trusted", file=sys.stderr)
             sys.exit(2)

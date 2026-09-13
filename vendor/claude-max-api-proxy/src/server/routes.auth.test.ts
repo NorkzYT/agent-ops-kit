@@ -79,6 +79,58 @@ test("API key gate rejects unauthenticated /v1 requests and allows correct beare
   }
 });
 
+test("ops, metrics and dashboard surfaces require the API key when configured", async () => {
+  const previousKey = runtimeConfig.apiKey;
+  runtimeConfig.apiKey = "integration-secret";
+  try {
+    await withServer(async (host, port) => {
+      const protectedPaths = [
+        "/",
+        "/ops",
+        "/dashboard",
+        "/metrics",
+        "/ops/snapshot",
+        "/ops/conversations/abc123",
+      ];
+      for (const p of protectedPaths) {
+        const missing = await send(port, "GET", p, { host });
+        assert.equal(missing.status, 401, `${p} without key should be 401`);
+        assert.match(missing.body, /invalid_api_key/);
+
+        // Correct bearer clears the auth gate; the handler may then 200/302/5xx
+        // but must never be the 401 auth rejection.
+        const ok = await send(port, "GET", p, {
+          host,
+          authorization: "Bearer integration-secret",
+        });
+        assert.notEqual(ok.status, 401, `${p} with key must not be 401`);
+      }
+
+      // Health probes stay open even with a key configured.
+      const health = await send(port, "GET", "/health", { host });
+      assert.notEqual(health.status, 401);
+      assert.notEqual(health.status, 403);
+    });
+  } finally {
+    runtimeConfig.apiKey = previousKey;
+  }
+});
+
+test("ops and metrics stay open when no API key is configured", async () => {
+  const previousKey = runtimeConfig.apiKey;
+  runtimeConfig.apiKey = undefined;
+  try {
+    await withServer(async (host, port) => {
+      for (const p of ["/ops", "/metrics", "/"]) {
+        const res = await send(port, "GET", p, { host });
+        assert.notEqual(res.status, 401, `${p} should be open without a key`);
+      }
+    });
+  } finally {
+    runtimeConfig.apiKey = previousKey;
+  }
+});
+
 test("health endpoints stay reachable without an API key", async () => {
   const previousKey = runtimeConfig.apiKey;
   runtimeConfig.apiKey = "integration-secret";

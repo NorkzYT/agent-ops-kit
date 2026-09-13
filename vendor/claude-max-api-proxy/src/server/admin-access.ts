@@ -25,14 +25,23 @@ export function safeTokenEquals(provided: string, expected: string): boolean {
 export function isAdminAuthorized(params: {
   remoteAddress?: string;
   authorization?: string;
+  adminTokenHeader?: string;
   adminToken?: string;
 }): boolean {
   const expected = params.adminToken?.trim();
   if (!expected) {
     return isLoopbackAddress(params.remoteAddress);
   }
-  const bearer = params.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  return Boolean(bearer && safeTokenEquals(bearer, expected));
+  // The dedicated X-Admin-Token header is authoritative: when present it decides
+  // the outcome so the API Authorization header can never shadow (or rescue) it.
+  // Only when no admin header is supplied do we fall back to a Bearer token, so
+  // single-token deployments (admin secret sent via Authorization, no separate
+  // API key) keep working while dual-token deployments stay fail-closed.
+  const provided =
+    params.adminTokenHeader !== undefined
+      ? params.adminTokenHeader.trim()
+      : params.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  return Boolean(provided && safeTokenEquals(provided, expected));
 }
 
 export function requireAdminAccess(
@@ -40,13 +49,11 @@ export function requireAdminAccess(
   res: Response,
   next: NextFunction,
 ): void {
-  const authorization = req.header("authorization");
-  const adminHeader = req.header("x-admin-token");
   if (
     isAdminAuthorized({
       remoteAddress: req.socket.remoteAddress,
-      authorization:
-        authorization || (adminHeader ? `Bearer ${adminHeader}` : undefined),
+      authorization: req.header("authorization"),
+      adminTokenHeader: req.header("x-admin-token"),
       adminToken: process.env.CLAUDE_PROXY_ADMIN_TOKEN,
     })
   ) {

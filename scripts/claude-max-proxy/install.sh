@@ -40,8 +40,9 @@ ensure_deps() {
   if [[ "$MODE" == "--render-only" ]]; then return 0; fi
   if have node; then
     major="$(node -v | sed 's/^v//; s/\..*//')"
-    # Node 24+: the proxy's store uses node:sqlite (DatabaseSync), which is only
-    # stable without --experimental-sqlite from Node 24 on.
+    # Node 24+: the proxy's store uses node:sqlite (DatabaseSync), which is
+    # available without the --experimental-sqlite flag from Node 24 on. It is
+    # still flagged experimental and emits an ExperimentalWarning at runtime.
     [[ "$major" -ge 24 ]] || die "node $(node -v) found; the proxy needs Node.js 24+ (node:sqlite). Install: https://nodejs.org/en/download (NodeSource or fnm), then re-run"
     log "node $(node -v)"
   else
