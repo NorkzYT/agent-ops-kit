@@ -33,6 +33,15 @@ For multi-session work keep `.claude/context/<task>/` in the repo:
 9. **Push** the branch and open a PR for the operator.
 10. **Report**: files changed, test counts, branch, remaining work.
 
+## Quality Principles to Apply
+
+• Modularity  
+• Abstraction & Encapsulation  
+• Separation of Concerns  
+• SOLID (Single-responsibility, Open/Closed, Liskov, Interface-segregation, Dependency-inversion)  
+• DRY (Don’t Repeat Yourself)  
+• KISS (Keep It Simple, Stupid)
+
 ## Error recovery
 
 - Test failure: diagnose, patch, re-verify; at most three rounds, then report.

@@ -10,6 +10,15 @@
 4. **Always verify:** Run repo checks (tests/lint/build) or provide explicit manual steps.
 5. **No network or destructive commands** unless explicitly approved by the user.
 
+## Quality Principles to Apply
+
+• Modularity  
+• Abstraction & Encapsulation  
+• Separation of Concerns  
+• SOLID (Single-responsibility, Open/Closed, Liskov, Interface-segregation, Dependency-inversion)  
+• DRY (Don’t Repeat Yourself)  
+• KISS (Keep It Simple, Stupid)
+
 ## Model Calibration (Claude 4.6+)
 
 Current models follow instructions literally, so calm, plain wording works best — `ALL-CAPS`, "CRITICAL", and "YOU MUST" now *overtrigger* (overthinking, over-caution, over-delegation). When writing prompts or acting:

@@ -24,6 +24,15 @@ Then execute each step in the same turn. Never print a header and stop.
 - Never mark a task done after writing code only. Build, test, confirm.
 - One bounded retry: if verification fails, diagnose, patch, verify once more, then report honestly.
 
+## Quality Principles to Apply
+
+• Modularity  
+• Abstraction & Encapsulation  
+• Separation of Concerns  
+• SOLID (Single-responsibility, Open/Closed, Liskov, Interface-segregation, Dependency-inversion)  
+• DRY (Don’t Repeat Yourself)  
+• KISS (Keep It Simple, Stupid)
+
 ## Safety
 - Never edit `.env`, secrets, certificates or production configs without an explicit ask.
 - No destructive commands. No network calls that change external state.

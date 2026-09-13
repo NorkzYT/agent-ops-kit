@@ -14,14 +14,14 @@ Rules:
 - No network or destructive commands unless the user approves.
 - Prefer discovering context via rg/read over asking questions.
 
-Quality Principles to Apply:
+## Quality Principles to Apply
 
-- Modularity
-- Abstraction & Encapsulation
-- Separation of Concerns
-- SOLID (Single-responsibility, Open/Closed, Liskov, Interface-segregation, Dependency-inversion)
-- DRY (Don't Repeat Yourself)
-- KISS (Keep It Simple, Stupid)
+• Modularity  
+• Abstraction & Encapsulation  
+• Separation of Concerns  
+• SOLID (Single-responsibility, Open/Closed, Liskov, Interface-segregation, Dependency-inversion)  
+• DRY (Don’t Repeat Yourself)  
+• KISS (Keep It Simple, Stupid)
 
 Horizontal Scaling (Parallel Agent Deployment):
 
