@@ -44,6 +44,17 @@ $ErrorActionPreference = "Stop"
 $HermesHome = Join-Path $env:USERPROFILE ".hermes"
 $KitRoot    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
+# Hermes on Windows defaults HERMES_HOME to %LOCALAPPDATA%\hermes, NOT
+# %USERPROFILE%\.hermes. Pin it for every child `hermes` call (and for the
+# official installer below) so the config.yaml/.env we write, `hermes doctor`,
+# and the gateway logon task all read the SAME home. Without this the gateway
+# boots against an empty %LOCALAPPDATA%\hermes and reports "DISCORD_BOT_TOKEN
+# missing" with an unmigrated (v0) config even though we wrote both here.
+# `hermes gateway install` bakes this value into the logon launcher, so the task
+# is also immune to the interactive account's %USERPROFILE% drifting (e.g. a
+# Default-profile fallback like C:\Users\default.<HOST>).
+$env:HERMES_HOME = $HermesHome
+
 if (-not (Get-Command hermes -ErrorAction SilentlyContinue)) {
   Write-Host "[agent-ops-kit] installing Hermes"
   # Run the official installer in its own child scope. It declares its own
@@ -164,14 +175,58 @@ if ($UseHostHoncho) {
   if (Test-Path $venvPy) { & $venvPy -m pip install -q honcho-ai }
 }
 
-# Gateway must run on the interactive desktop (Session 1+), so register a logon task.
-$exe = (Get-Command hermes).Source
-$action  = New-ScheduledTaskAction -Execute $exe -Argument "gateway"
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
-Register-ScheduledTask -TaskName "hermes-gateway" -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-Start-ScheduledTask -TaskName "hermes-gateway"
+# Browser tools: config.yaml selects the browser-use backend (headed), which needs
+# the agent-browser CLI plus a Chromium build. Provision both best-effort from this
+# elevated session so the first browser action doesn't stall on a cold ~170MB
+# download. Non-fatal: if it fails, computer_use is unaffected and Hermes retries
+# the Chromium fetch lazily on first browser use (security.allow_lazy_installs). The
+# final `hermes doctor` reports the browser tool's real state.
+Write-Host "[agent-ops-kit] provisioning browser tools (agent-browser + Chromium)"
+$browserReady = $false
+if (Get-Command npm -ErrorAction SilentlyContinue) {
+  try {
+    npm install -g agent-browser
+    if ($LASTEXITCODE -eq 0) { agent-browser install; if ($LASTEXITCODE -eq 0) { $browserReady = $true } }
+  } catch { Write-Warning "[agent-ops-kit] browser provisioning errored: $($_.Exception.Message)" }
+} else {
+  Write-Warning "[agent-ops-kit] npm/Node.js not found; skipping browser provisioning."
+}
+if (-not $browserReady) {
+  Write-Warning "[agent-ops-kit] Browser tools are not fully provisioned. computer_use is unaffected. To repair from an elevated session: npm install -g agent-browser; agent-browser install"
+}
 
+# The gateway must run on the interactive desktop (Session 1+). Use Hermes's own
+# Windows service installer instead of hand-rolling schtasks: it resolves the full
+# logon identity (DOMAIN\user from USERDOMAIN\USERNAME — a bare username as a logon
+# trigger fails with "Register-ScheduledTask : The parameter is incorrect. (…):UserId"),
+# registers a Scheduled Task with an explicit InteractiveToken principal at
+# LeastPrivilege (the correct run level for computer_use — an elevated/Highest gateway
+# cannot drive normal-integrity apps across the Windows UIPI boundary), launches
+# `hermes gateway run` through a console-less wscript.exe shim so the logon
+# CTRL_CLOSE can't kill it, is idempotent (delete+create), falls back to a
+# Startup-folder item when schtasks is blocked, and starts + verifies. HERMES_HOME
+# (pinned at the top) is baked into the generated launcher, so the gateway reads the
+# same config/.env we wrote. Registration precedes the start; both are verified below.
+Write-Host "[agent-ops-kit] installing the Hermes gateway logon task"
+hermes gateway install --start-on-login --start-now
+if ($LASTEXITCODE -ne 0) {
+  throw "hermes gateway install failed (exit $LASTEXITCODE). Run it from an elevated PowerShell on the interactive desktop: hermes gateway install --start-on-login --start-now"
+}
+
+# Verify registration (hard failure) and that a gateway process is live (soft
+# warning: a logon task legitimately waits for the next interactive logon when it
+# was installed over RDP/SSH rather than on the console).
+$gatewayStatus = (hermes gateway status 2>&1 | Out-String)
+Write-Host $gatewayStatus
+if ($gatewayStatus -notmatch 'Scheduled Task registered' -and $gatewayStatus -notmatch 'login item installed') {
+  throw "The Hermes gateway service did not register. See the status output above, then re-run from an elevated session: hermes gateway install --start-on-login --start-now"
+}
+if ($gatewayStatus -notmatch 'Gateway process running') {
+  Write-Warning "[agent-ops-kit] Gateway service registered but no gateway process is running yet. It starts at the next interactive logon. To start it now from the unlocked desktop: hermes gateway start (logs: $HermesHome\logs\gateway.log)."
+}
+
+# `hermes doctor` also migrates the config schema non-interactively (v0 → latest)
+# against HERMES_HOME before printing the health matrix.
 hermes doctor
 Write-Host ""
 Write-Host "Worker installed. It answers as its own Discord bot and can take Kanban tasks assigned to 'windows-operator'."

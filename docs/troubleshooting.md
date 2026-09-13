@@ -57,6 +57,8 @@ fixes it. Then find the symptom below.
 | computer use does nothing | desktop locked or RDP disconnected | keep the console session open; disable lock/sleep |
 | cannot click an admin window | Windows integrity levels | run the gateway task elevated for that job, or do the admin step yourself |
 | scheduled task not starting | registered under another user | re-run `install-worker.ps1` from the agent's account |
+| gateway task won't register (`The parameter is incorrect …:UserId`) | old script hand-rolled a bare-username logon trigger | update and re-run `install-worker.ps1`, or from an elevated desktop session: `hermes gateway install --start-on-login --start-now` (see [Windows VM worker](windows-vm-worker.md)) |
+| `DISCORD_BOT_TOKEN` missing though it was written | `HERMES_HOME` mismatch (`%LOCALAPPDATA%\hermes` vs `%USERPROFILE%\.hermes`) | set `$env:HERMES_HOME="$env:USERPROFILE\.hermes"` for the `hermes` shell, then `hermes doctor` |
 
 ## Claude Code kit
 

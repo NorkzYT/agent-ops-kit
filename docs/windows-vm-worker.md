@@ -61,12 +61,21 @@ Set-ExecutionPolicy -Scope Process Bypass -Force
 The script installs Hermes non-interactively (it passes `-SkipSetup` to the
 official installer so the Nous Portal sign-in wizard never runs — this stack
 self-hosts the model API and the script writes its own CLIProxyAPI config right
-after). It writes `config.yaml` (model via CLIProxyAPI, `computer_use` on,
-browser headed), `.env`, copies the `windows-operator` persona, installs the
-computer-use driver and verifies it with `hermes computer-use doctor` (repairing
-once if the runtime comes back degraded), and registers a logon scheduled task
-that starts `hermes gateway` on the interactive desktop. It ends with
-`hermes doctor`.
+after). It pins `HERMES_HOME` to `%USERPROFILE%\.hermes` (Hermes defaults to
+`%LOCALAPPDATA%\hermes` on Windows, so without this the gateway would read a
+different home than the one the script writes to). It writes `config.yaml` (model
+via CLIProxyAPI, `computer_use` on, browser headed), `.env`, copies the
+`windows-operator` persona, installs the computer-use driver and verifies it with
+`hermes computer-use doctor` (repairing once if the runtime comes back degraded),
+provisions the browser tools (`agent-browser` CLI + Chromium, best-effort), and
+registers the logon task with `hermes gateway install --start-on-login
+--start-now`. That is Hermes's own Windows installer: it resolves the full
+`DOMAIN\user` logon identity, registers a Scheduled Task with an explicit
+`InteractiveToken` principal at `LeastPrivilege` (an elevated gateway could not
+drive normal-integrity apps across the Windows UIPI boundary), launches
+`hermes gateway run` through a console-less `wscript.exe` shim, and starts +
+verifies the gateway. It ends with `hermes doctor`, which also migrates the config
+schema to the current version.
 
 ### Recovery: the installer stopped at a Nous Portal login
 
@@ -75,6 +84,49 @@ sign-in wizard, do not sign in. Press `Ctrl+C` to cancel the wizard, then
 re-run `install-worker.ps1` (now with `-SkipSetup`). The worker's own
 `config.yaml` is what points Hermes at the host's CLIProxyAPI; the portal
 account is not used by this stack.
+
+### Recovery: the gateway task failed to register (older script)
+
+An older copy of the script hand-rolled the Scheduled Task with a bare
+`$env:USERNAME` logon trigger and no principal. On accounts where the effective
+identity does not map from the bare username (e.g. `USERPROFILE` resolves to
+`C:\Users\default.<HOST>` while the account is `ai-workstation`) this failed with:
+
+```
+Register-ScheduledTask : The parameter is incorrect. (7,32):UserId:ai-workstation
+```
+
+and then `Start-ScheduledTask` failed because nothing was registered. It also
+wrote `config.yaml`/`.env` under `%USERPROFILE%\.hermes` while Hermes on Windows
+reads `%LOCALAPPDATA%\hermes`, so `hermes doctor` reported `DISCORD_BOT_TOKEN`
+missing and an unmigrated (v0) config even though both were written.
+
+The current script fixes both. To recover a half-finished install, just **update
+and re-run** it (it is idempotent). From an elevated PowerShell on the console/RDP
+session, in `$HOME\agent-ops-kit`:
+
+```powershell
+git pull
+cd scripts\windows-vm
+Set-ExecutionPolicy -Scope Process Bypass -Force
+.\install-worker.ps1 -HostAddress 100.64.0.1 -CliProxyApiKey <CLIPROXY_API_KEY> `
+    -DiscordBotToken <worker bot token> -AllowedUsers <your discord id>
+```
+
+Or, if the config and `.env` are already correct, register just the gateway task
+by hand from that same elevated, unlocked session:
+
+```powershell
+$env:HERMES_HOME = "$env:USERPROFILE\.hermes"
+hermes gateway install --start-on-login --start-now
+hermes gateway status          # expect "Scheduled Task registered" + "Gateway process running"
+hermes doctor                  # migrates the config; DISCORD_BOT_TOKEN now resolves
+```
+
+If `hermes doctor` still reports `DISCORD_BOT_TOKEN` missing, confirm the token is
+in `%USERPROFILE%\.hermes\.env` and that `HERMES_HOME` points there for the shell
+you run `hermes` from. `discord.py` showing as missing is expected — the Discord
+gateway installs it on first run; it does not block startup.
 
 ### Recovery: computer use is degraded
 
