@@ -16,6 +16,12 @@
     .\install-worker.ps1 -HostAddress 100.64.0.1 -CliProxyApiKey <key> `
         -DiscordBotToken <token> -AllowedUsers 282100214024896522
 
+  To share the host's Honcho, add -UseHostHoncho on a continued line. End each
+  preceding line with a backtick so PowerShell joins the continuation:
+    .\install-worker.ps1 -HostAddress 100.64.0.1 -CliProxyApiKey <key> `
+        -DiscordBotToken <token> -AllowedUsers 282100214024896522 `
+        -UseHostHoncho
+
   The host must publish CLIProxyAPI on that address over Tailscale: set
   CLIPROXY_BIND_ADDR to the host's Tailscale IP in .env (not 0.0.0.0), then
   `make up`. Keep every other service, including Honcho, on loopback.
@@ -40,7 +46,16 @@ $KitRoot    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 if (-not (Get-Command hermes -ErrorAction SilentlyContinue)) {
   Write-Host "[agent-ops-kit] installing Hermes"
-  Invoke-Expression (Invoke-RestMethod https://hermes-agent.nousresearch.com/install.ps1)
+  # Run the official installer in its own child scope. It declares its own
+  # $HermesHome, and PowerShell variable names are case-insensitive, so
+  # Invoke-Expression — which runs the fetched code in THIS optimized script
+  # scope — fails with "Cannot overwrite variable HermesHome because the
+  # variable has been optimized." Building a fresh scriptblock and invoking it
+  # with the call operator (&) gives the installer a private local scope, so its
+  # $HermesHome (and every other local) can never collide with ours. Env/PATH
+  # changes it makes still propagate because those live on the process.
+  $installerScript = Invoke-RestMethod https://hermes-agent.nousresearch.com/install.ps1
+  & ([scriptblock]::Create($installerScript))
   $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH"
 }
 New-Item -ItemType Directory -Force -Path $HermesHome, (Join-Path $HermesHome "memories") | Out-Null
