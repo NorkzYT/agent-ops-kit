@@ -11,6 +11,11 @@
   Memory defaults to Hermes's local built-in memory. Pass -UseHostHoncho only
   when you have chosen to share the host's unauthenticated Honcho over Tailscale.
 
+  For browser-only apps, pass -EnableChromeDevToolsMcp with a dedicated
+  -ChromeUserDataDir to arm the Chrome DevTools MCP against a signed-in automation
+  Chrome over loopback-only remote debugging. It is opt-in because CDP exposes that
+  profile's live tabs, cookies and storage. See docs/windows-vm-worker.md.
+
   Run from an elevated PowerShell in the VM's console/RDP session (not SSH):
     Set-ExecutionPolicy -Scope Process Bypass -Force
     .\install-worker.ps1 -HostAddress 100.64.0.1 -CliProxyApiKey <key> `
@@ -47,9 +52,50 @@ param(
   [string] $PeerName = "me",
   [string] $Workspace = "agent-ops",
   [string] $HomeChannel = "",
-  [switch] $UseHostHoncho
+  [switch] $UseHostHoncho,
+  # Chrome DevTools MCP (browser-only apps). OFF unless explicitly enabled: CDP hands
+  # the agent live tabs, cookies and storage of the target profile, so it is opt-in and
+  # requires you to name the dedicated automation profile. See docs/windows-vm-worker.md.
+  [switch] $EnableChromeDevToolsMcp,
+  [string] $ChromeUserDataDir = "",
+  [int]    $ChromeDebugPort = 9222,
+  [string] $ChromeProfileDirectory = "",
+  [string] $ChromeExePath = ""
 )
 $ErrorActionPreference = "Stop"
+
+# Chrome DevTools MCP is an explicit, security-sensitive opt-in. Validate the grant and
+# warn about what CDP exposes BEFORE any config is written, so the operator confirms the
+# dedicated profile rather than a personal one. The mcp_servers block is only emitted
+# into config.yaml when this passes.
+$mcpServersBlock = ""
+if ($EnableChromeDevToolsMcp) {
+  if (-not $ChromeUserDataDir) {
+    throw "-EnableChromeDevToolsMcp requires -ChromeUserDataDir pointing at a DEDICATED Chrome automation profile. It never defaults to a personal profile, because CDP exposes that profile's live tabs, cookies and storage."
+  }
+  Write-Warning "[agent-ops-kit] Chrome DevTools MCP arms the Chrome DevTools Protocol against '$ChromeUserDataDir'. CDP exposes that profile's live tabs, cookies and storage to the agent. Use a dedicated automation profile only — never a personal Chrome profile, and never a profile with banking or password-manager sign-ins."
+  $profileLine = ""
+  # `--browser-url` connects to the dedicated Chrome the launcher starts on LOOPBACK
+  # (127.0.0.1) only — CDP is never exposed to the LAN or the tailnet, and there is no
+  # Linux->Windows CDP listener. `--no-usage-statistics` (and the env var, belt and
+  # suspenders) keeps telemetry off. npx.cmd is the native Windows Node shim.
+  $mcpServersBlock = @"
+
+mcp_servers:
+  chrome-devtools:
+    command: npx.cmd
+    args:
+      - "-y"
+      - "chrome-devtools-mcp@latest"
+      - "--browser-url"
+      - "http://127.0.0.1:$ChromeDebugPort"
+      - "--no-usage-statistics"
+    env:
+      CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: "1"
+    connect_timeout: 60
+    timeout: 180
+"@
+}
 
 $HermesHome = Join-Path $env:USERPROFILE ".hermes"
 $KitRoot    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -158,6 +204,7 @@ discord:
     everyone: false
     roles: false
     users: true
+$mcpServersBlock
 "@ | Set-Content -Path (Join-Path $HermesHome "config.yaml") -Encoding UTF8
 
 # OPENAI_API_KEY/OPENAI_BASE_URL (not CLIPROXY_API_KEY): these are the provider
@@ -331,6 +378,64 @@ if ($UseHostHoncho) {
     throw "[agent-ops-kit] -UseHostHoncho was requested but shared Honcho is disabled or unreachable. Confirm config.yaml has memory.provider: honcho, honcho.json has defaultHost: hermes and hosts.hermes.enabled true with the host's Tailscale baseUrl, honcho-ai is installed, and the host publishes Honcho on http://${HostAddress}:$HonchoPort over Tailscale. Re-check with: hermes honcho status; hermes memory status"
   }
   Write-Host "[agent-ops-kit] shared Honcho memory verified active"
+}
+
+if ($EnableChromeDevToolsMcp) {
+  # Chrome DevTools MCP for browser-only apps. The mcp_servers block is already in
+  # config.yaml (written above). Here we: start the dedicated debuggable Chrome on
+  # loopback, verify the MCP server actually starts and lists tools, then restart the
+  # gateway so it loads those tools. Verification is authoritative — the install does
+  # NOT claim success from writing config alone.
+  Write-Host "[agent-ops-kit] setting up Chrome DevTools MCP (browser-only apps)"
+
+  # Start the dedicated Chrome automation profile with loopback-only remote debugging.
+  # `hermes mcp test` below does not need Chrome up (the server lists its tools without a
+  # browser and attaches lazily on first tool call), and browser tools at RUNTIME do, so
+  # bring it up now and register it on logon. Non-fatal: the MCP verification is the gate.
+  $chromeLauncher = Join-Path $PSScriptRoot "start-chrome-automation.ps1"
+  if (Test-Path $chromeLauncher) {
+    try {
+      & $chromeLauncher -UserDataDir $ChromeUserDataDir -Port $ChromeDebugPort `
+          -ProfileDirectory $ChromeProfileDirectory -ChromeExePath $ChromeExePath
+    } catch { Write-Warning "[agent-ops-kit] could not start the automation Chrome now: $($_.Exception.Message). Browser tools attach at runtime once it is running." }
+
+    # Register the launcher on logon (Startup shortcut) so the debuggable Chrome is up
+    # each session, matching the gateway's own logon start. Idempotent.
+    try {
+      $startup = [Environment]::GetFolderPath('Startup')
+      $lnkPath = Join-Path $startup "hermes-chrome-automation.lnk"
+      $ws = New-Object -ComObject WScript.Shell
+      $lnk = $ws.CreateShortcut($lnkPath)
+      $lnk.TargetPath = (Get-Command powershell).Source
+      $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$chromeLauncher`" -UserDataDir `"$ChromeUserDataDir`" -Port $ChromeDebugPort" + $(if ($ChromeProfileDirectory) { " -ProfileDirectory `"$ChromeProfileDirectory`"" } else { "" })
+      $lnk.Save()
+    } catch { Write-Warning "[agent-ops-kit] could not register the Chrome automation logon item: $($_.Exception.Message). Start it by hand each session with start-chrome-automation.ps1." }
+  } else {
+    Write-Warning "[agent-ops-kit] start-chrome-automation.ps1 not found next to this script; start the debuggable Chrome by hand before using browser tools."
+  }
+
+  # Authoritative verification: the server must start and list its tools. `hermes mcp
+  # test` prints "Tools discovered: N" on success and "Connection failed" on failure and
+  # does not always set a nonzero exit code, so parse the output. Fail clearly on error.
+  hermes mcp list
+  Write-Host "[agent-ops-kit] verifying the Chrome DevTools MCP server starts (hermes mcp test)"
+  $mcpTest = (hermes mcp test chrome-devtools 2>&1 | Out-String)
+  Write-Host $mcpTest
+  if ($mcpTest -notmatch 'Tools discovered' -or $mcpTest -match 'Connection failed') {
+    throw "[agent-ops-kit] Chrome DevTools MCP failed to start. Fix it, then re-run: hermes mcp test chrome-devtools. Common causes: Node/npx.cmd not on PATH, or the chrome-devtools-mcp package could not be fetched. The mcp_servers block is in $HermesHome\config.yaml."
+  }
+  Write-Host "[agent-ops-kit] Chrome DevTools MCP verified: server starts and tools are discovered"
+
+  # Restart the gateway so the running process reloads the mcp_servers config and exposes
+  # the mcp_chrome-devtools_* tools. Only after the config change, per the install order.
+  hermes gateway restart
+  Write-Host "[agent-ops-kit] gateway restarted to load Chrome DevTools MCP tools"
+
+  Write-Host ""
+  Write-Host "Chrome DevTools MCP one-time steps (do these in the worker's interactive session):"
+  Write-Host "  1. In the dedicated Chrome automation profile ($ChromeUserDataDir), sign in to the browser-only apps yourself. The agent never types passwords or 2FA."
+  Write-Host "  2. Confirm the debuggable Chrome is running on 127.0.0.1:$ChromeDebugPort (the logon item starts it). If you use the auto-connect flow instead, approve it once at chrome://inspect/#remote-debugging."
+  Write-Host "  3. Keep that Chrome running while the worker uses browser tools."
 }
 
 Write-Host ""

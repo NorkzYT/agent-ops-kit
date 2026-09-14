@@ -234,7 +234,107 @@ host publishes Honcho over Tailscale Serve (`make windows-vm-network`, which for
 worker can reach `http://<host>:8000`, then re-run the installer.
 
 Optional parameters: `-Model`, `-CliProxyPort`, `-HonchoPort`, `-PeerName`,
-`-Workspace`, `-HomeChannel`, `-UseHostHoncho`.
+`-Workspace`, `-HomeChannel`, `-UseHostHoncho`, `-EnableChromeDevToolsMcp`,
+`-ChromeUserDataDir`, `-ChromeDebugPort`, `-ChromeProfileDirectory`,
+`-ChromeExePath` (see [Chrome DevTools MCP](#chrome-devtools-mcp-browser-only-apps)).
+
+## Chrome DevTools MCP (browser-only apps)
+
+For web dashboards and tools that have no API, the worker can drive a real Chrome
+through the official **Chrome DevTools MCP** server. It exposes DOM-level tools
+(read the DOM, click, fill, snapshot, read the console and network) that are far
+more precise and repeatable than pixel clicks. It runs **locally inside the
+Windows VM** and connects only to a local Chrome. There is no Linux-to-Windows
+CDP listener.
+
+This is opt-in and security-sensitive. The Chrome DevTools Protocol (CDP) hands
+the agent the target profile's **live tabs, cookies and storage**. Arm it only
+against a **dedicated automation profile** — never a personal Chrome profile, and
+never one signed into banking or a password manager.
+
+### Enable it
+
+Re-run the installer (it is idempotent) with the MCP switch and a dedicated Chrome
+profile directory:
+
+```powershell
+.\install-worker.ps1 -HostAddress 100.64.0.1 -CliProxyApiKey <CLIPROXY_API_KEY> `
+    -DiscordBotToken <worker bot token> -AllowedUsers <your discord id> `
+    -EnableChromeDevToolsMcp -ChromeUserDataDir "$env:USERPROFILE\chrome-automation"
+```
+
+`-EnableChromeDevToolsMcp` without `-ChromeUserDataDir` fails on purpose — the MCP
+never defaults to a personal profile. Optional: `-ChromeDebugPort` (default 9222),
+`-ChromeProfileDirectory`, `-ChromeExePath`.
+
+The installer:
+
+- Writes an `mcp_servers.chrome-devtools` block into `config.yaml`. It runs
+  `npx.cmd -y chrome-devtools-mcp@latest --browser-url http://127.0.0.1:<port>
+  --no-usage-statistics` and sets `CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1`.
+  Telemetry stays off; the connection is loopback-only.
+- Starts the dedicated Chrome automation profile with **loopback-only** remote
+  debugging (`start-chrome-automation.ps1`, bound to `127.0.0.1`), and registers a
+  logon item so that Chrome comes back each session next to the gateway.
+- Verifies the MCP with `hermes mcp list` and `hermes mcp test chrome-devtools`.
+  That probe starts the server and lists its tools. The install **fails clearly**
+  if the server cannot start — it does not claim success from writing config alone.
+- Restarts the gateway (`hermes gateway restart`) so it loads the
+  `mcp_chrome-devtools_*` tools.
+
+### One-time Chrome permission
+
+The worker connects to an already-running Chrome over `--browser-url`, so:
+
+1. In the dedicated automation profile, **sign in yourself** to the browser-only
+   apps you need. The agent never types passwords or 2FA codes.
+2. Keep the debuggable Chrome running on `127.0.0.1:<port>` (the logon item does
+   this). Confirm with `hermes mcp test chrome-devtools`, then use a browser tool.
+
+If instead you use Chrome's newer **auto-connect** flow (the MCP's `--autoConnect`
+against your existing Chrome), enable it once at
+`chrome://inspect/#remote-debugging`. Chrome then shows a permission dialog **on
+every request**, which a human must approve — so it is not deterministic for an
+unattended gateway. That is why this stack uses the dedicated automation profile
+with loopback-only remote debugging instead.
+
+### CDP stays loopback-only
+
+The remote debugging port binds to `127.0.0.1` only. Never set
+`--remote-debugging-address` to `0.0.0.0` or a routable/tailnet address, and never
+point the MCP's `--browser-url` at the host's Tailscale address. Unlike the model
+API (CLIProxyAPI, reached over Tailscale Serve), CDP is never published to the
+tailnet or the LAN. `start-chrome-automation.ps1` refuses any non-loopback bind.
+
+### How it differs from the other browser tools
+
+- **`agent-browser` / Playwright (the `browser` toolset).** That backend launches
+  its own throwaway Chromium and is best for scripted, isolated automation with no
+  existing session. Chrome DevTools MCP attaches to your **real, signed-in Chrome**,
+  so it keeps logins and is the better fit for dashboards behind a login wall.
+- **`computer_use`.** Pixel-level screen control — the right tool for native
+  dialogs, browser chrome (address bar, profile menus, download and print
+  prompts), and non-web Windows apps. It is the slowest and most fragile path for
+  page content; prefer the DOM tools of Chrome DevTools MCP for anything inside the
+  page.
+
+Routing rule, in order: API or CLI first, then Chrome DevTools MCP / DOM tools,
+then `computer_use`. For Discord inventory and admin, use the Discord REST API
+from the host orchestrator — do not scroll the desktop app.
+
+### Troubleshooting
+
+- **`hermes mcp test chrome-devtools` reports "Connection failed".** The server
+  binary could not start. Confirm Node is installed and `npx.cmd` is on PATH, then
+  re-run the test. The server lists its tools without a browser, so a failure here
+  is about Node/npx or the package fetch, not about Chrome.
+- **Tools appear but browser actions fail.** The debuggable Chrome is not running.
+  Start it: `.\start-chrome-automation.ps1 -UserDataDir "<dir>" -Port 9222`, or log
+  off and back on so the logon item runs. Verify the port answers on `127.0.0.1`.
+- **"Refusing to bind … loopback-only".** The launcher was given a non-loopback
+  `-BindAddress`. Leave it at the `127.0.0.1` default. CDP must never leave the VM.
+- **Tools not listed after enabling.** The gateway must reload. Re-run
+  `hermes gateway restart`, then `hermes mcp list`.
 
 ## Reading `hermes doctor`: benign vs blocking
 
