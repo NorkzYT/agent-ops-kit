@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Install the Hermes "windows-operator" worker inside the Windows VM.
 
@@ -73,7 +73,7 @@ if ($EnableChromeDevToolsMcp) {
   if (-not $ChromeUserDataDir) {
     throw "-EnableChromeDevToolsMcp requires -ChromeUserDataDir pointing at a DEDICATED Chrome automation profile. It never defaults to a personal profile, because CDP exposes that profile's live tabs, cookies and storage."
   }
-  Write-Warning "[agent-ops-kit] Chrome DevTools MCP arms the Chrome DevTools Protocol against '$ChromeUserDataDir'. CDP exposes that profile's live tabs, cookies and storage to the agent. Use a dedicated automation profile only — never a personal Chrome profile, and never a profile with banking or password-manager sign-ins."
+  Write-Warning "[agent-ops-kit] Chrome DevTools MCP arms the Chrome DevTools Protocol against '$ChromeUserDataDir'. CDP exposes that profile's live tabs, cookies and storage to the agent. Use a dedicated automation profile only -- never a personal Chrome profile, and never a profile with banking or password-manager sign-ins."
   $profileLine = ""
   # `--browser-url` connects to the dedicated Chrome the launcher starts on LOOPBACK
   # (127.0.0.1) only — CDP is never exposed to the LAN or the tailnet, and there is no

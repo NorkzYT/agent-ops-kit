@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Start the dedicated Chrome automation profile with LOOPBACK-only remote debugging
   so the Chrome DevTools MCP server can attach to it.
