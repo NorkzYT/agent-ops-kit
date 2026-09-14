@@ -137,6 +137,50 @@ if ($UseHostHoncho) {
   }
 }
 
+# honcho-ai (the Honcho SDK) has to land in the SAME Python venv the `hermes`
+# runtime imports from, which on Windows is NOT under $HermesHome. HERMES_HOME
+# (%USERPROFILE%\.hermes here) holds config/.env; the Hermes checkout + venv
+# defaults to %LOCALAPPDATA%\hermes\hermes-agent and STAYS there when Hermes was
+# already installed before we pinned HERMES_HOME (the common case: `hermes` is
+# already on PATH so the official installer above is skipped). Guessing
+# $HermesHome\hermes-agent\venv then silently no-ops (Test-Path is false) and
+# `hermes honcho status` still reports "honcho-ai is not installed". Discover the
+# real interpreter instead: follow the on-PATH `hermes` launcher first (a
+# relocatable-venv install stages a hermes.cmd whose body points at the venv's
+# hermes.exe), then fall back to the known runtime roots, returning the first
+# python.exe that exists.
+function Get-HermesRuntimePython {
+  $candidates = New-Object System.Collections.Generic.List[string]
+
+  # 1) Derive from the launcher Hermes actually runs. The .cmd delegator body is
+  #    `"<Root>\venv\Scripts\hermes.exe" %*`; the sibling python.exe in that
+  #    Scripts dir is the runtime interpreter, wherever the tree lives.
+  $cmd = Get-Command hermes -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source) {
+    foreach ($p in @($cmd.Source, [System.IO.Path]::ChangeExtension($cmd.Source, ".cmd"))) {
+      if ($p -and ($p -like "*.cmd") -and (Test-Path -LiteralPath $p)) {
+        try {
+          $body = Get-Content -LiteralPath $p -Raw -ErrorAction Stop
+          $m = [regex]::Match($body, '([A-Za-z]:\\[^"]*?\\venv\\Scripts\\)hermes\.exe')
+          if ($m.Success) { $candidates.Add((Join-Path $m.Groups[1].Value "python.exe")) }
+        } catch {}
+      }
+    }
+  }
+
+  # 2) Known runtime roots, most-likely first: %LOCALAPPDATA%\hermes is the
+  #    Windows default; $HermesHome\hermes-agent covers an install that DID honour
+  #    a pre-set HERMES_HOME.
+  foreach ($root in @("$env:LOCALAPPDATA\hermes\hermes-agent", (Join-Path $HermesHome "hermes-agent"))) {
+    if ($root) { $candidates.Add((Join-Path $root "venv\Scripts\python.exe")) }
+  }
+
+  foreach ($py in $candidates) {
+    if ($py -and (Test-Path -LiteralPath $py)) { return $py }
+  }
+  return $null
+}
+
 if (-not (Get-Command hermes -ErrorAction SilentlyContinue)) {
   Write-Host "[agent-ops-kit] installing Hermes"
   # Run the official installer in its own child scope. It declares its own
@@ -226,12 +270,21 @@ if ($UseHostHoncho) {
 # hosts[defaultHost] to decide which endpoint is live, so without it a honcho.json with
 # only hosts.hermes.enabled true can still resolve to no active host and the provider
 # reports disabled. enabled stays true on the block itself.
+#
+# baseUrl goes INSIDE hosts.hermes (host-block fields win over root, and it is the
+# first spelling the loader reads: host_block.baseUrl -> ... -> raw.baseUrl). The
+# active Hermes 0.21.2 build keys the provider's availability off the host block —
+# doctor's own remediation is "set apiKey on hosts.hermes" — so a base URL stranded
+# only at the root can leave Honcho reported as disabled / "no base URL configured".
+# The root copy is kept for back-compat with loaders that read it there. No apiKey:
+# the host's Honcho runs unauthenticated and its Tailscale/CGNAT URL is treated as a
+# local deployment, so the SDK supplies a placeholder key itself.
 @"
 {
   "baseUrl": "http://$HostAddress`:$HonchoPort",
   "defaultHost": "hermes",
   "hosts": {
-    "hermes": { "enabled": true, "aiPeer": "hermes.windows-operator", "peerName": "$PeerName", "workspace": "$Workspace" }
+    "hermes": { "enabled": true, "baseUrl": "http://$HostAddress`:$HonchoPort", "aiPeer": "hermes.windows-operator", "peerName": "$PeerName", "workspace": "$Workspace" }
   }
 }
 "@ | Set-Content -Path (Join-Path $HermesHome "honcho.json") -Encoding UTF8
@@ -355,8 +408,23 @@ if ($UseHostHoncho) {
   # memory. This runs AFTER `hermes doctor --fix` so the config migration and the
   # browser/gateway remediation above still complete even when the host is not publishing
   # Honcho — only the shared-memory guarantee the operator asked for is enforced here.
-  $venvPy = Join-Path $HermesHome "hermes-agent\venv\Scripts\python.exe"
-  if (Test-Path $venvPy) { & $venvPy -m pip install -q honcho-ai }
+  # Install honcho-ai into the venv the Hermes runtime imports from (discovered via
+  # the launcher / known runtime roots, NOT a hardcoded $HermesHome subtree that does
+  # not exist when the checkout lives under %LOCALAPPDATA%\hermes). Pin the version
+  # Hermes' own `hermes honcho setup` installs, then confirm the interpreter can import
+  # it so a silent pip failure surfaces here rather than as "honcho-ai is not installed"
+  # in the status check below.
+  $venvPy = Get-HermesRuntimePython
+  if ($venvPy) {
+    Write-Host "[agent-ops-kit] installing honcho-ai into the Hermes runtime ($venvPy)"
+    & $venvPy -m pip install -q "honcho-ai==2.2.0"
+    & $venvPy -c "import honcho" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "[agent-ops-kit] honcho-ai is still not importable by the Hermes runtime at $venvPy. Install it by hand from the worker's session: & '$venvPy' -m pip install 'honcho-ai==2.2.0' (or run 'hermes honcho setup')."
+    }
+  } else {
+    Write-Warning "[agent-ops-kit] could not locate the Hermes runtime Python to install honcho-ai. Run 'hermes honcho setup' from the worker's session, or install it into the Hermes venv by hand: <hermes-agent>\venv\Scripts\python.exe -m pip install 'honcho-ai==2.2.0'."
+  }
 
   # `hermes honcho enable` sets hosts.hermes.enabled through the CLI (idempotent with what
   # honcho.json already writes). The subcommand is not on every Hermes build, so probe the

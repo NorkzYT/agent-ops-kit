@@ -206,6 +206,36 @@ ck "verifies shared Honcho with 'hermes memory status'" \
 ck "fails clearly (throws) when -UseHostHoncho stays disabled/unreachable" \
    "code | grep -Eiq 'throw.*Honcho'"
 
+# baseUrl must sit INSIDE the hermes host block (host-block fields win and are read
+# first; the active Hermes 0.21.2 build keys availability off the host block). A base
+# URL stranded only at the root left Honcho reported disabled / "no base URL configured".
+# The root copy stays for back-compat, so this asserts the host-block spelling exists.
+ck "honcho.json sets baseUrl inside the hermes host block" \
+   "grep -Eq '\"hermes\":\s*\{[^}]*\"baseUrl\"' '$ps1'"
+
+# honcho-ai install path split (the exact "honcho-ai is not installed" symptom):
+# HERMES_HOME is %USERPROFILE%\.hermes but the Hermes checkout+venv default to
+# %LOCALAPPDATA%\hermes\hermes-agent, so a hardcoded $HermesHome\hermes-agent\venv
+# Test-Path is false and honcho-ai never installs. The installer must DISCOVER the
+# runtime interpreter (launcher + known roots) and install into that, not the
+# HERMES_HOME subtree alone.
+ck "discovers the Hermes runtime Python instead of guessing one path" \
+   "grep -Eq 'function Get-HermesRuntimePython' '$ps1'"
+ck "runtime discovery considers the %LOCALAPPDATA%\\hermes checkout (the path split)" \
+   "code | grep -Eq '\\\$env:LOCALAPPDATA\\\\hermes\\\\hermes-agent'"
+ck "runtime discovery follows the on-PATH hermes launcher" \
+   "code | grep -Eq 'Get-Command hermes' && code | grep -Eq 'Get-Content -LiteralPath'"
+ck "installs honcho-ai into the DISCOVERED runtime python" \
+   "code | grep -Eq '\\\$venvPy\s*=\s*Get-HermesRuntimePython' && code | grep -Eq '\\\$venvPy\s+-m\s+pip\s+install'"
+ck "does not hardcode the HERMES_HOME venv as the sole honcho-ai target" \
+   "! code | grep -Eq '\\\$venvPy\s*=\s*Join-Path\s+\\\$HermesHome\s+\"hermes-agent'"
+ck "pins the honcho-ai version hermes honcho setup installs" \
+   "code | grep -Eq 'honcho-ai==2\.2\.0'"
+ck "verifies honcho-ai is importable by the runtime after install" \
+   "code | grep -Eq '\\\$venvPy\s+-c\s+\"import honcho\"'"
+ck "warns clearly when the runtime python or honcho-ai import cannot be resolved" \
+   "code | grep -Eiq 'Write-Warning.*honcho-ai'"
+
 # Usage example demonstrates a trailing backtick continuation before
 # -UseHostHoncho on its own line.
 ck "-UseHostHoncho shown on a continued line" \
