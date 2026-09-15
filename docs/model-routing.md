@@ -1,0 +1,158 @@
+# Model routing & privacy
+
+Two concerns, one bundled Hermes plugin (`hermes/plugins/model-router/`) plus
+native config:
+
+1. **Complexity routing** — pick the cheapest model that fits each request.
+2. **Privacy routing** — keep private data off every cloud provider, fail-closed.
+
+Secrets stay in `.env`; only routing knobs live in `config.yaml`.
+
+## Providers at a glance
+
+| Role | Provider | Endpoint | Models |
+|------|----------|----------|--------|
+| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-6-astra` |
+| Coding (delegation) | claude-max-proxy (Claude Max) | `:3456/v1` | `opus`, `sonnet`, `haiku`, `fable`, `default` |
+| Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` | a pulled chat model (readiness below) |
+
+## Complexity routing (`llm_request` middleware)
+
+Each request is scored deterministically (length, code fences, architectural
+keywords, turn count; `#max`/`#quick` force a tier) and the model is rewritten
+**within its own family**. Only models the plugin manages (the aliases below)
+are ever rewritten — a deliberate exact id is left untouched.
+
+| Tier | Orchestrator (GPT) | Coding |
+|------|--------------------|--------|
+| routine | `gpt-5.6-terra` | `opus` |
+| medium | `gpt-5.6-luna` | `opus` |
+| high | `gpt-5.6-sol` | `fable` |
+| max | `gpt-6-astra` | `fable` |
+
+**Degrade:** given a live `/v1/models` set, a chosen tier that is not available
+steps *down* to the nearest available tier (never up). `make route-smoke`
+probes both proxies and proves every tier resolves to a live model.
+
+Routing decisions log the tier, integer score, and detector labels only —
+never prompt content.
+
+## Fallback chains (native Hermes config)
+
+For **normal, non-private** traffic only. On a 429/503/connection failure Hermes
+walks the chain. Each entry is a distinct endpoint, so none duplicates the
+primary provider:
+
+- Orchestrator: CLIProxyAPI → claude-max-proxy → Ollama (`fallback_providers`)
+- Delegation: claude-max-proxy → Ollama (`delegation.fallback_providers`)
+
+Private traffic never reaches these chains: the privacy guard short-circuits
+before any provider call.
+
+## Privacy routing (`llm_execution` middleware) — fail-closed
+
+The guard inspects the **entire** outbound request — system prompt, every
+message, and tool results — for private signals:
+
+- explicit `#private` / `#local` tags
+- US SSN (area/group/serial validated)
+- Luhn-valid PAN (13–19 digits)
+- ABA routing number (checksum)
+- IBAN (mod-97)
+- private keys, provider secrets (`AKIA…`, `sk-…`, `ghp_…`, Slack, Google…),
+  bearer tokens, generic `key = secret`
+- credential/login pairs and creds-in-URL
+- operator-configured `private_terms` and `private_paths`
+
+When a request is private it is **never sent to a cloud provider**. It is
+answered by the local Ollama model, or — if local inference is unavailable —
+**refused**. Once a session is flagged private it stays local for the rest of
+the session. A classifier error is treated as private.
+
+### Why this is fail-closed
+
+Hermes middleware is *fail-open*: if a middleware **raises**, Hermes logs a
+warning and continues to the base cloud path. The guard therefore **never
+raises** — every path returns a local result or a refusal object, and the cloud
+callback (`next_call`) is invoked only for traffic proven public. This was
+verified end-to-end through Hermes' own `run_llm_execution_middleware` dispatch:
+a synthetic-SSN request produced **zero** cloud calls and a refusal; a benign
+request reached the cloud. See `make test-router` (the `TestPrivacyCanary`
+cases assert zero bytes to `:8317` and `:3456`).
+
+> No real secrets are used in any test. All sensitive-looking fixtures are
+> synthetic values chosen to satisfy the deterministic checksums.
+
+## Auxiliary work (title generation, compression)
+
+Cheap, high-volume helper calls default to `auto` (the main provider) so install
+never breaks when Ollama is absent. To keep them off the cloud, point them at a
+local chat model in `.env`:
+
+```
+AUX_PROVIDER=custom
+AUX_MODEL=llama3.1:8b
+AUX_BASE_URL=http://127.0.0.1:11434/v1
+```
+
+Re-run `make hermes-install` to re-render `auxiliary.title_generation` /
+`auxiliary.compression`.
+
+## Configuration
+
+`config.yaml` is rendered from `hermes/config.yaml.tmpl` by `make hermes-install`.
+The plugin is installed to `$HERMES_HOME/plugins/model-router/` and enabled via
+`plugins.enabled`. Plugin settings (`plugins.entries.model-router.settings`)
+and their `.env` fallbacks:
+
+| Setting | `.env` fallback | Purpose |
+|---------|-----------------|---------|
+| `complexity_routing` | `MODEL_ROUTER_COMPLEXITY` | enable the model rewrite |
+| `privacy_routing` | `MODEL_ROUTER_PRIVACY` | enable the fail-closed guard (keep on) |
+| `ollama_base_url` | `OLLAMA_BASE_URL` | host-reachable local endpoint |
+| `ollama_model` | `OLLAMA_CHAT_MODEL` | a pulled **chat** model |
+| `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | extra local-only terms |
+| `private_paths` | `MODEL_ROUTER_PRIVATE_PATHS` | extra local-only path fragments |
+
+## Readiness — when is private routing *live*?
+
+Private routing is **fully active only** when both hold:
+
+1. **Ollama is reachable from the host** where Hermes runs. In `docker-compose`
+   Ollama is loopback-only *inside* Docker (`11434/tcp`, not published). Publish
+   it to the host loopback (or run a host Ollama) and set `OLLAMA_BASE_URL`.
+2. **A chat model is pulled** (the compose Ollama only pulls the *embedding*
+   model for Honcho). e.g. `ollama pull llama3.1:8b`, then set `OLLAMA_CHAT_MODEL`.
+
+Until both hold, the guard still protects you: private requests are **refused**
+(never sent to the cloud), proven by `make test-router`. `make route-smoke`
+confirms tier resolution against the live proxies.
+
+## Honcho and private sessions — known limitation
+
+Hermes 0.21.2 has **no per-session "private/ephemeral" flag**: the only Honcho
+write gates are global (`save_messages`) or launch-time (`skip_memory`). So a
+plugin cannot, per-turn, stop Honcho from persisting a transcript or deriving
+cloud representations of it. The privacy guard prevents the *orchestrator's*
+cloud LLM calls from leaking private data, but Honcho isolation for a single
+private turn is **not** yet active.
+
+Proven fail-closed options until a core per-session hook exists:
+
+- Run private work under a Hermes **profile with memory disabled**
+  (`memory.provider` unset / `memory_enabled: false`), or
+- Point every Honcho reasoning model (`HONCHO_MODEL`) at a local endpoint so no
+  transcript-derived reasoning leaves the host, or
+- Globally set `save_messages: false` for private operating periods.
+
+This is tracked as a follow-up: add a memory-provider `should_persist(session)`
+gate the plugin can drive. **Do not treat private Honcho isolation as active
+until that lands.**
+
+## Verify
+
+```bash
+make route-smoke     # live: probe /v1/models, degrade-check tiers, run the canary
+make test-router     # offline: unit + zero-egress privacy canary
+make models          # what each proxy exposes
+```

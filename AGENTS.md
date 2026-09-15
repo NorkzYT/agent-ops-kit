@@ -79,8 +79,17 @@ the job id. If scheduling fails, say so and ask to be pinged.
 
 ## Model routing
 
-- Orchestrator: ChatGPT subscription through CLIProxyAPI (`HERMES_MODEL`).
+- Orchestrator: ChatGPT subscription through CLIProxyAPI (`HERMES_MODEL`,
+  `gpt-5.6-terra` default). Complexity routing: routine→terra, medium→luna,
+  high→sol, max→astra.
 - Coding subagents: Claude Max through claude-max-proxy (`HERMES_CODING_MODEL`,
-  Opus by default; set an exact id for Fable).
+  Opus by default; Fable for high-complexity coding).
+- Complexity + fail-closed privacy live in the `model-router` plugin
+  (`hermes/plugins/model-router/`). Private data (SSN/PAN/ABA/IBAN/secrets/
+  `#private`) never reaches a cloud provider — local Ollama or refuse.
+- Native fallback chains (non-private only): orchestrator CLIProxyAPI →
+  claude-max-proxy → Ollama; delegation claude-max-proxy → Ollama.
 - Honcho reasoning: CLIProxyAPI. Embeddings: local Ollama.
 - No vendor API keys anywhere in the stack.
+- Full reference: `docs/model-routing.md`. Verify: `make route-smoke`,
+  `make test-router`.
