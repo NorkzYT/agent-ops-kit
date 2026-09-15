@@ -72,3 +72,5 @@ vendor/claude-max-api-proxy/node_modules/
 vendor/claude-max-api-proxy/dist/
 vendor/claude-max-api-proxy/.agent-ops-kit-built
 vendor/claude-max-api-proxy/.env
+
+node_modules/
