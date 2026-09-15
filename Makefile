@@ -21,7 +21,7 @@ endef
 
 .PHONY: help init up down restart pull update ps status logs \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs \
-	    models honcho-health doctor \
+	    models honcho-health doctor route-smoke test-router \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-profile hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
@@ -79,6 +79,12 @@ claude-proxy-logs: ## Tail claude-max-proxy logs
 
 models: ## List models exposed by both proxies (distinguishes down from empty)
 	@bash scripts/models.sh
+
+test-router: ## Run the model-router unit + zero-egress privacy canary suite (offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+
+route-smoke: ## Read-only routing smoke test: probe /v1/models, degrade-check tiers, run the canary
+	@bash scripts/route-smoke.sh
 
 honcho-health: ## Check the Honcho API
 	@curl -fsS http://127.0.0.1:$(or $(call envval,HONCHO_PORT),8000)/health && echo

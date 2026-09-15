@@ -53,6 +53,19 @@ HERMES_CODING_MODEL="$(getenv HERMES_CODING_MODEL opus)"; export HERMES_CODING_M
 CLIPROXY_BASE_URL="http://127.0.0.1:$(getenv CLIPROXY_PORT 8317)/v1"; export CLIPROXY_BASE_URL
 CLAUDE_MAX_PROXY_BASE_URL="http://127.0.0.1:$(getenv CLAUDE_MAX_PROXY_PORT 3456)/v1"; export CLAUDE_MAX_PROXY_BASE_URL
 REPOS_DIR="$(getenv REPOS_DIR /opt/repos)"; export REPOS_DIR
+# Local Ollama (OpenAI-compatible) — used by the model-router plugin for private
+# and auxiliary work, and as the tail of the fallback chains. These render into
+# config.yaml even when Ollama is not yet host-reachable; until then private work
+# fails closed (refuses) and the fallback tail is simply inert. See
+# docs/model-routing.md for the readiness steps (publish the port, pull a chat model).
+OLLAMA_BASE_URL="$(getenv OLLAMA_BASE_URL "http://127.0.0.1:$(getenv OLLAMA_PORT 11434)/v1")"; export OLLAMA_BASE_URL
+OLLAMA_CHAT_MODEL="$(getenv OLLAMA_CHAT_MODEL llama3.1:8b)"; export OLLAMA_CHAT_MODEL
+# Auxiliary (title/compression) routing. Default 'auto' = main provider, so the
+# install never breaks when Ollama is absent. Set AUX_PROVIDER=custom with
+# AUX_BASE_URL=$OLLAMA_BASE_URL and a pulled AUX_MODEL to keep it off the cloud.
+AUX_PROVIDER="$(getenv AUX_PROVIDER auto)"; export AUX_PROVIDER
+AUX_MODEL="$(getenv AUX_MODEL "")"; export AUX_MODEL
+AUX_BASE_URL="$(getenv AUX_BASE_URL "")"; export AUX_BASE_URL
 
 cfg="$HERMES_HOME/config.yaml"
 if [[ -f "$cfg" && "$FORCE" != "1" ]]; then
@@ -125,6 +138,23 @@ for d in hermes/skills/*/; do
   cp -rf "$d". "$HERMES_HOME/skills/agent-ops-kit/$name/"
 done
 log "installed skills: $(ls hermes/skills | tr '\n' ' ')"
+
+# ------------------------------------------------------- 6b. plugins ---
+# Bundled Hermes plugins ship in hermes/plugins/<name>/ and install into
+# $HERMES_HOME/plugins/<name>/ where Hermes discovers them. Enablement is in
+# config.yaml (plugins.enabled), rendered above.
+if [[ -d hermes/plugins ]]; then
+  mkdir -p "$HERMES_HOME/plugins"
+  for d in hermes/plugins/*/; do
+    name="$(basename "$d")"
+    dest="$HERMES_HOME/plugins/$name"
+    mkdir -p "$dest"
+    cp -rf "$d". "$dest/"
+    # Drop any test bytecode that may have been produced in the source tree.
+    rm -rf "$dest/__pycache__" 2>/dev/null || true
+  done
+  log "installed plugins: $(ls hermes/plugins | tr '\n' ' ')"
+fi
 
 # ------------------------------------------------------------ 7. gateway ---
 if [[ "${HERMES_SKIP_GATEWAY:-0}" != "1" ]]; then
