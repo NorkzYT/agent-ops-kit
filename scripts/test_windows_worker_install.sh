@@ -278,6 +278,36 @@ ck "-UseHostHoncho shown on a continued line" \
 ck "line before -UseHostHoncho ends with a backtick" \
    "grep -B1 -E '^\s*-UseHostHoncho\s*\$' '$ps1' | grep -Eq '\`\s*\$'"
 
+# UTF-8-no-BOM for GENERATED config files. Windows PowerShell 5.1's
+# `Set-Content -Encoding UTF8` writes a leading BOM (EF BB BF). Hermes reads
+# honcho.json with `read_text(encoding='utf-8')` + json.loads, and json.loads
+# rejects a leading U+FEFF ("Unexpected UTF-8 BOM"), which the Honcho CLI swallows
+# as {} — so a BOM'd honcho.json reports "No Honcho config found" right after the
+# installer wrote it. The .env/config.yaml share the hazard. The fix routes every
+# generated file through a Write-Utf8NoBom helper (UTF8Encoding($false), no BOM).
+# The .ps1 scripts themselves must KEEP their BOM (test_windows_ps1_encoding.sh) —
+# that is a different concern (CP1252 misread), so this only forbids the encoded
+# write for the three generated files.
+ck "defines a Write-Utf8NoBom helper for generated config files" \
+   "grep -Eq 'function Write-Utf8NoBom' '$ps1'"
+ck "the helper writes UTF-8 WITHOUT a BOM (UTF8Encoding \$false + WriteAllText)" \
+   "code | grep -Eq 'New-Object System\.Text\.UTF8Encoding\(\s*\\\$false' && code | grep -Eq '\[System\.IO\.File\]::WriteAllText'"
+ck "writes honcho.json via Write-Utf8NoBom (not Set-Content -Encoding UTF8)" \
+   "code | grep -Eq 'Write-Utf8NoBom.*honcho\.json'"
+ck "writes config.yaml via Write-Utf8NoBom" \
+   "code | grep -Eq 'Write-Utf8NoBom.*config\.yaml'"
+ck "writes .env via Write-Utf8NoBom" \
+   "code | grep -Eq 'Write-Utf8NoBom.*\.env'"
+ck "no generated config file is written with Set-Content -Encoding UTF8" \
+   "! code | grep -Eiq 'Set-Content.*-Encoding\s+UTF8'"
+ck "no generated config file is written with Out-File -Encoding utf8 (also BOM on 5.1)" \
+   "! code | grep -Eiq 'Out-File.*-Encoding\s+utf8'"
+# End-to-end proof: render the real honcho.json here-string and show the fix's
+# UTF-8-no-BOM write parses on Hermes's exact read path while the old BOM write
+# reproduces "Unexpected UTF-8 BOM". Uses synthetic sample values only.
+ck "rendered honcho.json is BOM-free and Hermes-parseable (BOM form reproduces the bug)" \
+   "python3 scripts/lib/honcho_bom_repro.py '$ps1'"
+
 # Secrets must never be echoed by the script.
 ck "does not Write-Host the Discord bot token" \
    "! grep -Eq 'Write-(Host|Output|Warning).*\\\$DiscordBotToken' '$ps1'"

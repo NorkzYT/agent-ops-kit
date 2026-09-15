@@ -126,6 +126,25 @@ function Test-HostPort([string] $Address, [int] $Port, [int] $TimeoutMs = 4000) 
   } catch { return $false }
   finally { if ($client) { $client.Close() } }
 }
+
+# Write a GENERATED config file as UTF-8 WITHOUT a BOM. Windows PowerShell 5.1's
+# `Set-Content`/`Out-File -Encoding UTF8` prepends a BOM (EF BB BF). Hermes reads
+# honcho.json with read_text(encoding='utf-8') + json.loads, and json.loads rejects a
+# leading U+FEFF ("Unexpected UTF-8 BOM"); its Honcho CLI swallows that as {}, so a
+# BOM'd honcho.json is reported as "No Honcho config found" right after we wrote it.
+# config.yaml and .env share the hazard. UTF8Encoding($false) emits no BOM and
+# WriteAllText bypasses PowerShell's own encoding layer entirely. (The .ps1 scripts
+# themselves KEEP their BOM so 5.1 reads them as UTF-8, not CP1252 — a separate bug,
+# guarded by test_windows_ps1_encoding.sh.)
+function Write-Utf8NoBom {
+  param(
+    [Parameter(Mandatory)][string] $Path,
+    [Parameter(Mandatory)][AllowEmptyString()][string] $Content
+  )
+  $enc = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($Path, $Content, $enc)
+}
+
 Write-Host "[agent-ops-kit] probing host $HostAddress`:$CliProxyPort (CLIProxyAPI) over Tailscale"
 if (-not (Test-HostPort $HostAddress $CliProxyPort)) {
   throw "Cannot reach the model API at ${HostAddress}:$CliProxyPort. On the Linux host: bring the stack up (make up, Docker stays on 127.0.0.1), publish it over Tailscale (make windows-vm-network), and allow this VM in your Tailscale ACLs. Verify on the host with: make windows-vm-network-status. Do NOT bind Docker to the Tailscale IP. See docs/windows-vm-worker.md."
@@ -271,7 +290,7 @@ if ($UseHostHoncho) {
   $memoryProvider = "  # local built-in memory (no external Honcho)"
 }
 
-@"
+$configYaml = @"
 # Rendered by scripts/windows-vm/install-worker.ps1 — the Windows desktop worker.
 # The model is a custom OpenAI-compatible endpoint (CLIProxyAPI on the host). The
 # key/URL live in .env as OPENAI_API_KEY/OPENAI_BASE_URL — the exact names
@@ -311,20 +330,22 @@ discord:
     roles: false
     users: true
 $mcpServersBlock
-"@ | Set-Content -Path (Join-Path $HermesHome "config.yaml") -Encoding UTF8
+"@
+Write-Utf8NoBom -Path (Join-Path $HermesHome "config.yaml") -Content $configYaml
 
 # OPENAI_API_KEY/OPENAI_BASE_URL (not CLIPROXY_API_KEY): these are the provider
 # credential names `hermes doctor` scans .env for. The model provider is `custom`
 # with an explicit base_url, so the value is just the CLIProxyAPI key/URL — the
 # standard names make doctor report "API key or custom endpoint configured".
-@"
+$envFile = @"
 DISCORD_BOT_TOKEN=$DiscordBotToken
 DISCORD_ALLOWED_USERS=$AllowedUsers
 DISCORD_HOME_CHANNEL=$HomeChannel
 DISCORD_REQUIRE_MENTION=true
 OPENAI_API_KEY=$CliProxyApiKey
 OPENAI_BASE_URL=http://$HostAddress`:$CliProxyPort/v1
-"@ | Set-Content -Path (Join-Path $HermesHome ".env") -Encoding UTF8
+"@
+Write-Utf8NoBom -Path (Join-Path $HermesHome ".env") -Content $envFile
 
 if ($UseHostHoncho) {
   Write-Warning "-UseHostHoncho shares the host's Honcho, which runs with auth disabled. Use it only when the worker reaches the host strictly over Tailscale and you accept that anyone on the tailnet can read and write this memory."
@@ -341,7 +362,7 @@ if ($UseHostHoncho) {
 # The root copy is kept for back-compat with loaders that read it there. No apiKey:
 # the host's Honcho runs unauthenticated and its Tailscale/CGNAT URL is treated as a
 # local deployment, so the SDK supplies a placeholder key itself.
-@"
+$honchoJson = @"
 {
   "baseUrl": "http://$HostAddress`:$HonchoPort",
   "defaultHost": "hermes",
@@ -349,7 +370,8 @@ if ($UseHostHoncho) {
     "hermes": { "enabled": true, "baseUrl": "http://$HostAddress`:$HonchoPort", "aiPeer": "hermes.windows-operator", "peerName": "$PeerName", "workspace": "$Workspace" }
   }
 }
-"@ | Set-Content -Path (Join-Path $HermesHome "honcho.json") -Encoding UTF8
+"@
+  Write-Utf8NoBom -Path (Join-Path $HermesHome "honcho.json") -Content $honchoJson
 } else {
   Write-Host "[agent-ops-kit] using Hermes local built-in memory (no external Honcho)"
 }
