@@ -9,6 +9,7 @@ with `make hermes-profile NAME=...`, and the gateway running.
 |--------|----------|-------|
 | `coding-team.md` | planner (orchestrator) → coder → reviewer | plan, implement, review, merge |
 | `marketing-team.md` | research → marketing → strategy | research, position, plan, review |
+| `marketing-video-team.md` | research → marketing → strategy → coder → QA | validate claims, storyboard, review, render, QA |
 
 Pattern for any new team: research tasks in parallel, one synthesis task that
 depends on them (`--parent`), one review round, then the orchestrator writes

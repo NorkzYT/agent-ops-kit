@@ -1,0 +1,33 @@
+{
+  "name": "remotion-marketing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reusable Remotion marketing-video system: typed props, reusable scene components, and rights-aware render/QA pipeline.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio",
+    "still": "remotion still",
+    "render": "remotion render",
+    "check:provenance": "node scripts/check-provenance.mjs",
+    "check:claims": "node scripts/check-claims.mjs",
+    "qa": "node scripts/qa-video.mjs",
+    "gen:tone": "node scripts/generate-tone.mjs",
+    "render:campaign": "node scripts/render-campaign.mjs",
+    "test": "node --test \"tests/*.test.mjs\""
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.524",
+    "@remotion/cli": "4.0.524",
+    "@remotion/renderer": "4.0.524",
+    "@remotion/zod-types": "4.0.524",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.524",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.0",
+    "typescript": "5.6.3"
+  }
+}
