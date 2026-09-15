@@ -4,7 +4,7 @@
 # Proves, without touching the live gateway and without sending any private
 # data anywhere:
 #   1. both proxies are reachable and expose the expected model tiers;
-#   2. every complexity alias (terra/luna/sol/astra, opus/fable) resolves to a
+#   2. every complexity alias (luna/terra/sol/astra, opus/fable) resolves to a
 #      model id that is LIVE-available, degrading when a tier is missing;
 #   3. the plugin unit + zero-egress canary suite passes.
 #

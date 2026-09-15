@@ -123,7 +123,11 @@ class TestComplexity(unittest.TestCase):
         self.assertEqual(complexity.score_request(req("#quick big architecture migration rewrite")).tier, "routine")
 
     def test_gpt_tier_models(self):
-        self.assertEqual(complexity.resolve_model("routine", family="gpt"), "gpt-5.6-terra")
+        # Corrected order (per OpenAI docs): luna=fastest/cheapest floor,
+        # terra=balanced mid, sol=flagship, astra=hardest.
+        self.assertEqual(complexity.resolve_model("routine", family="gpt"), "gpt-5.6-luna")
+        self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-5.6-terra")
+        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-5.6-sol")
         self.assertEqual(complexity.resolve_model("max", family="gpt"), "gpt-6-astra")
 
     def test_coding_tier_models(self):
@@ -146,7 +150,13 @@ class TestComplexity(unittest.TestCase):
         )
 
     def test_alias_to_tier(self):
+        # luna is the routine floor, terra the balanced mid (corrected order).
+        self.assertEqual(complexity.alias_to_tier("gpt-5.6-luna"), "routine")
+        self.assertEqual(complexity.alias_to_tier("luna"), "routine")
+        self.assertEqual(complexity.alias_to_tier("gpt-5.6-terra"), "medium")
+        self.assertEqual(complexity.alias_to_tier("terra"), "medium")
         self.assertEqual(complexity.alias_to_tier("gpt-5.6-sol"), "high")
+        self.assertEqual(complexity.alias_to_tier("gpt-6-astra"), "max")
         self.assertEqual(complexity.alias_to_tier("fable"), "high")
         self.assertIsNone(complexity.alias_to_tier("some-unknown-model"))
 

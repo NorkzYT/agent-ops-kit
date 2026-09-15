@@ -48,7 +48,7 @@ log "hermes: $(hermes --version 2>/dev/null | head -n1 || echo present)"
 mkdir -p "$HERMES_HOME" "$HERMES_HOME/memories" "$HERMES_HOME/skills"
 
 # --------------------------------------------------------- 2. config.yaml ---
-HERMES_MODEL="$(getenv HERMES_MODEL gpt-5.6-sol)"; export HERMES_MODEL
+HERMES_MODEL="$(getenv HERMES_MODEL gpt-5.6-luna)"; export HERMES_MODEL
 HERMES_CODING_MODEL="$(getenv HERMES_CODING_MODEL opus)"; export HERMES_CODING_MODEL
 CLIPROXY_BASE_URL="http://127.0.0.1:$(getenv CLIPROXY_PORT 8317)/v1"; export CLIPROXY_BASE_URL
 CLAUDE_MAX_PROXY_BASE_URL="http://127.0.0.1:$(getenv CLAUDE_MAX_PROXY_PORT 3456)/v1"; export CLAUDE_MAX_PROXY_BASE_URL

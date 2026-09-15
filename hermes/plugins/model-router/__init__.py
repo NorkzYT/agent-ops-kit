@@ -2,7 +2,7 @@
 
 Registers two middleware callbacks with Hermes:
 
-  * ``llm_request``   — deterministic complexity rewrite (terra/luna/sol/astra
+  * ``llm_request``   — deterministic complexity rewrite (luna/terra/sol/astra
     for the orchestrator; opus/fable for delegated coding).
   * ``llm_execution`` — fail-closed privacy guard. Requests carrying private
     data (SSN, PAN, ABA, IBAN, secrets, credentials, ``#private``/``#local``,

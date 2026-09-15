@@ -12,7 +12,7 @@ Secrets stay in `.env`; only routing knobs live in `config.yaml`.
 
 | Role | Provider | Endpoint | Models |
 |------|----------|----------|--------|
-| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-6-astra` |
+| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-astra` |
 | Coding (delegation) | claude-max-proxy (Claude Max) | `:3456/v1` | `opus`, `sonnet`, `haiku`, `fable`, `default` |
 | Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` | a pulled chat model (readiness below) |
 
@@ -25,10 +25,15 @@ are ever rewritten — a deliberate exact id is left untouched.
 
 | Tier | Orchestrator (GPT) | Coding |
 |------|--------------------|--------|
-| routine | `gpt-5.6-terra` | `opus` |
-| medium | `gpt-5.6-luna` | `opus` |
+| routine | `gpt-5.6-luna` | `opus` |
+| medium | `gpt-5.6-terra` | `opus` |
 | high | `gpt-5.6-sol` | `fable` |
 | max | `gpt-6-astra` | `fable` |
+
+Tier order follows OpenAI's line: **Luna** is fastest/lowest-cost (the routine
+floor), **Terra** balances intelligence and cost, **Sol** is the flagship for
+complex professional work, and **Astra** (GPT-6) handles the hardest
+end-to-end work.
 
 **Degrade:** given a live `/v1/models` set, a chosen tier that is not available
 steps *down* to the nearest available tier (never up). `make route-smoke`
@@ -36,6 +41,20 @@ probes both proxies and proves every tier resolves to a live model.
 
 Routing decisions log the tier, integer score, and detector labels only —
 never prompt content.
+
+## Reasoning effort
+
+`config.yaml` sets `agent.reasoning_effort: high`. This is Hermes' single
+chokepoint (`resolve_reasoning_config`): it governs the **orchestrator** and
+every **delegated subagent**, clamped per model at the transport boundary. `high`
+is a valid level for every model the kit uses — GPT-5.6 luna/terra/sol and GPT-6
+astra on the Codex Responses wire, and `opus`/`fable` through claude-max-proxy,
+which reads `reasoning_effort` and maps it to a Claude CLI effort level (so this
+does not break Claude proxy semantics). **Auxiliary** title/compression calls
+carry `reasoning_effort: high` on each `auxiliary.*` entry as well.
+
+Complexity routing (which model) and reasoning effort (how hard it thinks) are
+orthogonal: the plugin only rewrites the model id; effort stays in native config.
 
 ## Fallback chains (native Hermes config)
 

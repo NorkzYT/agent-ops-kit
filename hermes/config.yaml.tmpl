@@ -132,9 +132,16 @@ kanban:
   max_in_progress: 2
 
 # ------------------------------------------------------------------ Agent ---
+# reasoning_effort is Hermes' single chokepoint (resolve_reasoning_config): it
+# governs the orchestrator AND delegated subagents, clamped per model at the
+# transport boundary. `high` is valid for every model this kit uses — GPT-5.6
+# luna/terra/sol and GPT-6 astra (Codex Responses), and claude-max-proxy, which
+# reads `reasoning_effort` and maps it to a Claude CLI effort level. So this
+# does not break Claude proxy semantics.
 agent:
   verify_on_stop: true
   verify_guidance: true
+  reasoning_effort: high
 
 display:
   streaming: true
@@ -150,13 +157,15 @@ auxiliary:
     provider: __AUX_PROVIDER__
     model: __AUX_MODEL__
     base_url: __AUX_BASE_URL__
+    reasoning_effort: high
   compression:
     provider: __AUX_PROVIDER__
     model: __AUX_MODEL__
     base_url: __AUX_BASE_URL__
+    reasoning_effort: high
 
 # --------------------------------------------------------------- Plugins ---
-# model-router: complexity-based model selection (terra/luna/sol/astra;
+# model-router: complexity-based model selection (luna/terra/sol/astra;
 # opus/fable for coding) + fail-closed privacy routing. Privacy is always on:
 # requests with private data never reach a cloud provider (local Ollama or
 # refuse). See hermes/plugins/model-router/ and docs/model-routing.md.
