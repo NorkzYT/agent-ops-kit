@@ -181,6 +181,68 @@ function Get-HermesRuntimePython {
   return $null
 }
 
+# Probe whether $Py can import $Module and return a plain boolean. The Hermes runtime
+# venv is pip-less and honcho-ai may be absent, so `python -c "import honcho"` can exit
+# non-zero with a traceback on stderr. Under the script-wide $ErrorActionPreference='Stop'
+# that native stderr is promoted to a terminating NativeCommandError — which previously
+# aborted the whole install (before Chrome MCP) at `& $venvPy -c "import honcho" 2>$null`.
+# We drop to 'Continue' for the probe, swallow both streams, and key the result off the
+# process exit code only, so a failed import is data — never a thrown error.
+function Test-PythonImport {
+  param([Parameter(Mandatory)][string] $Py, [Parameter(Mandatory)][string] $Module)
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & $Py -c "import $Module" 2>&1 | Out-Null
+    return ($LASTEXITCODE -eq 0)
+  } finally {
+    $ErrorActionPreference = $prev
+  }
+}
+
+# Install a pip-style requirement into the interpreter $Py WITHOUT assuming pip exists.
+# The Hermes runtime venv is intentionally pip-less: `python.exe -m pip` fails with
+# "No module named pip". Hermes ships `uv` on Windows, so we install into the exact
+# target interpreter with `uv pip install --python` first. Only when uv is missing (or its
+# install exits non-zero) do we fall back — `hermes honcho setup` installs the same pin,
+# and as a last resort we bootstrap pip with `ensurepip` and use it only if that succeeds.
+# Native stderr is kept non-terminating here for the same reason as the import probe.
+# Returns $true when $Module ends up importable by $Py.
+function Install-PythonRequirement {
+  param(
+    [Parameter(Mandatory)][string] $Py,
+    [Parameter(Mandatory)][string] $Spec,
+    [Parameter(Mandatory)][string] $Module
+  )
+  $prev = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $uv = Get-Command uv -ErrorAction SilentlyContinue
+    if ($uv) {
+      & uv pip install --python "$Py" -q "$Spec" 2>&1 | Out-Null
+      if ($LASTEXITCODE -eq 0 -and (Test-PythonImport $Py $Module)) { return $true }
+      Write-Warning "[agent-ops-kit] 'uv pip install $Spec' did not yield an importable $Module (exit $LASTEXITCODE); trying fallbacks."
+    } else {
+      Write-Warning "[agent-ops-kit] 'uv' was not found on PATH; falling back to install $Spec without it."
+    }
+
+    # Fallback 1: let Hermes install honcho-ai the way `hermes honcho setup` does.
+    & hermes honcho setup 2>&1 | Out-Null
+    if (Test-PythonImport $Py $Module) { return $true }
+
+    # Fallback 2 (last resort): bootstrap pip into the venv with ensurepip, then use it.
+    # Guarded — a truly pip-less interpreter without ensurepip support just returns false
+    # instead of hard-failing the install.
+    & $Py -m ensurepip --upgrade 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      & $Py -m pip install -q "$Spec" 2>&1 | Out-Null
+    }
+    return (Test-PythonImport $Py $Module)
+  } finally {
+    $ErrorActionPreference = $prev
+  }
+}
+
 if (-not (Get-Command hermes -ErrorAction SilentlyContinue)) {
   Write-Host "[agent-ops-kit] installing Hermes"
   # Run the official installer in its own child scope. It declares its own
@@ -417,13 +479,15 @@ if ($UseHostHoncho) {
   $venvPy = Get-HermesRuntimePython
   if ($venvPy) {
     Write-Host "[agent-ops-kit] installing honcho-ai into the Hermes runtime ($venvPy)"
-    & $venvPy -m pip install -q "honcho-ai==2.2.0"
-    & $venvPy -c "import honcho" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-      Write-Warning "[agent-ops-kit] honcho-ai is still not importable by the Hermes runtime at $venvPy. Install it by hand from the worker's session: & '$venvPy' -m pip install 'honcho-ai==2.2.0' (or run 'hermes honcho setup')."
+    # The runtime venv is pip-less (`python -m pip` => "No module named pip"), so install
+    # uv-first via Install-PythonRequirement; it falls back to `hermes honcho setup`/ensurepip
+    # and probes the import through Test-PythonImport so a failure cannot terminate the run.
+    $honchoOk = Install-PythonRequirement -Py $venvPy -Spec "honcho-ai==2.2.0" -Module "honcho"
+    if (-not $honchoOk) {
+      Write-Warning "[agent-ops-kit] honcho-ai is still not importable by the Hermes runtime at $venvPy. Install it by hand from the worker's session: uv pip install --python '$venvPy' 'honcho-ai==2.2.0' (or run 'hermes honcho setup')."
     }
   } else {
-    Write-Warning "[agent-ops-kit] could not locate the Hermes runtime Python to install honcho-ai. Run 'hermes honcho setup' from the worker's session, or install it into the Hermes venv by hand: <hermes-agent>\venv\Scripts\python.exe -m pip install 'honcho-ai==2.2.0'."
+    Write-Warning "[agent-ops-kit] could not locate the Hermes runtime Python to install honcho-ai. Run 'hermes honcho setup' from the worker's session, or install it into the Hermes venv with uv: uv pip install --python '<hermes-agent>\venv\Scripts\python.exe' 'honcho-ai==2.2.0'."
   }
 
   # `hermes honcho enable` sets hosts.hermes.enabled through the CLI (idempotent with what

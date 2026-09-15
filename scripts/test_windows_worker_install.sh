@@ -226,13 +226,48 @@ ck "runtime discovery considers the %LOCALAPPDATA%\\hermes checkout (the path sp
 ck "runtime discovery follows the on-PATH hermes launcher" \
    "code | grep -Eq 'Get-Command hermes' && code | grep -Eq 'Get-Content -LiteralPath'"
 ck "installs honcho-ai into the DISCOVERED runtime python" \
-   "code | grep -Eq '\\\$venvPy\s*=\s*Get-HermesRuntimePython' && code | grep -Eq '\\\$venvPy\s+-m\s+pip\s+install'"
+   "code | grep -Eq '\\\$venvPy\s*=\s*Get-HermesRuntimePython'"
+
+# The Hermes runtime venv is intentionally PIP-LESS: `python.exe -m pip install`
+# fails with the exact Windows symptom "No module named pip". Hermes ships `uv` on
+# Windows, so honcho-ai MUST be installed with `uv pip install --python <interpreter>`
+# first. `python -m pip` may only be reached as a guarded fallback AFTER an `ensurepip`
+# bootstrap succeeds — never assumed to work on its own.
+ck "installs honcho-ai uv-first (uv pip install --python <interpreter>)" \
+   "code | grep -Eq 'uv pip install --python'"
+ck "does not run an unconditional 'python -m pip install' at the honcho call site" \
+   "! code | grep -Eq '\\\$venvPy\s+-m\s+pip\s+install'"
+ck "reaches pip only through an ensurepip bootstrap (never bare pip)" \
+   "! code | grep -Eq '\-m pip install' || code | grep -Eq '\-m ensurepip'"
+ck "ensurepip bootstrap precedes any pip install fallback" \
+   "! code | grep -Eq '\-m pip install' || [[ \$(grep -nE '\-m ensurepip' '$ps1' | head -1 | cut -d: -f1) -lt \$(grep -nE '\-m pip install' '$ps1' | head -1 | cut -d: -f1) ]]"
+# A robust fallback that does not assume pip: `hermes honcho setup` installs the same pin.
+ck "falls back to 'hermes honcho setup' when uv is unavailable" \
+   "code | grep -Eq 'hermes\s+honcho\s+setup'"
+ck "warns when uv is not found before falling back" \
+   "code | grep -Eiq 'Write-Warning.*uv'"
+
 ck "does not hardcode the HERMES_HOME venv as the sole honcho-ai target" \
    "! code | grep -Eq '\\\$venvPy\s*=\s*Join-Path\s+\\\$HermesHome\s+\"hermes-agent'"
 ck "pins the honcho-ai version hermes honcho setup installs" \
    "code | grep -Eq 'honcho-ai==2\.2\.0'"
-ck "verifies honcho-ai is importable by the runtime after install" \
-   "code | grep -Eq '\\\$venvPy\s+-c\s+\"import honcho\"'"
+
+# Import verification must capture the exit status WITHOUT letting the Python traceback
+# on stderr become a terminating NativeCommandError under $ErrorActionPreference='Stop'
+# (that aborted the install before Chrome MCP). A probe helper drops to 'Continue',
+# swallows both streams, and keys success off $LASTEXITCODE only.
+ck "verifies honcho-ai via a non-terminating probe helper (Test-PythonImport)" \
+   "grep -Eq 'function Test-PythonImport' '$ps1'"
+ck "the honcho install/verify path invokes the probe helper" \
+   "code | grep -Eq 'Test-PythonImport\s+\\\$P'"
+ck "the import probe runs python -c \"import <module>\"" \
+   "code | grep -Eq '\-c\s+\"import '"
+ck "the import probe lowers \$ErrorActionPreference so native stderr is not terminating" \
+   "code | grep -Eq \"ErrorActionPreference\s*=\s*'Continue'\""
+ck "the import probe keys success off the process exit code" \
+   "code | grep -Eq 'LASTEXITCODE\s+-eq\s+0'"
+ck "no bare 'import honcho' probe left under the Stop preference (2>\$null idiom removed)" \
+   "! code | grep -Eq '\\\$venvPy\s+-c\s+\"import honcho\"\s+2>\\\$null'"
 ck "warns clearly when the runtime python or honcho-ai import cannot be resolved" \
    "code | grep -Eiq 'Write-Warning.*honcho-ai'"
 
