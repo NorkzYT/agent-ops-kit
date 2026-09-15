@@ -50,12 +50,29 @@ cfg="$hh/config.yaml"; henv="$hh/.env"; hj="$hh/honcho.json"
 ck "config.yaml written"                 "[[ -f '$cfg' ]]"
 ck "config.yaml has no unrendered tokens" "! grep -q '__[A-Z0-9_]*__' '$cfg'"
 ck "orchestrator model = gpt-5.6-sol"     "grep -q 'default: gpt-5.6-sol' '$cfg'"
+ck "orchestrator reasoning effort = high" "grep -qE '^  reasoning_effort: high\$' '$cfg'"
+ck "auxiliary reasoning effort = high"    "[[ \$(grep -c 'reasoning_effort: high' '$cfg') -ge 3 ]]"
 ck "orchestrator base_url = CLIProxyAPI"  "grep -q 'http://127.0.0.1:8317/v1' '$cfg'"
 ck "delegation base_url = claude-max"     "grep -q 'http://127.0.0.1:3456/v1' '$cfg'"
 ck "delegation model = opus"              "grep -q 'model: opus' '$cfg'"
 ck "hermes .env has the real proxy key"   "grep -q '^CLAUDE_MAX_PROXY_API_KEY=secrettoken123$' '$henv'"
 ck "hermes .env not left as placeholder"  "! grep -q '^CLAUDE_MAX_PROXY_API_KEY=local$' '$henv'"
 ck "honcho.json written, rendered"        "[[ -f '$hj' ]] && ! grep -q '__[A-Z0-9_]*__' '$hj'"
+
+# --- default-model scenario: with HERMES_MODEL unset the installer must fall
+# back to the corrected routine-tier floor (gpt-5.6-luna), not sol. The fixture
+# above keeps proving an explicit HERMES_MODEL renders through; this proves the
+# install DEFAULT.
+hh2="$tmp/hermes-default"
+envf2="$tmp/fixture-default.env"
+grep -v '^HERMES_MODEL=' "$envf" | sed "s#^HERMES_HOME=.*#HERMES_HOME=$hh2#" > "$envf2"
+HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf2" \
+  HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+  bash scripts/hermes-install.sh >"$tmp/out-default.log" 2>&1
+rc2=$?
+cfg2="$hh2/config.yaml"
+ck "default installer exits 0 (rc=$rc2)"  "[[ $rc2 -eq 0 ]]"
+ck "default orchestrator model = luna"    "grep -q 'default: gpt-5.6-luna' '$cfg2'"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || { echo '--- installer output ---'; cat "$tmp/out.log"; }

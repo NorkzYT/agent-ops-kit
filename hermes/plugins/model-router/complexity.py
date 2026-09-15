@@ -2,7 +2,7 @@
 
 Pure and side-effect-free. Two model families are supported:
 
-  * ``gpt`` (orchestrator, CLIProxyAPI): routine->terra, medium->luna,
+  * ``gpt`` (orchestrator, CLIProxyAPI): routine->luna, medium->terra,
     high->sol, max->astra.
   * ``coding`` (delegation, claude-max-proxy): opus by default, fable for
     high-complexity work.
@@ -20,9 +20,12 @@ from typing import Iterable, List, Optional, Sequence
 # Ordered low -> high. The index is the degrade walk order.
 TIERS = ("routine", "medium", "high", "max")
 
+# Per OpenAI's GPT-5.6/6 line: Luna = fastest/lowest-cost (routine floor),
+# Terra = balanced intelligence/cost (mid), Sol = flagship complex work (high),
+# Astra (GPT-6) = hardest end-to-end work (max).
 GPT_TIER_MODELS = {
-    "routine": "gpt-5.6-terra",
-    "medium": "gpt-5.6-luna",
+    "routine": "gpt-5.6-luna",
+    "medium": "gpt-5.6-terra",
     "high": "gpt-5.6-sol",
     "max": "gpt-6-astra",
 }
@@ -37,8 +40,8 @@ CODING_TIER_MODELS = {
 
 _ALIAS_TO_TIER = {
     # gpt aliases
-    "terra": "routine", "gpt-5.6-terra": "routine",
-    "luna": "medium", "gpt-5.6-luna": "medium",
+    "luna": "routine", "gpt-5.6-luna": "routine",
+    "terra": "medium", "gpt-5.6-terra": "medium",
     "sol": "high", "gpt-5.6-sol": "high",
     "astra": "max", "gpt-6-astra": "max",
     # coding aliases

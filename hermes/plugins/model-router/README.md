@@ -4,7 +4,7 @@ Two Hermes middleware behaviors in one bundled plugin:
 
 - **Complexity routing** (`llm_request`) — deterministically scores each request
   and rewrites the model *within its own family*:
-  - orchestrator (CLIProxyAPI): `routine→gpt-5.6-terra`, `medium→gpt-5.6-luna`,
+  - orchestrator (CLIProxyAPI): `routine→gpt-5.6-luna`, `medium→gpt-5.6-terra`,
     `high→gpt-5.6-sol`, `max→gpt-6-astra`.
   - delegated coding (claude-max-proxy): `opus` by default, `fable` for
     high/max complexity.

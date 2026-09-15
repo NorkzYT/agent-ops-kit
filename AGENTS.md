@@ -80,8 +80,9 @@ the job id. If scheduling fails, say so and ask to be pinged.
 ## Model routing
 
 - Orchestrator: ChatGPT subscription through CLIProxyAPI (`HERMES_MODEL`,
-  `gpt-5.6-terra` default). Complexity routing: routine→terra, medium→luna,
-  high→sol, max→astra.
+  `gpt-5.6-luna` default). Complexity routing: routine→luna, medium→terra,
+  high→sol, max→astra. Reasoning effort is `high` for orchestrator, delegation,
+  and auxiliary (`agent.reasoning_effort` + per-`auxiliary` entry).
 - Coding subagents: Claude Max through claude-max-proxy (`HERMES_CODING_MODEL`,
   Opus by default; Fable for high-complexity coding).
 - Complexity + fail-closed privacy live in the `model-router` plugin
