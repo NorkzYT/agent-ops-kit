@@ -147,11 +147,16 @@ display:
   streaming: true
 
 # ---------------------------------------------------------- Auxiliary work ---
-# Cheap, high-volume helper calls. Left on `auto` (main provider) by default so
-# install never breaks when Ollama is not yet host-reachable. To keep title and
-# compression work OFF the cloud, point them at a local Ollama chat model:
-#   provider: custom, base_url: __OLLAMA_BASE_URL__, model: <a pulled chat model>
-# See docs/model-routing.md (§ Auxiliary + readiness).
+# Cheap, high-volume helper calls (title generation, compression). Rendered from
+# AUX_PROVIDER/AUX_MODEL/AUX_BASE_URL in .env. Semantics on Hermes 0.21.2:
+#   - provider: auto with an empty model + empty base_url => use the MAIN
+#     provider and model, following the top-level fallback policy. This is the
+#     default so install never breaks when Ollama is not yet host-reachable.
+#   - a NON-EMPTY base_url => Hermes routes to that endpoint and IGNORES provider.
+# So to keep title/compression work OFF the cloud, set AUX_BASE_URL to a local
+# Ollama endpoint and AUX_MODEL to a pulled chat model:
+#   base_url: __OLLAMA_BASE_URL__, model: <a pulled chat model>
+# See docs/model-routing.md (§ Auxiliary work).
 auxiliary:
   title_generation:
     provider: __AUX_PROVIDER__
@@ -166,17 +171,22 @@ auxiliary:
 
 # --------------------------------------------------------------- Plugins ---
 # model-router: complexity-based model selection (luna/terra/sol/astra;
-# opus/fable for coding) + fail-closed privacy routing. Privacy is always on:
-# requests with private data never reach a cloud provider (local Ollama or
-# refuse). See hermes/plugins/model-router/ and docs/model-routing.md.
+# opus/fable for coding) + fail-closed privacy routing.
+# Both knobs default to true (rendered from MODEL_ROUTER_COMPLEXITY /
+# MODEL_ROUTER_PRIVACY in .env). Privacy routing is ENABLED by default: requests
+# with private data never reach a cloud provider (local Ollama, or refuse when
+# local inference is down — it never auto-escalates private data to the cloud).
+# Setting MODEL_ROUTER_PRIVACY=false renders privacy_routing: false here — a
+# deliberate, risky opt-out that disables the guard entirely. When enabled it
+# remains fail-closed. See hermes/plugins/model-router/ and docs/model-routing.md.
 plugins:
   enabled:
     - model-router
   entries:
     model-router:
       settings:
-        complexity_routing: true
-        privacy_routing: true
+        complexity_routing: __MODEL_ROUTER_COMPLEXITY__
+        privacy_routing: __MODEL_ROUTER_PRIVACY__
         ollama_base_url: __OLLAMA_BASE_URL__
         ollama_model: __OLLAMA_CHAT_MODEL__
         private_terms: []

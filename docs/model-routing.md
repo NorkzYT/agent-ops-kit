@@ -70,6 +70,11 @@ before any provider call.
 
 ## Privacy routing (`llm_execution` middleware) — fail-closed
 
+Privacy routing is **enabled by default** (`MODEL_ROUTER_PRIVACY` defaults to
+`true` and renders into `config.yaml`). Setting `MODEL_ROUTER_PRIVACY=false` is a
+deliberate, **risky opt-out** that disables the guard entirely; when enabled it
+stays fail-closed as described here.
+
 The guard inspects the **entire** outbound request — system prompt, every
 message, and tool results — for private signals:
 
@@ -104,18 +109,27 @@ cases assert zero bytes to `:8317` and `:3456`).
 
 ## Auxiliary work (title generation, compression)
 
-Cheap, high-volume helper calls default to `auto` (the main provider) so install
-never breaks when Ollama is absent. To keep them off the cloud, point them at a
-local chat model in `.env`:
+Cheap, high-volume helper calls (`auxiliary.title_generation` /
+`auxiliary.compression`), rendered from `AUX_PROVIDER` / `AUX_MODEL` /
+`AUX_BASE_URL`. Behavior on **Hermes 0.21.2**:
+
+| `AUX_PROVIDER` | `AUX_BASE_URL` | Result |
+|----------------|----------------|--------|
+| `auto` (default) | empty | Use the **main provider + model**, following the top-level `fallback_providers` policy. Install never breaks when Ollama is absent. |
+| any value | **non-empty** | Route to that endpoint; the **provider field is ignored**. Pair with `AUX_MODEL`. |
+| `custom` | empty | Custom provider with no endpoint override — only useful if a provider default endpoint applies; prefer setting `AUX_BASE_URL`. |
+
+`AUX_PROVIDER=auto` therefore has one meaningful behavior — inherit the main
+provider/model — and any custom routing is driven by `AUX_BASE_URL`, not by the
+provider name. To keep title/compression work off the cloud, set the base_url to
+a local chat model in `.env`:
 
 ```
-AUX_PROVIDER=custom
 AUX_MODEL=llama3.1:8b
 AUX_BASE_URL=http://127.0.0.1:11434/v1
 ```
 
-Re-run `make hermes-install` to re-render `auxiliary.title_generation` /
-`auxiliary.compression`.
+Re-run `make hermes-install` to re-render the `auxiliary.*` entries.
 
 ## Configuration
 
@@ -126,8 +140,8 @@ and their `.env` fallbacks:
 
 | Setting | `.env` fallback | Purpose |
 |---------|-----------------|---------|
-| `complexity_routing` | `MODEL_ROUTER_COMPLEXITY` | enable the model rewrite |
-| `privacy_routing` | `MODEL_ROUTER_PRIVACY` | enable the fail-closed guard (keep on) |
+| `complexity_routing` | `MODEL_ROUTER_COMPLEXITY` | enable the model rewrite (default **true**) |
+| `privacy_routing` | `MODEL_ROUTER_PRIVACY` | the fail-closed guard, **enabled by default**; `MODEL_ROUTER_PRIVACY=false` is a deliberate, risky opt-out that disables it entirely |
 | `ollama_base_url` | `OLLAMA_BASE_URL` | host-reachable local endpoint |
 | `ollama_model` | `OLLAMA_CHAT_MODEL` | a pulled **chat** model |
 | `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | extra local-only terms |

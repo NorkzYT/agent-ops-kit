@@ -60,12 +60,25 @@ REPOS_DIR="$(getenv REPOS_DIR /opt/repos)"; export REPOS_DIR
 # docs/model-routing.md for the readiness steps (publish the port, pull a chat model).
 OLLAMA_BASE_URL="$(getenv OLLAMA_BASE_URL "http://127.0.0.1:$(getenv OLLAMA_PORT 11434)/v1")"; export OLLAMA_BASE_URL
 OLLAMA_CHAT_MODEL="$(getenv OLLAMA_CHAT_MODEL llama3.1:8b)"; export OLLAMA_CHAT_MODEL
-# Auxiliary (title/compression) routing. Default 'auto' = main provider, so the
-# install never breaks when Ollama is absent. Set AUX_PROVIDER=custom with
-# AUX_BASE_URL=$OLLAMA_BASE_URL and a pulled AUX_MODEL to keep it off the cloud.
+# Auxiliary (title/compression) routing. Default AUX_PROVIDER=auto with an empty
+# AUX_MODEL/AUX_BASE_URL means "use the main provider + model" (with the top-level
+# fallback policy), so install never breaks when Ollama is absent. Per Hermes
+# 0.21.2, a non-empty base_url routes to that endpoint and the provider field is
+# ignored — so to keep these cheap calls OFF the cloud, set AUX_BASE_URL to your
+# Ollama endpoint and a pulled AUX_MODEL (AUX_PROVIDER is then irrelevant).
 AUX_PROVIDER="$(getenv AUX_PROVIDER auto)"; export AUX_PROVIDER
 AUX_MODEL="$(getenv AUX_MODEL "")"; export AUX_MODEL
 AUX_BASE_URL="$(getenv AUX_BASE_URL "")"; export AUX_BASE_URL
+# model-router plugin knobs. Both default to true when unset in .env:
+#   - complexity_routing: rewrite each request to the cheapest model that fits.
+#   - privacy_routing:     the fail-closed guard that keeps private data off every
+#     cloud provider (local Ollama or refuse). Setting MODEL_ROUTER_PRIVACY=false
+#     is a deliberate, risky opt-out that disables that guard entirely; leave it
+#     on unless you fully understand the tradeoff. When on, it stays fail-closed:
+#     a private request never auto-escalates to the cloud on a local outage.
+# Explicit false is preserved verbatim (not forced back to true by --force).
+MODEL_ROUTER_COMPLEXITY="$(getenv MODEL_ROUTER_COMPLEXITY true)"; export MODEL_ROUTER_COMPLEXITY
+MODEL_ROUTER_PRIVACY="$(getenv MODEL_ROUTER_PRIVACY true)"; export MODEL_ROUTER_PRIVACY
 
 cfg="$HERMES_HOME/config.yaml"
 if [[ -f "$cfg" && "$FORCE" != "1" ]]; then

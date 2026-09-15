@@ -45,6 +45,11 @@ Environment fallbacks (used when a setting is unset): `OLLAMA_BASE_URL`,
 `OLLAMA_CHAT_MODEL`, `MODEL_ROUTER_COMPLEXITY`, `MODEL_ROUTER_PRIVACY`,
 `MODEL_ROUTER_PRIVATE_TERMS`, `MODEL_ROUTER_PRIVATE_PATHS`.
 
+`complexity_routing` and `privacy_routing` both default to **true**. The kit's
+`hermes-install.sh` renders them from `MODEL_ROUTER_COMPLEXITY` /
+`MODEL_ROUTER_PRIVACY` in `.env`; an explicit `false` is preserved (privacy_routing
+`false` is a deliberate, risky opt-out that disables the fail-closed guard).
+
 ## Readiness
 
 Private routing is **active only** when a host-reachable Ollama chat endpoint is
