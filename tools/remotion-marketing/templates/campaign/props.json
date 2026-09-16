@@ -1,0 +1,58 @@
+{
+  "fps": 30,
+  "aspectRatio": "16:9",
+  "brand": {
+    "name": "<Brand>",
+    "primaryColor": "#1e293b",
+    "secondaryColor": "#0ea5e9",
+    "accentColor": "#f59e0b",
+    "logoAssetId": "img_hero"
+  },
+  "product": {
+    "name": "<Product>",
+    "tagline": "<one-line tagline>"
+  },
+  "facts": [
+    {
+      "id": "f_example",
+      "claim": "Short claim shown on screen",
+      "evidence": "Real source: file path, analytics query, or citation URL"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "s_intro",
+      "kind": "intro",
+      "durationInFrames": 60,
+      "headline": "<Hook headline>",
+      "subhead": "<supporting line>",
+      "caption": "<sound-off caption>",
+      "factIds": []
+    },
+    {
+      "id": "s_feature",
+      "kind": "media",
+      "durationInFrames": 90,
+      "headline": "<Feature headline>",
+      "caption": "<what the screenshot shows>",
+      "mediaAssetId": "img_hero",
+      "factIds": ["f_example"]
+    },
+    {
+      "id": "s_outro",
+      "kind": "outro",
+      "durationInFrames": 60,
+      "headline": "<CTA headline>",
+      "caption": "<CTA caption>",
+      "factIds": []
+    }
+  ],
+  "cta": {"text": "<Call to action>", "url": "<url>"},
+  "music": {"mode": "generated", "assetId": "aud_bed"},
+  "captions": true,
+  "safeMargins": true,
+  "assetPaths": {
+    "img_hero": "<slug>/hero.png",
+    "aud_bed": "<slug>/bed.wav"
+  }
+}

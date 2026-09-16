@@ -238,23 +238,7 @@ def main() -> int:
         except Exception:
             pass
 
-    # Try to get task name from ralph loop state
     task_label = ""
-    ralph_state = Path(project_dir) / ".claude" / "ralph-loop.local.md"
-    if ralph_state.exists():
-        try:
-            content = ralph_state.read_text()
-            # Extract first non-frontmatter line as task label
-            in_frontmatter = False
-            for line in content.splitlines():
-                if line.strip() == "---":
-                    in_frontmatter = not in_frontmatter
-                    continue
-                if not in_frontmatter and line.strip():
-                    task_label = line.strip()[:60]
-                    break
-        except Exception:
-            pass
 
     # Prefer terminal_name over short_session for the tag
     terminal_tag = ""

@@ -1,6 +1,6 @@
 ---
 name: quality-gates
-description: Self-verification and review checklist for OpenClaw agents. Re-read changed files, run tests, check commit format, and perform self-review on large changes.
+description: Self-verification and review checklist for coding agents. Re-read changed files, run tests, check commit format, and perform self-review on large changes.
 ---
 
 # Quality Gates — Self-Verification Checklist

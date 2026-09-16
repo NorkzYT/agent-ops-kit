@@ -14,14 +14,14 @@ Rules:
 - No network or destructive commands unless the user approves.
 - Prefer discovering context via rg/read over asking questions.
 
-Quality Principles to Apply:
+## Quality Principles to Apply
 
-- Modularity
-- Abstraction & Encapsulation
-- Separation of Concerns
-- SOLID (Single-responsibility, Open/Closed, Liskov, Interface-segregation, Dependency-inversion)
-- DRY (Don't Repeat Yourself)
-- KISS (Keep It Simple, Stupid)
+• Modularity  
+• Abstraction & Encapsulation  
+• Separation of Concerns  
+• SOLID (Single-responsibility, Open/Closed, Liskov, Interface-segregation, Dependency-inversion)  
+• DRY (Don’t Repeat Yourself)  
+• KISS (Keep It Simple, Stupid)
 
 Horizontal Scaling (Parallel Agent Deployment):
 
@@ -44,24 +44,6 @@ Execution Model: For each sub-task, follow Reason -> Act -> Observe -> Repeat:
 - REPEAT: If mismatch, fix before moving on
 
 Workflow:
-
-0. **Auto-setup Ralph loop** (ensures iterative completion):
-   - Read `.claude/ralph-loop.local.md` to check if it exists AND has `active: true`
-   - If NO active loop exists, use the Write tool to create `.claude/ralph-loop.local.md` with:
-     ```
-     ---
-     active: true
-     iteration: 1
-     max_iterations: 30
-     completion_promise: "TASK_COMPLETE"
-     consecutive_idle: 0
-     started_at: "<current ISO timestamp>"
-     ---
-
-     [ORIGINAL TASK FROM INPUT]
-     ```
-   - This ensures the task will iterate until DoD is met
-   - Do NOT use bash/scripts/heredocs for this -- use the Write tool directly
 
 1. Restate goal + assumptions (short).
 
@@ -146,7 +128,7 @@ Workflow:
       - Review-chain verdict from step 8 (if available)
       - Any context/notes about what to verify
     - closer confirms work is done and produces PR-ready summary.
-    - The closer is the final gate for Ralph loop completion.
+    - The closer is the final gate for completion.
 
 12. Summarize:
     - What changed, where, why.
@@ -208,47 +190,6 @@ When a task has multiple independent components, use these patterns:
    - Wait for all to complete
    - Merge results and resolve any conflicts
    - Run final verification
-
-## Automatic Ralph Loop Integration
-
-Autopilot **automatically enables Ralph loops** to ensure 100% task completion.
-
-### What happens at startup (Step 0):
-1. Check if `.claude/ralph-loop.local.md` exists with `active: true`
-2. If no active loop, create one with defaults: 30 iterations, TASK_COMPLETE promise
-3. The original task becomes the loop prompt
-
-### During execution:
-1. **Check for ralph state**: Read `.claude/ralph-loop.local.md` if it exists
-2. **Continue previous work**: If iteration > 1, review what was done in prior iterations
-3. **Output completion promise ONLY when**:
-   - All verification passes (tests, lint, build)
-   - Closer confirms DoD is fully met
-   - No blocking issues remain
-4. **Completion signal**: Output `<promise>TASK_COMPLETE</promise>` at the very end of your response when truly done
-
-### What this means for users:
-- Just paste the task template and autopilot handles the rest
-- No need to manually invoke `/ship` or `/ralph-loop`
-- Tasks iterate automatically until DoD is met
-- Loop exits when `<promise>TASK_COMPLETE</promise>` is output
-
-### Ralph Completion Protocol
-
-```
-IF ralph loop active:
-  IF all checks pass AND DoD met (even if follow-up questions exist):
-    Output: <promise>TASK_COMPLETE</promise>
-    THEN ask any follow-up questions
-  ELSE IF waiting for user input with no more autonomous work to do:
-    Output: <promise>TASK_COMPLETE</promise>
-    (User can start new loop for follow-up tasks)
-  ELSE:
-    Summarize progress and remaining work
-    Loop will continue automatically
-```
-
-If your reply would just be filler ("." / "Standing by" / "Ready when you are"), the task is done — output `<promise>TASK_COMPLETE</promise>` instead, so the loop exits.
 
 INPUT
 <<<

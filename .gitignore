@@ -22,7 +22,6 @@ __pycache__/
 
 # Ephemeral local state files
 .claude/checkpoint-state.local.json
-.claude/ralph-loop.local.md
 .claude/terminal-identity.local.json
 
 # Local environment files
@@ -40,13 +39,18 @@ tmp
 .codex-home/
 .agents/
 
-# Local agent/workspace runtime state (OpenClaw, CrewAI, agent identity files).
-# NOTE: this is the kit's SOURCE repo — .claude/ and AGENTS.md are tracked
-# content here and must never be ignored. The broader installer-appended block
-# (which does ignore them) is for target repos only; install.sh skips it here.
-.crewai/
+# Local agent runtime state and identity files (never commit).
+# NOTE: this is the kit's SOURCE repo — .claude/, AGENTS.md and hermes/ are
+# tracked content here and must never be ignored. The installer-appended block
+# (which does ignore .claude/) is for target repos only; install.sh skips it here.
+.hermes/
+# Leftovers from the previous OpenClaw/CrewAI setup on older checkouts; safe to delete.
 .openclaw/
+.crewai/
 SOUL.md
+# ...but hermes/ is this kit's tracked source (see note above): keep its SOUL prompts.
+!hermes/SOUL.md
+!hermes/profiles/*/SOUL.md
 USER.md
 IDENTITY.md
 TOOLS.md
@@ -59,3 +63,14 @@ PROJECT.md
 # Eval harness run outputs (keep the dir, ignore generated results)
 .claude/eval/results/*
 !.claude/eval/results/.gitkeep
+
+# Stack runtime (rendered configs, OAuth state, docker data)
+data/
+# vendor/claude-max-api-proxy is committed (see its UPSTREAM file); only its
+# build output and local state stay out.
+vendor/claude-max-api-proxy/node_modules/
+vendor/claude-max-api-proxy/dist/
+vendor/claude-max-api-proxy/.agent-ops-kit-built
+vendor/claude-max-api-proxy/.env
+
+node_modules/

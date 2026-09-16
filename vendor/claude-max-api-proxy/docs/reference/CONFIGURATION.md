@@ -1,0 +1,427 @@
+# Configuration
+
+All runtime configuration is driven by environment variables. Set them **before** starting the server. There is no config file.
+
+## Environment variables
+
+| Variable | Default | Values | What it does |
+| --- | --- | --- | --- |
+| `CLAUDE_PROXY_REQUIRE_CLAUDE` | `true` with no external provider; otherwise `false` | `true`, `false` | Require Claude CLI/auth/model checks to pass before startup. Set `true` for a mixed deployment that must never run without Claude. |
+| `CLAUDE_PROXY_SAME_CONVERSATION_POLICY` | `latest-wins` | `latest-wins`, `queue` | How concurrent requests for the same conversation are handled. |
+| `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS` | 75% of host parallelism, rounded up and clamped to `2`–`8` | positive integer | Global request concurrency across independent conversations. Per-conversation ordering still applies. |
+| `CLAUDE_PROXY_DEBUG_QUEUES` | `false` | `true`, `false` | Emit extra structured log events for queue enqueue/drop/block/cancel. |
+| `CLAUDE_PROXY_ENABLE_ADMIN_API` | `false` | `true`, `false` | Mount the live thinking-budget, feature-refresh, and conversation-reset admin routes. |
+| `CLAUDE_PROXY_ADMIN_TOKEN` | _(unset)_ | secret string | Require this bearer token (or `X-Admin-Token`) on admin routes. Without it, admin access is restricted to loopback clients. |
+| `CLAUDE_PROXY_DEFAULT_AGENT` | _(unset)_ | builtin agent id, currently `expert-coder` | Automatically prepends the built-in expert agent profile to every request unless the caller explicitly chooses another built-in agent route/body value. |
+| `CLAUDE_PROXY_SYSTEM_PROMPT_FILE` | _(unset)_ | readable filesystem path | Prepends a global house prompt to each request. The file is cached by modification time, so edits apply without a restart. |
+| `CLAUDE_PROXY_MODEL_FALLBACKS` | _(unset)_ | comma-separated Claude selectors, e.g. `default,haiku` | When the requested model is unavailable, try these selectors in order before returning `model_unavailable`. |
+| `GEMINI_CLI_ENABLED` | `false` unless `GEMINI_CLI_MODEL` / `GEMINI_CLI_EXTRA_MODELS` is set | `true`, `false` | Enable the local Gemini CLI provider. This is the CLI-first proxy path and does not need an API key. |
+| `GEMINI_CLI_COMMAND` | `gemini` | executable path | Which local Gemini CLI binary the proxy should launch. |
+| `GEMINI_CLI_MODEL` | `auto` when Gemini CLI is enabled | model id or CLI alias | Default Gemini CLI model advertised for explicit Gemini routing. `auto` lets the installed CLI choose from currently available models. |
+| `GEMINI_CLI_EXTRA_MODELS` | _(unset)_ | comma-separated model ids | Additional Gemini CLI models to advertise on `/v1/models`, for example `gemini-3.1-pro-preview,gemini-3.6-flash`. |
+| `GEMINI_CLI_WORKDIR` | `os.tmpdir()/claude-max-api-proxy-gemini-cli` | filesystem path | Isolated working directory used when launching the Gemini CLI in read-only plan mode. |
+| `GEMINI_CLI_STREAM_MODE` | `passthrough` | `passthrough`, `synthetic` | How streamed Gemini CLI requests are handled. `passthrough` converts Gemini `stream-json` into OpenAI SSE live. |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | _(unset)_ | Google AI Studio API key | Advertises a Gemini OpenAI-compatible provider using `https://generativelanguage.googleapis.com/v1beta/openai` and default model `gemini-3.6-flash`. |
+| `ZAI_API_KEY` / `BIGMODEL_API_KEY` | _(unset)_ | Z.AI API key | Advertises a Z.AI OpenAI-compatible provider using `https://api.z.ai/api/paas/v4` and default model `glm-4.7-flash`. |
+| `ZAI_MODEL` | `glm-4.7-flash` when Z.AI is inferred | model id | Which Z.AI / GLM model the proxy should advertise as its external model. |
+| `ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` when Z.AI is inferred | OpenAI-compatible base URL | Override the Z.AI endpoint directly. |
+| `ZAI_CODING_PLAN` | `false` | `true`, `false` | When `true`, default Z.AI base URL switches to `https://api.z.ai/api/coding/paas/v4` so you can target coding-plan models like `glm-5` or `glm-4.7`. |
+| `OPENAI_COMPAT_FALLBACK_PROVIDER` | provider-specific inference (`google`, `zai`, or explicit) | provider label | Label advertised on `/v1/models` and `/v1/capabilities` for the external provider. |
+| `OPENAI_COMPAT_FALLBACK_BASE_URL` | provider-specific inference | OpenAI-compatible base URL | Base URL for the external provider. |
+| `OPENAI_COMPAT_FALLBACK_API_KEY` | _(unset)_ | API key | API key sent as `Authorization: Bearer ...` to the external provider. |
+| `OPENAI_COMPAT_FALLBACK_MODEL` | provider-specific inference | model id | Model ID advertised for explicit routing to the external OpenAI-compatible backend. |
+| `OPENAI_COMPAT_FALLBACK_STREAM_MODE` | `synthetic` | `synthetic`, `passthrough` | How streamed external requests are handled. `synthetic` buffers upstream output and emits proxy-generated OpenAI SSE for maximum client compatibility. |
+| `OPENAI_COMPAT_PROVIDERS_JSON` / `OPENAI_COMPAT_PROVIDERS` | _(unset)_ | JSON object or array | Declare multiple named OpenAI-compatible providers, models, timeouts, headers, and per-model capabilities. When set, it replaces the legacy single-provider configuration. Prefer the `_JSON` name for clarity. |
+| `DEFAULT_THINKING_BUDGET` | _(unset)_ | integer, `off`, `none`, `minimal`, `low`, `medium`, `high`, `auto`, `xhigh`, `max`, `ultracode` | Server-wide fallback thinking budget when the client does not send one. |
+| `CLAUDE_PROXY_LOG_FILE` | _(unset)_ | writable filesystem path | Append the same structured JSON events sent to stdout to a durable log file. Parent directories are created automatically. |
+| `DB_PATH` | `~/.claude-proxy-conversations.db` | filesystem path | Location of the SQLite conversation database. |
+| `SESSION_FILE` | `~/.claude-code-cli-sessions.json` | filesystem path | Location of the conversation-to-session mapping file. |
+| `RUNTIME_STATE_FILE` | `dirname(DB_PATH)/runtime-state.json` | filesystem path | Location of persisted admin-endpoint runtime state. |
+| `HOST` | `127.0.0.1` | bind address | Network interface used by the standalone server. |
+| `PORT` | `3456` | any free port | Docker Compose host-side published port only. For the standalone server, pass the port as `node dist/server/standalone.js <port>`. |
+
+## Same-conversation policy
+
+The proxy resolves a conversation key in this order:
+
+1. request body `conversation_id`
+2. request body `metadata.conversation_id`
+3. `X-Conversation-Id` header
+4. legacy OpenAI `user` field
+5. an opaque hash of `Idempotency-Key`, when present
+6. the generated request ID
+
+The response includes `X-Request-Id` and `X-Conversation-Id`, so a client can
+cancel work or continue the exact thread without guessing identifiers. A
+request can override the server default with body
+`"conversation_policy": "interrupt" | "queue"` or the
+`X-Conversation-Policy` header.
+
+### `latest-wins` (default)
+
+- New request for the same conversation → **cancels the active request** and drops older queued work for that conversation.
+- Good for interactive chat UIs where the user interrupts the model mid-response.
+- Side effect: if a client accidentally reuses a conversation ID across unrelated threads, requests will interrupt each other.
+
+### `queue`
+
+- New request for the same conversation → **waits** behind the active request.
+- Admitted requests for a single conversation run strictly FIFO; validation
+  happens before scheduler admission.
+- Good for batch workflows, agent frameworks with strict turn ordering, or when you genuinely want no in-flight cancellation.
+
+Switch policy:
+
+```bash
+export CLAUDE_PROXY_SAME_CONVERSATION_POLICY=queue
+npm start
+```
+
+## Queue debug logging
+
+When `CLAUDE_PROXY_DEBUG_QUEUES=true`, the proxy emits these additional structured log events:
+
+- `queue.enqueue` — a request was accepted and queued
+- `queue.drop` — a queued request was dropped (typically because `latest-wins` superseded it)
+- `queue.blocked` — a request is waiting because another request for the same conversation is active
+- `request.cancel` — an in-flight request was canceled
+
+Normal request/subprocess/session events are always emitted — this flag only gates the queue-internals noise.
+
+```bash
+export CLAUDE_PROXY_DEBUG_QUEUES=true
+npm start
+```
+
+## Default expert agent
+
+Set `CLAUDE_PROXY_DEFAULT_AGENT=expert-coder` to make every request flow
+through the repo's built-in expert coding agent profile.
+
+```bash
+export CLAUDE_PROXY_DEFAULT_AGENT=expert-coder
+npm start
+```
+
+This injects the canonical developer prompt shipped by the proxy and applies
+the agent's default reasoning tier when the caller did not already request one.
+For one-off use, you can leave the env var unset and call the dedicated routes
+instead:
+
+- `GET /v1/agents`
+- `GET /v1/agents/expert-coder`
+- `POST /v1/agents/expert-coder/chat/completions`
+- `POST /v1/agents/expert-coder/responses`
+
+## House system prompt
+
+Set `CLAUDE_PROXY_SYSTEM_PROMPT_FILE` to prepend one global instruction block
+to every Claude request:
+
+```bash
+export CLAUDE_PROXY_SYSTEM_PROMPT_FILE=/etc/claude-proxy/house-prompt.md
+npm start
+```
+
+The house prompt is placed before the request-specific system prompt. The
+proxy checks the file modification time on each request and reloads changed
+content without restarting. An unreadable or empty file is treated as no house
+prompt; unreadable paths produce one structured warning per path.
+
+## Default reasoning effort
+
+Set `DEFAULT_THINKING_BUDGET` when a client cannot send its own reasoning
+controls:
+
+```bash
+export DEFAULT_THINKING_BUDGET=high
+npm start
+```
+
+The value can be a token count or one of the effort labels listed in the
+environment-variable table. Request-body and `X-Thinking-Budget` values take
+precedence over this server default. `xhigh` maps to an intermediate
+48000-token tier; if the installed Claude CLI does not support
+`--effort xhigh`, the proxy falls back to `max`.
+
+## Model fallback order
+
+Set `CLAUDE_PROXY_MODEL_FALLBACKS` when you want the proxy to step down to a
+different Claude selector instead of failing immediately.
+
+```bash
+export CLAUDE_PROXY_MODEL_FALLBACKS=default,haiku
+npm start
+```
+
+Behavior:
+
+- The originally requested model still wins when it is accessible.
+- If it is unavailable, the proxy tries the listed selectors in order.
+- `default` follows Claude Code's account-tier recommendation.
+- The fallback list is also probed during startup so `/v1/models` can stay
+  populated even when only a fallback selector is currently usable.
+
+## Choosing the model
+
+There are four model-related controls, and they do different jobs:
+
+- Request body `model`
+  What the caller asks to run. Claude selectors (`sonnet`, `opus`, `best`,
+  `fable`, `haiku`) are still the default path. Supported accounts can request
+  `sonnet[1m]`, `opus[1m]`, or a full Sonnet/Opus ID ending in `[1m]`; the
+  proxy preserves that selector for Claude Code to validate.
+- `CLAUDE_PROXY_MODEL_FALLBACKS`
+  Claude-only step-down order when the requested Claude family is unavailable.
+- `GEMINI_CLI_MODEL` / `GEMINI_CLI_EXTRA_MODELS`
+  The local Gemini CLI models that the proxy advertises and can route to
+  without any hosted API key.
+- `OPENAI_COMPAT_FALLBACK_MODEL` or `ZAI_MODEL`
+  The external OpenAI-compatible API model that the proxy advertises and can
+  route to.
+
+Claude remains the default provider. External models are opt-in.
+
+That rule is strict:
+
+- omitted `model` stays on Claude
+- `default` stays on Claude
+- `sonnet`, `opus`, `best`, `fable`, `haiku`, extended-context variants, and
+  resolved Claude IDs stay on Claude
+- external providers are used only when the caller explicitly asks for one of
+  their model IDs
+
+## Local Gemini CLI provider
+
+If you want to keep the proxy architecture CLI-first, enable Gemini through
+the local authenticated `gemini` CLI instead of a hosted API key:
+
+```bash
+export GEMINI_CLI_ENABLED=true
+export GEMINI_CLI_COMMAND=/opt/homebrew/bin/gemini
+export GEMINI_CLI_MODEL=auto
+export GEMINI_CLI_EXTRA_MODELS=gemini-3.1-pro-preview,gemini-3.6-flash
+export OPEN_WEBUI_TASK_MODEL_EXTERNAL=gemini-3.6-flash
+npm start
+```
+
+Behavior:
+
+- `GET /v1/models` includes the configured Gemini CLI models.
+- If a client explicitly requests one of those model IDs, the proxy routes
+  directly to the local Gemini CLI.
+- Requests that omit `model` or ask for Claude aliases still stay on Claude.
+- If you want Open WebUI to use Gemini, set `OPEN_WEBUI_TASK_MODEL_EXTERNAL`
+  to the exact Gemini model ID you want.
+- The proxy launches Gemini in read-only plan mode from an isolated workdir so
+  the service above still sees a normal OpenAI-compatible API surface.
+- Streamed Gemini requests default to `GEMINI_CLI_STREAM_MODE=passthrough`,
+  which converts Gemini `stream-json` into OpenAI SSE live.
+
+## External OpenAI-compatible provider
+
+The hosted OpenAI-compatible path is secondary to the CLI-based proxy flow, but
+it remains available if you explicitly want it.
+
+The built-in default path is Gemini:
+
+```bash
+export GEMINI_API_KEY=your-google-ai-studio-key
+npm start
+```
+
+That is equivalent to:
+
+```bash
+export OPENAI_COMPAT_FALLBACK_PROVIDER=google
+export OPENAI_COMPAT_FALLBACK_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+export OPENAI_COMPAT_FALLBACK_API_KEY=your-google-ai-studio-key
+export OPENAI_COMPAT_FALLBACK_MODEL=gemini-3.6-flash
+npm start
+```
+
+Behavior:
+
+- `GET /v1/models` includes the configured external provider models.
+- If a client explicitly requests one of those models, the proxy routes
+  directly to the matching external provider.
+- Requests that omit `model`, use `default`, or ask for Claude families still
+  stay on Claude and return Claude errors if Claude is unavailable.
+- If you want Open WebUI or another client to use the external provider by
+  default, configure that client to request the external model ID explicitly.
+- Claude-specific reasoning knobs are stripped before forwarding so the payload
+  stays OpenAI-compatible upstream.
+- Streamed external requests default to `OPENAI_COMPAT_FALLBACK_STREAM_MODE=synthetic`,
+  which buffers the upstream response and emits stable OpenAI-style SSE from
+  the proxy itself. Set `passthrough` only if you explicitly want raw upstream
+  streaming behavior.
+
+### Multiple providers and model capabilities
+
+Use `OPENAI_COMPAT_PROVIDERS_JSON` when one fallback is not enough:
+
+```bash
+export OPENROUTER_API_KEY=...
+export OPENAI_COMPAT_PROVIDERS_JSON='[
+  {
+    "provider": "local",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "models": [
+      {
+        "id": "local/qwen3",
+        "upstreamId": "qwen3",
+        "timeoutMs": 420000,
+        "capabilities": {
+          "reasoning": true,
+          "tools": true,
+          "contextWindow": 131072
+        }
+      }
+    ]
+  },
+  {
+    "provider": "openrouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "apiKeyEnv": "OPENROUTER_API_KEY",
+    "models": ["openrouter/google/gemini-3.1-pro-preview"],
+    "streamMode": "passthrough"
+  }
+]'
+```
+
+Supported model capability fields are `chatCompletions`, `streaming`,
+`reasoning`, `tools`, `vision`, `structuredOutputs`, `contextWindow`, and
+`maxOutputTokens`. The proxy reports these, provider probe state, and per-model
+timeouts through `GET /v1/capabilities`. Model IDs must be unique and cannot
+collide with Claude aliases.
+
+Each `baseUrl` must be an `http` or `https` URL without embedded credentials.
+Put secrets in `apiKeyEnv` (preferred), `apiKey`, or explicit headers instead.
+Configuration fails fast when a named `apiKeyEnv` is unset. External catalog
+probes are capped at 30 seconds and are cancelled when the feature scanner
+stops; an unprobed model remains `configured` rather than being reported as
+available.
+
+### Z.AI / GLM
+
+If you want the free GLM path, the simplest setup is:
+
+```bash
+export ZAI_API_KEY=your-z-ai-key
+npm start
+```
+
+That defaults to `glm-4.7-flash`.
+
+To pin a different Z.AI model:
+
+```bash
+export ZAI_API_KEY=your-z-ai-key
+export ZAI_MODEL=glm-4.7-flash
+npm start
+```
+
+If you use Z.AI's coding endpoint and want larger coding models:
+
+```bash
+export ZAI_API_KEY=your-z-ai-key
+export ZAI_CODING_PLAN=true
+export ZAI_MODEL=glm-5
+# or glm-4.7
+npm start
+```
+
+The CLI-based Gemini provider can advertise multiple model IDs at once via
+`GEMINI_CLI_EXTRA_MODELS`. Legacy API-key fallback variables advertise one
+model; `OPENAI_COMPAT_PROVIDERS_JSON` can advertise any number of providers and
+models.
+
+## Admin API
+
+The mutable thinking-budget admin API is disabled by default:
+
+```bash
+export CLAUDE_PROXY_ENABLE_ADMIN_API=true
+npm start
+```
+
+When enabled, these endpoints are mounted:
+
+- `GET /admin/thinking-budget`
+- `POST /admin/thinking-budget`
+- `PUT /admin/thinking-budget`
+- `POST /admin/features/refresh`
+- `POST /admin/conversations/:conversationId/reset`
+
+Without `CLAUDE_PROXY_ADMIN_TOKEN`, these routes accept loopback requests only.
+When a token is configured, every admin request must send either
+`Authorization: Bearer <token>` or `X-Admin-Token: <token>`, including
+localhost requests. The thinking-budget override persists across restarts;
+feature refresh re-probes Claude and external providers; conversation reset
+discards only the resumable provider session and retains the stored transcript.
+
+## Network binding
+
+The standalone server binds to `127.0.0.1:3456` by default. Pass a port as the first positional argument to change the port, or set `HOST` to change the bind address:
+
+```bash
+HOST=0.0.0.0 node dist/server/standalone.js 8080
+```
+
+Then point clients at `http://127.0.0.1:8080/v1` for localhost use, or your chosen host/IP when deliberately exposing it.
+
+> [!NOTE]
+> The safest default is to keep the server on `127.0.0.1`. If you set `HOST=0.0.0.0`, treat the proxy like an internal service and put network controls in front of it.
+> The Ops snapshots include conversation diagnostics and request IDs used by
+> cancellation controls; they are intended for trusted operators.
+
+> [!NOTE]
+> When you use `docker-compose.yml`, the `.env` `PORT` value controls the host-side published port only. The Node process still listens on `3456` inside the container.
+
+## Timeouts
+
+Timeouts are hard-coded per model family in `src/models.ts`. They're deliberately not environment-configurable today.
+
+### Stall timeouts
+
+The proxy resets a per-request stall timer every time the subprocess produces output. If the subprocess goes silent for longer than the stall timeout, it is killed and the queue is unblocked.
+
+| Family | Stall timeout |
+| --- | --- |
+| Opus | 120 s |
+| Fable | 120 s |
+| Sonnet | 90 s |
+| Haiku | 45 s |
+
+### Hard timeouts
+
+Absolute wall-clock ceiling per request, regardless of activity.
+
+| Family | Hard timeout |
+| --- | --- |
+| Opus | 30 min |
+| Fable | 30 min |
+| Sonnet | 10 min |
+| Haiku | 2 min |
+
+If any thinking budget source is active on the request (`thinking.budget_tokens`, `reasoning_effort`, `X-Thinking-Budget`, or `DEFAULT_THINKING_BUDGET`), the hard timeout is multiplied by **3×** to allow for longer reasoning windows.
+
+### Kill escalation
+
+When a subprocess needs to die (stall, client disconnect, shutdown, timeout), the proxy sends `SIGTERM` first and then escalates to `SIGKILL` after a 5 second grace period if the process hasn't exited. Watch for `subprocess.kill` events with `signal: "SIGKILL"` — those mean the process ignored the polite request.
+
+## Persistent state
+
+The proxy writes these machine-local state files:
+
+| Path | Purpose |
+| --- | --- |
+| `~/.claude-code-cli-sessions.json` | Maps conversation IDs → Claude CLI session IDs, tracks resume failure counts. |
+| `~/.claude-proxy-conversations.db` | SQLite conversation metadata, message history, request metrics. |
+| `dirname(DB_PATH)/runtime-state.json` | Persists the admin-set default thinking budget when `CLAUDE_PROXY_ENABLE_ADMIN_API=true`. |
+
+These files are **machine-local** and not portable. Moving the repo to another machine does not carry conversation continuity.
+
+## macOS auto-start
+
+See [macOS setup](../setup/macos-setup.md) for the LaunchAgent setup that runs the proxy at login with KeepAlive.

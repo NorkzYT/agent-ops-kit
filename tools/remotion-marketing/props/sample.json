@@ -1,0 +1,81 @@
+{
+  "fps": 30,
+  "aspectRatio": "16:9",
+  "brand": {
+    "name": "Demo Studio",
+    "primaryColor": "#4338ca",
+    "secondaryColor": "#0ea5e9",
+    "accentColor": "#f59e0b"
+  },
+  "product": {
+    "name": "Marketing Video System",
+    "tagline": "From brief to rights-clean MP4"
+  },
+  "facts": [
+    {
+      "id": "f_types",
+      "claim": "Typed props and schema",
+      "evidence": "src/schema.ts defines a zod schema covering every prop the composition reads."
+    },
+    {
+      "id": "f_rights",
+      "claim": "Provenance-checked assets",
+      "evidence": "scripts/check-provenance.mjs blocks any render whose assets lack commercial-use rights."
+    },
+    {
+      "id": "f_qa",
+      "claim": "ffprobe QA on every render",
+      "evidence": "scripts/qa-video.mjs validates duration, audio track, resolution, fps and loudness."
+    }
+  ],
+  "scenes": [
+    {
+      "id": "s_intro",
+      "kind": "intro",
+      "durationInFrames": 60,
+      "headline": "Marketing videos from a brief",
+      "subhead": "Reusable Remotion pipeline",
+      "caption": "A reusable Remotion pipeline that turns a brief into a rights-clean video.",
+      "factIds": []
+    },
+    {
+      "id": "s_feature",
+      "kind": "feature",
+      "durationInFrames": 75,
+      "headline": "Typed props, reusable scenes",
+      "subhead": "One composition, three aspect ratios",
+      "caption": "Every campaign uses the same typed props and scene components.",
+      "factIds": ["f_types"]
+    },
+    {
+      "id": "s_proof",
+      "kind": "proof",
+      "durationInFrames": 75,
+      "headline": "Rights-checked by default",
+      "subhead": "Provenance and QA gates",
+      "caption": "Renders are blocked unless assets carry commercial-use rights.",
+      "factIds": ["f_rights", "f_qa"]
+    },
+    {
+      "id": "s_outro",
+      "kind": "outro",
+      "durationInFrames": 60,
+      "headline": "Ship your first campaign",
+      "caption": "Read the docs to render your first campaign.",
+      "factIds": []
+    }
+  ],
+  "cta": {
+    "text": "Read the docs",
+    "url": "hermes-agent.nousresearch.com/docs"
+  },
+  "music": {
+    "mode": "generated",
+    "assetId": "aud_tone"
+  },
+  "captions": true,
+  "safeMargins": true,
+  "assetPaths": {
+    "aud_tone": "audio/sample-tone.wav"
+  }
+}

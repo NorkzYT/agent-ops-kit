@@ -1,0 +1,26 @@
+# CLIProxyAPI config template for agent-ops-kit.
+#
+# `make init` renders this file to data/cliproxyapi/config.yaml, replacing the
+# __PLACEHOLDERS__ with the values from .env. Edit .env, not the rendered copy.
+#
+# Reference: https://github.com/router-for-me/CLIProxyAPI/blob/main/config.example.yaml
+
+host: ""
+port: 8317
+
+# OAuth credentials written by `make auth-codex` live here (mounted volume).
+auth-dir: "/root/.cli-proxy-api"
+
+# Client keys. Hermes, Honcho and the Windows worker all send this as their
+# OpenAI API key. Rotate by changing CLIPROXY_API_KEY in .env and `make init`.
+api-keys:
+  - "__CLIPROXY_API_KEY__"
+
+remote-management:
+  allow-remote: false
+  secret-key: "__CLIPROXY_MANAGEMENT_KEY__"
+  disable-control-panel: true
+
+debug: false
+usage-statistics-enabled: false
+logging-to-file: false

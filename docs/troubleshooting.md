@@ -1,298 +1,83 @@
 # Troubleshooting
 
-## Common Issues
+Start with `make doctor`. It names the failing piece and the make target that
+fixes it. Then find the symptom below.
 
-| Issue | What to check |
-|-------|---------------|
-| Autopilot not launching | Restart Claude Code and confirm `.claude/settings.local.json` exists |
-| Command blocked | Review `.claude/hooks/guard_bash.py` and add a safe allowlist rule if needed |
-| File edit blocked | Check protected file markers and sentinel rules |
-| Formatting not working | Make sure the repo has formatter config files (`.prettierrc*`, `pyproject.toml`) |
-| Hooks not running | Ensure the settings file used by Claude includes the hook config |
-| `Ctrl+G` opens `nano` | Confirm VS Code integration requirements from `docs/editor.md` |
+## Stack
 
-## Validate the kit setup
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `honcho-api` stays `starting` | waiting for Ollama's model pull | `make logs S=ollama`; first pull is ~270 MB |
+| `ollama` unhealthy after 15 min | pull failing (no network, disk full) | `docker exec ollama ollama pull nomic-embed-text`; check `df -h` |
+| deriver logs `response_format` / `json_schema` errors | proxied model rejects strict schemas | `HONCHO_STRUCTURED_OUTPUT_MODE=json_object` in `.env`, `make up` |
+| deriver logs 401 from cliproxyapi | key mismatch after rotation | `make init && make up` re-renders the proxy config |
+| `make models` shows no GPT models | Codex login missing or expired | `make auth-codex` |
+| `honcho-api` restarts with `embedding dim (1536) does not match EMBEDDING_VECTOR_DIMENSIONS` | database created before the kit entrypoint, or dimensions changed after data existed | `make up` (entrypoint now resizes empty tables); if data exists, `make clean && make up` |
+| `honcho-api` logs `password authentication failed for user "postgres"` | database volume created before `HONCHO_DB_PASSWORD` existed (or the value changed) | empty database: `make clean && make up`. With data: `docker exec honcho-db psql -U postgres -c "ALTER USER postgres PASSWORD '<value from .env>'"` then `make restart S=honcho-api` |
+| `honcho-db` logs `POSTGRES_HOST_AUTH_METHOD has been set to "trust"` | volume initialised by an older kit version | harmless on a local stack; to close it: `docker exec honcho-db sed -i 's/^host all all all trust$/host all all all scram-sha-256/' /var/lib/postgresql/data/pgdata/pg_hba.conf && make restart S=honcho-db` after setting the password as above |
+| claude-max-proxy restarts by itself every few hours | `CLAUDE_PROXY_MAX_UPTIME_HOURS` (idle-only restart, by design) | raise it or set it empty in `.env`, `make claude-proxy-install` |
+| `make claude-proxy-logs` says `no Claude Max credentials yet` | no `CLAUDE_CODE_OAUTH_TOKEN` | `make auth-claude-proxy` |
+| claude-max-proxy `/v1/models` empty or 401 | token expired or revoked | `make auth-claude-proxy` again |
+| `make claude-proxy-install` says `node not found` / `needs Node.js 24+` | no Node on the host | install Node 24+ (NodeSource, fnm or nvm), open a new shell, re-run |
+| service `failed`, journal shows `claude: not found` | `claude` not on the PATH captured at install time | run `make claude-proxy-install` from a shell where `claude --version` works |
+| service `failed`, journal shows `EACCES` under `data/claude-max-proxy` | leftover root-owned files from the old Docker proxy | `sudo chown -R $(id -u):$(id -g) data/claude-max-proxy` |
+| subagent cannot find `go`, `docker`, `uv`... | tool installed after the unit captured PATH, or only in a shell rc | `make claude-proxy-install` again from a shell that has it |
+| host freezes during coding tasks | proxy limits too high for the box | lower `CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS`, `CLAUDE_MAX_PROXY_CPUS`, `CLAUDE_MAX_PROXY_MEM_LIMIT`; `make claude-proxy-install` |
+| `systemctl --user show` reports `CPUQuotaPerSecUSec=infinity` | cgroup v2 CPU controller not delegated to user services (old systemd) | limits still apply for memory and pids; upgrade systemd (>= 252) or accept it |
+| a port is already in use | another service on 8317/3456/8000 | change `*_PORT` in `.env`, then `make up`, `make claude-proxy-install`, `make hermes-install` |
 
-```bash
-./.claude/extras/doctor.sh
-```
+## Hermes
 
-## Agent Stops Mid-Task (Requires "Continue")
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `hermes: command not found` after install | new PATH not loaded | `export PATH=$HOME/.local/bin:$PATH` or open a new shell |
+| bot never answers | intents off, user not allowed, or no mention | enable Message Content + Server Members intents; set `DISCORD_ALLOWED_USERS`; @mention it |
+| bot answers in DM but not in a channel | `require_mention` | mention it, or add the channel to `DISCORD_FREE_RESPONSE_CHANNELS` |
+| gateway dies on logout | no lingering user session | `sudo loginctl enable-linger $USER` |
+| model errors `401`/`invalid api key` | `~/.hermes/.env` stale | `make hermes-install` re-writes it from `.env` |
+| `hermes memory status` says disconnected | Honcho down or wrong URL | `make honcho-health`; check `~/.hermes/honcho.json` |
+| subagents fail immediately | claude-max-proxy not authenticated | see the proxy rows above |
+| config edits ignored | gateway caches config | `hermes gateway restart` |
+| `config.yaml.agent-ops-kit` appeared | you had a custom config | diff it against `config.yaml`, merge, or `scripts/hermes-install.sh --force` |
 
-**Symptom:** The agent stops during a long-running task and requires the user to say "Continue." to resume.
+## Profiles and Kanban
 
-**Log signature** (in `make logs`):
-```
-[agent/embedded] embedded run timeout: runId=... timeoutMs=600000
-[agent/embedded] Profile anthropic:manual timed out. Trying next account...
-[agent/embedded] embedded run failover decision: ... decision=surface_error reason=timeout
-```
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| tasks stay `ready` | gateway not running or board missing | `hermes gateway status`; `hermes kanban init` |
+| worker profile has no tools | kanban toolset disabled for it | `hermes -p <name> tools enable kanban` |
+| profile answers without its knowledge | `/learn` not run in that profile | `hermes -p <name> chat`, then `/learn <folder>` |
+| profile bot offline | its `.env` lacks a token or gateway not installed | `PROFILE_DISCORD_BOT_TOKEN=... make hermes-profile NAME=<name>`; `<name> gateway install` |
 
-**Cause:** OpenClaw's default embedded run timeout is 600 seconds (10 minutes). Complex multi-step tasks exceed this limit.
+## Windows worker
 
-**Fix:**
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| cannot reach the model from the VM | Docker on loopback but not published to the tailnet | keep Docker on `127.0.0.1`; on the host run `make windows-vm-network` (Tailscale Serve forwards :8317/:8000), then `make windows-vm-network-status`; confirm the VM is allowed by your Tailscale ACLs |
+| `make doctor` / host Hermes can't reach a service after opening it to the VM | Docker was bound to a Tailscale IP or `0.0.0.0` instead of loopback | set `CLIPROXY_BIND_ADDR`/`HONCHO_BIND_ADDR` back to `127.0.0.1`, `make up`, then `make windows-vm-network` (loopback + Serve is the supported path) |
+| `tailscale serve` says "access denied" | Tailscale operator not set | run once: `sudo tailscale set --operator=$USER` (or let `make windows-vm-network` escalate via sudo) |
+| computer use does nothing | desktop locked or RDP disconnected | keep the console session open; disable lock/sleep |
+| cannot click an admin window | Windows integrity levels | run the gateway task elevated for that job, or do the admin step yourself |
+| scheduled task not starting | registered under another user | re-run `install-worker.ps1` from the agent's account |
+| gateway task won't register (`The parameter is incorrect …:UserId`) | old script hand-rolled a bare-username logon trigger | update and re-run `install-worker.ps1`, or from an elevated desktop session: `hermes gateway install --start-on-login --start-now` (see [Windows VM worker](windows-vm-worker.md)) |
+| `DISCORD_BOT_TOKEN` missing though it was written | `HERMES_HOME` mismatch (`%LOCALAPPDATA%\hermes` vs `%USERPROFILE%\.hermes`) | set `$env:HERMES_HOME="$env:USERPROFILE\.hermes"` for the `hermes` shell, then `hermes doctor` |
 
-```bash
-# Set to 2 hours (recommended) — applied automatically on next make update-agent
-make set-timeout TIMEOUT=7200
+## Claude Code kit
 
-# Or set directly inside the container
-make shell
-openclaw config set agents.defaults.timeoutSeconds 7200
-```
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| hook blocks a needed command | guard pattern | add an allowlist rule in `.claude/hooks/guard_bash.py` |
+| edit blocked | protected file marker | see `.claude/hooks/protect_files.py` |
+| hooks not running | settings file mismatch | confirm `.claude/settings.local.json` is the one Claude loads |
 
-Re-provisioning an agent with `make update-agent` also applies the 7200s default automatically.
+Validate the bundle itself with `bash .claude/extras/doctor.sh` and
+`python3 .claude/scripts/test_guard.py`.
 
-**Verify:**
-```bash
-make shell
-openclaw config get agents.defaults.timeoutSeconds
-# Should output: 7200
-```
-
-## Discord Task Killed at ~30 Minutes ("Discord inbound worker timed out")
-
-**Symptom:** A long task launched from Discord dies after roughly 30 minutes, even
-though `agents.defaults.timeoutSeconds` is already 7200 (2h). The Discord reply
-says **"Discord inbound worker timed out."**
-
-**Log signature** (in `make logs` / proxy logs):
-```
-event=subprocess.kill reason=client_disconnected
-event=subprocess.kill signal=SIGTERM
-event=subprocess.close code=143
-```
-
-**Cause:** OpenClaw's Discord **inbound worker** has its own hard-coded ~30-minute
-total wall-clock cap per inbound message. This is **separate from**
-`agents.defaults.timeoutSeconds` — which is why raising the agent timeout never
-helped. When the inbound cap trips, OpenClaw drops the connection to
-`claude-max-proxy`; the proxy then SIGTERMs the in-flight Claude CLI on client
-disconnect (`code=143` = 128 + SIGTERM). The gap between the start and the kill
-in the log is exactly ~30 min.
-
-**Fix:** raise `channels.discord.inboundWorker.runTimeoutMs` (milliseconds). 2h
-matches the agent timeout so the agent's own graceful timeout becomes the limiter
-instead of the channel's hard kill. `make setup-discord` now sets this
-automatically; for existing installs:
-
-```bash
-# Set to 2 hours (7200000 ms)
-make set-inbound-timeout TIMEOUT_MS=7200000
-make restart
-
-# Or directly inside the container
-make shell
-openclaw config set channels.discord.inboundWorker.runTimeoutMs 7200000
-```
-
-`openclaw.json` ends up with:
-```jsonc
-"channels": {
-  "discord": {
-    "inboundWorker": { "runTimeoutMs": 7200000 }
-  }
-}
-```
-
-Prefer a generous bound (e.g. 7200000) over disabling the cap entirely, so a
-genuinely hung request can still be reclaimed.
-
-**Verify:**
-```bash
-make shell
-openclaw config get channels.discord.inboundWorker.runTimeoutMs
-# Should output: 7200000
-```
-
-## Run Aborted Mid-Think at ~9.5 Minutes (no-progress watchdog)
-
-**Symptom:** A long run on a heavy reasoning model (opus / fable at high
-thinking) is killed partway through even though `agents.defaults.timeoutSeconds`
-and `channels.discord.inboundWorker.runTimeoutMs` are both already raised to 1h+.
-The gateway log shows a stalled-session warning around `lastProgressAge≈389s`
-followed by an abort-drain near `age≈574s`:
-```
-[diagnostics] stuck session warn ... lastProgressAge=389s
-[diagnostics] stuck session abort-drain ... age=574s
-```
-
-**Cause:** This is **not** a request timeout — it is OpenClaw's *no-progress
-watchdog* (`diagnostics.stuckSessionWarnMs` / `diagnostics.stuckSessionAbortMs`).
-It measures wall-clock since the run last streamed anything OpenClaw counts as
-progress, and abort-drains the session for recovery once it crosses the abort
-threshold. The built-in defaults (~6.5m warn / ~9.5m abort) were sized for fast
-models; opus/fable with a large thinking budget can go minutes between visible
-tokens, so a slow-but-healthy run trips the watchdog and dies mid-think. Fast
-models (sonnet) rarely hit it.
-
-**Fix:** raise both thresholds (milliseconds) so a genuinely-healthy slow run has
-room to finish. 10m warn / 20m abort is the production profile:
-```bash
-make shell
-make set-watchdog WARN_MS=600000 ABORT_MS=1200000
-# or directly (note --strict-json so they store as numbers):
-openclaw config set diagnostics.stuckSessionWarnMs 600000 --strict-json
-openclaw config set diagnostics.stuckSessionAbortMs 1200000 --strict-json
-make restart   # these keys are cached at boot — a gateway restart is required
-```
-
-In `openclaw.json`:
-```jsonc
-"diagnostics": {
-  "stuckSessionWarnMs": 600000,
-  "stuckSessionAbortMs": 1200000
-}
-```
-
-On Docker hosts these are provisioned automatically on every boot by
-`openclaw-ensure-timeouts` (override via `OPENCLAW_STUCK_SESSION_WARN_MS` /
-`OPENCLAW_STUCK_SESSION_ABORT_MS`). Keep `abort` finite (e.g. 1200000) rather
-than disabling it, so a genuinely hung session can still be reclaimed — `warn`
-must stay below `abort` or it never fires.
-
-**Verify:**
-```bash
-make shell
-openclaw config get diagnostics.stuckSessionAbortMs
-# Should output: 1200000
-```
-
-## New Model Missing After `make update` (e.g. no `fable`)
-
-**Symptom:** You run `make update` (or `make rebuild-proxy`), restart, and a
-newly released proxy model never shows up. `docker logs claude-max-proxy`
-still prints the old model list, and `/model` in chat does not offer it.
-
-**Two independent causes, both now handled automatically:**
-
-1. **Stale proxy sources.** `docker compose build` builds whatever sits in
-   the `claude-max-api-proxy` checkout. If that checkout never moved (the
-   old installer pinned it to a fixed branch), the build is a byte-identical
-   cache hit — the `CACHED [claude-max-proxy 8/11] COPY src/ src/` line in
-   the build output is the tell. `make update` now runs
-   `docker/openclaw/sync-proxy-checkout.sh` first, which fast-forwards the
-   checkout (default branch: `main`, override with `CLAUDE_MAX_PROXY_REF`)
-   and migrates checkouts still sitting on legacy pinned branches. It never
-   touches a dirty worktree.
-
-2. **Missing openclaw.json entries.** OpenClaw only offers models listed
-   under `models.providers.claude-max-proxy.models` with aliases under
-   `agents.defaults.models`. The boot provisioner `openclaw-ensure-models`
-   now merges the current catalog (claude-sonnet/claude-opus/claude-fable)
-   into `openclaw.json` on every container start — merge-only, so your
-   existing entries, names, and aliases always win.
-
-**Verify after `make update`:**
-```bash
-# Proxy advertises the model
-curl -s http://localhost:3456/v1/models | jq -r '.data[].id'
-# openclaw.json carries it
-docker exec openclaw-gateway jq '.models.providers["claude-max-proxy"].models' \
-  /home/node/.openclaw/openclaw.json
-# Which sources were built
-git -C ./claude-max-api-proxy log -1 --oneline
-```
-
-If the proxy list still lacks the model, the checkout predates it:
-`git -C ./claude-max-api-proxy log -1` and compare with the branch that
-ships the model, then `make update` again. To converge config without a
-rebuild: `make ensure-config` then `make restart`.
-
-## Discord Plugin Not Installed ("plugin not installed: discord")
-
-**Symptom:** On startup or in `make logs` you see:
-```
-plugins.entries.discord: plugin not installed: discord — install the official
-external plugin with: openclaw plugins install @openclaw/discord
-```
-
-**Cause:** Discord support ships as an external OpenClaw plugin
-(`@openclaw/discord`) installed into `$OPENCLAW_STATE_DIR/npm` — a host bind
-mount, so it can't be baked into the image. The gateway entrypoint installs it
-automatically on **first boot**; this warning appears only if that install was
-skipped (e.g. `OPENCLAW_INSTALL_DISCORD_PLUGIN=0`), failed (no network), or the
-image predates the auto-install.
-
-**Fix:**
-```bash
-docker exec openclaw-gateway openclaw plugins install @openclaw/discord --pin
-make restart
-```
-A normal `make restart` on a current image is enough — the entrypoint installs
-the plugin before launching the gateway if it isn't already present.
-
-## Can't Access Host localhost From Container
-
-**Symptom:** An agent inside the Docker container can't reach a dev server running on the host at `127.0.0.1:<port>`. `curl http://127.0.0.1:4000` fails with "Connection refused".
-
-**Cause:** `127.0.0.1` inside the container is the container's own loopback, not the host's. Services bound to `127.0.0.1` on the host don't listen on the Docker bridge interface.
-
-**Fix — Option A: Bind the dev server to `0.0.0.0`**
-
-If possible, start your dev server on `0.0.0.0:<port>` instead of `127.0.0.1:<port>`. Then use `host.docker.internal:<port>` from inside the container.
-
-**Fix — Option B: Use host networking mode**
+## Reset everything
 
 ```bash
-make start-host    # or: make restart-host
-```
-
-This uses `network_mode: host` so the container shares the host's network stack. `127.0.0.1:4000` on the host IS `127.0.0.1:4000` in the container.
-
-To switch back to normal bridge networking:
-
-```bash
-make start         # or: make restart
-```
-
-**Note:** In host networking mode, the gateway port is no longer mapped — it binds directly to the host. The browser viewer still works via `http://<host>:6080`.
-
-## Browser Contention With Multiple Agents
-
-**Symptom:** Multiple agents interfere with each other's browser tabs, navigation, or session state.
-
-**Cause:** By default, all agents share a single Chromium instance (one X display :99, one CDP port, one profile).
-
-**Fix:** Enable per-agent browser isolation:
-
-1. Set `OPENCLAW_BROWSER_ISOLATION=per-agent` in your `.env` file
-2. Rebuild: `make rebuild && make restart`
-
-Each agent gets its own virtual X display (:100–:119), Chromium profile, and CDP port (18801–18820). The shared display :99 continues to serve the VNC viewer for manual use.
-
-**Verify:**
-```bash
-make shell
-ps aux | grep Xvfb                 # Should show :99 + per-agent displays
-ls ~/.openclaw/browser-profiles/   # Per-agent profile directories
-ls ~/.openclaw/display-locks/      # Active lock files
-```
-
-**Rollback:** Set `OPENCLAW_BROWSER_ISOLATION=shared` (or remove it) and `make rebuild`.
-
-## Permission Denied: mkdir '/opt/github' (or other custom repo dir)
-
-**Symptom:** `EACCES: permission denied, mkdir '/opt/github'` when using Discord or other channels.
-
-**Cause:** `HOST_REPOS_DIR` in `.env` is set to a custom path (e.g., `/opt/github`), but after the fix in this commit, the path is properly mounted. For older setups, the mount was hardcoded to `/opt/repos`.
-
-**Fix (post-fix):** No action needed — custom `HOST_REPOS_DIR` values now work automatically.
-
-**Legacy workaround (pre-fix):** Manually add the custom directory to docker-compose volumes and rebuild.
-
-## OpenClaw Troubleshooting
-
-Use the OpenClaw docs for gateway, Discord, and browser issues:
-
-- `.claude/docs/openclaw-integration.md`
-- `.claude/docs/openclaw-remote-commands.md`
-- `.claude/docs/openclaw-commands.md`
-
-Useful commands:
-
-```bash
-make status
-make doctor
-make logs
+make clean               # deletes Honcho memory and the Ollama model
+systemctl --user disable --now claude-max-proxy.service
+rm -rf data vendor .env
+make init && make up
 ```

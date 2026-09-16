@@ -1,0 +1,211 @@
+# agent-ops-kit — the Docker half of the stack.
+#
+#   Hermes (the agent) runs on the HOST, installed by scripts/hermes-install.sh.
+#   The rest of the HTTP half runs here:
+#
+#     honcho-api / honcho-deriver   long-term memory (Honcho, self-hosted)
+#     honcho-db / honcho-redis      Honcho's Postgres+pgvector and Redis
+#     ollama                        local embedding model for Honcho (no API key)
+#     cliproxyapi                   ChatGPT/Codex subscription -> OpenAI-compatible API (:8317)
+#
+#   claude-max-proxy (Claude Max -> OpenAI-compatible API, :3456) runs on the
+#   HOST too, as a systemd user service (make claude-proxy-install), so the
+#   Claude Code sessions it spawns see your repos, toolchains, docker and gh.
+#
+#   Each service binds its OWN address (all default 127.0.0.1): CLIPROXY_BIND_ADDR
+#   for cliproxyapi, HONCHO_BIND_ADDR for the Honcho API. Keep both on loopback.
+#   To reach a service from the Windows VM worker, publish the loopback port to
+#   your tailnet with Tailscale Serve (make windows-vm-network) — do not bind
+#   Docker to a routable address. Honcho runs with auth disabled: loopback-only.
+#
+#   Usage:  make init && make up      (see Makefile / docs/install.md)
+
+name: agent-ops-kit
+
+x-honcho-common: &honcho-common
+  image: ${HONCHO_IMAGE:-ghcr.io/plastic-labs/honcho:latest}
+  restart: unless-stopped
+  depends_on:
+    honcho-db:
+      condition: service_healthy
+    honcho-redis:
+      condition: service_healthy
+    ollama:
+      condition: service_healthy
+    cliproxyapi:
+      condition: service_healthy
+  environment: &honcho-env
+    LOG_LEVEL: ${HONCHO_LOG_LEVEL:-INFO}
+    DB_CONNECTION_URI: postgresql+psycopg://postgres:${HONCHO_DB_PASSWORD:?run make init}@honcho-db:5432/postgres
+    CACHE_URL: redis://honcho-redis:6379/0?suppress=true
+    CACHE_ENABLED: "true"
+    AUTH_USE_AUTH: "false"
+    VECTOR_STORE_TYPE: pgvector
+    # --- Reasoning LLM: every Honcho component goes through cliproxyapi -----
+    # Honcho's "openai" transport reads LLM_OPENAI_API_KEY and, per component,
+    # MODEL_CONFIG__OVERRIDES__BASE_URL. No vendor API key is involved: the
+    # key below is the cliproxyapi client key from .env.
+    LLM_OPENAI_API_KEY: ${CLIPROXY_API_KEY}
+    DERIVER_MODEL_CONFIG__TRANSPORT: openai
+    DERIVER_MODEL_CONFIG__MODEL: ${HONCHO_MODEL:?set HONCHO_MODEL in .env (make init)}
+    DERIVER_MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    SUMMARY_MODEL_CONFIG__TRANSPORT: openai
+    SUMMARY_MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    SUMMARY_MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    DREAM_DEDUCTION_MODEL_CONFIG__TRANSPORT: openai
+    DREAM_DEDUCTION_MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    DREAM_DEDUCTION_MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    DREAM_INDUCTION_MODEL_CONFIG__TRANSPORT: openai
+    DREAM_INDUCTION_MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    DREAM_INDUCTION_MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    DIALECTIC_LEVELS__minimal__MODEL_CONFIG__TRANSPORT: openai
+    DIALECTIC_LEVELS__minimal__MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    DIALECTIC_LEVELS__minimal__MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    DIALECTIC_LEVELS__low__MODEL_CONFIG__TRANSPORT: openai
+    DIALECTIC_LEVELS__low__MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    DIALECTIC_LEVELS__low__MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    DIALECTIC_LEVELS__medium__MODEL_CONFIG__TRANSPORT: openai
+    DIALECTIC_LEVELS__medium__MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    DIALECTIC_LEVELS__medium__MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    DIALECTIC_LEVELS__high__MODEL_CONFIG__TRANSPORT: openai
+    DIALECTIC_LEVELS__high__MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    DIALECTIC_LEVELS__high__MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    DIALECTIC_LEVELS__max__MODEL_CONFIG__TRANSPORT: openai
+    DIALECTIC_LEVELS__max__MODEL_CONFIG__MODEL: ${HONCHO_MODEL}
+    DIALECTIC_LEVELS__max__MODEL_CONFIG__OVERRIDES__BASE_URL: http://cliproxyapi:8317/v1
+    # Some OpenAI-compatible proxies reject json_schema response formats.
+    # Flip to json_object in .env if the deriver logs structured-output errors.
+    DERIVER_MODEL_CONFIG__STRUCTURED_OUTPUT_MODE: ${HONCHO_STRUCTURED_OUTPUT_MODE:-json_schema}
+    # --- Embeddings: local Ollama model, OpenAI-compatible endpoint ----------
+    EMBED_MESSAGES: "true"
+    EMBEDDING_MODEL_CONFIG__TRANSPORT: openai
+    EMBEDDING_MODEL_CONFIG__MODEL: ${HONCHO_EMBED_MODEL:-nomic-embed-text}
+    EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL: http://ollama:11434/v1
+    EMBEDDING_MODEL_CONFIG__MAX_BATCH_SIZE: "10"
+    EMBEDDING_VECTOR_DIMENSIONS: ${HONCHO_EMBED_DIMENSIONS:-768}
+    EMBEDDING_MAX_INPUT_TOKENS: "8192"
+
+services:
+  # ---------------------------------------------------------------- Honcho ---
+  honcho-db:
+    image: pgvector/pgvector:pg15
+    container_name: honcho-db
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=200"]
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      # Generated by `make init`. Postgres applies it on first initdb only; to
+      # change it on an existing database see docs/troubleshooting.md.
+      POSTGRES_PASSWORD: ${HONCHO_DB_PASSWORD:?run make init}
+      # Port is not published to the host; only containers on the compose network reach it.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ./docker/honcho/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - honcho-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  honcho-redis:
+    image: redis:8.2
+    container_name: honcho-redis
+    restart: unless-stopped
+    volumes:
+      - honcho-redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  honcho-api:
+    <<: *honcho-common
+    container_name: honcho-api
+    # Kit entrypoint = upstream entrypoint + scripts/configure_embeddings.py, which
+    # resizes the pgvector columns (created as 1536) to EMBEDDING_VECTOR_DIMENSIONS.
+    entrypoint: ["sh", "/agent-ops-kit/entrypoint.sh"]
+    volumes:
+      - ./docker/honcho/entrypoint.sh:/agent-ops-kit/entrypoint.sh:ro
+    ports:
+      - "${HONCHO_BIND_ADDR:-127.0.0.1}:${HONCHO_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/app/.venv/bin/python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  honcho-deriver:
+    <<: *honcho-common
+    container_name: honcho-deriver
+    entrypoint: ["/app/.venv/bin/python", "-m", "src.deriver"]
+    depends_on:
+      honcho-api:
+        condition: service_healthy
+      honcho-db:
+        condition: service_healthy
+      honcho-redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+      cliproxyapi:
+        condition: service_healthy
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
+    environment:
+      OLLAMA_EMBED_MODEL: ${HONCHO_EMBED_MODEL:-nomic-embed-text}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-24h}
+    volumes:
+      - ./docker/ollama/entrypoint.sh:/entrypoint.sh:ro
+      - ollama-data:/root/.ollama
+    cpus: ${OLLAMA_CPUS:-2.0}
+    mem_limit: ${OLLAMA_MEM_LIMIT:-3g}
+    healthcheck:
+      # Healthy only once the embedding model is pulled (see entrypoint.sh).
+      test: ["CMD-SHELL", "test -f /tmp/ollama-ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 90
+      start_period: 20s
+
+  # ------------------------------------------------- Subscription proxies ---
+  cliproxyapi:
+    image: ${CLIPROXY_IMAGE:-eceasy/cli-proxy-api:latest}
+    container_name: cliproxyapi
+    restart: unless-stopped
+    ports:
+      - "${CLIPROXY_BIND_ADDR:-127.0.0.1}:${CLIPROXY_PORT:-8317}:8317"
+      # OAuth browser-callback port used by `-codex-login` (not by device login).
+      - "127.0.0.1:1455:1455"
+    volumes:
+      - ./data/cliproxyapi/config.yaml:/CLIProxyAPI/config.yaml
+      - ./data/cliproxyapi/auths:/root/.cli-proxy-api
+      - ./data/cliproxyapi/logs:/CLIProxyAPI/logs
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -qO- http://127.0.0.1:8317/healthz >/dev/null || exit 1"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  honcho-pgdata:
+  honcho-redis-data:
+  ollama-data:

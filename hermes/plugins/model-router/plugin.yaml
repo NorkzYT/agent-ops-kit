@@ -1,0 +1,16 @@
+name: model-router
+version: 0.1.0
+description: >-
+  Complexity-based model routing (luna/terra/sol/astra for the orchestrator,
+  opus/fable for delegated coding) and fail-closed privacy routing that keeps
+  private data off cloud providers.
+author: agent-ops-kit
+kind: standalone
+requires_hermes: ">=0.21"
+# Hermes 0.21+ manifest schema: middleware capabilities are declared under
+# `provides_middleware` (validated by `hermes plugins validate` and surfaced in
+# `hermes plugins show`). register() is what actually wires them via
+# ctx.register_middleware; this block is the matching declaration.
+provides_middleware:
+  - llm_request
+  - llm_execution

@@ -1,0 +1,9 @@
+{
+  "facts": [
+    {
+      "id": "f_example",
+      "claim": "Short claim shown on screen",
+      "evidence": "Real source: file path, analytics query, or citation URL"
+    }
+  ]
+}

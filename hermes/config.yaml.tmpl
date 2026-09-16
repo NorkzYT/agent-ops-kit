@@ -1,0 +1,201 @@
+# ~/.hermes/config.yaml — rendered by scripts/hermes-install.sh from
+# hermes/config.yaml.tmpl. Secrets are NOT in this file: they live in
+# ~/.hermes/.env and are referenced here as ${VAR}.
+#
+# Re-render after editing .env:  make hermes-install
+# Full reference: https://hermes-agent.nousresearch.com/docs/user-guide/configuration
+
+# ---------------------------------------------------------------- Models ---
+# Orchestrator model: ChatGPT subscription through CLIProxyAPI (OpenAI-compatible).
+model:
+  provider: custom
+  default: __HERMES_MODEL__
+  base_url: __CLIPROXY_BASE_URL__
+  api_key: ${CLIPROXY_API_KEY}
+
+# Native fallback chain for NORMAL (non-private) orchestrator traffic. On a
+# 429/503/connection failure Hermes walks these in order. Each entry is a
+# distinct endpoint, so this is not a same-provider duplicate of the primary:
+#   CLIProxyAPI (primary)  ->  claude-max-proxy  ->  local Ollama.
+# Private traffic never reaches this chain — the model-router plugin
+# short-circuits it to local/refuse before any provider call (docs/model-routing.md).
+fallback_providers:
+  - provider: custom
+    model: opus
+    base_url: __CLAUDE_MAX_PROXY_BASE_URL__
+    key_env: CLAUDE_MAX_PROXY_API_KEY
+    api_mode: chat_completions
+  - provider: custom
+    model: __OLLAMA_CHAT_MODEL__
+    base_url: __OLLAMA_BASE_URL__
+    api_mode: chat_completions
+
+# Subagents spawned with delegate_task (coding work) go to Claude Max through
+# claude-max-proxy. `opus`, `sonnet`, `haiku`, `default` or an exact id from
+# `make models`. The proxy needs no key; any non-empty string is accepted.
+delegation:
+  provider: custom
+  model: __HERMES_CODING_MODEL__
+  base_url: __CLAUDE_MAX_PROXY_BASE_URL__
+  api_key: ${CLAUDE_MAX_PROXY_API_KEY}
+  api_mode: chat_completions
+  max_concurrent_children: 4
+  max_spawn_depth: 2
+  child_timeout_seconds: 3600
+  worktree_isolation: false
+  # Delegation fallback for normal coding traffic: claude-max-proxy -> Ollama.
+  # No same-provider duplicate of the primary; private coding never reaches here.
+  fallback_providers:
+    - provider: custom
+      model: __OLLAMA_CHAT_MODEL__
+      base_url: __OLLAMA_BASE_URL__
+      api_mode: chat_completions
+
+# --------------------------------------------------------------- Toolsets ---
+toolsets: [hermes-cli]
+platform_toolsets:
+  cli:
+    - web
+    - search
+    - terminal
+    - file
+    - browser
+    - vision
+    - skills
+    - todo
+    - memory
+    - session_search
+    - cronjob
+    - code_execution
+    - delegation
+    - clarify
+    - kanban
+  discord:
+    - web
+    - search
+    - terminal
+    - file
+    - browser
+    - vision
+    - skills
+    - todo
+    - memory
+    - session_search
+    - cronjob
+    - code_execution
+    - delegation
+    - clarify
+    - kanban
+    - discord
+    - discord_admin
+
+terminal:
+  backend: local
+  cwd: __REPOS_DIR__
+  timeout: 600
+
+# Browser Use is the default browser backend. With BROWSER_USE_API_KEY set in
+# .env, sessions run on Browser Use Cloud; otherwise a local Chromium is used.
+browser:
+  backend: browser-use
+  headed: false
+  allow_private_urls: true
+
+# ----------------------------------------------------------------- Memory ---
+# Built-in MEMORY.md/USER.md stay on; Honcho (self-hosted, see honcho.json)
+# provides cross-session user modelling (honcho.json points at the local stack).
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  provider: honcho
+  write_approval: false
+
+# ---------------------------------------------------------------- Discord ---
+discord:
+  require_mention: true
+  thread_require_mention: false
+  auto_thread: true
+  reactions: true
+  history_backfill: true
+  allow_mentions:
+    everyone: false
+    roles: false
+    users: true
+    replied_user: true
+group_sessions_per_user: true
+
+# ----------------------------------------------------------------- Kanban ---
+# Shared board for multi-profile teams (docs/profiles-and-teams.md).
+kanban:
+  dispatch_in_gateway: true
+  dispatch_interval_seconds: 60
+  max_in_progress: 2
+
+# ------------------------------------------------------------------ Agent ---
+# reasoning_effort is Hermes' single chokepoint (resolve_reasoning_config): it
+# governs the orchestrator AND delegated subagents, clamped per model at the
+# transport boundary. `high` is valid for every model this kit uses — GPT-5.6
+# luna/terra/sol and GPT-6 astra (Codex Responses), and claude-max-proxy, which
+# reads `reasoning_effort` and maps it to a Claude CLI effort level. So this
+# does not break Claude proxy semantics.
+agent:
+  verify_on_stop: true
+  verify_guidance: true
+  reasoning_effort: high
+
+display:
+  streaming: true
+
+# ---------------------------------------------------------- Auxiliary work ---
+# Cheap, high-volume helper calls (title generation, compression). Rendered from
+# AUX_PROVIDER/AUX_MODEL/AUX_BASE_URL in .env. Semantics on Hermes 0.21.2:
+#   - provider: auto with an empty model + empty base_url => use the MAIN
+#     provider and model, following the top-level fallback policy. This is the
+#     default so install never breaks when Ollama is not yet host-reachable.
+#   - a NON-EMPTY base_url => Hermes routes to that endpoint and IGNORES provider.
+# So to keep title/compression work OFF the cloud, set AUX_BASE_URL to a local
+# Ollama endpoint and AUX_MODEL to a pulled chat model:
+#   base_url: __OLLAMA_BASE_URL__, model: <a pulled chat model>
+# See docs/model-routing.md (§ Auxiliary work).
+auxiliary:
+  # Secure default-deny for auxiliary CLOUD fallback. When an aux task is pinned
+  # to a LOCAL endpoint (loopback / RFC-1918 / CGNAT / *.local) and that endpoint
+  # times out or is unreachable, the request is refused/skipped rather than
+  # spilled to the main cloud provider. Set true to opt back into cloud fallback
+  # for a pinned local endpoint. This NEVER overrides the private-payload guard:
+  # a payload flagged private (#private/#local tags, secrets/credentials) is never
+  # sent to a cloud provider regardless. See docs/model-routing.md (§ Auxiliary work).
+  allow_cloud_fallback: false
+  title_generation:
+    provider: __AUX_PROVIDER__
+    model: __AUX_MODEL__
+    base_url: __AUX_BASE_URL__
+    reasoning_effort: high
+  compression:
+    provider: __AUX_PROVIDER__
+    model: __AUX_MODEL__
+    base_url: __AUX_BASE_URL__
+    reasoning_effort: high
+
+# --------------------------------------------------------------- Plugins ---
+# model-router: complexity-based model selection (luna/terra/sol/astra;
+# opus/fable for coding) + fail-closed privacy routing.
+# Both knobs default to true (rendered from MODEL_ROUTER_COMPLEXITY /
+# MODEL_ROUTER_PRIVACY in .env). Privacy routing is ENABLED by default: requests
+# with private data never reach a cloud provider (local Ollama, or refuse when
+# local inference is down — it never auto-escalates private data to the cloud).
+# Setting MODEL_ROUTER_PRIVACY=false renders privacy_routing: false here — a
+# deliberate, risky opt-out that disables the guard entirely. When enabled it
+# remains fail-closed. See hermes/plugins/model-router/ and docs/model-routing.md.
+plugins:
+  enabled:
+    - model-router
+  entries:
+    model-router:
+      settings:
+        complexity_routing: __MODEL_ROUTER_COMPLEXITY__
+        privacy_routing: __MODEL_ROUTER_PRIVACY__
+        ollama_base_url: __OLLAMA_BASE_URL__
+        ollama_model: __OLLAMA_CHAT_MODEL__
+        private_terms: []
+        private_paths: []

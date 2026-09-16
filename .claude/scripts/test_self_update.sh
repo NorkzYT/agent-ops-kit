@@ -26,19 +26,11 @@ RC1=$?
 set -e
 assert "exits non-zero"                      '[ "$RC1" -ne 0 ]'
 assert "mentions the missing manifest"       'grep -q "no manifest" <<<"$OUT1"'
-assert "suggests a curl installer command"   'grep -q "curl -fsSL https://raw.githubusercontent.com/NorkzYT/claude-code-autopilot/main/install.sh" <<<"$OUT1"'
-assert "fills in --repo with a real repo"    'grep -q -- "--repo NorkzYT/claude-code-autopilot" <<<"$OUT1"'
+assert "suggests a curl installer command"   'grep -q "curl -fsSL https://raw.githubusercontent.com/NorkzYT/agent-ops-kit/main/install.sh" <<<"$OUT1"'
+assert "fills in --repo with a real repo"    'grep -q -- "--repo NorkzYT/agent-ops-kit" <<<"$OUT1"'
 assert "fills in --dest with this root"      'grep -q -- "--dest $ROOT1" <<<"$OUT1"'
 assert "no <owner>/<repo> placeholders"      '! grep -q "<owner>" <<<"$OUT1"'
-assert "plain install omits --with-openclaw" '! grep -q -- "--with-openclaw" <<<"$OUT1"'
-
-echo "== no manifest on an OpenClaw install: suggests --with-openclaw =="
-ROOT2="$TMP/openclaw-install"
-mkdir -p "$ROOT2/.claude" "$ROOT2/docker/openclaw"
-set +e
-OUT2="$(bash "$SU" "$ROOT2" 2>&1)"
-set -e
-assert "openclaw markers add --with-openclaw" 'grep -q -- "--with-openclaw" <<<"$OUT2"'
+assert "no legacy stack flags suggested"     '! grep -q -- "--with-" <<<"$OUT1"'
 
 echo "== no manifest: canonical repo overridable for forks =="
 set +e
@@ -85,14 +77,12 @@ echo "== manifest replay: re-runs installer with recorded flags =="
 ROOT4="$TMP/recorded-install"
 mkdir -p "$ROOT4/.claude"
 cat >"$ROOT4/.claude/install.manifest" <<'EOF'
-# claude-code-autopilot install manifest (shell-sourceable).
-CCA_REPO='NorkzYT/claude-code-autopilot'
+# agent-ops-kit install manifest (shell-sourceable).
+CCA_REPO='NorkzYT/agent-ops-kit'
 CCA_REF='main'
 CCA_DEST='/tmp/somewhere'
 CCA_BOOTSTRAP_LINUX='1'
 CCA_NO_EXTRAS='0'
-CCA_WITH_OPENCLAW='1'
-CCA_WITH_CREWAI='0'
 EOF
 # Stub curl: serve a fake installer that just echoes its argv, so the replay
 # is observable without touching the network.
@@ -116,13 +106,12 @@ OUT4="$(PATH="$BIN:$PATH" bash "$SU" "$ROOT4" 2>&1)"
 RC4=$?
 set -e
 assert "replay exits zero"                   '[ "$RC4" -eq 0 ]'
-assert "replays --repo from manifest"        'grep -q -- "--repo NorkzYT/claude-code-autopilot" <<<"$OUT4"'
+assert "replays --repo from manifest"        'grep -q -- "--repo NorkzYT/agent-ops-kit" <<<"$OUT4"'
 assert "replays --ref from manifest"         'grep -q -- "--ref main" <<<"$OUT4"'
 assert "replays recorded --dest"             'grep -q -- "--dest /tmp/somewhere" <<<"$OUT4"'
 assert "always passes --force"               'grep -q -- "--force" <<<"$OUT4"'
 assert "replays --bootstrap-linux"           'grep -q -- "--bootstrap-linux" <<<"$OUT4"'
-assert "replays --with-openclaw"             'grep -q -- "--with-openclaw" <<<"$OUT4"'
-assert "omits flags recorded as 0"           '! grep -q -- "--with-crewai" <<<"$OUT4"'
+assert "omits flags recorded as 0"           '! grep -q -- "--no-extras" <<<"$OUT4"'
 assert "installer actually executed"         'grep -q "FAKE-INSTALLER:" <<<"$OUT4"'
 
 echo "== manifest replay: empty CCA_DEST falls back to install root =="

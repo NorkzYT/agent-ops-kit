@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-START_MARKER="# >>> claude-code-autopilot ccx >>>"
-END_MARKER="# <<< claude-code-autopilot ccx <<<"
+START_MARKER="# >>> agent-ops-kit ccx >>>"
+END_MARKER="# <<< agent-ops-kit ccx <<<"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"

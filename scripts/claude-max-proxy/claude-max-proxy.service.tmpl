@@ -1,0 +1,34 @@
+# ~/.config/systemd/user/claude-max-proxy.service — rendered by
+# scripts/claude-max-proxy/install.sh (make claude-proxy-install). Do not edit;
+# change .env and re-run the target.
+[Unit]
+Description=claude-max-proxy (Claude Max subscription as an OpenAI-compatible API)
+Documentation=https://github.com/mattschwen/claude-max-api-proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# cwd of the proxy and of every Claude Code session it spawns.
+WorkingDirectory=__REPOS_DIR__
+# Rendered from .env: token, port, concurrency, thinking budget, state paths.
+EnvironmentFile=__ENV_FILE__
+# PATH captured at install time so Claude Code sees the same toolchains you do
+# (node, go, docker, gh, uv, ...).
+Environment=PATH=__SERVICE_PATH__
+ExecStart=/usr/bin/env bash __RUN_SH__ __PROXY_DIR__
+Restart=always
+RestartSec=5
+# SIGTERM to run.sh (forwarded to the proxy, which drains), then SIGKILL the
+# whole group after TimeoutStopSec.
+KillMode=mixed
+TimeoutStopSec=45
+# cgroup limits for the proxy AND every Claude Code session/tool it spawns.
+# The same guard the Docker version had; keeps a runaway session from freezing
+# the host. From CLAUDE_MAX_PROXY_CPUS / _MEM_LIMIT / _TASKS_MAX in .env.
+CPUQuota=__CPU_QUOTA__
+MemoryMax=__MEMORY_MAX__
+TasksMax=__TASKS_MAX__
+
+[Install]
+WantedBy=default.target

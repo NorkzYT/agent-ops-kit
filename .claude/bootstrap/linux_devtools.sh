@@ -21,11 +21,7 @@ else
   skip "Claude Code already installed."
 fi
 
-if has claude; then
-  CLAUDE_BIN="$(command -v claude)"
-elif [[ -x "${HOME}/.local/bin/claude" ]]; then
-  CLAUDE_BIN="${HOME}/.local/bin/claude"
-else
+if ! has claude && [[ ! -x "${HOME}/.local/bin/claude" ]]; then
   warn "Claude Code binary not found after install attempt. Ensure ~/.local/bin is in PATH."
   exit 1
 fi
@@ -74,9 +70,9 @@ setup_node_fnm() {
   local current_node_major=0
   current_node_major="$(node_major_or_zero)"
 
-  if ! has node || [[ "$current_node_major" -lt 22 ]]; then
+  if ! has node || [[ "$current_node_major" -lt 24 ]]; then
     if has node; then
-      log "System Node $(node -v) is below Node 22+. Installing/activating fnm LTS..."
+      log "System Node $(node -v) is below Node 24+. Installing/activating fnm LTS..."
     else
       log "Installing Node.js LTS..."
     fi
@@ -103,8 +99,8 @@ NODE_MAJOR_NOW="$(node_major_or_zero)"
 if ! has npm; then
   warn "npm not found. Installing Node/npm via fnm now..."
   setup_node_fnm || warn "Node/npm install failed. JS/Python LSP binaries will be skipped."
-elif [[ "$NODE_MAJOR_NOW" -lt 22 ]]; then
-  warn "Detected Node $(node -v 2>/dev/null || echo 'unknown') (below 22). Activating fnm LTS for OpenClaw compatibility..."
+elif [[ "$NODE_MAJOR_NOW" -lt 24 ]]; then
+  warn "Detected Node $(node -v 2>/dev/null || echo 'unknown') (below 24). Activating fnm LTS (Node 24+ needed by the claude-max-proxy node:sqlite store, Claude CLI and Browser Use)..."
   setup_node_fnm || warn "fnm Node activation failed; continuing with system Node."
   skip "npm already installed: $(npm -v)"
 else
@@ -211,13 +207,6 @@ if [ ! -f "$NTFY_CONFIG" ]; then
 else
   NTFY_TOPIC="$(cat "$NTFY_CONFIG")"
   skip "ntfy.sh already configured: $NTFY_TOPIC"
-fi
-
-# ---- 6) OpenClaw (optional, when INSTALL_OPENCLAW=1) ----
-if [[ "${INSTALL_OPENCLAW:-0}" == "1" ]]; then
-  skip "Docker-only OpenClaw mode selected. Host OpenClaw CLI install is skipped."
-else
-  skip "OpenClaw install not requested (use --with-openclaw to enable)."
 fi
 
 log "Done."
