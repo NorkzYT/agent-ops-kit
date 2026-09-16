@@ -131,6 +131,47 @@ AUX_BASE_URL=http://127.0.0.1:11434/v1
 
 Re-run `make hermes-install` to re-render the `auxiliary.*` entries.
 
+### Auxiliary pre-egress guard — fail-closed
+
+Auxiliary calls run **outside** the main-loop `llm_execution` middleware, so the
+model-router privacy guard above never inspects them. Hermes core therefore
+applies an equivalent pre-egress guard on the auxiliary path
+(`agent/aux_egress_guard.py`). Two independent, fail-closed checks decide whether
+a failed auxiliary request may reach a **cloud** provider:
+
+1. **Local-endpoint pin — secure default-deny.** When an aux task is pinned to a
+   LOCAL endpoint (loopback / RFC-1918 / RFC-6598 CGNAT such as Tailscale /
+   `*.local`) and that endpoint **times out or is unreachable**, the request is
+   **refused/skipped** rather than spilled to the main cloud provider. Prior to
+   this guard a local Ollama outage silently fell back to the cloud, defeating
+   the whole point of pinning a local endpoint. Opt back in with
+   `auxiliary.allow_cloud_fallback: true` (native config; default **false**).
+   Non-outage failures on a local endpoint (a rejected model, an operator's
+   explicit `auxiliary.<task>.fallback_chain` hop) keep the documented fallback.
+
+2. **Private payload — never to cloud.** A payload the deterministic scanner
+   flags as private (`#private` / `#local` tags, secrets/credentials, and the
+   operator `MODEL_ROUTER_PRIVATE_TERMS` / `MODEL_ROUTER_PRIVATE_PATHS` signals)
+   is **never** sent to a cloud provider — on the primary call or on fallback —
+   regardless of `allow_cloud_fallback`. This guard is always on for the
+   auxiliary path and does not depend on `MODEL_ROUTER_PRIVACY`.
+
+Both checks fail closed: an unreadable config or a scanner error denies cloud
+egress. `AUX_PROVIDER=auto` with **no** local `AUX_BASE_URL` keeps its documented
+behavior — public traffic still follows the main provider + fallback policy.
+
+> **`MODEL_ROUTER_PRIVACY=false` is unsafe.** It disables the main-loop privacy
+> guard entirely, so private data in ordinary (non-auxiliary) turns can reach the
+> cloud. The auxiliary pre-egress guard above still protects auxiliary calls, but
+> it is **not** a substitute for main-loop privacy routing. Leave
+> `MODEL_ROUTER_PRIVACY=true` in production.
+
+> **Follow-up (not yet implemented):** interactive per-call confirmation for a
+> pinned-local outage. It is intentionally omitted here because it cannot fail
+> closed in gateway/headless contexts and must not transmit raw private payload
+> without a separate explicit opt-in. The default-deny policy above is the safe
+> baseline until a fail-closed confirmation channel exists.
+
 ## Configuration
 
 `config.yaml` is rendered from `hermes/config.yaml.tmpl` by `make hermes-install`.

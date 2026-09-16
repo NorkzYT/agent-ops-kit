@@ -158,6 +158,14 @@ display:
 #   base_url: __OLLAMA_BASE_URL__, model: <a pulled chat model>
 # See docs/model-routing.md (§ Auxiliary work).
 auxiliary:
+  # Secure default-deny for auxiliary CLOUD fallback. When an aux task is pinned
+  # to a LOCAL endpoint (loopback / RFC-1918 / CGNAT / *.local) and that endpoint
+  # times out or is unreachable, the request is refused/skipped rather than
+  # spilled to the main cloud provider. Set true to opt back into cloud fallback
+  # for a pinned local endpoint. This NEVER overrides the private-payload guard:
+  # a payload flagged private (#private/#local tags, secrets/credentials) is never
+  # sent to a cloud provider regardless. See docs/model-routing.md (§ Auxiliary work).
+  allow_cloud_fallback: false
   title_generation:
     provider: __AUX_PROVIDER__
     model: __AUX_MODEL__
