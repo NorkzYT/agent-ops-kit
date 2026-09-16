@@ -229,4 +229,6 @@ until that lands.**
 make route-smoke     # live: probe /v1/models, degrade-check tiers, run the canary
 make test-router     # offline: unit + zero-egress privacy canary
 make models          # what each proxy exposes
+make router-logs     # last 20 model_router lines from ~/.hermes/logs/agent.log (LINES=<n>)
+make router-logs-follow  # same, then follow live (survives log rotation)
 ```

@@ -21,6 +21,7 @@ Image `eceasy/cli-proxy-api`, source
 ```bash
 make auth-codex        # device-code login with the ChatGPT account
 make models            # list what the subscription exposes
+make cliproxyapi-logs  # last 200 container log lines (LINES=<n>); -follow to tail live
 ```
 
 Clients authenticate with `Authorization: Bearer $CLIPROXY_API_KEY`. Rotate

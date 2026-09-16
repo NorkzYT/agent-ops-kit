@@ -20,6 +20,7 @@ $(shell bash scripts/envval.sh $(1) $(ENV_FILE))
 endef
 
 .PHONY: help init up down restart pull update ps status logs \
+	    cliproxyapi-logs cliproxyapi-logs-follow router-logs router-logs-follow \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs \
 	    models honcho-health doctor route-smoke test-router \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
@@ -54,6 +55,24 @@ ps status: ## Container status
 
 logs: ## Tail container logs (all, or S=<service>)
 	@$(COMPOSE) logs -f --tail=200 $(S)
+
+# $(call tail_lines,<default>) sets shell var $$n to LINES (env or `make LINES=n`)
+# validated as a positive integer, falling back to <default>.
+define tail_lines
+n="$${LINES:-$(1)}"; [[ "$$n" =~ ^[1-9][0-9]*$$ ]] || { echo "LINES must be a positive integer (got '$$n')" >&2; exit 2; }
+endef
+
+router-logs: ## Last 20 model_router lines from the Hermes agent log (LINES=<n> to override)
+	@bash scripts/router-logs.sh snapshot
+
+router-logs-follow: ## Recent model_router lines, then follow live (survives log rotation)
+	@bash scripts/router-logs.sh follow
+
+cliproxyapi-logs: ## Last 200 CLIProxyAPI container log lines (LINES=<n> to override)
+	@$(call tail_lines,200); $(COMPOSE) logs --tail="$$n" cliproxyapi
+
+cliproxyapi-logs-follow: ## Follow CLIProxyAPI container logs from the last 200 lines (LINES=<n> to override)
+	@$(call tail_lines,200); $(COMPOSE) logs -f --tail="$$n" cliproxyapi
 
 auth-codex: ## Log the ChatGPT/Codex subscription into CLIProxyAPI (device code flow)
 	@echo "Follow the URL shown, sign in with your ChatGPT account, then come back."
