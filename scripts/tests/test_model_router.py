@@ -252,6 +252,59 @@ class TestPrivacyCanary(unittest.TestCase):
         self.assertIsNotNone(resp)
 
 
+class TestProviderExceptionBoundary(unittest.TestCase):
+    def test_provider_errors_propagate_unchanged_once(self):
+        for enabled in (False, True):
+            for error in (RuntimeError("synthetic provider failure"),
+                          TimeoutError("synthetic timeout")):
+                with self.subTest(privacy=enabled, error=type(error).__name__):
+                    router = _router(privacy_routing=enabled)
+                    request = req("hello")
+                    calls = []
+
+                    def downstream(received):
+                        calls.append(received)
+                        raise error
+
+                    with self.assertRaises(type(error)) as caught:
+                        router.on_llm_execution(request=request, next_call=downstream)
+                    self.assertIs(caught.exception, error)
+                    self.assertEqual(len(calls), 1)
+                    self.assertIs(calls[0], request)
+                    self.assertEqual(router._private_sessions, set())
+
+    def test_disabled_privacy_does_not_classify_or_call_local(self):
+        router = _router(privacy_routing=False)
+        def unexpected(*args, **kwargs):
+            self.fail("disabled privacy must not classify or call local")
+        router.is_private = unexpected
+        router._local_or_refuse = unexpected
+        spy = _Spy()
+        result = router.on_llm_execution(request=req("hello"), next_call=spy)
+        self.assertEqual(spy.calls, 1)
+        self.assertEqual(result.model, "CLOUD")
+
+    def test_private_backend_error_never_calls_downstream(self):
+        router = _router()
+        def broken_local(messages):
+            raise RuntimeError("synthetic local failure")
+        router._backend = SimpleNamespace(chat=broken_local)
+        spy = _Spy()
+        result = router.on_llm_execution(request=req("#private synthetic"), next_call=spy)
+        self.assertEqual(spy.calls, 0)
+        self.assertTrue(result._model_router_refusal)
+
+    def test_unexpected_local_guard_error_still_refuses(self):
+        router = _router()
+        def broken_guard(*args):
+            raise RuntimeError("synthetic guard failure")
+        router._local_or_refuse = broken_guard
+        spy = _Spy()
+        result = router.on_llm_execution(request=req("#private synthetic"), next_call=spy)
+        self.assertEqual(spy.calls, 0)
+        self.assertTrue(result._model_router_refusal)
+
+
 class TestComplexityRewrite(unittest.TestCase):
     def test_orchestrator_upgrades_high(self):
         r = _router()

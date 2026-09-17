@@ -75,6 +75,13 @@ Privacy routing is **enabled by default** (`MODEL_ROUTER_PRIVACY` defaults to
 deliberate, **risky opt-out** that disables the guard entirely; when enabled it
 stays fail-closed as described here.
 
+Classification and local-routing errors remain fail-closed. Exceptions from a
+permitted downstream provider call propagate unchanged to normal provider error
+handling; they are not evidence of private content or an unavailable local model.
+A `router-guard` refusal identifies an internal privacy-path failure, not a
+provider timeout. Repository changes require installation and a gateway restart
+to update an already-running plugin instance.
+
 The guard inspects the **entire** outbound request — system prompt, every
 message, and tool results — for private signals:
 

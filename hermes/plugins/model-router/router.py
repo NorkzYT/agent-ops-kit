@@ -1,9 +1,9 @@
 """Router: complexity rewrite (llm_request) + fail-closed privacy (llm_execution).
 
-The privacy handler is the load-bearing security boundary. Hermes treats a
-middleware that *raises* as a failure and falls open to the base cloud path, so
-this handler must never raise: every path returns either a local result or a
-refusal, and cloud (`next_call`) is invoked only for traffic proven public.
+The privacy handler is the load-bearing security boundary. Errors while
+classifying or routing private traffic must return a local result or refusal,
+never fall through to cloud. Once a provider call is permitted, its exceptions
+propagate unchanged instead of being mislabeled as privacy refusals.
 """
 
 from __future__ import annotations
@@ -74,21 +74,24 @@ class Router:
             return refusal_response(reason="local-error")
 
     def on_llm_execution(self, **kwargs: Any) -> Any:
-        """Wrap the provider call. Fail-closed: never raises, never leaks private."""
+        """Fail closed on privacy errors; preserve permitted provider errors."""
         request = kwargs.get("request")
         next_call: Callable[[Any], Any] = kwargs.get("next_call")  # type: ignore[assignment]
-        session_id = str(kwargs.get("session_id") or "")
         try:
-            if not self.settings.privacy_routing:
-                return next_call(request)
-            decision = self.is_private(request, session_id)
-            if not decision.private:
-                return next_call(request)  # public -> cloud provider
-            logger.info("model_router: private detected reasons=%s (no cloud egress)", decision.label)
-            return self._local_or_refuse(request, decision.label)
-        except Exception:  # last-resort guard: refuse rather than fall open to cloud
+            if self.settings.privacy_routing:
+                session_id = str(kwargs.get("session_id") or "")
+                decision = self.is_private(request, session_id)
+                if decision.private:
+                    logger.info("model_router: private detected reasons=%s (no cloud egress)", decision.label)
+                    return self._local_or_refuse(request, decision.label)
+        except Exception:  # privacy failures must never fall open to cloud
             logger.warning("model_router: llm_execution guard tripped; refusing")
             return refusal_response(reason="router-guard")
+
+        # Public traffic (or an explicit privacy opt-out) is permitted here.
+        # Provider failures belong to normal error/retry handling, not to the
+        # privacy guard: catching them above falsely reports private content.
+        return next_call(request)
 
     # ------------------------------------------------------------- complexity
     def on_llm_request(self, **kwargs: Any) -> Optional[Dict[str, Any]]:
