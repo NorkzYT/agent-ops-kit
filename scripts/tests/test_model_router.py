@@ -114,30 +114,49 @@ class TestComplexity(unittest.TestCase):
     def test_routine(self):
         self.assertEqual(complexity.score_request(req("hi there")).tier, "routine")
 
-    def test_high_keyword(self):
-        self.assertIn(complexity.score_request(req("refactor the architecture across the codebase")).tier,
-                      ("high", "max"))
+    def test_high_keyword_needs_substance(self):
+        # Two distinct hard categories (arch + refactor scope) -> high (Sol),
+        # never max without explicit authorization.
+        self.assertEqual(
+            complexity.score_request(req("refactor the architecture across the codebase")).tier,
+            "high",
+        )
+
+    def test_single_keyword_is_not_sol(self):
+        # One keyword alone is ambiguous work, not Sol-hard.
+        self.assertEqual(complexity.score_request(req("please debug this small helper")).tier, "medium")
+        self.assertEqual(complexity.score_request(req("plan the migration")).tier, "elevated")
 
     def test_forced_tags(self):
-        self.assertEqual(complexity.score_request(req("#max simple thing")).tier, "max")
+        # Explicit max authorization = LEADING STANDALONE control line only.
+        self.assertEqual(complexity.score_request(req("#max\nsimple thing")).tier, "max")
+        self.assertEqual(complexity.score_request(req("#astra\nsimple thing")).tier, "max")
+        # Inline #max is a hard-work hint (Sol at most), never an Astra grant.
+        self.assertEqual(complexity.score_request(req("#max simple thing")).tier, "high")
+        # #deep / #hard alone no longer grant Astra either.
+        self.assertEqual(complexity.score_request(req("#deep think about this")).tier, "high")
         self.assertEqual(complexity.score_request(req("#quick big architecture migration rewrite")).tier, "routine")
 
     def test_gpt_tier_models(self):
-        # Corrected order (per OpenAI docs): luna=fastest/cheapest floor,
-        # terra=balanced mid, sol=flagship, astra=hardest.
+        # Balanced policy: luna covers routine AND ordinary execution, terra is
+        # the ambiguous/planning tier, sol the hard tier, astra explicit-only.
         self.assertEqual(complexity.resolve_model("routine", family="gpt"), "gpt-5.6-luna")
-        self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-5.6-terra")
+        self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-5.6-luna")
+        self.assertEqual(complexity.resolve_model("elevated", family="gpt"), "gpt-5.6-terra")
         self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-5.6-sol")
-        self.assertEqual(complexity.resolve_model("max", family="gpt"), "gpt-6-astra")
+        # Without explicit authorization the max tier clamps to the Sol ceiling.
+        self.assertEqual(complexity.resolve_model("max", family="gpt"), "gpt-5.6-sol")
+        self.assertEqual(complexity.resolve_model("max", family="gpt", allow_max=True), "gpt-6-astra")
 
     def test_coding_tier_models(self):
         self.assertEqual(complexity.resolve_model("routine", family="coding"), "opus")
+        self.assertEqual(complexity.resolve_model("medium", family="coding"), "opus")
         self.assertEqual(complexity.resolve_model("high", family="coding"), "fable")
 
     def test_degrade_when_unavailable(self):
-        # astra gone -> step down to sol
+        # astra gone -> step down to sol (authorized max degrades too)
         self.assertEqual(
-            complexity.resolve_model("max", family="gpt",
+            complexity.resolve_model("max", family="gpt", allow_max=True,
                                      available=["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol"]),
             "gpt-5.6-sol",
         )
@@ -149,12 +168,23 @@ class TestComplexity(unittest.TestCase):
             "gpt-5.6-terra",
         )
 
+    def test_missing_lower_models_never_upshift_to_astra(self):
+        # Only astra advertised: the upward walk must NOT silently pick it.
+        self.assertIsNone(
+            complexity.resolve_model("routine", family="gpt", available=["gpt-6-astra"])
+        )
+        # With explicit authorization the upward walk may reach it.
+        self.assertEqual(
+            complexity.resolve_model("routine", family="gpt", available=["gpt-6-astra"],
+                                     allow_max=True),
+            "gpt-6-astra",
+        )
+
     def test_alias_to_tier(self):
-        # luna is the routine floor, terra the balanced mid (corrected order).
         self.assertEqual(complexity.alias_to_tier("gpt-5.6-luna"), "routine")
         self.assertEqual(complexity.alias_to_tier("luna"), "routine")
-        self.assertEqual(complexity.alias_to_tier("gpt-5.6-terra"), "medium")
-        self.assertEqual(complexity.alias_to_tier("terra"), "medium")
+        self.assertEqual(complexity.alias_to_tier("gpt-5.6-terra"), "elevated")
+        self.assertEqual(complexity.alias_to_tier("terra"), "elevated")
         self.assertEqual(complexity.alias_to_tier("gpt-5.6-sol"), "high")
         self.assertEqual(complexity.alias_to_tier("gpt-6-astra"), "max")
         self.assertEqual(complexity.alias_to_tier("fable"), "high")

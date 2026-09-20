@@ -134,10 +134,12 @@ kanban:
 # ------------------------------------------------------------------ Agent ---
 # reasoning_effort is Hermes' single chokepoint (resolve_reasoning_config): it
 # governs the orchestrator AND delegated subagents, clamped per model at the
-# transport boundary. `high` is valid for every model this kit uses — GPT-5.6
-# luna/terra/sol and GPT-6 astra (Codex Responses), and claude-max-proxy, which
-# reads `reasoning_effort` and maps it to a Claude CLI effort level. So this
-# does not break Claude proxy semantics.
+# transport boundary. With the model-router plugin enabled this value is the
+# per-request CEILING, not a blanket level: the plugin rewrites the effort of
+# managed orchestrator (GPT) requests per task (status questions run low,
+# ordinary work medium, genuinely hard work high) and never raises it above
+# this setting. Coding requests through claude-max-proxy keep this value
+# untouched — the proxy owns the Claude effort mapping.
 agent:
   verify_on_stop: true
   verify_guidance: true
@@ -178,15 +180,21 @@ auxiliary:
     reasoning_effort: high
 
 # --------------------------------------------------------------- Plugins ---
-# model-router: complexity-based model selection (luna/terra/sol/astra;
-# opus/fable for coding) + fail-closed privacy routing.
-# Both knobs default to true (rendered from MODEL_ROUTER_COMPLEXITY /
-# MODEL_ROUTER_PRIVACY in .env). Privacy routing is ENABLED by default: requests
-# with private data never reach a cloud provider (local Ollama, or refuse when
-# local inference is down — it never auto-escalates private data to the cloud).
+# model-router: task-scoped model + effort routing (luna/terra/sol for the
+# orchestrator, opus/fable for coding; gpt-6-astra ONLY with explicit per-task
+# authorization) + fail-closed privacy routing.
+# Knobs are rendered from MODEL_ROUTER_* in .env; explicit false/never values
+# are preserved. Privacy routing is ENABLED by default: requests with private
+# data never reach a cloud provider (local Ollama, or refuse when local
+# inference is down — it never auto-escalates private data to the cloud).
 # Setting MODEL_ROUTER_PRIVACY=false renders privacy_routing: false here — a
 # deliberate, risky opt-out that disables the guard entirely. When enabled it
-# remains fail-closed. See hermes/plugins/model-router/ and docs/model-routing.md.
+# remains fail-closed. effort_routing rewrites the reasoning-effort fields
+# already present on managed orchestrator requests per task (never above the
+# configured ceiling below). astra_policy: task = a leading standalone
+# #max/#astra line in the current user task authorizes gpt-6-astra; always =
+# legacy allow; never = hard off. See hermes/plugins/model-router/ and
+# docs/model-routing.md.
 plugins:
   enabled:
     - model-router
@@ -195,6 +203,9 @@ plugins:
       settings:
         complexity_routing: __MODEL_ROUTER_COMPLEXITY__
         privacy_routing: __MODEL_ROUTER_PRIVACY__
+        effort_routing: __MODEL_ROUTER_EFFORT__
+        astra_policy: __MODEL_ROUTER_ASTRA__
+        task_ttl_seconds: __MODEL_ROUTER_TASK_TTL__
         ollama_base_url: __OLLAMA_BASE_URL__
         ollama_model: __OLLAMA_CHAT_MODEL__
         private_terms: []

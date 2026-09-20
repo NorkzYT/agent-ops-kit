@@ -77,6 +77,11 @@ ck "default orchestrator model = luna"    "grep -q 'default: gpt-5.6-luna' '$cfg
 # default; complexity rewrite on by default). Both fixtures above omit them.
 ck "default complexity_routing = true"    "grep -qE '^        complexity_routing: true\$' '$cfg2'"
 ck "default privacy_routing = true"       "grep -qE '^        privacy_routing: true\$' '$cfg2'"
+# Balanced-routing knobs unset in .env must render their defaults: effort
+# rewrite on, Astra opt-in per task, 30-minute task state TTL.
+ck "default effort_routing = true"        "grep -qE '^        effort_routing: true\$' '$cfg2'"
+ck "default astra_policy = task"          "grep -qE '^        astra_policy: task\$' '$cfg2'"
+ck "default task_ttl_seconds = 1800"      "grep -qE '^        task_ttl_seconds: 1800\$' '$cfg2'"
 
 # --- explicit-false scenario: MODEL_ROUTER_* set to false in .env must render
 # as false (the risky opt-out), NOT be silently forced back to true. This is the
@@ -88,6 +93,9 @@ sed "s#^HERMES_HOME=.*#HERMES_HOME=$hh3#" "$envf" > "$envf3"
 cat >> "$envf3" <<EOF
 MODEL_ROUTER_COMPLEXITY=false
 MODEL_ROUTER_PRIVACY=false
+MODEL_ROUTER_EFFORT=false
+MODEL_ROUTER_ASTRA=never
+MODEL_ROUTER_TASK_TTL=600
 EOF
 HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf3" \
   HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
@@ -97,6 +105,9 @@ cfg3="$hh3/config.yaml"
 ck "routing-off installer exits 0 (rc=$rc3)"  "[[ $rc3 -eq 0 ]]"
 ck "explicit complexity_routing = false"      "grep -qE '^        complexity_routing: false\$' '$cfg3'"
 ck "explicit privacy_routing = false"         "grep -qE '^        privacy_routing: false\$' '$cfg3'"
+ck "explicit effort_routing = false"          "grep -qE '^        effort_routing: false\$' '$cfg3'"
+ck "explicit astra_policy = never"            "grep -qE '^        astra_policy: never\$' '$cfg3'"
+ck "explicit task_ttl_seconds = 600"          "grep -qE '^        task_ttl_seconds: 600\$' '$cfg3'"
 ck "routing-off leaves no unrendered tokens"  "! grep -q '__[A-Z0-9_]*__' '$cfg3'"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

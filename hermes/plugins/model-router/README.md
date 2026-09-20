@@ -2,15 +2,26 @@
 
 Two Hermes middleware behaviors in one bundled plugin:
 
-- **Complexity routing** (`llm_request`) — deterministically scores each request
-  and rewrites the model *within its own family*:
-  - orchestrator (CLIProxyAPI): `routine→gpt-5.6-luna`, `medium→gpt-5.6-terra`,
-    `high→gpt-5.6-sol`, `max→gpt-6-astra`.
-  - delegated coding (claude-max-proxy): `opus` by default, `fable` for
-    high/max complexity.
-  It only rewrites models it manages (known aliases) and degrades to an
-  available tier when a live `/v1/models` probe says the first choice is gone.
-  It logs labels and scores only — never prompt content.
+- **Task-scoped routing** (`llm_request`) — deterministically classifies the
+  CURRENT user task (never history, system prompts, or tool output) and
+  rewrites model **and** reasoning effort *within the request's family*:
+  - orchestrator (CLIProxyAPI): status/lookup→`gpt-5.6-luna` (low effort),
+    ordinary work→`gpt-5.6-luna` (medium), ambiguous/planning→`gpt-5.6-terra`,
+    genuinely hard→`gpt-5.6-sol`; `gpt-6-astra` ONLY when the current task
+    starts with a standalone `#max`/`#astra` control line (per-task, TTL-bound,
+    never bleeding to the next task or session). The automatic ceiling is Sol.
+  - delegated coding (claude-max-proxy): `opus` by default, `fable` only for
+    genuinely difficult engineering; effort fields are never touched here.
+  Quoted/fenced/tool-borne `#max`/`#deep`/`#hard` tags are inert; `#deep`/
+  `#hard` never grant Astra. Effort is only rewritten on fields the request
+  already carries (both Chat Completions and Responses shapes), never above
+  the configured ceiling. It only rewrites models it manages (known aliases)
+  and degrades to an available tier when a live `/v1/models` probe says the
+  first choice is gone; a missing lower tier never silently upgrades to Astra
+  — an unauthorized Astra request that cannot be downgraded is refused with a
+  typed response at the execution seam. Every managed decision (even
+  unchanged) is logged with opaque hashes, tier/reason labels and transport
+  outcomes — never prompt content.
 
 - **Privacy routing** (`llm_execution`) — **fail-closed**. If the outbound
   request (system + messages + tool results) carries private data, it is never
@@ -33,6 +44,9 @@ plugins:
       settings:
         complexity_routing: true
         privacy_routing: true
+        effort_routing: true           # per-task effort rewrite (gpt family)
+        astra_policy: task             # task | always | never
+        task_ttl_seconds: 1800         # per-session task-state TTL
         ollama_base_url: "http://127.0.0.1:11434/v1"   # host-reachable Ollama
         ollama_model: "llama3.1:8b"                     # a pulled CHAT model
         private_terms: []                               # extra local-only terms
@@ -43,6 +57,7 @@ plugins:
 
 Environment fallbacks (used when a setting is unset): `OLLAMA_BASE_URL`,
 `OLLAMA_CHAT_MODEL`, `MODEL_ROUTER_COMPLEXITY`, `MODEL_ROUTER_PRIVACY`,
+`MODEL_ROUTER_EFFORT`, `MODEL_ROUTER_ASTRA`, `MODEL_ROUTER_TASK_TTL`,
 `MODEL_ROUTER_PRIVATE_TERMS`, `MODEL_ROUTER_PRIVATE_PATHS`.
 
 `complexity_routing` and `privacy_routing` both default to **true**. The kit's

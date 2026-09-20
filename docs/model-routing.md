@@ -16,45 +16,100 @@ Secrets stay in `.env`; only routing knobs live in `config.yaml`.
 | Coding (delegation) | claude-max-proxy (Claude Max) | `:3456/v1` | `opus`, `sonnet`, `haiku`, `fable`, `default` |
 | Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` | a pulled chat model (readiness below) |
 
-## Complexity routing (`llm_request` middleware)
+## Task-scoped routing (`llm_request` middleware)
 
-Each request is scored deterministically (length, code fences, architectural
-keywords, turn count; `#max`/`#quick` force a tier) and the model is rewritten
-**within its own family**. Only models the plugin manages (the aliases below)
-are ever rewritten — a deliberate exact id is left untouched.
+Each request is classified deterministically from the **current user task
+only** — the newest genuine `role: user` turn (Chat Completions `messages` or
+Responses `input`). System prompts, assistant output, tool results, pasted
+transcripts, fenced code and `>`-quoted lines are never signals, so a short
+status question stays cheap no matter how much history the session carries,
+and control tags inside quoted logs are inert. The model is rewritten **within
+its own family**; only managed aliases are touched — a deliberate exact id is
+left alone.
 
-| Tier | Orchestrator (GPT) | Coding |
-|------|--------------------|--------|
-| routine | `gpt-5.6-luna` | `opus` |
-| medium | `gpt-5.6-terra` | `opus` |
-| high | `gpt-5.6-sol` | `fable` |
-| max | `gpt-6-astra` | `fable` |
+| Task shape | Tier | Orchestrator (GPT) | Effort | Coding |
+|------------|------|--------------------|--------|--------|
+| status / lookup / report question | routine | `gpt-5.6-luna` | low | `opus` |
+| ordinary execution / delegation | medium | `gpt-5.6-luna` | medium | `opus` |
+| ambiguous / multi-constraint planning | elevated | `gpt-5.6-terra` | medium | `opus` |
+| genuinely hard (debug/architecture/security) | high | `gpt-5.6-sol` | medium–high | `fable` |
+| explicitly authorized max | max | `gpt-6-astra` | high | `fable` |
 
-Tier order follows OpenAI's line: **Luna** is fastest/lowest-cost (the routine
-floor), **Terra** balances intelligence and cost, **Sol** is the flagship for
-complex professional work, and **Astra** (GPT-6) handles the hardest
-end-to-end work.
+Sol requires **substantive** complexity (two distinct hard categories, or one
+plus another strong signal — length, dense constraints, pasted code); a single
+keyword routes to Terra at most.
 
-**Degrade:** given a live `/v1/models` set, a chosen tier that is not available
-steps *down* to the nearest available tier (never up). `make route-smoke`
-probes both proxies and proves every tier resolves to a live model.
+**Control lines (current task only):**
 
-Routing decisions log the tier, integer score, and detector labels only —
-never prompt content.
+- A **leading standalone** `#max` or `#astra` line (the first non-empty line of
+  the task, containing only the tag) authorizes `gpt-6-astra` for that task.
+- Inline `#max`, `#deep`, `#hard` are hard-work *hints* (Sol at most) — they no
+  longer grant Astra, and they are ignored entirely inside quotes/code fences,
+  tool output, or older turns.
+- `#quick` / `#routine` / `#cheap` / `#simple` / `#low` force the routine tier.
+
+**Bounded task state:** per session the plugin keeps only an opaque task hash,
+tier/effort and the authorization bit (sliding TTL `task_ttl_seconds`, default
+30 min, absolute cap 4×, LRU-bounded). A short "continue" retains the running
+task's tier (and its authorization); a status question routes low without
+resetting it; a new substantive request replaces it — authorization never
+bleeds into the next task or session. A request with no user turn at all
+classifies as medium, never max.
+
+**Budget ceiling & degrade:** automatic routing is ceilinged at **Sol**. Given
+a live `/v1/models` set, a chosen tier steps *down* to the nearest available
+tier; the upward walk (nothing at or below available) can never select Astra
+without explicit authorization — with no allowed model the request is left on
+its configured model, and an *unauthorized Astra request* that cannot be
+downgraded is **refused with a typed response** at the execution seam instead
+of being sent. `make route-smoke` probes both proxies and proves every tier
+resolves to a live model.
 
 ## Reasoning effort
 
-`config.yaml` sets `agent.reasoning_effort: high`. This is Hermes' single
-chokepoint (`resolve_reasoning_config`): it governs the **orchestrator** and
-every **delegated subagent**, clamped per model at the transport boundary. `high`
-is a valid level for every model the kit uses — GPT-5.6 luna/terra/sol and GPT-6
-astra on the Codex Responses wire, and `opus`/`fable` through claude-max-proxy,
-which reads `reasoning_effort` and maps it to a Claude CLI effort level (so this
-does not break Claude proxy semantics). **Auxiliary** title/compression calls
-carry `reasoning_effort: high` on each `auxiliary.*` entry as well.
+`config.yaml` sets `agent.reasoning_effort: high` as the per-request
+**ceiling**. With the plugin's `effort_routing` on (default), managed
+orchestrator (GPT) requests get their effort rewritten per task — low for
+status questions, medium for ordinary/planning work, high only for genuinely
+hard tasks or authorized max — never above the ceiling, and both transport
+shapes are kept consistent (Chat Completions `reasoning_effort` /
+`extra_body.reasoning.effort`, Responses `reasoning.effort`), so no stale
+conflicting `high` rides along. Fields the request does not carry are never
+invented, and explicitly disabled reasoning is never re-enabled.
 
-Complexity routing (which model) and reasoning effort (how hard it thinks) are
-orthogonal: the plugin only rewrites the model id; effort stays in native config.
+**Coding requests are exempt:** claude-max-proxy reads `reasoning_effort` and
+owns the Claude CLI effort mapping; the plugin only ever selects `opus` vs
+`fable` there. **Auxiliary** title/compression calls keep their per-entry
+`reasoning_effort` from native config.
+
+Model selection (which model) and reasoning effort (how hard it thinks) are
+decided independently by the same task classification.
+
+## Observability
+
+Every managed routing decision is logged — including unchanged ones — as a
+single `model_router: route …` line carrying only opaque correlation ids
+(hashes of the session id and current-task text, plus the core
+`api_request_id`), the family, tier, authorization bit, `model old->new`,
+`effort old->new`, stable reason labels and an outcome
+(`rewritten` / `unchanged` / `no-candidate` / `refuse-scheduled`). Prompt
+content, secrets and private values never appear in logs.
+
+At the execution seam, managed requests also get a `model_router: outcome …`
+line distinguishing **requested** (what the middleware selected) from
+**served** — reported only from actual provider evidence (the response's
+`model` attribute) — with `status=completed|failed`, token usage when the
+response exposes it, and `usage=unavailable` otherwise (streaming responses
+are never consumed for logging; failures log the exception *type* only and
+re-raise unchanged).
+
+Known limitations, stated rather than invented: the middleware sees each
+provider *attempt* (native fallback hops re-enter it with their own
+`api_request_id`/`base_url`), but Hermes core does not expose the relay's
+`call_role` to middleware, so fallback attempts are linked only via
+`turn_id`/`api_call_count`; and for streaming responses no served-model or
+usage evidence exists at this seam, so none is logged. View with
+`make router-logs`.
 
 ## Fallback chains (native Hermes config)
 
@@ -188,12 +243,19 @@ and their `.env` fallbacks:
 
 | Setting | `.env` fallback | Purpose |
 |---------|-----------------|---------|
-| `complexity_routing` | `MODEL_ROUTER_COMPLEXITY` | enable the model rewrite (default **true**) |
+| `complexity_routing` | `MODEL_ROUTER_COMPLEXITY` | enable the task-scoped model rewrite (default **true**) |
 | `privacy_routing` | `MODEL_ROUTER_PRIVACY` | the fail-closed guard, **enabled by default**; `MODEL_ROUTER_PRIVACY=false` is a deliberate, risky opt-out that disables it entirely |
+| `effort_routing` | `MODEL_ROUTER_EFFORT` | per-task reasoning-effort rewrite for managed GPT requests (default **true**; never above the config ceiling) |
+| `astra_policy` | `MODEL_ROUTER_ASTRA` | `task` (default: leading standalone `#max`/`#astra` line authorizes), `always` (legacy allow), `never` |
+| `task_ttl_seconds` | `MODEL_ROUTER_TASK_TTL` | sliding TTL for per-session task state / authorization (default 1800) |
 | `ollama_base_url` | `OLLAMA_BASE_URL` | host-reachable local endpoint |
 | `ollama_model` | `OLLAMA_CHAT_MODEL` | a pulled **chat** model |
 | `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | extra local-only terms |
 | `private_paths` | `MODEL_ROUTER_PRIVATE_PATHS` | extra local-only path fragments |
+
+All knobs are backwards-compatible: a pre-upgrade config without the new keys
+gets the balanced defaults (effort rewrite on, Astra opt-in per task), and
+explicit `false`/`never` values render and load verbatim.
 
 ## Readiness — when is private routing *live*?
 

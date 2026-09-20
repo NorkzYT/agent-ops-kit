@@ -49,7 +49,10 @@ code = [x for x in os.environ["CODE_IDS"].splitlines() if x.strip()]
 def check(family, avail):
     ok = True
     for tier in cx.TIERS:
-        chosen = cx.resolve_model(tier, family=family, available=avail)
+        # allow_max=True exercises the explicitly-authorized path so the max
+        # tier still validates against the live model set; automatic routing
+        # is ceilinged at the high tier (Sol) and never selects Astra itself.
+        chosen = cx.resolve_model(tier, family=family, available=avail, allow_max=True)
         live = chosen in avail if chosen else False
         flag = "ok" if live else "MISSING"
         if not live:
@@ -58,8 +61,9 @@ def check(family, avail):
     return ok
 
 ok = check("gpt", gpt) & check("coding", code)
-# degrade demonstration: pretend the top tier vanished
-degraded = cx.resolve_model("max", family="gpt", available=[m for m in gpt if m != "gpt-6-astra"])
+# degrade demonstration: pretend the top tier vanished (authorized max steps down)
+degraded = cx.resolve_model("max", family="gpt", allow_max=True,
+                            available=[m for m in gpt if m != "gpt-6-astra"])
 print(f"    degrade  gpt max (astra removed) -> {degraded}")
 assert degraded and degraded in gpt, "degrade did not fall back to a live tier"
 sys.exit(0 if ok else 1)

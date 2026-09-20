@@ -29,12 +29,27 @@ def _truthy(raw: Any, default: bool) -> bool:
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _astra_policy(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in ("task", "always", "never") else "task"
+
+
 @dataclass
 class RouterSettings:
     # Privacy is always on and fail-closed; this only disables the complexity
     # rewrite, never the privacy guard.
     complexity_routing: bool = True
     privacy_routing: bool = True
+    # Rewrite the reasoning-effort fields already present on managed GPT
+    # requests (never invented, never raised above what the request carried).
+    effort_routing: bool = True
+    # Astra (max tier) policy: "task" = only a leading standalone #max/#astra
+    # control line in the CURRENT user task authorizes it; "always" = legacy
+    # behavior (any managed max-tier request allowed); "never" = hard off.
+    astra_policy: str = "task"
+    # Sliding TTL (seconds) for per-session task state (continuation retention
+    # and per-task Astra authorization). Absolute cap is 4x this value.
+    task_ttl: float = 1800.0
     # Local (Ollama) OpenAI-compatible endpoint used for private/aux work.
     ollama_base_url: str = ""
     ollama_model: str = ""
@@ -63,6 +78,9 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
     return RouterSettings(
         complexity_routing=_truthy(val("complexity_routing", "MODEL_ROUTER_COMPLEXITY", None), True),
         privacy_routing=_truthy(val("privacy_routing", "MODEL_ROUTER_PRIVACY", None), True),
+        effort_routing=_truthy(val("effort_routing", "MODEL_ROUTER_EFFORT", None), True),
+        astra_policy=_astra_policy(val("astra_policy", "MODEL_ROUTER_ASTRA", "task")),
+        task_ttl=float(val("task_ttl_seconds", "MODEL_ROUTER_TASK_TTL", 1800.0) or 1800.0),
         ollama_base_url=str(val("ollama_base_url", "OLLAMA_BASE_URL", "") or "").rstrip("/"),
         ollama_model=str(val("ollama_model", "OLLAMA_CHAT_MODEL", "") or ""),
         ollama_timeout=float(val("ollama_timeout", "OLLAMA_TIMEOUT", 60.0) or 60.0),

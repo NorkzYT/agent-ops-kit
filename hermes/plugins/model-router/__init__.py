@@ -1,14 +1,18 @@
-"""model-router — complexity-based model selection + fail-closed privacy routing.
+"""model-router — task-scoped model/effort selection + fail-closed privacy routing.
 
 Registers two middleware callbacks with Hermes:
 
-  * ``llm_request``   — deterministic complexity rewrite (luna/terra/sol/astra
-    for the orchestrator; opus/fable for delegated coding).
-  * ``llm_execution`` — fail-closed privacy guard. Requests carrying private
-    data (SSN, PAN, ABA, IBAN, secrets, credentials, ``#private``/``#local``,
-    or configured terms/paths) never reach a cloud provider: they are answered
-    by a local Ollama model or refused. It never raises, so Hermes' fail-open
-    middleware behavior can never route private data to the cloud.
+  * ``llm_request``   — deterministic rewrite of model and reasoning effort
+    from the CURRENT user task only (luna/terra/sol for the orchestrator,
+    gpt-6-astra only with explicit per-task authorization; opus/fable for
+    delegated coding, effort untouched there).
+  * ``llm_execution`` — fail-closed privacy guard plus the Astra budget seam.
+    Requests carrying private data (SSN, PAN, ABA, IBAN, secrets, credentials,
+    ``#private``/``#local``, or configured terms/paths) never reach a cloud
+    provider: they are answered by a local Ollama model or refused. It never
+    raises, so Hermes' fail-open middleware behavior can never route private
+    data to the cloud. Unauthorized max-tier (Astra) requests are refused with
+    a typed response instead of being sent.
 
 See ``docs/model-routing.md`` in the kit for configuration and readiness.
 """

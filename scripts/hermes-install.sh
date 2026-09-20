@@ -79,6 +79,16 @@ AUX_BASE_URL="$(getenv AUX_BASE_URL "")"; export AUX_BASE_URL
 # Explicit false is preserved verbatim (not forced back to true by --force).
 MODEL_ROUTER_COMPLEXITY="$(getenv MODEL_ROUTER_COMPLEXITY true)"; export MODEL_ROUTER_COMPLEXITY
 MODEL_ROUTER_PRIVACY="$(getenv MODEL_ROUTER_PRIVACY true)"; export MODEL_ROUTER_PRIVACY
+# Balanced-routing knobs (same preserve-explicit-value rule):
+#   - MODEL_ROUTER_EFFORT: rewrite reasoning-effort fields already present on
+#     managed orchestrator requests per task (never above the config ceiling).
+#   - MODEL_ROUTER_ASTRA: task (default; leading standalone #max/#astra line in
+#     the current user task authorizes gpt-6-astra) | always (legacy) | never.
+#   - MODEL_ROUTER_TASK_TTL: seconds a session's current-task state (and its
+#     Astra authorization) stays live without a substantive follow-up.
+MODEL_ROUTER_EFFORT="$(getenv MODEL_ROUTER_EFFORT true)"; export MODEL_ROUTER_EFFORT
+MODEL_ROUTER_ASTRA="$(getenv MODEL_ROUTER_ASTRA task)"; export MODEL_ROUTER_ASTRA
+MODEL_ROUTER_TASK_TTL="$(getenv MODEL_ROUTER_TASK_TTL 1800)"; export MODEL_ROUTER_TASK_TTL
 
 cfg="$HERMES_HOME/config.yaml"
 if [[ -f "$cfg" && "$FORCE" != "1" ]]; then

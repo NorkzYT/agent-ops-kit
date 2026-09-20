@@ -80,12 +80,16 @@ the job id. If scheduling fails, say so and ask to be pinged.
 ## Model routing
 
 - Orchestrator: ChatGPT subscription through CLIProxyAPI (`HERMES_MODEL`,
-  `gpt-5.6-luna` default). Complexity routing: routine→luna, medium→terra,
-  high→sol, max→astra. Reasoning effort is `high` for orchestrator, delegation,
-  and auxiliary (`agent.reasoning_effort` + per-`auxiliary` entry).
+  `gpt-5.6-luna` default). Task-scoped routing (current user task only, never
+  history/tool output): status→luna low effort, ordinary work→luna medium,
+  ambiguous/planning→terra, genuinely hard→sol; `gpt-6-astra` only with a
+  leading standalone `#max`/`#astra` line in the current task. Reasoning
+  effort is rewritten per task up to the `agent.reasoning_effort` ceiling
+  (`high`); auxiliary entries keep their own `reasoning_effort`.
 - Coding subagents: Claude Max through claude-max-proxy (`HERMES_CODING_MODEL`,
-  Opus by default; Fable for high-complexity coding).
-- Complexity + fail-closed privacy live in the `model-router` plugin
+  Opus by default; Fable only for genuinely difficult engineering; effort
+  fields untouched — the proxy owns the Claude effort mapping).
+- Task routing + fail-closed privacy live in the `model-router` plugin
   (`hermes/plugins/model-router/`). Private data (SSN/PAN/ABA/IBAN/secrets/
   `#private`) never reaches a cloud provider — local Ollama or refuse.
 - Native fallback chains (non-private only): orchestrator CLIProxyAPI →
