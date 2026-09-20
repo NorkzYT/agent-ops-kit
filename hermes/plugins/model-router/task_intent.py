@@ -12,6 +12,16 @@ Rules implemented here (all deterministic, no network, no LLM calls):
     ``messages``) or user input item (Responses ``input``). Tool results,
     function-call outputs, assistant/reasoning items and system/instructions
     text are never part of it.
+  * The Hermes gateway ships that user message as ONE flat string with runtime
+    material around the sender's text (verified read-only against the installed
+    core, see ``genuine_user_text``): reply/trigger metadata, media notes and
+    channel backfill are PREPENDED (backfill ends with a literal
+    ``[New message]`` marker, then an inline ``[sender] `` prefix), while
+    recalled memory (``<memory-context>…</memory-context>``) and
+    ``--- Attached Context ---`` blocks are APPENDED. Classification and
+    authorization operate on the sender-authored segment only, so recalled
+    memories, other users' channel messages, quoted replies and attached files
+    can never look like the current task or grant authority.
   * Explicit max/Astra authorization is a LEADING STANDALONE control line —
     the first non-empty line of the current task being exactly ``#max`` or
     ``#astra``. Inline ``#max`` / ``#deep`` / ``#hard`` only *hint* at a hard
@@ -38,6 +48,81 @@ _FORCE_MIN_RE = re.compile(r"(?<![A-Za-z0-9_])#(?:quick|routine|cheap|simple|low
 # Inline hard-intent hints. Deliberately includes #max: away from the leading
 # control line it is a hint, not an authorization.
 _HARD_HINT_RE = re.compile(r"(?<![A-Za-z0-9_])#(?:max|astra|deep|hard)\b", re.IGNORECASE)
+
+# ---------------------------------------------------------------------------
+# Hermes wire-format markers (formats verified against the installed core:
+# gateway/run_inbound.py, agent/turn_context.py, agent/memory_manager.py,
+# agent/prompt_builder.py, agent/context_references.py).
+# ---------------------------------------------------------------------------
+# Appended runtime context. Cutting at the FIRST occurrence is the safe
+# direction: a sender who fakes one of these lines only truncates their own
+# text (loses signals/authority); recalled memory that embeds a fake
+# ``[New message]`` marker is discarded before the marker search runs.
+_APPENDED_CUT_RE = re.compile(
+    r"(?m)^(?:<memory-context>|--- Attached Context ---|--- Context Warnings ---)\s*$"
+)
+# Channel backfill terminator: f"{context}\n\n[New message]\n{sender_text}".
+# The gateway's own marker is the LAST one in the (already appendix-free)
+# string — anything a prior channel message or reply quote embeds sits earlier.
+_NEW_MESSAGE_MARKER = "\n[New message]\n"
+# Prepended single-paragraph runtime blocks on the DM path (no backfill).
+# Deliberately narrow: only templates the gateway itself emits. Arbitrary
+# leading bracket lines a user pastes are NOT stripped, so pasted transcripts
+# cannot maneuver a #max line into leading position.
+_LEADING_RUNTIME_BLOCK_RE = re.compile(
+    r"^(?:\[Triggering message id: `[^`\n]*`[^\n]*\]"
+    r"|\[Replying to[^\n]*\]"
+    r"|\[The user sent [^\n]*\]"
+    r"|\[voice message [^\n]*\])\s*(?:\n|$)"
+)
+# Inline sender prefix added in shared multi-user sessions: f"[{name}] {text}".
+_SENDER_PREFIX_RE = re.compile(r"^\[[^\[\]\n]{1,96}\] ")
+# Mid-turn steer delivery (a genuine direct user message).
+_STEER_OPEN_PREFIX = "[OUT-OF-BAND USER MESSAGE"
+_STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"
+# Gateway placeholder for a message with no text content (runtime text, not a task).
+_EMPTY_PLACEHOLDER = "(The user sent a message with no text content)"
+
+
+def genuine_user_text(text: str) -> str:
+    """Reduce a wire-format user message to its sender-authored segment.
+
+    Strips, in provenance-safe order: appended memory/attached context (first
+    marker wins), everything up to the gateway's ``[New message]`` marker
+    (last marker wins — see comments above for why the directions differ), the
+    known prepended runtime metadata blocks on the marker-less DM path, and a
+    single inline ``[sender] `` prefix. Plain text without any runtime markers
+    passes through unchanged. Returns '' when nothing sender-authored remains.
+    """
+    t = text
+    stripped = t.strip()
+    if stripped.startswith(_STEER_OPEN_PREFIX):
+        lines = stripped.splitlines()
+        body = "\n".join(lines[1:])
+        close = body.rfind(_STEER_CLOSE)
+        if close != -1:
+            t = body[:close]
+    m = _APPENDED_CUT_RE.search(t)
+    if m:
+        t = t[: m.start()]
+    idx = t.rfind(_NEW_MESSAGE_MARKER)
+    if idx != -1:
+        t = t[idx + len(_NEW_MESSAGE_MARKER):]
+    else:
+        t = t.lstrip()
+        while True:
+            blk = _LEADING_RUNTIME_BLOCK_RE.match(t)
+            if not blk:
+                break
+            t = t[blk.end():].lstrip()
+    t = t.strip()
+    prefix = _SENDER_PREFIX_RE.match(t)
+    if prefix:
+        t = t[prefix.end():].strip()
+    if t == _EMPTY_PLACEHOLDER:
+        return ""
+    return t
+
 
 # Responses API item types that are never a user task.
 _SKIP_ITEM_TYPES = {
@@ -174,7 +259,20 @@ def _strip_quoted(text: str) -> str:
 
 
 def task_from_text(text: str) -> CurrentTask:
-    """Build a :class:`CurrentTask` from raw current-turn user text."""
+    """Build a :class:`CurrentTask` from raw current-turn user text.
+
+    The wire text is first reduced to its sender-authored segment
+    (:func:`genuine_user_text`); every downstream signal — the control line,
+    routine/hard hints, length, the task hash — comes from that segment only,
+    so the hash stays stable across tool iterations even as backfill and
+    recalled memory around the same task change.
+    """
+    text = genuine_user_text(text)
+    if not text:
+        # Runtime-only content (placeholder, bare memory block): no current
+        # textual task. Callers fall back to the conservative middle tier
+        # rather than classifying older history as if it were current.
+        return CurrentTask(False, "", "", "", False, False, False)
     lines = text.splitlines()
     authorized = False
     forced = False

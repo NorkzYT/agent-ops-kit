@@ -27,6 +27,27 @@ and control tags inside quoted logs are inert. The model is rewritten **within
 its own family**; only managed aliases are touched — a deliberate exact id is
 left alone.
 
+**Wire-format provenance (Discord):** the Hermes gateway ships each user turn
+as one flat string with runtime material around the sender's text (verified
+read-only against the installed core — `gateway/run_inbound.py`,
+`agent/turn_context.py`, `agent/memory_manager.py`): reply/trigger metadata,
+media notes and channel backfill are *prepended* (backfill ends with a literal
+`[New message]` marker, then an inline `[sender]` prefix), while recalled
+memory (`<memory-context>…</memory-context>`) and `--- Attached Context ---`
+blocks are *appended*. The classifier reduces the turn to the sender-authored
+segment first (`task_intent.genuine_user_text`), in provenance-safe order:
+appended blocks are cut at the **first** marker (a sender faking one only
+truncates their own text), the backfill is cut at the **last** `[New message]`
+marker (forged copies in memory are already gone; forged copies in backfill or
+quotes sit earlier), and only the gateway's exact metadata templates are
+stripped from the front. So recalled memories, other users' channel messages,
+quoted replies and attached files can neither inflate the tier nor grant
+authorization — and a genuine leading `#max` still authorizes even when the
+gateway wraps it in trigger metadata. Arbitrary bracket lines in a pasted
+transcript are *not* stripped, so a `#max` buried under pasted content is not
+a control line. `TestCoreWireContract` re-checks the installed core's marker
+templates so a Hermes upgrade that changes them fails loudly.
+
 | Task shape | Tier | Orchestrator (GPT) | Effort | Coding |
 |------------|------|--------------------|--------|--------|
 | status / lookup / report question | routine | `gpt-5.6-luna` | low | `opus` |
@@ -55,6 +76,19 @@ task's tier (and its authorization); a status question routes low without
 resetting it; a new substantive request replaces it — authorization never
 bleeds into the next task or session. A request with no user turn at all
 classifies as medium, never max.
+
+The absolute cap is enforced against the agent loop itself: re-deriving the
+same current task on every tool iteration keeps the task's **original**
+`created` stamp (a re-put never restarts the clock, and the hash is computed
+from the sender-authored segment only, so it stays stable while backfill and
+recalled memory change around it). When a task exhausts its absolute lifetime
+its hash is **retired** for that session: the same historical `#max` message
+sitting at the tail of the transcript can neither re-store state nor
+re-authorize Astra on later iterations, and a "continue" after the deadline
+starts fresh at medium. A genuinely new task (different text, fresh hash)
+authorizes normally. Known limit: re-sending the *byte-identical* task text in
+the same session after retirement is still treated as the retired task —
+rephrase (or start a new session) to re-authorize.
 
 **Budget ceiling & degrade:** automatic routing is ceilinged at **Sol**. Given
 a live `/v1/models` set, a chosen tier steps *down* to the nearest available
@@ -98,10 +132,15 @@ content, secrets and private values never appear in logs.
 At the execution seam, managed requests also get a `model_router: outcome …`
 line distinguishing **requested** (what the middleware selected) from
 **served** — reported only from actual provider evidence (the response's
-`model` attribute) — with `status=completed|failed`, token usage when the
-response exposes it, and `usage=unavailable` otherwise (streaming responses
-are never consumed for logging; failures log the exception *type* only and
-re-raise unchanged).
+`model` attribute) — with `status=completed|failed|stream-opened`, token usage
+when the response exposes it, and `usage=unavailable` otherwise. `completed`
+is only claimed for a materialized response; when the transport hands back a
+lazy stream (generator, async iterator, SDK stream wrapper) the seam logs
+`status=stream-opened … completion=unobserved` instead, and the stream is
+returned untouched — never advanced or consumed for logging. (In the installed
+core this path is defensive: `agent/chat_completion_helpers.py` materializes
+streaming responses below the middleware seam.) Failures log the exception
+*type* only and re-raise the original exception unchanged.
 
 Known limitations, stated rather than invented: the middleware sees each
 provider *attempt* (native fallback hops re-enter it with their own

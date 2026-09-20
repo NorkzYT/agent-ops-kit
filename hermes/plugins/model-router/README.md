@@ -13,15 +13,27 @@ Two Hermes middleware behaviors in one bundled plugin:
   - delegated coding (claude-max-proxy): `opus` by default, `fable` only for
     genuinely difficult engineering; effort fields are never touched here.
   Quoted/fenced/tool-borne `#max`/`#deep`/`#hard` tags are inert; `#deep`/
-  `#hard` never grant Astra. Effort is only rewritten on fields the request
-  already carries (both Chat Completions and Responses shapes), never above
-  the configured ceiling. It only rewrites models it manages (known aliases)
-  and degrades to an available tier when a live `/v1/models` probe says the
-  first choice is gone; a missing lower tier never silently upgrades to Astra
-  — an unauthorized Astra request that cannot be downgraded is refused with a
-  typed response at the execution seam. Every managed decision (even
-  unchanged) is logged with opaque hashes, tier/reason labels and transport
-  outcomes — never prompt content.
+  `#hard` never grant Astra. The classifier first reduces the Hermes wire
+  format to the sender-authored segment (`task_intent.genuine_user_text`):
+  gateway trigger/reply metadata, channel backfill (`[New message]` marker),
+  the `[sender]` prefix, appended `<memory-context>` and
+  `--- Attached Context ---` blocks are provenance-stripped, so recalled
+  memories, other users' channel messages, quoted replies, attachments and
+  pasted transcripts neither inflate the tier nor grant authorization — while
+  a genuine leading `#max` still authorizes under the gateway wrapper. The
+  same-task hash is stable across tool iterations, the absolute state
+  lifetime survives per-iteration re-puts, and an expired (retired) task hash
+  cannot re-authorize Astra from the same historical message. Effort is only
+  rewritten on fields the request already carries (both Chat Completions and
+  Responses shapes), never above the configured ceiling. It only rewrites
+  models it manages (known aliases) and degrades to an available tier when a
+  live `/v1/models` probe says the first choice is gone; a missing lower tier
+  never silently upgrades to Astra — an unauthorized Astra request that
+  cannot be downgraded is refused with a typed response at the execution
+  seam. Every managed decision (even unchanged) is logged with opaque hashes,
+  tier/reason labels and transport outcomes — never prompt content; a lazy
+  streaming response logs `stream-opened` (completion unobserved) rather than
+  a fabricated `completed`, and is returned unconsumed.
 
 - **Privacy routing** (`llm_execution`) — **fail-closed**. If the outbound
   request (system + messages + tool results) carries private data, it is never

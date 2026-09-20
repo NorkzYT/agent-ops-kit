@@ -16,6 +16,7 @@ transport outcomes; never prompt content, secrets, or raw provider errors.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 from collections import OrderedDict
 from typing import Any, Callable, Dict, Optional, Set
@@ -120,6 +121,24 @@ def _apply_effort(new_request: Dict[str, Any], request: Dict[str, Any], effort: 
     return changed
 
 
+def _looks_like_stream(response: Any) -> bool:
+    """True when ``next_call`` returned a lazy object whose completion we will
+    never observe (generator, async iterator, awaitable, or an SDK stream
+    wrapper). Inspection is attribute-only — the object is never advanced."""
+    if response is None or isinstance(response, (dict, list, tuple, str, bytes)):
+        return False
+    if inspect.isgenerator(response) or inspect.isasyncgen(response) or inspect.isawaitable(response):
+        return True
+    if hasattr(response, "__aiter__"):
+        return True
+    # Iterable wrapper carrying no final-response evidence (usage/choices/output).
+    if hasattr(response, "__iter__") and not any(
+        getattr(response, attr, None) is not None for attr in ("usage", "choices", "output")
+    ):
+        return True
+    return False
+
+
 def _usage_summary(response: Any) -> str:
     """Token counts from a completed (non-streaming) response, else 'unavailable'.
 
@@ -208,7 +227,9 @@ class Router:
             return bool(self._decisions[rid].get("authorized"))
         task = ti.extract_current_user_task(request)
         decision = ti.classify(task, self._tasks.get(session_id))
-        return decision.authorized_max
+        # A hash whose absolute lifetime is spent cannot re-authorize: the same
+        # historical `#max` message at the tail of the transcript stays inert.
+        return decision.authorized_max and not self._tasks.retired(session_id, task.task_hash)
 
     def on_llm_execution(self, **kwargs: Any) -> Any:
         """Fail closed on privacy errors; preserve permitted provider errors."""
@@ -268,16 +289,25 @@ class Router:
         except BaseException as exc:
             self._log_outcome(rid, session_id, kwargs, "failed", error=type(exc).__name__)
             raise
-        self._log_outcome(rid, session_id, kwargs, "completed", response=response)
+        if _looks_like_stream(response):
+            # The transport handed back a lazy stream: the call is opened, not
+            # finished. Claiming "completed" here would be evidence-free — the
+            # stream may still error or be abandoned downstream. It is returned
+            # untouched (never advanced), so completion stays unobserved.
+            self._log_outcome(rid, session_id, kwargs, "stream-opened", stream=True)
+        else:
+            self._log_outcome(rid, session_id, kwargs, "completed", response=response)
         return response
 
     def _log_outcome(
         self, rid: str, session_id: str, kwargs: Dict[str, Any], status: str,
-        *, response: Any = None, error: str = "",
+        *, response: Any = None, error: str = "", stream: bool = False,
     ) -> None:
         """Completion/outcome telemetry. ``served`` comes only from actual
         response evidence (the provider-reported ``model`` attribute); a
-        selected/requested model is never presented as the model executed."""
+        selected/requested model is never presented as the model executed.
+        For a lazy stream nothing final exists yet, so served/usage report as
+        unobserved rather than pretending a completion happened."""
         try:
             entry = self._decisions.get(rid, {})
             served = getattr(response, "model", None)
@@ -290,10 +320,12 @@ class Router:
             elif kwargs.get("model"):
                 requested = str(kwargs["model"])
             logger.info(
-                "model_router: outcome rid=%s sid=%s task=%s status=%s requested=%s served=%s usage=%s%s",
+                "model_router: outcome rid=%s sid=%s task=%s status=%s requested=%s served=%s usage=%s%s%s",
                 rid or "-", _hash8(session_id), entry.get("task8", "-"), status, requested,
-                served if isinstance(served, str) else "unknown",
-                _usage_summary(response) if response is not None else "unavailable",
+                served if isinstance(served, str) else ("unobserved" if stream else "unknown"),
+                "unobserved" if stream else (
+                    _usage_summary(response) if response is not None else "unavailable"),
+                " completion=unobserved" if stream else "",
                 f" error={error}" if error else "",
             )
         except Exception:  # telemetry must never affect the call path
@@ -332,25 +364,32 @@ class Router:
             task = ti.extract_current_user_task(request)
             prev = self._tasks.get(session_id)
             decision = ti.classify(task, prev)
-            # Bounded task state: a continuation refreshes the running task, a
-            # new substantive request replaces it (authorization never carries
-            # over), and a status question leaves it untouched.
-            if decision.continuation and prev is not None:
-                self._tasks.touch(session_id)
-            elif decision.substantive and task.found:
-                self._tasks.put(session_id, TaskState(
-                    task.task_hash, decision.tier, decision.effort, decision.authorized_max,
-                ))
 
             if self.settings.astra_policy == "always":
                 authorized = True
             elif self.settings.astra_policy == "never":
                 authorized = False
             else:
-                authorized = decision.authorized_max
+                # An expired (retired) task hash cannot re-authorize itself —
+                # the agent loop re-presents the same latest user text every
+                # iteration, and that must not renew Astra past the absolute cap.
+                authorized = (decision.authorized_max
+                              and not self._tasks.retired(session_id, task.task_hash))
             tier = decision.tier
             if tier == "max" and not authorized:
                 tier = "high"  # automatic ceiling: Sol
+
+            # Bounded task state: a continuation refreshes the running task, a
+            # new substantive request replaces it (authorization never carries
+            # over), and a status question leaves it untouched. The store keeps
+            # the original `created` stamp for a repeated identical task, so
+            # per-iteration re-puts cannot restart the absolute lifetime.
+            if decision.continuation and prev is not None:
+                self._tasks.touch(session_id)
+            elif decision.substantive and task.found:
+                self._tasks.put(session_id, TaskState(
+                    task.task_hash, tier, decision.effort, authorized,
+                ))
 
             chosen = cx.resolve_model(tier, family=family, available=available or None,
                                       allow_max=authorized)
