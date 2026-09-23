@@ -98,6 +98,28 @@ def _available_lower(available: Iterable[str]) -> set:
     return {a.strip().lower() for a in available if isinstance(a, str) and a.strip()}
 
 
+# Coding models a leading #opus/#fable control may force.
+FORCED_CODING_MODELS = frozenset(CODING_TIER_MODELS.values())
+
+
+def resolve_forced_coding(model_alias: str, *, available: Optional[Sequence[str]] = None) -> Optional[str]:
+    """Resolve a forced coding control (``#opus``/``#fable``) to a concrete model id.
+
+    Unlike :func:`resolve_model` this never crosses families or silently degrades
+    to a *different* model — the control names the model. Returns the alias when
+    the live set is unknown (trust config) or contains it, and ``None`` when a
+    live ``/v1/models`` probe proves it absent (the caller then keeps the request
+    on its configured model and lets normal error/fallback handling apply). Only
+    ``opus``/``fable`` are valid controls; anything else returns ``None``.
+    """
+    alias = (model_alias or "").strip().lower()
+    if alias not in FORCED_CODING_MODELS:
+        return None
+    if available is None:
+        return alias
+    return alias if alias in _available_lower(available) else None
+
+
 def resolve_model(
     tier: str,
     *,

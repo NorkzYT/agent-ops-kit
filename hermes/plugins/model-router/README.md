@@ -12,7 +12,14 @@ Two Hermes middleware behaviors in one bundled plugin:
     never bleeding to the next task or session). The automatic ceiling is Sol.
   - delegated coding (claude-max-proxy): `opus` by default, `fable` only for
     genuinely difficult engineering; effort fields are never touched here.
-  Quoted/fenced/tool-borne `#max`/`#deep`/`#hard` tags are inert; `#deep`/
+  A **leading standalone `#opus`/`#fable`** line forces that coding model for the
+  request, overriding complexity (effort untouched, no state stored). Because the
+  middleware can rewrite the request body but not switch the bound
+  provider/`base_url`, the force is honored only on a coding-family seam; on the
+  orchestrator/GPT seam it is refused with a typed response at the execution seam
+  rather than faked with a GPT alias. Privacy is enforced first, so a private
+  forced request never reaches the cloud coding proxy.
+  Quoted/fenced/tool-borne `#max`/`#deep`/`#hard`/`#opus`/`#fable` tags are inert; `#deep`/
   `#hard` never grant Astra. The classifier first reduces the Hermes wire
   format to the sender-authored segment (`task_intent.genuine_user_text`):
   gateway trigger/reply metadata, channel backfill (`[New message]` marker),

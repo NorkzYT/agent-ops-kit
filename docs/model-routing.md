@@ -62,12 +62,41 @@ keyword routes to Terra at most.
 
 **Control lines (current task only):**
 
+Only the **first non-empty line** of the sender-authored task is a control line.
+Precedence when that line is exactly one tag: coding force (`#opus`/`#fable`)
+→ max authorization (`#max`/`#astra`) → routine force (`#quick`/…).
+
+- A **leading standalone** `#opus` or `#fable` line **forces the Claude coding
+  model** for that request, overriding complexity (see *Forced coding* below).
 - A **leading standalone** `#max` or `#astra` line (the first non-empty line of
   the task, containing only the tag) authorizes `gpt-6-astra` for that task.
 - Inline `#max`, `#deep`, `#hard` are hard-work *hints* (Sol at most) — they no
   longer grant Astra, and they are ignored entirely inside quotes/code fences,
-  tool output, or older turns.
+  tool output, or older turns. Inline/quoted `#opus`/`#fable` are inert (not even
+  a hint).
 - `#quick` / `#routine` / `#cheap` / `#simple` / `#low` force the routine tier.
+
+**Forced coding (`#opus` / `#fable`).** A leading standalone `#opus`/`#fable`
+line forces that exact coding model regardless of task shape, for **that request
+only** (no task state or authorization is stored, so it never bleeds into the
+next task). Reasoning effort is left untouched — the coding proxy owns it. The
+control is resolved through the provenance-safe extractor, so a tag in memory,
+backfill, a reply quote, an attachment, a quote/fence, tool output or an older
+turn grants nothing; only a genuine leading tag in the current turn counts.
+
+Because the `llm_request` middleware can rewrite the request **body** but cannot
+switch the bound provider/`base_url` (verified against the installed core —
+`agent/turn_api_request.py`, `agent/turn_api_call.py`: the client is
+`agent.client`, fixed before middleware), the force is honored only on a
+**coding-family seam** (claude-max-proxy): the model is rewritten to
+`opus`/`fable`, degrading to nothing (kept as configured, normal error/fallback)
+if a live `/v1/models` probe proves it absent. On the **orchestrator/GPT seam**
+the call cannot be redirected to the coding provider, so a forced request is
+**refused with a typed response** at the execution seam rather than sent to the
+wrong provider or faked with a GPT alias — delegate the task (delegation routes
+to the coding proxy) or drop the control. **Privacy stays the higher priority:**
+the fail-closed privacy guard runs first, so a private forced request goes local
+or is refused and never reaches the cloud coding proxy.
 
 **Bounded task state:** per session the plugin keeps only an opaque task hash,
 tier/effort and the authorization bit (sliding TTL `task_ttl_seconds`, default
@@ -126,8 +155,10 @@ single `model_router: route …` line carrying only opaque correlation ids
 (hashes of the session id and current-task text, plus the core
 `api_request_id`), the family, tier, authorization bit, `model old->new`,
 `effort old->new`, stable reason labels and an outcome
-(`rewritten` / `unchanged` / `no-candidate` / `refuse-scheduled`). Prompt
-content, secrets and private values never appear in logs.
+(`rewritten` / `unchanged` / `no-candidate` / `refuse-scheduled` /
+`forced-coding` / `forced-coding-unroutable`). A forced-coding request carries
+the `force:opus` / `force:fable` reason label and is identified on both seams.
+Prompt content, secrets and private values never appear in logs.
 
 At the execution seam, managed requests also get a `model_router: outcome …`
 line distinguishing **requested** (what the middleware selected) from

@@ -88,7 +88,10 @@ the job id. If scheduling fails, say so and ask to be pinged.
   (`high`); auxiliary entries keep their own `reasoning_effort`.
 - Coding subagents: Claude Max through claude-max-proxy (`HERMES_CODING_MODEL`,
   Opus by default; Fable only for genuinely difficult engineering; effort
-  fields untouched — the proxy owns the Claude effort mapping).
+  fields untouched — the proxy owns the Claude effort mapping). A leading
+  standalone `#opus`/`#fable` line forces that coding model for the request
+  (coding-family seam only; refused on the orchestrator seam, never faked with a
+  GPT alias; privacy takes precedence).
 - Task routing + fail-closed privacy live in the `model-router` plugin
   (`hermes/plugins/model-router/`). Private data (SSN/PAN/ABA/IBAN/secrets/
   `#private`) never reaches a cloud provider — local Ollama or refuse.

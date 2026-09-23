@@ -862,5 +862,178 @@ class TestCoreMiddlewareContract(unittest.TestCase):
             self.assertIn("api_request_id=api_request_id", src, rel)
 
 
+class TestForcedCodingControl(unittest.TestCase):
+    """Leading standalone #opus/#fable forces the Claude coding model regardless
+    of task shape. Honored on the coding-family seam (claude-max-proxy); on the
+    orchestrator/GPT seam the provider cannot be switched, so it is refused with
+    a typed response rather than faked with a GPT alias. Privacy stays higher
+    priority; effort is left to the coding proxy; no state bleeds to later tasks."""
+
+    HARD = ("refactor the ingest architecture and migrate the schema; "
+            "there is a deadlock risk")
+
+    # ---- extraction: leading standalone only, provenance-safe -------------
+    def test_leading_standalone_opus_and_fable_detected(self):
+        self.assertEqual(task_intent.task_from_text("#opus\ndo it").forced_coding, "opus")
+        self.assertEqual(task_intent.task_from_text("#fable\ndo it").forced_coding, "fable")
+        for tag in ("#OPUS", "  #fable  "):
+            self.assertTrue(task_intent.task_from_text(f"{tag}\nwork").forced_coding, tag)
+
+    def test_inline_and_quoted_and_fenced_do_not_force(self):
+        for content in ("please use #opus here", "do it #fable",
+                        "Earlier:\n> #opus rewrite\nwhat now?",
+                        "```\n#opus\n#fable\n```\nis it done?"):
+            self.assertEqual(task_intent.task_from_text(content).forced_coding, "", content)
+
+    def test_history_and_tool_content_never_force(self):
+        r = {"model": "opus", "messages": [
+            {"role": "user", "content": "#opus\nold coding task"},
+            {"role": "assistant", "content": "#fable done"},
+            {"role": "tool", "tool_call_id": "c", "content": "#fable tool noise"},
+            {"role": "user", "content": "what is running?"}]}
+        self.assertEqual(task_intent.extract_current_user_task(r).forced_coding, "")
+
+    def test_precedence_over_inline_max(self):
+        task = task_intent.task_from_text("#opus\n#max run the huge migration")
+        self.assertEqual(task.forced_coding, "opus")
+        self.assertFalse(task.authorized_max, "coding control takes the control line")
+
+    # ---- coding-family seam: forces the exact model, overriding complexity -
+    def test_opus_forces_opus_on_coding_seam_over_hard_task(self):
+        # A hard task would normally route to fable; #opus overrides to opus.
+        req = {"model": "fable", "messages": [{"role": "user", "content": f"#opus\n{self.HARD}"}]}
+        out = route(make_router(), req, base_url=CODE_URL, session_id="fc1", rid="a1")
+        self.assertIsNotNone(out)
+        self.assertEqual(out["request"]["model"], "opus")
+
+    def test_fable_forces_fable_on_coding_seam_over_routine_task(self):
+        # A trivial task would normally stay opus; #fable overrides to fable.
+        req = {"model": "opus", "messages": [{"role": "user", "content": "#fable\nwhat does the Makefile do?"}]}
+        out = route(make_router(), req, base_url=CODE_URL, session_id="fc2", rid="a2")
+        self.assertEqual(out["request"]["model"], "fable")
+
+    def test_responses_shaped_forced_coding(self):
+        req = responses_req("#fable\nrefactor the worker module", model="opus")
+        out = route(make_router(), req, base_url=CODE_URL, api_mode="codex_responses",
+                    session_id="rs", rid="a3")
+        self.assertEqual(out["request"]["model"], "fable")
+
+    def test_coding_forced_effort_untouched_and_no_mutation(self):
+        import copy
+        req = {"model": "opus", "reasoning_effort": "high", "temperature": 0.2,
+               "messages": [{"role": "user", "content": "#fable\ntiny task"}]}
+        snap = copy.deepcopy(req)
+        out = route(make_router(), req, base_url=CODE_URL, session_id="fc3", rid="a4")
+        self.assertEqual(out["request"]["model"], "fable")
+        self.assertEqual(out["request"]["reasoning_effort"], "high", "coding effort must be untouched")
+        self.assertEqual(out["request"]["temperature"], 0.2)
+        self.assertEqual(req, snap, "original request must not be mutated")
+
+    def test_coding_forced_request_reaches_provider(self):
+        r = make_router()
+        out = route(r, {"model": "fable", "messages": [{"role": "user", "content": "#opus\ndo it"}]},
+                    base_url=CODE_URL, session_id="cf", rid="cf1")
+        self.assertEqual(out["request"]["model"], "opus")
+        spy = _Spy()
+        resp = r.on_llm_execution(request=out["request"], next_call=spy, session_id="cf",
+                                  api_request_id="cf1", base_url=CODE_URL, model="opus")
+        self.assertEqual(spy.calls, 1, "forced coding request must reach the coding provider")
+        self.assertEqual(resp.model, "CLOUD")
+
+    def test_forced_model_unavailable_keeps_request(self):
+        # Live probe proves fable absent: keep the configured model, no silent
+        # cross-model degrade; normal error/fallback handling applies.
+        r = make_router(available_coding_models=["opus"])
+        out = route(r, {"model": "opus", "messages": [{"role": "user", "content": "#fable\ndo it"}]},
+                    base_url=CODE_URL, session_id="un1", rid="u1")
+        self.assertIsNone(out)
+
+    # ---- orchestrator/GPT seam: refuse, never fake a GPT alias ------------
+    def test_gpt_seam_not_faked_at_request_stage_and_refused_at_execution(self):
+        r = make_router()
+        req = chat_req(("user", "#opus\nrefactor this module"), model="gpt-5.6-terra")
+        out = route(r, req, session_id="g1s", rid="g1", base_url=GPT_URL)
+        self.assertIsNone(out, "must not substitute a GPT alias for a forced coding model")
+        self.assertEqual(req["model"], "gpt-5.6-terra")
+        spy = _Spy()
+        resp = r.on_llm_execution(request=req, next_call=spy, session_id="g1s",
+                                  api_request_id="g1", base_url=GPT_URL, model=req["model"])
+        self.assertEqual(spy.calls, 0, "forced coding on the GPT seam must not reach the provider")
+        self.assertTrue(getattr(resp, "_model_router_refusal", False))
+        self.assertIn("forced-coding-unroutable", getattr(resp, "model", ""))
+
+    def test_gpt_seam_refused_via_fresh_eval_without_rid(self):
+        r = make_router()
+        spy = _Spy()
+        req = chat_req(("user", "#fable\nbuild the feature"), model="gpt-5.6-luna")
+        resp = r.on_llm_execution(request=req, next_call=spy, session_id="g2",
+                                  api_request_id="", base_url=GPT_URL, model=req["model"])
+        self.assertEqual(spy.calls, 0)
+        self.assertTrue(getattr(resp, "_model_router_refusal", False))
+
+    # ---- privacy stays the higher priority --------------------------------
+    def test_privacy_precedes_forced_coding(self):
+        r = make_router()  # no local backend configured -> private refuses
+        req = {"model": "fable", "messages": [
+            {"role": "user", "content": "#opus\nreview this #private internal note"}]}
+        spy = _Spy()
+        resp = r.on_llm_execution(request=req, next_call=spy, session_id="pf",
+                                  api_request_id="", base_url=CODE_URL, model="fable")
+        self.assertEqual(spy.calls, 0, "private forced-coding must never reach the cloud coding proxy")
+        self.assertTrue(getattr(resp, "_model_router_refusal", False))
+
+    # ---- no state bleed ---------------------------------------------------
+    def test_forced_coding_does_not_bleed_to_next_task(self):
+        r = make_router()
+        out = route(r, {"model": "opus", "messages": [{"role": "user", "content": "#fable\ndo the thing"}]},
+                    base_url=CODE_URL, session_id="nb", rid="n1")
+        self.assertEqual(out["request"]["model"], "fable")
+        out2 = route(r, {"model": "opus", "messages": [
+            {"role": "user", "content": "list the files in the repo"}]},
+            base_url=CODE_URL, session_id="nb", rid="n2")
+        self.assertTrue(out2 is None or out2["request"]["model"] == "opus",
+                        "the next ordinary task must route normally, not stay forced to fable")
+
+    # ---- observability ----------------------------------------------------
+    def test_forced_coding_logged_on_both_seams(self):
+        r = make_router()
+        with self.assertLogs("hermes.plugin.model_router", level="INFO") as cap:
+            route(r, {"model": "fable", "messages": [{"role": "user", "content": "#opus\ntask"}]},
+                  base_url=CODE_URL, session_id="lg", rid="lg1")
+        joined = "\n".join(cap.output)
+        self.assertIn("outcome=forced-coding", joined)
+        self.assertIn("reasons=force:opus", joined)
+        with self.assertLogs("hermes.plugin.model_router", level="INFO") as cap2:
+            route(r, chat_req(("user", "#opus\nx"), model="gpt-5.6-terra"),
+                  base_url=GPT_URL, session_id="lg2", rid="lg2r")
+        self.assertIn("outcome=forced-coding-unroutable", "\n".join(cap2.output))
+
+
+class TestForcedCodingWireFormat(unittest.TestCase):
+    """Gateway-shaped fixtures: a genuine leading #opus/#fable authorizes forced
+    coding under the Discord wrapper, but a tag in memory/backfill/reply/attached
+    context grants nothing."""
+
+    def test_wrapped_leading_opus_forces_on_coding_seam(self):
+        text = wire_discord(f"#opus\n{HARD_TASK}", backfill=BACKFILL, memory="notes")
+        out = route(make_router(), chat_req(("user", text), model="fable"),
+                    base_url=CODE_URL, session_id="wc1", rid="w1")
+        self.assertEqual(out["request"]["model"], "opus")
+
+    def test_tag_in_nonsender_context_grants_nothing(self):
+        for wrapped in (
+            wire_discord("summarize the deploy status", memory=f"#opus\n{HARD_TASK}"),
+            wire_discord("run the usual checks", backfill=BACKFILL, reply=f"#fable {HARD_TASK}"),
+            wire_discord("summarize that attachment", attached=f"#opus\n{HARD_TASK}"),
+        ):
+            task = task_intent.extract_current_user_task(chat_req(("user", wrapped)))
+            self.assertEqual(task.forced_coding, "", wrapped)
+
+    def test_dm_path_trigger_metadata_stripped_still_forces(self):
+        text = wire_discord(f"#fable\n{HARD_TASK}", sender=None)
+        task = task_intent.extract_current_user_task(chat_req(("user", text)))
+        self.assertEqual(task.forced_coding, "fable")
+
+
 if __name__ == "__main__":
     unittest.main()

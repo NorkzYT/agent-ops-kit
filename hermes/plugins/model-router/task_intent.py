@@ -43,6 +43,13 @@ from typing import Any, Iterator, List, Optional, Tuple
 # --------------------------------------------------------------------------- #
 CONTROL_MAX = ("#max", "#astra")
 CONTROL_MIN = ("#quick", "#routine", "#cheap", "#simple", "#low")
+# Leading standalone coding-force controls: the first non-empty line of the
+# current task being exactly ``#opus`` or ``#fable`` forces that Claude coding
+# model regardless of task shape. Like ``#max`` these are LEADING STANDALONE
+# only — an inline or quoted ``#opus`` is inert (not even a hint) — and they
+# take precedence over ``#max``/``#astra`` and the routine controls. The router
+# can only honor them on a coding-family seam (claude-max-proxy); see router.py.
+CONTROL_CODING = {"#opus": "opus", "#fable": "fable"}
 
 _FORCE_MIN_RE = re.compile(r"(?<![A-Za-z0-9_])#(?:quick|routine|cheap|simple|low)\b", re.IGNORECASE)
 # Inline hard-intent hints. Deliberately includes #max: away from the leading
@@ -176,6 +183,7 @@ class CurrentTask:
     authorized_max: bool
     forced_routine: bool
     hard_hint: bool
+    forced_coding: str = ""  # '' | 'opus' | 'fable' — leading #opus/#fable control
 
 
 @dataclass(frozen=True)
@@ -190,6 +198,7 @@ class Decision:
     substantive: bool = True
     continuation: bool = False
     status_query: bool = False
+    forced_coding: str = ""  # '' | 'opus' | 'fable' — leading #opus/#fable control
 
     @property
     def label(self) -> str:
@@ -276,13 +285,18 @@ def task_from_text(text: str) -> CurrentTask:
     lines = text.splitlines()
     authorized = False
     forced = False
+    forced_coding = ""
     control_index: Optional[int] = None
     for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
             continue
         low = stripped.lower()
-        if low in CONTROL_MAX:
+        # Precedence on the single control line: coding force (#opus/#fable)
+        # first, then max authorization, then routine force.
+        if low in CONTROL_CODING:
+            forced_coding, control_index = CONTROL_CODING[low], i
+        elif low in CONTROL_MAX:
             authorized, control_index = True, i
         elif low in CONTROL_MIN:
             forced, control_index = True, i
@@ -294,7 +308,7 @@ def task_from_text(text: str) -> CurrentTask:
     hard_hint = bool(_HARD_HINT_RE.search(visible))
     normalized = " ".join(text.split()).lower()
     task_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16] if normalized else ""
-    return CurrentTask(True, text, visible, task_hash, authorized, forced, hard_hint)
+    return CurrentTask(True, text, visible, task_hash, authorized, forced, hard_hint, forced_coding)
 
 
 # --------------------------------------------------------------------------- #
@@ -310,6 +324,15 @@ def classify(task: CurrentTask, prev_state: Any = None) -> Decision:
     if not task.found:
         # No user turn (internal/synthetic call): conservative middle, never max.
         return Decision("medium", "medium", ("no-user-turn",), 0, substantive=False)
+
+    if task.forced_coding:
+        # Highest-precedence explicit control. The tier here only feeds the log
+        # label and a degrade target; the router forces the exact coding model
+        # and leaves reasoning effort to the coding proxy. It does not persist
+        # state — the force applies to this request only.
+        tier = "high" if task.forced_coding == "fable" else "medium"
+        return Decision(tier, "medium", (f"force:{task.forced_coding}",), 99,
+                        forced_coding=task.forced_coding, substantive=False)
 
     if task.authorized_max:
         return Decision("max", "high", ("auth:max",), 99, authorized_max=True)

@@ -247,6 +247,37 @@ class Router:
             logger.warning("model_router: llm_execution guard tripped; refusing")
             return refusal_response(reason="router-guard")
 
+        # Forced-coding seam: a #opus/#fable control names a Claude coding model
+        # that lives behind the coding proxy. The middleware contract cannot move
+        # a call to another provider, so a forced control on the orchestrator/GPT
+        # seam is refused here with a typed response rather than sent to the wrong
+        # provider or faked with a GPT alias. Privacy is enforced ABOVE, so a
+        # private forced request has already gone local/refused and never reaches
+        # this cloud path — the privacy/local route stays the higher priority.
+        try:
+            if self.settings.complexity_routing and isinstance(request, dict):
+                forced = self._forced_coding_unroutable(rid, session_id, request, kwargs)
+                if forced:
+                    logger.warning(
+                        "model_router: refuse rid=%s sid=%s reason=forced-coding-unroutable model=%s",
+                        rid or "-", _hash8(session_id), forced,
+                    )
+                    return refusal_response(
+                        model="model-router/forced-coding-unroutable",
+                        reason="forced-coding-unroutable",
+                        text=(
+                            "This request begins with a `#opus`/`#fable` control, which "
+                            "forces the Claude coding model. That model is reachable only "
+                            "on delegated/coding requests (the coding proxy); this "
+                            "orchestrator request cannot be redirected to it, so it was "
+                            "not sent. Delegate the task (it routes to the coding proxy) "
+                            "or drop the control to use the orchestrator normally."
+                        ),
+                    )
+        except Exception:  # the forced-coding gate must not fall open
+            logger.warning("model_router: forced-coding gate errored; refusing")
+            return refusal_response(reason="forced-coding-gate-error")
+
         # Budget seam: an unauthorized max-tier (Astra) request is refused with
         # a typed response rather than sent (or silently left) on the wire.
         # Raising here would trip Hermes' fail-open middleware handling and let
@@ -340,6 +371,72 @@ class Router:
         while len(self._decisions) > 512:
             self._decisions.popitem(last=False)
 
+    # --------------------------------------------------------- forced coding
+    def _route_forced_coding(
+        self, request: Dict[str, Any], rid: str, session_id: str, coding: bool,
+        model_alias: str, current: str, task: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Honor a leading #opus/#fable control. On a coding-family seam force the
+        exact coding model (effort untouched — the coding proxy owns it); on the
+        GPT seam the provider cannot be switched here, so record the forced
+        request for the execution seam to refuse and leave the body unchanged."""
+        sid8 = _hash8(session_id)
+        task8 = task.task_hash[:8] if task.task_hash else "-"
+        if not coding:
+            # Orchestrator/GPT seam: the middleware contract cannot move a call
+            # to the coding provider (base_url/provider are bound on the agent
+            # before middleware; only the request body is rewritable). Do NOT
+            # substitute a GPT alias — the execution seam refuses this request.
+            self._record_decision(rid, {"forced_coding": model_alias, "unroutable": True, "task8": task8})
+            logger.info(
+                "model_router: route rid=%s sid=%s task=%s family=gpt tier=force auth=0 "
+                "model=%s->%s effort=- reasons=force:%s outcome=forced-coding-unroutable",
+                rid or "-", sid8, task8, current, current, model_alias,
+            )
+            return None
+        chosen = cx.resolve_forced_coding(
+            model_alias, available=self.settings.available_coding_models or None)
+        if not chosen:
+            # The named coding model is not in the live set: keep the request as
+            # configured and let normal error/fallback handling apply. The log
+            # still identifies the forced request.
+            self._record_decision(rid, {"forced_coding": model_alias, "task8": task8})
+            logger.info(
+                "model_router: route rid=%s sid=%s task=%s family=coding tier=force auth=0 "
+                "model=%s->%s effort=- reasons=force:%s outcome=no-candidate",
+                rid or "-", sid8, task8, current, current, model_alias,
+            )
+            return None
+        new_request = dict(request)
+        model_changed = chosen.strip().lower() != current.strip().lower()
+        if model_changed:
+            new_request["model"] = chosen
+        self._record_decision(rid, {"forced_coding": model_alias, "selected": chosen, "task8": task8})
+        logger.info(
+            "model_router: route rid=%s sid=%s task=%s family=coding tier=force auth=0 "
+            "model=%s->%s effort=- reasons=force:%s outcome=%s",
+            rid or "-", sid8, task8, current, chosen if model_changed else current,
+            model_alias, "forced-coding" if model_changed else "unchanged",
+        )
+        if not model_changed:
+            return None
+        return {"request": new_request, "source": "model-router", "reason": f"force:{model_alias}"}
+
+    def _forced_coding_unroutable(
+        self, rid: str, session_id: str, request: Any, kwargs: Dict[str, Any]) -> str:
+        """The forced coding model ('opus'/'fable') when the CURRENT task carries
+        a leading #opus/#fable control but this seam is NOT coding-family (so the
+        call cannot reach the coding provider). '' otherwise — including on a
+        coding seam, where the force is already honored at the request stage."""
+        model = str(request.get("model") or kwargs.get("model") or "")
+        base_url = str(kwargs.get("base_url") or "")
+        if _is_coding_family(request, model, base_url):
+            return ""
+        if rid and rid in self._decisions:
+            entry = self._decisions[rid]
+            return str(entry.get("forced_coding") or "") if entry.get("unroutable") else ""
+        return ti.extract_current_user_task(request).forced_coding or ""
+
     def on_llm_request(self, **kwargs: Any) -> Optional[Dict[str, Any]]:
         """Rewrite model and (gpt family) reasoning effort for the current task."""
         if not self.settings.complexity_routing:
@@ -364,6 +461,18 @@ class Router:
             task = ti.extract_current_user_task(request)
             prev = self._tasks.get(session_id)
             decision = ti.classify(task, prev)
+
+            # Highest-precedence explicit control: a leading standalone #opus /
+            # #fable line forces the Claude coding model regardless of task shape,
+            # overriding complexity and Astra for THIS request only (no task
+            # state or authorization is stored). The request-middleware contract
+            # rewrites the request body but cannot switch provider/base_url, so a
+            # forced control is honored only on a coding-family seam; on the GPT
+            # seam it is recorded for the execution seam to refuse — never a GPT
+            # alias substituted for the coding model.
+            if decision.forced_coding:
+                return self._route_forced_coding(
+                    request, rid, session_id, coding, decision.forced_coding, current, task)
 
             if self.settings.astra_policy == "always":
                 authorized = True

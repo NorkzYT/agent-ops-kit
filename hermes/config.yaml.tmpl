@@ -193,8 +193,10 @@ auxiliary:
 # already present on managed orchestrator requests per task (never above the
 # configured ceiling below). astra_policy: task = a leading standalone
 # #max/#astra line in the current user task authorizes gpt-6-astra; always =
-# legacy allow; never = hard off. See hermes/plugins/model-router/ and
-# docs/model-routing.md.
+# legacy allow; never = hard off. A leading standalone #opus/#fable line forces
+# that coding model for the request (coding-family seam only; refused on the
+# orchestrator seam, never faked with a GPT alias; privacy stays higher
+# priority). See hermes/plugins/model-router/ and docs/model-routing.md.
 plugins:
   enabled:
     - model-router
