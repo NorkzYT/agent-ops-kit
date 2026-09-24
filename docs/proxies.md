@@ -47,6 +47,7 @@ make models                  # opus / sonnet / haiku / fable ...
 make claude-proxy-logs       # journalctl -f
 make claude-proxy-restart
 make claude-proxy-update     # newer upstream sources if reachable, rebuild, restart
+make claude-cli-update       # update the Claude Code CLI itself (claude update)
 ```
 
 ### Vendored sources

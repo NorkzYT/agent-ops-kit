@@ -21,7 +21,7 @@ endef
 
 .PHONY: help init up down restart pull update ps status logs \
 	    cliproxyapi-logs cliproxyapi-logs-follow router-logs router-logs-follow \
-	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs \
+	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-profile hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
@@ -95,6 +95,11 @@ claude-proxy-restart: ## Restart the claude-max-proxy service
 
 claude-proxy-logs: ## Tail claude-max-proxy logs
 	@journalctl --user -u claude-max-proxy.service -n 200 -f
+
+claude-cli-update: ## Update the Claude Code CLI itself (`claude update`); the proxy is claude-proxy-update
+	@export PATH="$$HOME/.local/bin:$$PATH"; \
+	 command -v claude >/dev/null || { echo "claude CLI not found (make claude-proxy-install installs it)" >&2; exit 1; }; \
+	 claude update; claude --version
 
 models: ## List models exposed by both proxies (distinguishes down from empty)
 	@bash scripts/models.sh
