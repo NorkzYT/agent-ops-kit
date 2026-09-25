@@ -20,7 +20,8 @@ That runs `scripts/hermes-profile.sh`, which:
 ## Giving a profile knowledge
 
 Put `.md` or `.txt` files (a book per file, chapters as headings) under the
-shared knowledge root, one folder per profile:
+shared knowledge root, one folder per profile. EPUB and PDF books convert with
+`make knowledge-convert` (see `docs/document-conversion.md`):
 
 ```
 data/knowledge/<name>/**/*.md

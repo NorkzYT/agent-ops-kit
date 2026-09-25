@@ -21,8 +21,9 @@ Shipped profiles: `coder`, `marketing`, `strategy`, `security`, `research`,
 ## Give it knowledge from books
 
 Put books and notes in the profile's knowledge folder as `.md` or `.txt` (one
-book per file, chapters as headings; convert EPUB with `pandoc book.epub -t
-gfm -o book.md`). Then, in that profile's chat:
+book per file, chapters as headings; convert EPUB/PDF copy-only with `make
+knowledge-convert`, see [document-conversion.md](document-conversion.md)). Then,
+in that profile's chat:
 
 ```
 /learn ~/.hermes/profiles/herbalism/knowledge

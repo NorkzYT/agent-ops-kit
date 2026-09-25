@@ -17,7 +17,9 @@ data/knowledge/
 - Path: `data/knowledge/<profile>/**/*.md` and `**/*.txt`.
 - One book per file, chapters as headings. Nested folders are kept.
 - Only `.md` and `.txt` files sync. PDFs, images and other formats are ignored;
-  convert a book to Markdown or plain text first.
+  convert a book to Markdown or plain text first. For EPUB and PDF books, use
+  `make knowledge-convert SRC=/mnt/books/edu DEST=data/knowledge/<profile>`
+  (copy-only; see `docs/document-conversion.md`).
 
 ## How it reaches a profile
 

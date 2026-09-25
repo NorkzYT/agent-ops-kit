@@ -12,6 +12,7 @@ The root `README.md` is the fast path. These pages hold the detail.
 | [proxies.md](proxies.md) | ChatGPT and Claude Max subscriptions as OpenAI-compatible APIs |
 | [browser-use.md](browser-use.md) | Browser automation: local Chromium vs Browser Use Cloud, rules |
 | [profiles-and-teams.md](profiles-and-teams.md) | Specialist agents with their own knowledge, and Kanban teams |
+| [document-conversion.md](document-conversion.md) | Copy-only EPUB/PDF to Markdown for profile knowledge (`document-converter` skill) |
 | [windows-vm-worker.md](windows-vm-worker.md) | The desktop worker inside the Windows VM (computer use) |
 | [troubleshooting.md](troubleshooting.md) | Symptoms, causes, fixes |
 

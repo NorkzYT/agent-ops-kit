@@ -148,3 +148,11 @@ jobs:
       - run: bash scripts/test_windows_worker_install.sh
       - run: bash scripts/test_windows_chrome_devtools_mcp.sh
       - run: bash .claude/scripts/test_install.sh
+
+  document-converter:
+    name: document-converter skill (synthetic EPUB/PDF fixtures)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils ghostscript
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py' -v
