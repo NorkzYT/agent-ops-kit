@@ -1,0 +1,6 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Software Engineering at Google Lessons - Learned from Programming Over Time
+edu/The Tao of Microservices
+books-in-text/the-great-mental-models/The Great Mental Models, Volume 3_ Systems and Mathematics -- Shane Parrish & Rhiannon Beaubien & Rosie Leizrowice -- PS, 2024 -- Penguin Publishing -- 9780593720035 -- fb43ac02a2fa317e845fe07.txt

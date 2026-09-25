@@ -1,0 +1,13 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Outlive - The Science and Art of Longevity - Peter Attia
+edu/Exercised - The Science of Physical Activity, Rest and Health
+edu/Scientific Principles of Hypertrophy Training
+edu/The Renaissance Diet 2.0 - Your Scientific Guide to Fat Loss, Muscle Gain, and Performance
+edu/The Ultimate Guide To Body Recomposition
+edu/The 4-Hour Body - An Uncommon Guide to Rapid Fat-Loss, Incredible Sex, and Becoming
+edu/Easy Keto and Intermittent Fasting by Eric Berg, DC
+edu/The Healthy Keto Plan - Get Healthy, Lose Weight & Feel Great
+edu/Beginner’s Guide to Healthly Keto & Intermittent Fasting by Eric Berg, DC
+edu/Dr. Berg's Healthy Substitute Pleasure Foods Alternatives to Junk Foods & Sweet Foods

@@ -1,0 +1,9 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Bushcraft 101 - A Field Guide to the Art of Wilderness Survival
+edu/Advanced Bushcraft - An Expert Field Guide to the Art of Wilderness Survival
+edu/Bushcraft First Aid - A Field Guide to Wilderness Emergency Care
+edu/The Bushcraft Field Guide to Trapping, Gathering, and Cooking in the Wild
+edu/The Noma Guide to Fermentation - Including koji, kombuchas, shoyus, misos, vinegars, garums, lacto-ferments, and black fruits and vegetables (Foundations of Flavor)
+edu/Way of the Warrior Kid - From Wimpy to Warrior the Navy SEAL Way - A Novel

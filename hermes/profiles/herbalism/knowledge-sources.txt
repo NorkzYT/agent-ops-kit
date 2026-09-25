@@ -1,0 +1,10 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Herbal Remedies Guide - Uses Of 100 Herbs For Common Ailments
+edu/Herbal Antibiotics - What BIG Pharma Doel Antibiotics for Overcoming Any Ailment
+edu/DR. SEBI Medicinal Herbs - Healing Uses, Dosage, DIY Capsules
+edu/Traditional Chinese Medicine (Introductions to Chinese Culture)
+edu/The Tao of Healthy Eating - Dietary Wisdom According to Traditional Chinese Medicine
+edu/Pharmacopoeia of the Peoples Republic of China
+edu/Alternative Treatment for Cancer (Annals of Traditional Chinese Medicine)

@@ -1,0 +1,6 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/The Art of War - Sun Tzu
+edu/The Prince by Niccolò Machiavelli
+edu/Survival of the Savvy - High-Integrity Political Tactics for Career and Company Success

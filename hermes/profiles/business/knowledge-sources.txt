@@ -1,0 +1,8 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/The Psychology of Money
+edu/Rich Dad’s CASHFLOW Quadrant - Rich Dad’s Guide to Financial Freedom
+edu/The 4-Hour Workweek - Ferris, Timothy
+edu/The Diary of a CEO - The 33 Laws of Business and Life - Steven Bartlett
+books-in-text/poor-charlies-almanack-the-wit-and-wisdom-of-charles

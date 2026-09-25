@@ -1,0 +1,14 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Meditations - Marcus Aurelius
+edu/Beyond Good and Evil - Nietzsche
+edu/The Prince by Niccolò Machiavelli
+edu/Discourses on Livy - Machiavelli
+edu/Tao Te Ching - Laozi
+edu/The Art of War - Sun Tzu
+edu/The Undiscovered Self - Carl Jung
+edu/Inner Engineering - A Yogi’s Guide to Joy
+edu/Studies in Alchemy Pearls of Wisdom, 1962 Saint Germain
+edu/The Occult Sciences 2014 Waite, Arthur Edward
+books-in-text/the-great-mental-models

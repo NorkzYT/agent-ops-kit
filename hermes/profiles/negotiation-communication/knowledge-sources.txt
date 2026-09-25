@@ -1,0 +1,7 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Never Split the Difference Negotiating - As If Your Life Depended On It
+edu/Crucial Conversations Tools for Talking When Stakes Are High, Second Edition
+edu/Negotiation as a martial art - techniques to master the art of human exchange
+edu/Six-Minute X-Ray - Rapid Behavior Profiling - Chase Hughes

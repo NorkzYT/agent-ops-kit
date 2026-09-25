@@ -53,6 +53,22 @@ reference file per topic, loaded on demand. Re-running `/learn` folds new
 material into the existing skill instead of duplicating it. A 400-page book
 does not sit in every prompt; only the chapter the question needs does.
 
+## Book lists
+
+A profile's `knowledge-sources.txt` lists the books it learns from, one path
+per line relative to the library root (`/mnt/books` by default). Build the
+profile's corpus from it, then sync and learn:
+
+```bash
+make knowledge-stage NAME=philosophy     # copies .md/.txt, converts EPUB/PDF
+make hermes-profile NAME=philosophy      # syncs data/knowledge/philosophy
+# then in `philosophy chat`:  /learn ~/.hermes/profiles/philosophy/knowledge
+```
+
+`knowledge-stage` only reads the library and writes under `data/knowledge/`
+(gitignored). EPUB/PDF conversion uses the `document-converter` skill; set
+`KNOWLEDGE_CONVERT=0` to copy text books only.
+
 ## Talking to a profile
 
 - `marketing chat` from a terminal (launcher created by Hermes)
@@ -75,7 +91,14 @@ ready-made recipes and `docs/profiles-and-teams.md` for the walkthrough.
 | `business` | Operations, finance and market analysis (analysis only, no transactions) |
 | `security` | Security review and authorised penetration testing |
 | `research` | Deep research and synthesis |
+| `offers-sales` | Offer design, pricing, lead generation and sales funnels (drafts only) |
+| `leadership-teamwork` | Team design, delegation, feedback, conflict and hiring advice |
+| `negotiation-communication` | Negotiation plans, hard conversations and message drafts |
+| `software-engineering` | Architecture, review standards and testing strategy (advisory, read-only) |
 | `herbalism` | Botanical knowledge, educational only (not medical advice) |
+| `health-fitness` | Training, nutrition and habit plans, educational only (not medical advice) |
+| `martial-arts` | Grappling technique study, conditioning and injury-aware progression |
 | `survival` | Lawful, low-risk preparedness and emergency guidance |
+| `philosophy` | Philosophy, mental models and decision reflection |
 | `windows-operator` | Computer-use worker that runs inside the Windows VM |
 | `_template` | Copy this to start a new specialist (support, legal, ...) |

@@ -1,0 +1,5 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+books-in-text/alex-hormozi
+edu/Scorecard Marketing - The four-step playbook for getting better leads and bigger profits

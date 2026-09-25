@@ -1,0 +1,8 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Gracie Jiu-Jitsu
+edu/Brazilian Jiu-Jitsu Self-Defense Techniques (Brazilian Jiu-Jitsu series)
+edu/Sambo - An Essential Guide to a Martial Art Similar to Judo, Jiu-Jitsu, and Wrestling along with Its Throws, Grappling Styles, Holds, and Submission Techniques
+edu/Never Finished
+edu/Scientific Principles of Hypertrophy Training
