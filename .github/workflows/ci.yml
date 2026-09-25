@@ -126,9 +126,9 @@ jobs:
           shellcheck -x --severity=warning \
             scripts/lib.sh scripts/stack-init.sh scripts/doctor.sh scripts/hermes-install.sh \
             scripts/envval.sh scripts/models.sh scripts/hermes-ui.sh scripts/auth-claude-proxy.sh \
-            scripts/hermes-profile.sh scripts/knowledge-sync.sh scripts/claude-max-proxy/install.sh \
+            scripts/hermes-profile.sh scripts/knowledge-sync.sh scripts/knowledge-stage.sh scripts/claude-max-proxy/install.sh \
             scripts/test_hermes_ui.sh scripts/test_healthcheck.sh scripts/test_hermes_install.sh \
-            scripts/test_stack_render.sh scripts/test_knowledge_sync.sh scripts/test_hermes_profile.sh \
+            scripts/test_stack_render.sh scripts/test_knowledge_sync.sh scripts/test_knowledge_stage.sh scripts/test_hermes_profile.sh \
             scripts/test_windows_worker_install.sh \
             scripts/test_windows_chrome_devtools_mcp.sh \
             install.sh .claude/scripts/test_install.sh \
@@ -144,6 +144,7 @@ jobs:
       - run: bash scripts/test_stack_render.sh
       - run: bash scripts/test_hermes_install.sh
       - run: bash scripts/test_knowledge_sync.sh
+      - run: bash scripts/test_knowledge_stage.sh
       - run: bash scripts/test_hermes_profile.sh
       - run: bash scripts/test_windows_worker_install.sh
       - run: bash scripts/test_windows_chrome_devtools_mcp.sh

@@ -21,6 +21,13 @@ data/knowledge/
   `make knowledge-convert SRC=/mnt/books/edu DEST=data/knowledge/<profile>`
   (copy-only; see `docs/document-conversion.md`).
 
+## Building a folder from the book library
+
+Each profile lists its books in `hermes/profiles/<profile>/knowledge-sources.txt`.
+`make knowledge-stage NAME=<profile>` reads that list from `/mnt/books` (set
+`BOOKS_ROOT` to change it), copies text books and converts EPUB/PDF to Markdown
+into `data/knowledge/<profile>/`. The library is never changed.
+
 ## How it reaches a profile
 
 `make hermes-profile NAME=strategy` copies `data/knowledge/strategy/` into

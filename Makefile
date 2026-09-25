@@ -24,7 +24,7 @@ endef
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-profile knowledge-convert test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
+	    hermes-install hermes-profile knowledge-convert knowledge-stage test-knowledge-stage test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-22s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
@@ -135,6 +135,13 @@ hermes-profile: ## Create/refresh a Hermes profile and sync its books from data/
 knowledge-convert: ## Copy-convert EPUB/PDF books to Markdown (SRC=/mnt/books/edu DEST=data/knowledge/<profile> [ARGS="--dry-run 'Book folder'"])
 	@test -n "$(SRC)" -a -n "$(DEST)" || { echo "usage: make knowledge-convert SRC=<book dir> DEST=<output dir> [ARGS=...]"; exit 2; }
 	@python3 hermes/skills/document-converter/scripts/doc2md.py --source "$(SRC)" --dest "$(DEST)" $(ARGS)
+
+knowledge-stage: ## Build data/knowledge/<NAME> from hermes/profiles/<NAME>/knowledge-sources.txt (NAME=strategy [BOOKS_ROOT=/mnt/books KNOWLEDGE_CONVERT=0])
+	@test -n "$(NAME)" || { echo "usage: make knowledge-stage NAME=<profile> [BOOKS_ROOT=<dir>]"; exit 2; }
+	@bash scripts/knowledge-stage.sh "$(NAME)"
+
+test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub converter, offline)
+	@bash scripts/test_knowledge_stage.sh
 
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'
