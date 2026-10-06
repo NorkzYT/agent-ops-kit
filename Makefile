@@ -24,7 +24,7 @@ endef
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
+	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-22s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
@@ -143,14 +143,14 @@ knowledge-stage: ## Build data/knowledge/<NAME> from hermes/profiles/<NAME>/know
 knowledge-refresh: ## After adding books: stage + sync every book-backed profile (or NAME=<profile>) and report updated/current/missing/uncategorized
 	@bash scripts/knowledge-refresh.sh $(NAME)
 
-knowledge-inventory: ## Read-only: compare the book library with every knowledge-sources.txt; suggest lines for uncategorized books
+knowledge-inventory: ## Read-only: library vs. book lists by content: uncategorized, already imported (source not linked), missing sources
 	@bash scripts/knowledge-refresh.sh --inventory $(NAME)
 
 # Values reach the script through the environment (command-line make variables
 # are exported), so book paths with spaces or quotes are passed through intact.
 # APPLY counts only when given on the make command line, never from a stray
 # exported shell variable.
-knowledge-classify: ## AI proposals for uncategorized books (dry-run). APPLY=1 assigns guardrail-clean ones; APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1 SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n]
+knowledge-classify: ## AI proposals for uncategorized books (dry-run; already-staged books are reported, never re-classified). APPLY=1 assigns guardrail-clean ones; APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1 SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n]
 	@args=(); \
 	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
 	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \
@@ -162,11 +162,21 @@ knowledge-classify: ## AI proposals for uncategorized books (dry-run). APPLY=1 a
 	 [[ -n "$${LIMIT:-}" ]] && args+=(--limit "$$LIMIT"); \
 	 python3 scripts/knowledge-classify.py "$${args[@]}"
 
+# Proposal only by default. APPLY counts only on the make command line and only
+# together with explicit approvals; it appends book-list lines, nothing else.
+knowledge-reconcile: ## Proposal only: staged knowledge with no book-list source, library copies of staged books. APPLY=1 APPROVE='<profile>=<library path>' / APPROVALS=<file> appends approved lines [SCOPE=<library path>]
+	@args=(); \
+	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \
+	 [[ -n "$${APPROVE:-}" ]] && args+=(--approve "$$APPROVE"); \
+	 [[ -n "$${APPROVALS:-}" ]] && args+=(--approvals "$$APPROVALS"); \
+	 [[ -n "$${SCOPE:-}" ]] && args+=(--scope "$$SCOPE"); \
+	 python3 scripts/knowledge-reconcile.py "$${args[@]}"
+
 test-knowledge-refresh: ## Run the knowledge-refresh tests (temp library, profiles, HERMES_HOME; offline)
 	@bash scripts/test_knowledge_refresh.sh
 
-test-knowledge-classify: ## Run the knowledge-classify tests (synthetic library, stub classifier server; offline)
-	@python3 -m unittest discover -s scripts/tests -p 'test_knowledge_classify.py'
+test-knowledge-classify: ## Run the knowledge-classify/reconcile/match tests (synthetic library, stub classifier server; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_knowledge_*.py'
 
 test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub converter, offline)
 	@bash scripts/test_knowledge_stage.sh

@@ -13,7 +13,7 @@ assigns only with `APPLY=1` or your explicit approval.
 From the repo root:
 
 ```bash
-make knowledge-inventory                  # read-only: what is new, missing or unlisted
+make knowledge-inventory                  # read-only: new, already imported, missing sources
 make knowledge-classify                   # optional: AI proposals per book (dry-run)
 # add each new book to the right profile's book list (lines are printed for you),
 # or: make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='<profile>=<library path>'
@@ -60,12 +60,37 @@ survival                     not-installed  0 staged file(s) new/changed; instal
 | `not-installed` | Staged under `data/knowledge/`, no Hermes profile yet | `make hermes-profile NAME=<name>` |
 | `error` | Bad book list or sync failure; the note names the cause | Fix the line, rerun |
 
-**Missing from the library** lists book-list lines with no matching path under
-the library. Fix the spelling or remove the line.
+Library books that no book list includes are sorted **by content**, not by
+file name (`scripts/knowledge_match.py`): each book's text (EPUB/PDF converted
+in a temp folder that is deleted afterwards, OCR off) is reduced to a bounded,
+normalized word stream (converter front matter, Markdown markup, case,
+punctuation and whitespace dropped) and compared with every staged file under
+`data/knowledge/<profile>`. A match needs an identical stream (`exact`) or a
+7-word-shingle resemblance of at least 0.85 (`strong`). Another volume of a
+series, a revised edition or a file with the same name is not a match. The
+check reads every staged file and converts each unlisted EPUB/PDF, so it takes
+a few seconds per book; `KNOWLEDGE_MATCH=0` skips it.
 
-**Uncategorized** lists library books that no book list includes, at the
-smallest unlisted path (a new file inside a listed folder is not reported,
-since the folder already covers it). Each comes with the exact line to append:
+**Missing manifest sources** lists book-list lines with no matching path
+under the library (fix the spelling or remove the line), and **Staged without
+a manifest source** lists files in `data/knowledge/<profile>` that no line of
+that profile's book list stages from the library (legacy or hand-converted
+copies). `make knowledge-reconcile` proposes a library source for those (see
+[knowledge-classify.md](knowledge-classify.md#reconcile-legacy-staged-knowledge)).
+
+**Already imported, source not linked** lists library books no book list
+includes whose text is already staged in a profile under another path, for
+example an EPUB in `edu/` whose text came in earlier from `books-in-text/`. Each
+line names every owner profile, the staged file, the evidence and the book-list
+line it came through. Several owners are all listed and flagged for
+reconciliation review; none is chosen. These books need no classification and
+are never re-ingested. To stop listing one, add its line to
+`hermes/knowledge-ignore.txt`.
+
+**Uncategorized** lists library books that no book list includes and no
+profile has staged, at the smallest unlisted path (a new file inside a listed
+folder is not reported, since the folder already covers it). Each comes with
+the exact line to append:
 
 ```
   - edu/The Code Breaker - Jennifer Doudna, Gene Editing, and the Future of the Human Race
@@ -97,7 +122,8 @@ prints its path.
 | `KNOWLEDGE_ROOT` | `data/knowledge` | Staged corpora, never pruned |
 | `HERMES_HOME` | `.env` value, else `~/.hermes` | Where installed profiles live |
 | `KNOWLEDGE_IGNORE` | `hermes/knowledge-ignore.txt` | Library paths left out on purpose |
-| `KNOWLEDGE_CONVERT` | `1` | `0` copies text books only |
+| `KNOWLEDGE_CONVERT` | `1` | `0` copies text books only (and skips the EPUB/PDF content check) |
+| `KNOWLEDGE_MATCH` | `1` | `0` skips the content check: every unlisted book is uncategorized |
 
 Stale files from books you removed from a book list stay in
 `data/knowledge/<name>` and the profile. Delete them by hand, or sync with
@@ -111,7 +137,8 @@ have the model propose the mapping first, use the template in
 
 ```
 I added books under /mnt/books. Refresh profile knowledge in the agent-ops-kit repo:
-1. Run `make knowledge-inventory` and post the Missing and Uncategorized sections as they are.
+1. Run `make knowledge-inventory` and post the Missing manifest sources, Staged without a manifest source,
+   Already imported and Uncategorized sections as they are. Already-imported books need no mapping.
 2. Do not add books to any knowledge-sources.txt yourself. Wait for my mapping.
 3. Mapping: [edu/<book folder> -> <profile>, ...]. Append exactly these lines with the printed printf commands and show `git diff hermes/profiles`.
 4. Run `make knowledge-refresh` [NAME=<profile>] and post the report table and exit code.

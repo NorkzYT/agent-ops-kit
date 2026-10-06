@@ -115,9 +115,33 @@ chmod u+w "$books/text/Series A"; printf 'vol 3\n' > "$books/text/Series A/vol 3
 before="$(chmod -R u+w "$books"; lib_hash; chmod -R a-w "$books")"
 out="$(run beta)"; rc=$?
 [[ $rc -eq 0 ]] && row beta updated && ! grep -q '^alpha ' <<<"$out" && ok "NAME=beta refreshes only beta" || bad "single refresh wrong ($rc): $out"
-grep -qE '^Missing from the library \(0\)' <<<"$out" && ok "missing list scoped to the selection" || bad "missing not scoped"
+grep -qE '^Missing manifest sources \(0\)' <<<"$out" && ok "missing list scoped to the selection" || bad "missing not scoped"
 [[ -f "$hh/profiles/beta/knowledge/Series A/vol 3.txt" ]] && ok "new book synced" || bad "new book not synced"
 [[ -f "$kroot/beta/stale.md" && -f "$hh/profiles/beta/knowledge/own.md" ]] && ok "nothing deleted" || bad "files were deleted"
+
+# --- content-equivalent copy: already imported, not uncategorized ------------
+# A library book whose text is staged in alpha under another name and path
+# (converter front matter, different line breaks) is reported with its owner,
+# never as uncategorized; the staged file has no manifest source (reconcile).
+words="$(for i in $(seq 1 400); do printf 'w%d%s ' "$((i * 7919 % 1009))" "$([[ $((i % 13)) -eq 0 ]] && echo .)"; done)"
+mkdir -p "$kroot/alpha/Legacy"
+printf -- '---\nsource: "old/legacy.epub"\nconverter: "doc2md 1.0.0"\n---\n\n%s\n' "$words" > "$kroot/alpha/Legacy/orig.md"
+chmod u+w "$books/text"; mkdir -p "$books/text/Legacy Copy"
+fold -s -w 50 <<<"$words" > "$books/text/Legacy Copy/copy.txt"; chmod -R a-w "$books/text"
+before="$(chmod -R u+w "$books"; lib_hash; chmod -R a-w "$books")"
+k0="$(cd "$kroot" && find . -type f -printf '%p %s %T@\n' | sort | md5sum)"
+out="$(run --inventory)"
+grep -q '^Already imported, source not linked (1)' <<<"$out" && grep -qxF '  - text/Legacy Copy' <<<"$out" \
+  && grep -qE '^      owners: alpha: Legacy/orig.md \(exact' <<<"$out" && ok "content copy reported as already imported with its owner" \
+  || bad "already-imported section wrong: $out"
+grep -q '^Uncategorized (3)' <<<"$out" && ! grep -qxF '  - text/Legacy Copy' <<<"$(sed -n '/^Uncategorized/,$p' <<<"$out")" \
+  && ok "content copy is not uncategorized" || bad "content copy listed as uncategorized"
+grep -qE '^  alpha +Legacy/orig.md \(no book-list entry' <<<"$out" && grep -qE '^  beta +stale.md' <<<"$out" \
+  && grep -q 'make knowledge-reconcile' <<<"$out" && ok "staged files without a manifest source reported" || bad "orphans not reported: $out"
+out="$(KNOWLEDGE_MATCH=0 run --inventory)"
+grep -q '^Uncategorized (4)' <<<"$out" && ok "KNOWLEDGE_MATCH=0 skips the content check" || bad "KNOWLEDGE_MATCH=0 ignored"
+[[ "$k0" == "$(cd "$kroot" && find . -type f -printf '%p %s %T@\n' | sort | md5sum)" ]] \
+  && ok "inventory left data/knowledge untouched" || bad "inventory changed data/knowledge"
 
 out="$(run ../x)"; [[ $? -eq 1 ]] && ok "bad profile name refused" || bad "bad name accepted"
 out="$(run nope)"; [[ $? -eq 1 ]] && ok "profile without a book list refused" || bad "unknown profile accepted"

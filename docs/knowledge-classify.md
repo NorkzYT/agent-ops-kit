@@ -1,10 +1,13 @@
 # AI-assisted book classification
 
 `make knowledge-inventory` lists library books that no profile's book list
-includes. `make knowledge-classify` asks a model which existing specialist
-profile each of those books fits. It shows the model's proposal, confidence
-and reason, and the checks that flagged it for review. It assigns a book only
-when you pass `APPLY=1`.
+includes. `make knowledge-classify` first checks each of them by content
+against what is already staged in `data/knowledge/<profile>`; a book whose text
+is already there (under any file name or path) is reported as
+`already-imported` with its owner profiles and left alone. For the genuinely
+new books it asks a model which existing specialist profile each fits. It shows
+the model's proposal, confidence and reason, and the checks that flagged it for
+review. It assigns a book only when you pass `APPLY=1`.
 
 The model is treated as unreliable. Fixed rules, not the model, decide what
 can be assigned without your approval.
@@ -12,8 +15,8 @@ can be assigned without your approval.
 ## Fast path
 
 ```bash
-make knowledge-inventory                       # read-only: what is new, missing or unlisted
-make knowledge-classify                        # DRY-RUN: proposals + report, no book list changes
+make knowledge-inventory                       # read-only: new, already imported, missing sources
+make knowledge-classify                        # DRY-RUN: proposals for new books + report, no book list changes
 make knowledge-classify SOURCE='edu/Some Book' # one uncategorized book only
 make knowledge-classify APPLY=1                # assign proposals that passed every check
 make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='herbalism=edu/Some Book'
@@ -21,6 +24,8 @@ make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='herbalism=edu/Some Book
 make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVALS=data/knowledge-staging/reports/<run>.approvals.txt
 make knowledge-refresh NAME=<profile>          # sync into the installed profile
 # then in `hermes -p <profile> chat`:  /learn ~/.hermes/profiles/<profile>/knowledge
+make knowledge-reconcile                       # PROPOSAL: library sources for staged files without one
+make knowledge-reconcile APPLY=1 APPROVE='<profile>=<library path>'   # append that one line
 ```
 
 `APPLY=1` counts only on the make command line. An exported `APPLY` shell
@@ -29,8 +34,27 @@ with `--help` to see every flag.
 
 ## What one run does
 
-For each uncategorized source (the same list `make knowledge-inventory` prints;
-at most `LIMIT`, default 20, per run):
+For each library path that no book list includes:
+
+0. **Content check (no model, no quarantine).** The source's text is
+   fingerprinted (bounded, normalized: converter front matter, Markdown markup,
+   case, punctuation and whitespace are dropped; EPUB/PDF text comes from the
+   converter in a temp folder that is deleted afterwards) and compared with
+   every staged `.md`/`.txt` under `data/knowledge/<profile>`. With `exact` or
+   `strong` evidence (resemblance ≥ 0.85) for every book file, the source is
+   `already-imported`: the report lists every owner profile, the staged file,
+   the evidence and the book-list line it came through, and nothing else
+   happens (no model call, no quarantine copy, no book-list change, no
+   re-ingest, also with `APPLY=1`). Several owners are all listed with
+   `needs_review: multiple-owners` and no profile is chosen; link or review
+   them with `make knowledge-reconcile`. A source whose files are only partly
+   staged continues below but always gets `needs_review: partially-imported`;
+   one whose text could not be checked (conversion failed or off, a scanned
+   PDF: the check never runs OCR) gets `needs_review: content-unchecked`.
+   File names are never evidence: a different book with the same file name,
+   another volume of a series or a revised edition is classified normally.
+
+The remaining sources (at most `LIMIT`, default 20, per run) go through:
 
 1. **Quarantine copy-convert.** Text books are copied and EPUB/PDF books are
    converted by the `document-converter` skill into
@@ -61,8 +85,10 @@ at most `LIMIT`, default 20, per run):
    any other host is not trusted with private text.
 4. **Classify.** The model gets one OpenAI-compatible chat call. By default that
    is CLIProxyAPI at `http://127.0.0.1:${CLIPROXY_PORT}/v1` with
-   `gpt-5.6-luna`, the cheapest routine tier (Opus is not needed). It must
-   return a single JSON object:
+   `gpt-5.6-luna`, the cheapest routine tier (Opus is not needed). Each
+   candidate profile is described by its purpose (the `You are …` line of its
+   `SOUL.md`) and its current corpus: book-list size, staged file count and up
+   to six book titles from its book list. It must return a single JSON object:
    `{"profile", "confidence", "rationale", "risk", "topics"}`. The book
    evidence is wrapped and labeled as untrusted data.
 5. **Checks.** A source gets `needs_review` when any of these holds:
@@ -78,7 +104,9 @@ at most `LIMIT`, default 20, per run):
    | `high-risk-content:<cat>` | Title or file names match, or the text repeatedly matches, medical, offensive-security or weapons terms |
    | `model-risk:<cat>` | The model itself flagged medical, offensive-security, weapons, self-harm, legal or other risk |
    | `suspicious-text` | The evidence contains prompt-injection phrasing |
-   | `private-source`, `private-excerpt`, `metadata-only`, `no-text` | Less evidence, or private content |
+   | `partially-imported`, `multiple-owners` | Some of its text is already staged; or it is staged in several profiles |
+| `content-unchecked` | Its text could not be compared with staged knowledge, so it might already be imported |
+| `private-source`, `private-excerpt`, `metadata-only`, `no-text` | Less evidence, or private content |
 
 6. **Report.** Every source appears on stdout with its status, profile,
    confidence, classifier, how much was sent, privacy labels, rationale, review
@@ -89,6 +117,7 @@ at most `LIMIT`, default 20, per run):
 
 | Status | Meaning |
 |--------|---------|
+| `already-imported` | Its text is already staged; owners are listed, nothing is done (an approval into an owner profile is refused) |
 | `proposed` | Passed every check; `APPLY=1` assigns it |
 | `needs-review` | Has a proposal (or a bad answer) that one or more checks flagged; only an explicit approval assigns it |
 | `approved` | You approved it with `APPROVE`/`APPROVALS`; the model is not called |
@@ -105,7 +134,8 @@ approved it. An approval is your decision and overrides `needs_review`,
 including for high-risk profiles. Assigning a source:
 
 1. re-validates the path (inside the library, no `..`, no symlinks, still
-   uncategorized) and that the profile is book-backed;
+   uncategorized), that the profile is book-backed and, for an approval, that
+   the profile does not already stage the same text (that would re-ingest it);
 2. **appends** one line to `hermes/profiles/<profile>/knowledge-sources.txt`
    (existing lines are never rewritten);
 3. stages that one book into `data/knowledge/<profile>` with
@@ -152,6 +182,40 @@ Candidate profiles are folders under `hermes/profiles/` with a
 `knowledge-sources.txt` (except `_template`). To make a profile a candidate,
 give it a book list first.
 
+## Reconcile legacy staged knowledge
+
+`make knowledge-reconcile` is proposal-only by default. It reports:
+
+- **Staged without a manifest source**: files under `data/knowledge/<profile>`
+  that no line of that profile's book list stages from an existing library
+  path (hand-converted copies, renamed or removed library paths). For each it
+  lists every library file whose text matches with `exact` or `strong`
+  evidence, whether a refresh would update that same staged file or stage a
+  second copy, and a ready-to-run approve command. With several candidates it
+  says so and chooses none.
+- **Already imported, source not linked**: library books no book list includes
+  whose text is already staged, with every owner. When the owners' staged files
+  already come from a book-list line, nothing needs linking; the report prints
+  the `hermes/knowledge-ignore.txt` line that stops listing the copy.
+
+```bash
+make knowledge-reconcile                                   # proposal + report, nothing changes
+make knowledge-reconcile SCOPE=edu                         # search only part of the library
+make knowledge-reconcile APPROVE='<profile>=<library path>'  # check an approval, still nothing changes
+make knowledge-reconcile APPLY=1 APPROVE='<profile>=<library path>'
+make knowledge-reconcile APPLY=1 APPROVALS=data/knowledge-staging/reports/<run>.approvals.txt
+```
+
+`APPLY=1` without an approval is refused. An approval is applied only when
+every book file at that library path matches, by content, a staged file of that
+profile that has no source; anything weaker is `refused` (exit 3). Applying
+appends that one line to the profile's book list. It does not stage, sync,
+delete duplicate staged data, run `/learn` or write to the library. Prefer the
+candidate marked "refresh updates this same file"; another candidate makes the
+next `make knowledge-refresh` stage a second copy, which you would remove by
+hand. The JSON report and an approvals template go to
+`data/knowledge-staging/reports/reconcile-<time>.*`.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -162,28 +226,47 @@ give it a book list first.
 
 ## Discord prompt template
 
-Paste this to Hermes in Discord after adding books. Fill in the brackets.
+Paste this to Hermes in Discord after adding books. Fill in the brackets. Every
+change happens in a second message, after you approve the proposal.
 
 ```
-I added books under /mnt/books. Classify them in the agent-ops-kit repo (dry-run first):
-1. Run `make knowledge-inventory` and post the Uncategorized section as it is.
+I added books under /mnt/books. Propose, do not change anything yet (agent-ops-kit repo):
+1. Run `make knowledge-inventory` and post the Missing manifest sources, Staged without a manifest source,
+   Already imported and Uncategorized sections as they are.
 2. Run `make knowledge-classify` [SOURCE='<library path>']. Do not pass APPLY. Post, per book:
-   status, proposed profile, confidence, needs_review reasons and rationale, plus the report path and exit code.
-3. Do not edit any knowledge-sources.txt and do not touch /mnt/books. Wait for my approval.
-4. When I reply with mappings like `herbalism=edu/<book>`, run exactly:
-   make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='<profile>=<library path>'
-   once per mapping, then post `git diff hermes/profiles` and the exit codes.
-   [Or, only if I say "apply the clean proposals": make knowledge-classify APPLY=1]
-5. Run `make knowledge-refresh NAME=<profile>` for each assigned profile and post the report table.
-6. Do not run /learn. List the /learn command for every `updated` profile.
+   status, owners (for already-imported), proposed profile, confidence, needs_review reasons and rationale,
+   plus the report path and exit code. Already-imported books are not to be classified, assigned or re-ingested.
+3. If anything is staged without a manifest source or flagged multiple-owners, run `make knowledge-reconcile`
+   (no APPLY) and post each staged file with its candidates, evidence and approve command.
+4. Do not edit any knowledge-sources.txt or knowledge-ignore.txt, do not touch /mnt/books or delete
+   anything under data/knowledge. Wait for my approval.
+```
+
+After you reply with approvals:
+
+```
+Apply exactly these approvals in the agent-ops-kit repo, nothing else:
+- classification: for each `<profile>=<library path>` I listed, run
+  make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='<profile>=<library path>'
+  [or, only if I say "apply the clean proposals": make knowledge-classify APPLY=1]
+- legacy links: for each `link <profile>=<library path>` I listed, run
+  make knowledge-reconcile APPLY=1 APPROVE='<profile>=<library path>'
+Post `git diff hermes/profiles` and every exit code. Then run `make knowledge-refresh NAME=<profile>` for each
+changed profile and post the report table. Do not run /learn; list the /learn command for every `updated` profile.
 ```
 
 ## Tests
 
 `make test-knowledge-classify` runs `scripts/tests/test_knowledge_classify.py`
-offline. It uses a synthetic read-only library, temp profile seeds, a stub
-converter, and stub OpenAI-compatible servers for the cloud and local models.
-It covers the dry-run default, bounded evidence, private content never
-reaching the cloud stub, malformed, refused, low-confidence and high-risk
-answers, apply-only-when-approved, unsafe paths, the Make target and an
-unchanged library.
+and `scripts/tests/test_knowledge_match.py` offline. They use a synthetic
+read-only library, temp profile seeds, a stub converter, and stub
+OpenAI-compatible servers for the cloud and local models. They cover the
+dry-run default, bounded evidence, private content never reaching the cloud
+stub, malformed, refused, low-confidence and high-risk answers,
+apply-only-when-approved, unsafe paths, the Make targets and an unchanged
+library; plus the content matcher against near collisions (series volume,
+revised edition, same file name), EPUB/PDF/text copies of staged text reported
+`already-imported` with no model call, quarantine copy, book-list change or
+re-ingest (also with `APPLY=1`), every owner listed for multi-profile copies,
+profile purpose and corpus context in the prompt, and reconcile being
+proposal-only with apply limited to explicit, content-backed approvals.

@@ -11,10 +11,16 @@
 # Per profile: scripts/knowledge-stage.sh builds $KNOWLEDGE_ROOT/<p> from
 # hermes/profiles/<p>/knowledge-sources.txt, then scripts/knowledge-sync.sh copies
 # it into $HERMES_HOME/profiles/<p>/knowledge when that profile is installed.
-# The report lists each profile as updated/current, manifest entries missing
-# from the library, and library books in no book list ("uncategorized") with the
-# exact line to append. It never picks a profile for a book and never runs
-# /learn (a model turn); it prints the /learn command for each updated profile.
+# The report lists each profile as updated/current and sorts the library books
+# no book list includes by content (scripts/knowledge_match.py, normalized-text
+# fingerprints, never file names):
+#   already imported, source not linked   the text is staged in some profile under
+#                                         another path; nothing to classify
+#   uncategorized                         not imported anywhere; the exact line to append
+# plus missing manifest sources (book-list lines not in the library, and staged
+# files no book-list line produces; see make knowledge-reconcile). It never
+# picks a profile for a book and never runs /learn (a model turn); it prints the
+# /learn command for each updated profile.
 #
 # Env: BOOKS_ROOT        book library root (default /mnt/books, never written)
 #      KNOWLEDGE_ROOT    staged corpora (default data/knowledge, never pruned)
@@ -22,7 +28,10 @@
 #      KNOWLEDGE_IGNORE  library paths to leave out of the report
 #                        (default hermes/knowledge-ignore.txt)
 #      PROFILES_DIR      profile seeds (default hermes/profiles; tests)
-#      KNOWLEDGE_CONVERT, DOC2MD   passed through to knowledge-stage.sh
+#      KNOWLEDGE_CONVERT, DOC2MD   passed through to knowledge-stage.sh and the
+#                        content check (EPUB/PDF text, temp folder, OCR off)
+#      KNOWLEDGE_MATCH   0 skips the content check (all unlisted books count as
+#                        uncategorized)
 #
 # Exit 0 when every profile staged cleanly, 3 when a book is missing or could
 # not be converted, 1 on a usage or safety error. Uncategorized books do not
@@ -151,6 +160,31 @@ snap() {
 }
 changed() { LC_ALL=C comm -13 <(LC_ALL=C sort "$1") <(LC_ALL=C sort "$2") | wc -l; }
 
+# match_content: sort the uncategorized books by content against the staged
+# corpora (after staging, so the report reflects this run). Read-only.
+newbooks=() imported=() orphans=()
+declare -A partial=()
+match_content() {
+  local out kind a b
+  if [[ "${KNOWLEDGE_MATCH:-1}" != "1" ]]; then newbooks=("${uncategorized[@]}"); return; fi
+  out="$(mktemp "${TMPDIR:-/tmp}/knowledge-match.XXXXXX")"
+  if printf '%s\0' "${uncategorized[@]}" | BOOKS_ROOT="$books" KNOWLEDGE_ROOT="$kroot" PROFILES_DIR="$pdir_root" \
+       python3 "$ROOT/scripts/knowledge_match.py" inventory > "$out"; then
+    while IFS= read -r -d '' kind && IFS= read -r -d '' a && IFS= read -r -d '' b; do
+      case "$kind" in
+        imported) imported+=("$a|$b") ;;
+        partial)  newbooks+=("$a"); partial[$a]="$b" ;;
+        orphan)   orphans+=("$a|$b") ;;
+        *)        newbooks+=("$a") ;;
+      esac
+    done < "$out"
+  else
+    warn "content check failed; every unlisted book is reported as uncategorized"
+    newbooks=("${uncategorized[@]}")
+  fi
+  rm -f "$out"
+}
+
 declare -A status=() note=()
 learn=()
 worst=0
@@ -192,6 +226,7 @@ if [[ "$inventory_only" -eq 0 ]]; then
 fi
 
 # ---- report -----------------------------------------------------------------
+match_content
 echo
 echo "== knowledge refresh report =="
 echo "library: $books   staged: $kroot   hermes: $HERMES_HOME"
@@ -205,19 +240,37 @@ echo
 sel=" ${names[*]} "
 nm=0
 for m in "${missing[@]}"; do [[ "$sel" == *" ${m%%|*} "* ]] && nm=$((nm + 1)); done
-echo "Missing from the library ($nm): listed in a book list, not found under $books"
+echo "Missing manifest sources ($nm): listed in a book list, not found under $books"
 for m in "${missing[@]}"; do
   [[ "$sel" == *" ${m%%|*} "* ]] && printf '  %-26s %s\n' "${m%%|*}" "${m#*|}"
 done
+no=0
+for m in "${orphans[@]}"; do [[ "$sel" == *" ${m%%|*} "* ]] && no=$((no + 1)); done
+echo "Staged without a manifest source ($no): files in $kroot/<profile> that no book-list line stages"
+for m in "${orphans[@]}"; do
+  [[ "$sel" == *" ${m%%|*} "* ]] && printf '  %-26s %s\n' "${m%%|*}" "${m#*|}"
+done
+[[ "$no" -eq 0 ]] || echo "  Link a library source (proposal first, applied only on your approval): make knowledge-reconcile"
 
 echo
-echo "Uncategorized (${#uncategorized[@]}): books in the library that no book list includes"
-if [[ ${#uncategorized[@]} -gt 0 ]]; then
+echo "Already imported, source not linked (${#imported[@]}): library books no book list includes whose text is already staged under another path"
+if [[ ${#imported[@]} -gt 0 ]]; then
+  echo "  Nothing to classify or re-ingest. Owners are reported, never chosen. Review: make knowledge-reconcile"
+  for m in "${imported[@]}"; do
+    echo "  - ${m%%|*}"
+    echo "      owners: ${m#*|}"
+  done
+fi
+
+echo
+echo "Uncategorized (${#newbooks[@]}): books in the library that no book list includes and no profile has staged"
+if [[ ${#newbooks[@]} -gt 0 ]]; then
   echo "  Pick the profile yourself (nothing is assigned automatically), append the line, rerun."
   echo "  For AI-assisted proposals (dry-run, nothing assigned): make knowledge-classify"
   echo "  Profiles with book lists: ${all[*]}"
-  for u in "${uncategorized[@]}"; do
+  for u in "${newbooks[@]}"; do
     echo "  - $u"
+    [[ -z "${partial[$u]:-}" ]] || echo "      partly staged already (review before assigning): ${partial[$u]}"
     echo "      printf '%s\\n' $(sq "$u") >> ${pdir_root#"$ROOT"/}/<profile>/knowledge-sources.txt"
   done
   echo "  To leave a book out on purpose, add the same line to ${ignore_file#"$ROOT"/}."

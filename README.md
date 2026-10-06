@@ -84,9 +84,10 @@ and [docs/knowledge-classify.md](docs/knowledge-classify.md); both have a
 Discord prompt template.
 
 ```bash
-make knowledge-inventory     # read-only report: missing and uncategorized books
-make knowledge-classify      # AI proposals with confidence and review flags (dry-run)
+make knowledge-inventory     # read-only: uncategorized, already imported (by content), missing sources
+make knowledge-classify      # AI proposals for new books only (dry-run); staged copies are skipped
 make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='<profile>=<library path>'
+make knowledge-reconcile     # proposal: link staged knowledge that has no book-list source
 make knowledge-refresh       # stage + sync every profile (NAME=<profile> for one)
 ```
 
@@ -94,7 +95,7 @@ make knowledge-refresh       # stage + sync every profile (NAME=<profile> for on
 
 ```
 docker-compose.yml        Honcho, Ollama, CLIProxyAPI
-Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile, knowledge-refresh, knowledge-classify
+Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile, knowledge-refresh, knowledge-classify, knowledge-reconcile
 .env.example              every setting, commented
 scripts/                  stack-init, hermes-install, hermes-profile, doctor, claude-max-proxy/ (host install), windows-vm/
 vendor/claude-max-api-proxy  vendored proxy sources (UPSTREAM pins the commit; make claude-proxy-update)

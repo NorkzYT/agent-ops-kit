@@ -47,17 +47,19 @@ kc = load_module()
 STUB_DOC2MD = r'''
 import json, os, sys
 a = sys.argv[1:]
-src, dest, rel = a[a.index("--source") + 1], a[a.index("--dest") + 1], a[a.index("--") + 1]
+src, dest, rels = a[a.index("--source") + 1], a[a.index("--dest") + 1], a[a.index("--") + 1:]
 res = []
-for d, _, files in os.walk(os.path.join(src, rel)):
-    for f in files:
-        if f.endswith((".epub", ".pdf")):
-            p = os.path.join(d, f)
-            out = os.path.splitext(os.path.join(dest, os.path.relpath(p, src)))[0] + ".md"
-            os.makedirs(os.path.dirname(out), exist_ok=True)
-            body = open(p).read()
-            open(out, "w").write('---\ntitle: "Converted Title"\nconverter: "doc2md stub"\n---\n\n# Converted Title\n\n' + body)
-            res.append({"source": os.path.relpath(p, src), "status": "converted", "output": out})
+paths = []
+for rel in rels:                                   # folders or files, like doc2md
+    t = os.path.join(src, rel)
+    paths += [t] if os.path.isfile(t) else [os.path.join(d, f) for d, _, fs in os.walk(t) for f in fs]
+for p in paths:
+    if p.endswith((".epub", ".pdf")):
+        out = os.path.splitext(os.path.join(dest, os.path.relpath(p, src)))[0] + ".md"
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        body = open(p).read()
+        open(out, "w").write('---\ntitle: "Converted Title"\nconverter: "doc2md stub"\n---\n\n# Converted Title\n\n' + body)
+        res.append({"source": os.path.relpath(p, src), "status": "converted", "output": out})
 print(json.dumps({"results": res}))
 '''
 
