@@ -363,7 +363,11 @@ class ClassifyE2E(unittest.TestCase):
         for f in router.glob("*.py"):
             src = f.read_text().lower()
             self.assertNotIn("exempt", src, f)
-            self.assertNotIn("knowledge", src, f)
+            self.assertNotIn("knowledge_library", src, f)
+            # The specialist router reports profile knowledge readiness, so only
+            # the privacy decision path itself must never mention knowledge.
+            if f.name in ("privacy.py", "router.py", "local_backend.py"):
+                self.assertNotIn("knowledge", src, f)
         # knowledge-classify only calls the detectors; it never patches them.
         script = SCRIPT.read_text()
         self.assertIsNone(re.search(r"(privacy_module\(\)|_privacy_mod)\.\w+\s*=(?!=)", script))

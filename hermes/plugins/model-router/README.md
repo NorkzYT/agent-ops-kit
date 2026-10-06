@@ -51,6 +51,14 @@ Two Hermes middleware behaviors in one bundled plugin:
   local. Classifier errors are treated as private. The handler never raises, so
   Hermes' fail-open middleware path can never leak private data to the cloud.
 
+- **Specialist routing pilot** (`pre_llm_call` hook, off by default) —
+  `specialists.py` deterministically picks 0-4 book-backed profiles for the
+  current genuine user task and appends a `<specialist-routing>` note to the
+  orchestrator's turn (privacy first, high-risk profiles advisory with the
+  `skills` toolset only, readiness from the installed profile's `/learn`
+  skill). `/route-specialists <task>` and `make specialist-route` are offline
+  dry-runs. See `docs/specialist-routing.md`.
+
 ## Configuration
 
 `~/.hermes/config.yaml`:
@@ -72,6 +80,11 @@ plugins:
         private_paths: []                               # extra local-only path fragments
         available_gpt_models: []                        # optional probe cache
         available_coding_models: []
+        specialist_routing: false        # pilot; docs/specialist-routing.md
+        specialist_max_profiles: 4
+        specialist_require_ready: false
+        specialist_classifier: none      # none | local
+        specialist_profiles: []
 ```
 
 Environment fallbacks (used when a setting is unset): `OLLAMA_BASE_URL`,

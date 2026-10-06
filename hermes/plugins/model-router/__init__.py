@@ -14,6 +14,11 @@ Registers two middleware callbacks with Hermes:
     data to the cloud. Unauthorized max-tier (Astra) requests are refused with
     a typed response instead of being sent.
 
+Optionally (``specialist_routing: true``, off by default) a ``pre_llm_call``
+hook adds a deterministic specialist-routing note to the orchestrator's
+current turn, and ``/route-specialists <task>`` prints a dry-run trace. See
+``docs/specialist-routing.md``.
+
 See ``docs/model-routing.md`` in the kit for configuration and readiness.
 """
 
@@ -23,6 +28,7 @@ import logging
 
 from .router import Router
 from .router_config import load_settings
+from .specialist_hook import SpecialistHook
 
 logger = logging.getLogger("hermes.plugin.model_router")
 
@@ -32,11 +38,22 @@ def register(ctx) -> None:
     router = Router(settings)
     ctx.register_middleware("llm_request", router.on_llm_request)
     ctx.register_middleware("llm_execution", router.on_llm_execution)
+    profile = str(getattr(ctx, "profile_name", "") or "default")
+    specialists = SpecialistHook(settings, profile_name=profile,
+                                 session_private=router.session_is_private)
+    if specialists.active:
+        ctx.register_hook("pre_llm_call", specialists.on_pre_llm_call)
+    register_command = getattr(ctx, "register_command", None)
+    if callable(register_command):
+        register_command("route-specialists", specialists.dry_run,
+                         description="Dry-run the specialist router for a task (nothing dispatched)",
+                         args_hint="<task>")
     logger.info(
-        "model_router registered (privacy=%s complexity=%s local=%s)",
+        "model_router registered (privacy=%s complexity=%s local=%s specialists=%s)",
         settings.privacy_routing,
         settings.complexity_routing,
         "configured" if (settings.ollama_base_url and settings.ollama_model) else "unset",
+        "on" if specialists.active else "off",
     )
 
 

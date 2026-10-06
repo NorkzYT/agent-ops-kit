@@ -89,6 +89,10 @@ MODEL_ROUTER_PRIVACY="$(getenv MODEL_ROUTER_PRIVACY true)"; export MODEL_ROUTER_
 MODEL_ROUTER_EFFORT="$(getenv MODEL_ROUTER_EFFORT true)"; export MODEL_ROUTER_EFFORT
 MODEL_ROUTER_ASTRA="$(getenv MODEL_ROUTER_ASTRA task)"; export MODEL_ROUTER_ASTRA
 MODEL_ROUTER_TASK_TTL="$(getenv MODEL_ROUTER_TASK_TTL 1800)"; export MODEL_ROUTER_TASK_TTL
+# Specialist-router pilot (docs/specialist-routing.md): off unless set to true.
+#   - MODEL_ROUTER_SPECIALIST_MAX: route cap per task (0-6, default 4).
+MODEL_ROUTER_SPECIALISTS="$(getenv MODEL_ROUTER_SPECIALISTS false)"; export MODEL_ROUTER_SPECIALISTS
+MODEL_ROUTER_SPECIALIST_MAX="$(getenv MODEL_ROUTER_SPECIALIST_MAX 4)"; export MODEL_ROUTER_SPECIALIST_MAX
 
 cfg="$HERMES_HOME/config.yaml"
 if [[ -f "$cfg" && "$FORCE" != "1" ]]; then

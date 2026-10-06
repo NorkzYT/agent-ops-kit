@@ -29,6 +29,13 @@ def _truthy(raw: Any, default: bool) -> bool:
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _int(raw: Any, default: int) -> int:
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _astra_policy(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     return value if value in ("task", "always", "never") else "task"
@@ -60,6 +67,20 @@ class RouterSettings:
     # Live-available model ids (kept in sync by the probe); empty = trust config.
     available_gpt_models: List[str] = field(default_factory=list)
     available_coding_models: List[str] = field(default_factory=list)
+    # Specialist-router pilot (specialists.py). Off unless explicitly enabled;
+    # when on it only ADDS a routing note to the orchestrator's current turn.
+    specialist_routing: bool = False
+    specialist_max_profiles: int = 4
+    specialist_profiles: List[str] = field(default_factory=list)   # allowlist; empty = all
+    specialist_require_ready: bool = False
+    specialist_classifier: str = "none"                            # none | local (Ollama)
+    specialist_orchestrators: List[str] = field(default_factory=lambda: ["default"])
+    specialist_profiles_root: str = ""                             # '' = $HERMES_HOME/profiles
+
+
+def _classifier(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in ("none", "local") else "none"
 
 
 def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterSettings:
@@ -88,4 +109,11 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         private_paths=_split(val("private_paths", "MODEL_ROUTER_PRIVATE_PATHS", [])),
         available_gpt_models=_split(val("available_gpt_models", "MODEL_ROUTER_GPT_MODELS", [])),
         available_coding_models=_split(val("available_coding_models", "MODEL_ROUTER_CODING_MODELS", [])),
+        specialist_routing=_truthy(val("specialist_routing", "MODEL_ROUTER_SPECIALISTS", None), False),
+        specialist_max_profiles=_int(val("specialist_max_profiles", "MODEL_ROUTER_SPECIALIST_MAX", 4), 4),
+        specialist_profiles=_split(val("specialist_profiles", "MODEL_ROUTER_SPECIALIST_PROFILES", [])),
+        specialist_require_ready=_truthy(val("specialist_require_ready", "MODEL_ROUTER_SPECIALIST_REQUIRE_READY", None), False),
+        specialist_classifier=_classifier(val("specialist_classifier", "MODEL_ROUTER_SPECIALIST_CLASSIFIER", "none")),
+        specialist_orchestrators=_split(val("specialist_orchestrators", "MODEL_ROUTER_SPECIALIST_ORCHESTRATORS", ["default"])) or ["default"],
+        specialist_profiles_root=str(val("specialist_profiles_root", "MODEL_ROUTER_SPECIALIST_PROFILES_ROOT", "") or ""),
     )

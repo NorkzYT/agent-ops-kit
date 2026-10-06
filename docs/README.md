@@ -12,6 +12,7 @@ The root `README.md` is the fast path. These pages hold the detail.
 | [proxies.md](proxies.md) | ChatGPT and Claude Max subscriptions as OpenAI-compatible APIs |
 | [browser-use.md](browser-use.md) | Browser automation: local Chromium vs Browser Use Cloud, rules |
 | [profiles-and-teams.md](profiles-and-teams.md) | Specialist agents with their own knowledge, and Kanban teams |
+| [specialist-routing.md](specialist-routing.md) | Pilot: deterministic per-task routing to the book-backed profiles, privacy precedence, high-risk advisory mode, readiness, `make specialist-route` dry-run |
 | [knowledge-refresh.md](knowledge-refresh.md) | After adding books: `make knowledge-refresh`, the report, `/learn`, Discord prompt |
 | [knowledge-classify.md](knowledge-classify.md) | AI-proposed profiles for new books (already-staged copies detected by content), privacy gate and `/mnt/books` exemption, review checks, `APPLY=1`, `make knowledge-reconcile`, Discord prompt |
 | [document-conversion.md](document-conversion.md) | Copy-only EPUB/PDF to Markdown for profile knowledge (`document-converter` skill) |

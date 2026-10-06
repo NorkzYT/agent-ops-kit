@@ -198,6 +198,10 @@ class Router:
                 self._private_sessions.add(session_id)
             return pv.PrivacyDecision(True, ("classifier-error",))
 
+    def session_is_private(self, session_id: str) -> bool:
+        """True once the privacy guard has flagged this session (sticky)."""
+        return bool(session_id) and session_id in self._private_sessions
+
     def _local_or_refuse(self, request: Any, reason: str) -> Any:
         try:
             resp = self._backend.chat(messages_from_request(request))

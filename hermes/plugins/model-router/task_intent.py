@@ -65,8 +65,11 @@ _HARD_HINT_RE = re.compile(r"(?<![A-Za-z0-9_])#(?:max|astra|deep|hard)\b", re.IG
 # direction: a sender who fakes one of these lines only truncates their own
 # text (loses signals/authority); recalled memory that embeds a fake
 # ``[New message]`` marker is discarded before the marker search runs.
+# ``<specialist-routing>`` is this plugin's own pre_llm_call note (appended to
+# the current user message by Hermes); cutting it keeps the router from
+# classifying its own suggestion on the same turn's API calls.
 _APPENDED_CUT_RE = re.compile(
-    r"(?m)^(?:<memory-context>|--- Attached Context ---|--- Context Warnings ---)\s*$"
+    r"(?m)^(?:<memory-context>|<specialist-routing>|--- Attached Context ---|--- Context Warnings ---)\s*$"
 )
 # Channel backfill terminator: f"{context}\n\n[New message]\n{sender_text}".
 # The gateway's own marker is the LAST one in the (already appendix-free)

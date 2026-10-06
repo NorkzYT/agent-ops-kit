@@ -304,6 +304,13 @@ behavior — public traffic still follows the main provider + fallback policy.
 > without a separate explicit opt-in. The default-deny policy above is the safe
 > baseline until a fail-closed confirmation channel exists.
 
+## Specialist routing (pilot)
+
+The same plugin can suggest book-backed specialist profiles per task through a
+`pre_llm_call` hook. It is off by default (`specialist_routing`), uses the same
+current-task extraction and privacy detectors, and only runs in the `default`
+profile. See [specialist-routing.md](specialist-routing.md).
+
 ## Configuration
 
 `config.yaml` is rendered from `hermes/config.yaml.tmpl` by `make hermes-install`.

@@ -197,6 +197,10 @@ auxiliary:
 # that coding model for the request (coding-family seam only; refused on the
 # orchestrator seam, never faked with a GPT alias; privacy stays higher
 # priority). See hermes/plugins/model-router/ and docs/model-routing.md.
+# specialist_routing (pilot, default false via MODEL_ROUTER_SPECIALISTS) adds a
+# deterministic note naming the 0-4 book-backed profiles a task needs; it only
+# runs in the default (orchestrator) profile and never dispatches by itself.
+# See docs/specialist-routing.md.
 plugins:
   enabled:
     - model-router
@@ -212,3 +216,8 @@ plugins:
         ollama_model: __OLLAMA_CHAT_MODEL__
         private_terms: []
         private_paths: []
+        specialist_routing: __MODEL_ROUTER_SPECIALISTS__
+        specialist_max_profiles: __MODEL_ROUTER_SPECIALIST_MAX__
+        specialist_require_ready: false
+        specialist_classifier: none
+        specialist_profiles: []

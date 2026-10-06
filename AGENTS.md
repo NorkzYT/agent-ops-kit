@@ -101,3 +101,7 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - No vendor API keys anywhere in the stack.
 - Full reference: `docs/model-routing.md`. Verify: `make route-smoke`,
   `make test-router`.
+- Specialist routing (pilot, off by default): `specialist_routing` in the same
+  plugin suggests 0-4 book-backed profiles per current task; private tasks never
+  reach cloud-backed profiles; high-risk profiles are advisory only. Dry-run:
+  `TASK="..." make specialist-route`. Reference: `docs/specialist-routing.md`.
