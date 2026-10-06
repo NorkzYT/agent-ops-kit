@@ -67,19 +67,38 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    matter. The excerpt is 3000 characters by default and never more than 12000
    (`--excerpt-chars`). Links, URLs, e-mail addresses and control characters
    are stripped. Whole books are never sent.
-3. **Privacy gate (fail-closed).** The model-router plugin's deterministic
-   detectors (`#private`/`#local` tags, SSN, card numbers, IBAN/ABA, keys,
-   secrets, credentials, `MODEL_ROUTER_PRIVATE_TERMS`/`_PATHS`) and
-   `hermes/knowledge-private.txt` decide what may leave the host:
+3. **Privacy gate.** `hermes/knowledge-private.txt` and the model-router
+   plugin's deterministic detectors (`#private`/`#local` tags, SSN, card
+   numbers, IBAN/ABA, keys, secrets, credentials,
+   `MODEL_ROUTER_PRIVATE_TERMS`/`_PATHS`) decide what may leave the host.
 
-   | Finding | Classifier | Sent |
-   |---------|-----------|------|
-   | Path listed in `knowledge-private.txt`, or private metadata | local model if configured, else **skipped** | to the cloud: nothing |
-   | Private excerpt, clean metadata | local model if configured, else CLIProxyAPI | to the cloud: metadata only |
-   | Clean | the selected classifier | metadata + excerpt |
+   **Book-library exemption.** You have authorized the configured CLIProxyAPI
+   model to classify the books in your library. When `BOOKS_ROOT` is exactly
+   that library (`KNOWLEDGE_LIBRARY_EXEMPT_ROOT`, default `/mnt/books`) and the
+   classifier is `cliproxy`, detector hits in a book's metadata or excerpt do
+   not keep it local: a book that quotes an example card number, an SSN or a
+   key gets the same bounded, sanitized evidence as any other book. The report
+   says `book-library exemption used (detector hits: …)` and keeps the labels,
+   and the JSON report records `library_exemption: true` per source and for
+   the run. A path in `knowledge-private.txt` is never exempt.
 
-   The exact outbound payload is scanned once more right before a cloud call.
-   A scanner error counts as private. "Local" means an `OLLAMA_BASE_URL` on a
+   | Finding | Exemption active | Exemption off |
+   |---------|------------------|---------------|
+   | Path listed in `knowledge-private.txt` | local model if configured, else **skipped**; nothing sent to the cloud | same |
+   | Detector hit in the metadata (title, file names, path) | CLIProxyAPI: metadata + excerpt | local model if configured, else **skipped** |
+   | Detector hit in the excerpt only | CLIProxyAPI: metadata + excerpt | local model if configured, else CLIProxyAPI with metadata only |
+   | Clean | CLIProxyAPI: metadata + excerpt | the selected classifier |
+
+   The exemption is off when `BOOKS_ROOT` is any other folder (also a parent
+   or child of the library), with `CLASSIFIER=local`/`none`, with
+   `KNOWLEDGE_LIBRARY_EXEMPT_ROOT=off`, or for one run with
+   `--no-library-exemption`. It lives only in this script: the model-router
+   plugin, its detectors and the routing of your normal tasks are unchanged.
+   To keep a book local, list its path in `knowledge-private.txt`.
+
+   The exact outbound payload is scanned once more right before a cloud call
+   (with the exemption, everything except the book evidence: instructions and
+   profile descriptions). A scanner error counts as private. "Local" means an `OLLAMA_BASE_URL` on a
    loopback address, or on a host you list in `KNOWLEDGE_LOCAL_HOSTS` (for
    example an Ollama on another of your machines over Tailscale). A model on
    any other host is not trusted with private text.
@@ -106,10 +125,11 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    | `suspicious-text` | The evidence contains prompt-injection phrasing |
    | `partially-imported`, `multiple-owners` | Some of its text is already staged; or it is staged in several profiles |
 | `content-unchecked` | Its text could not be compared with staged knowledge, so it might already be imported |
-| `private-source`, `private-excerpt`, `metadata-only`, `no-text` | Less evidence, or private content |
+| `private-source`, `private-excerpt`, `metadata-only`, `no-text` | Less evidence, or private content (a path in `knowledge-private.txt`, or a detector hit with the exemption off) |
 
 6. **Report.** Every source appears on stdout with its status, profile,
-   confidence, classifier, how much was sent, privacy labels, rationale, review
+   confidence, classifier, how much was sent, privacy labels (and whether the
+   book-library exemption was used), rationale, review
    reasons and a ready-to-run approve command. The full JSON report and an
    approvals template are written to `data/knowledge-staging/reports/`.
 
@@ -121,7 +141,7 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
 | `proposed` | Passed every check; `APPLY=1` assigns it |
 | `needs-review` | Has a proposal (or a bad answer) that one or more checks flagged; only an explicit approval assigns it |
 | `approved` | You approved it with `APPROVE`/`APPROVALS`; the model is not called |
-| `skipped` | Nothing was sent (private with no local model, or `CLASSIFIER=none`) |
+| `skipped` | Nothing was sent (in `knowledge-private.txt` or, with the exemption off, private, and no local model; or `CLASSIFIER=none`) |
 | `error` | Unsafe input, unreachable classifier, or not an uncategorized source |
 
 Actions: `would-assign` (dry-run), `assigned`, `already-listed`, `refused`,
@@ -166,7 +186,8 @@ where needed.
 | `--threshold` | `KNOWLEDGE_CLASSIFY_THRESHOLD` | 0.75 | Minimum confidence to apply without review |
 | `LIMIT=` / `--limit` | `KNOWLEDGE_CLASSIFY_LIMIT` | 20 | Sources classified per run |
 | — | `KNOWLEDGE_HIGH_RISK_PROFILES` | see above | Comma list of profiles that always need approval |
-| — | `KNOWLEDGE_PRIVATE` | `hermes/knowledge-private.txt` | Library paths that never go to the cloud |
+| — | `KNOWLEDGE_PRIVATE` | `hermes/knowledge-private.txt` | Library paths that never go to the cloud (also under the exemption) |
+| `--no-library-exemption` | `KNOWLEDGE_LIBRARY_EXEMPT_ROOT` | `/mnt/books` | The book library whose books CLIProxyAPI may classify despite detector hits; `off` disables |
 | — | `KNOWLEDGE_STAGING` | `data/knowledge-staging` | Quarantine; must not overlap the library or `KNOWLEDGE_ROOT` |
 | — | `KNOWLEDGE_CLASSIFY_BASE_URL` | `http://127.0.0.1:$CLIPROXY_PORT/v1` | Cloud classifier endpoint |
 | — | `OLLAMA_BASE_URL`, `OLLAMA_CHAT_MODEL` | `.env` | Local classifier (loopback, or a `KNOWLEDGE_LOCAL_HOSTS` host) |
@@ -235,7 +256,9 @@ I added books under /mnt/books. Propose, do not change anything yet (agent-ops-k
    Already imported and Uncategorized sections as they are.
 2. Run `make knowledge-classify` [SOURCE='<library path>']. Do not pass APPLY. Post, per book:
    status, owners (for already-imported), proposed profile, confidence, needs_review reasons and rationale,
-   plus the report path and exit code. Already-imported books are not to be classified, assigned or re-ingested.
+   whether the book-library exemption was used, plus the report path and exit code. Books from /mnt/books
+   may go to the configured CLIProxyAPI model even when their text looks private; only paths in
+   hermes/knowledge-private.txt stay local. This applies to book classification only, not to other tasks. Already-imported books are not to be classified, assigned or re-ingested.
 3. If anything is staged without a manifest source or flagged multiple-owners, run `make knowledge-reconcile`
    (no APPLY) and post each staged file with its candidates, evidence and approve command.
 4. Do not edit any knowledge-sources.txt or knowledge-ignore.txt, do not touch /mnt/books or delete
@@ -262,7 +285,11 @@ and `scripts/tests/test_knowledge_match.py` offline. They use a synthetic
 read-only library, temp profile seeds, a stub converter, and stub
 OpenAI-compatible servers for the cloud and local models. They cover the
 dry-run default, bounded evidence, private content never reaching the cloud
-stub, malformed, refused, low-confidence and high-risk answers,
+stub outside the book-library exemption, a library book with card-number-like
+text reaching the cloud stub under the exemption while a `knowledge-private.txt`
+path stays local or skipped, the exemption being off for any other root, the
+local classifier and `--no-library-exemption`, the model-router detectors still
+flagging that text, malformed, refused, low-confidence and high-risk answers,
 apply-only-when-approved, unsafe paths, the Make targets and an unchanged
 library; plus the content matcher against near collisions (series volume,
 revised edition, same file name), EPUB/PDF/text copies of staged text reported

@@ -28,8 +28,15 @@ list includes):
   2. build bounded evidence: path metadata plus a sanitized excerpt
      (--excerpt-chars, default 3000, hard cap 12000) — never the whole book;
   3. privacy gate (fail-closed, model-router detectors + hermes/knowledge-private.txt):
-     private sources are classified by the local model only, or skipped; a
-     private excerpt with clean metadata goes to the cloud as metadata only;
+     paths in knowledge-private.txt are classified by the local model only, or
+     skipped. Book-library exemption: when BOOKS_ROOT is the operator's book
+     library ($KNOWLEDGE_LIBRARY_EXEMPT_ROOT, default /mnt/books) and the
+     classifier is cliproxy, detector hits in a book's metadata or excerpt do
+     not gate it: the same bounded, sanitized evidence goes to CLIProxyAPI and
+     the report says the exemption was used. Without the exemption a private
+     source is classified locally or skipped, and a private excerpt with clean
+     metadata goes to the cloud as metadata only. The exemption lives only in
+     this script; the model-router plugin and its detectors are unchanged;
   4. ask the configured classifier (CLIProxyAPI `gpt-5.6-luna` by default, or
      the local Ollama model) for strict JSON: profile, confidence, rationale, risk.
      Each candidate profile is described by its purpose (SOUL.md) and its
@@ -82,6 +89,10 @@ DEFAULT_EXCERPT = 3000
 MAX_EXCERPT = 12000
 DEFAULT_THRESHOLD = 0.75
 DEFAULT_LIMIT = 20
+# The operator's book library. Books under it may go to CLIProxyAPI as bounded
+# classification evidence even when the privacy detectors flag their text (see
+# library_exemption). Paths in KNOWLEDGE_PRIVATE are never exempt.
+DEFAULT_EXEMPT_LIBRARY = "/mnt/books"
 CONTEXT_TITLES = 6                      # book titles per profile in the classifier prompt
 MAX_TEXT_BYTES = 64 * 1024 * 1024       # copy cap per .md/.txt book file
 MAX_RATIONALE = 400
@@ -170,6 +181,9 @@ class Settings:
     high_risk: Tuple[str, ...] = DEFAULT_HIGH_RISK
     private_terms: Tuple[str, ...] = ()
     private_paths: Tuple[str, ...] = ()
+    exempt_root: str = ""                  # KNOWLEDGE_LIBRARY_EXEMPT_ROOT; "" or "off" disables
+    library_exempt: bool = False           # set by library_exemption() after check_roots
+    exemption_note: str = ""
 
 
 def is_within(child: Path, parent: Path) -> bool:
@@ -205,6 +219,26 @@ def check_roots(s: Settings) -> None:
     if is_within(staging, kroot) or is_within(kroot, staging):
         raise SafetyError(f"staging {staging} overlaps the knowledge root {kroot} — "
                           "quarantined books must never sync into a profile")
+
+
+def library_exemption(s: Settings) -> Tuple[bool, str]:
+    """(active, note) for the book-library classification exemption.
+
+    Active only for the cliproxy classifier and only when the verified
+    BOOKS_ROOT is the configured exempt library itself (no parent, child or
+    other folder). Call after check_roots.
+    """
+    raw = s.exempt_root.strip()
+    if not raw or raw.lower() == "off":
+        return False, "book-library exemption off"
+    if s.classifier != "cliproxy":
+        return False, f"book-library exemption not used with --classifier {s.classifier}"
+    exempt = Path(raw)
+    if not exempt.is_absolute() or not exempt.is_dir():
+        return False, f"book-library exemption off: {raw} is not an existing absolute folder"
+    if s.books.resolve() != exempt.resolve():
+        return False, f"book-library exemption off: BOOKS_ROOT {s.books} is not the exempt library {raw}"
+    return True, f"book-library exemption for {exempt.resolve()}"
 
 
 # --------------------------------------------------------------------------- #
@@ -633,6 +667,7 @@ class Item:
     staged_files: List[str] = field(default_factory=list)
     stage_problems: List[str] = field(default_factory=list)
     approved_profile: str = ""
+    library_exemption: bool = False                         # detector hits overridden for a library book
     owners: List[str] = field(default_factory=list)          # profiles that already stage this text
     imported_as: List[Dict[str, object]] = field(default_factory=list)
     action: str = "none"           # none | would-assign | assigned | already-listed | refused | failed
@@ -694,7 +729,7 @@ def classify_item(s: Settings, rel: str, profiles: Dict[str, Profile], cloud: Op
     item.privacy = sorted(set((["policy"] if policy_private else []) + meta_labels + ex_labels))
     backend: Optional[Backend] = None
     ev = Evidence(meta, excerpt)
-    if policy_private or meta_private:
+    if policy_private or (meta_private and not s.library_exempt):
         reasons.append("private-source")
         if local is not None:
             backend = local
@@ -702,7 +737,7 @@ def classify_item(s: Settings, rel: str, profiles: Dict[str, Profile], cloud: Op
             item.status, item.action_note = "skipped", "private source and no local classifier: nothing was sent"
             item.review_reasons = reasons
             return item
-    elif ex_private:
+    elif ex_private and not s.library_exempt:
         reasons.append("private-excerpt")
         if local is not None:
             backend = local
@@ -711,6 +746,8 @@ def classify_item(s: Settings, rel: str, profiles: Dict[str, Profile], cloud: Op
             backend = cloud
     else:
         backend = cloud if s.classifier == "cliproxy" else local
+        # Book-library exemption: detector hits in a library book do not gate it.
+        item.library_exemption = meta_private or ex_private
 
     if not ev.excerpt:
         reasons.append("metadata-only")
@@ -727,8 +764,11 @@ def classify_item(s: Settings, rel: str, profiles: Dict[str, Profile], cloud: Op
         return item
     messages = build_messages(profiles, ev)
     if not backend.local:
-        # Last fail-closed check on the exact outbound bytes.
-        private, labels = privacy_labels(s, "\n".join(m["content"] for m in messages))
+        # Last fail-closed check on the exact outbound bytes. Under the
+        # book-library exemption only the book evidence is exempt: the rest of
+        # the payload (instructions, profile descriptions) is still checked.
+        scanned = build_messages(profiles, Evidence({}, "")) if s.library_exempt else messages
+        private, labels = privacy_labels(s, "\n".join(m["content"] for m in scanned))
         if private:
             item.status, item.action_note = "skipped", "outbound payload tripped the privacy scanner: nothing was sent"
             item.privacy = sorted(set(item.privacy + labels))
@@ -860,7 +900,8 @@ def write_report(s: Settings, items: List[Item], applied: bool, report: Optional
             "library": str(s.books), "staging": str(s.staging), "classifier": s.classifier,
             "model": s.model if s.classifier == "cliproxy" else s.local_model,
             "threshold": s.threshold, "excerpt_chars": 0 if s.metadata_only else s.excerpt_chars,
-            "high_risk_profiles": list(s.high_risk)}
+            "high_risk_profiles": list(s.high_risk), "library_exemption": s.library_exempt,
+            "library_exemption_note": s.exemption_note}
     path.write_text(json.dumps({"run": meta, "items": [asdict(i) for i in items]}, indent=2,
                                ensure_ascii=False) + "\n", encoding="utf-8")
     appr = path.with_suffix(".approvals.txt")
@@ -889,6 +930,8 @@ def print_report(s: Settings, items: List[Item], applied: bool, approved_only: b
         "cliproxy": f"cliproxy:{s.model}", "local": f"local:{s.local_model}"}.get(s.classifier, "none")
     print(f"mode: {mode}   classifier: {who}   threshold: {s.threshold}")
     print(f"library: {s.books} (read-only)   quarantine: {s.staging}")
+    if not approved_only:
+        print(f"privacy: {s.exemption_note}; paths in {s.private_file.name} stay local")
     if not items:
         print("\nNo uncategorized sources.")
     for i in items:
@@ -905,7 +948,11 @@ def print_report(s: Settings, items: List[Item], applied: bool, approved_only: b
                 print(f"    imported as: {m['profile']}/{m['staged']}  ({m['evidence']} {m['score']:.2f}, via {via})")
         if i.classifier:
             print(f"    sent to {i.classifier}: {i.evidence}, {i.sent_chars} chars")
-        if i.privacy:
+        if i.library_exemption:
+            hits = ", ".join(i.privacy)
+            print(f"    privacy: book-library exemption used (detector hits: {hits}); "
+                  "bounded, sanitized evidence sent as for any library book")
+        elif i.privacy:
             print(f"    privacy: {', '.join(i.privacy)}")
         if i.rationale:
             print(f"    rationale: {i.rationale}")
@@ -957,6 +1004,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--excerpt-chars", type=int, default=int(os.environ.get("KNOWLEDGE_EXCERPT_CHARS", DEFAULT_EXCERPT)))
     p.add_argument("--threshold", type=float, default=float(os.environ.get("KNOWLEDGE_CLASSIFY_THRESHOLD", DEFAULT_THRESHOLD)))
     p.add_argument("--limit", type=int, default=int(os.environ.get("KNOWLEDGE_CLASSIFY_LIMIT", DEFAULT_LIMIT)))
+    p.add_argument("--no-library-exemption", action="store_true",
+                   help="apply the privacy gate to library books too (no book-library exemption this run)")
     p.add_argument("--no-convert", action="store_true", help="do not convert EPUB/PDF (text books only)")
     p.add_argument("--no-stage", action="store_true", help="with --apply: update book lists only")
     p.add_argument("--report", type=Path, help="JSON report path (default <staging>/reports/classify-<time>.json)")
@@ -991,6 +1040,7 @@ def settings_from(args: argparse.Namespace) -> Settings:
         high_risk=tuple(split_list(hr)) if hr is not None else DEFAULT_HIGH_RISK,
         private_terms=tuple(split_list(env_value("MODEL_ROUTER_PRIVATE_TERMS"))),
         private_paths=tuple(split_list(env_value("MODEL_ROUTER_PRIVATE_PATHS"))),
+        exempt_root="off" if args.no_library_exemption else env("KNOWLEDGE_LIBRARY_EXEMPT_ROOT", DEFAULT_EXEMPT_LIBRARY),
     )
 
 
@@ -998,6 +1048,7 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     s = settings_from(args)
     check_roots(s)
+    s.library_exempt, s.exemption_note = library_exemption(s)
     profiles = load_profiles(s)
     approvals = load_approvals(args.approve, args.approvals)
     for rel in list(approvals) + list(args.sources):
@@ -1053,6 +1104,9 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
             todo = todo[:s.limit]
         cloud, local = make_backends(s)
         private_entries = private_policy(s.private_file)
+        if todo and s.library_exempt:
+            print(f"[knowledge-classify] {s.exemption_note}: privacy-detector hits in a book do not keep it "
+                  f"from {s.base_url}; paths in {s.private_file} stay local", file=sys.stderr)
         for rel in todo:
             print(f"[knowledge-classify] {rel}", file=sys.stderr)
             items.append(classify_item(s, rel, profiles, cloud, local, private_entries, content[rel]))
