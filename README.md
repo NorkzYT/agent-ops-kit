@@ -77,13 +77,16 @@ hermes kanban create "Positioning for the new plan" --assignee marketing
 ```
 
 Book-backed profiles list their books in `hermes/profiles/<name>/knowledge-sources.txt`.
-After adding books to `/mnt/books`, check what is unlisted, add the printed
-lines to the right book lists, refresh, then `/learn` in each `updated`
-profile. See [docs/knowledge-refresh.md](docs/knowledge-refresh.md), which
-also has a Discord prompt template.
+After adding books to `/mnt/books`, check what is unlisted, have a model
+propose a profile for each (dry-run), approve or apply, refresh, then `/learn`
+in each `updated` profile. See [docs/knowledge-refresh.md](docs/knowledge-refresh.md)
+and [docs/knowledge-classify.md](docs/knowledge-classify.md); both have a
+Discord prompt template.
 
 ```bash
 make knowledge-inventory     # read-only report: missing and uncategorized books
+make knowledge-classify      # AI proposals with confidence and review flags (dry-run)
+make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='<profile>=<library path>'
 make knowledge-refresh       # stage + sync every profile (NAME=<profile> for one)
 ```
 
@@ -91,7 +94,7 @@ make knowledge-refresh       # stage + sync every profile (NAME=<profile> for on
 
 ```
 docker-compose.yml        Honcho, Ollama, CLIProxyAPI
-Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile, knowledge-refresh
+Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile, knowledge-refresh, knowledge-classify
 .env.example              every setting, commented
 scripts/                  stack-init, hermes-install, hermes-profile, doctor, claude-max-proxy/ (host install), windows-vm/
 vendor/claude-max-api-proxy  vendored proxy sources (UPSTREAM pins the commit; make claude-proxy-update)

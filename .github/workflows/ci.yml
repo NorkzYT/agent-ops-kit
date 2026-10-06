@@ -146,6 +146,7 @@ jobs:
       - run: bash scripts/test_knowledge_sync.sh
       - run: bash scripts/test_knowledge_stage.sh
       - run: bash scripts/test_knowledge_refresh.sh
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_knowledge_classify.py' -v
       - run: bash scripts/test_hermes_profile.sh
       - run: bash scripts/test_windows_worker_install.sh
       - run: bash scripts/test_windows_chrome_devtools_mcp.sh

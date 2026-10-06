@@ -37,7 +37,9 @@ file.
 
 Profiles with a `knowledge-sources.txt` book list refresh in one step after you
 add books to the library: `make knowledge-refresh`. See
-[knowledge-refresh.md](knowledge-refresh.md).
+[knowledge-refresh.md](knowledge-refresh.md). `make knowledge-classify` proposes
+a profile for each uncategorized book (dry-run by default); see
+[knowledge-classify.md](knowledge-classify.md).
 
 ## Give it its own Discord bot
 

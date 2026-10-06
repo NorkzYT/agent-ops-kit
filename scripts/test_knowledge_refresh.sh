@@ -78,6 +78,15 @@ line="$(grep -F "It'\\''s Quoted" <<<"$out" | sed 's#>> .*#>> "$tmp/knowledge-so
 [[ "$(cat "$tmp/knowledge-sources.txt" 2>/dev/null)" == "edu/It's Quoted" ]] \
   && ok "suggested command appends the exact manifest line" || bad "suggested command broken: $line"
 
+grep -qF 'make knowledge-classify' <<<"$out" && ok "inventory points at the AI proposal target" || bad "no knowledge-classify hint"
+
+# --- --uncategorized: NUL-separated paths only (knowledge-classify input) ------
+mapfile -d '' unc < <(bash "$ROOT/scripts/knowledge-refresh.sh" --uncategorized 2>/dev/null); rc=$?
+[[ $rc -eq 0 && ${#unc[@]} -eq 3 && "${unc[0]}" == "edu/It's Quoted" && "${unc[1]}" == "edu/New Book" \
+   && "${unc[2]}" == "text/Mixed/extra.txt" ]] && ok "--uncategorized lists exactly the uncategorized paths" \
+  || bad "--uncategorized wrong: ${unc[*]}"
+[[ ! -e "$kroot" ]] && ok "--uncategorized writes nothing" || bad "--uncategorized created $kroot"
+
 # --- refresh all ------------------------------------------------------------
 out="$(run)"; rc=$?
 [[ $rc -eq 3 ]] && ok "missing book -> exit 3" || bad "refresh exited $rc: $out"

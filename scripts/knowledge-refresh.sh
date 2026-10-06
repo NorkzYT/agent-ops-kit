@@ -5,6 +5,8 @@
 #   knowledge-refresh.sh               stage + sync every profile with a book list
 #   knowledge-refresh.sh strategy      the same for one profile (or several)
 #   knowledge-refresh.sh --inventory   read-only: library vs. book lists, no writes
+#   knowledge-refresh.sh --uncategorized   read-only: uncategorized paths only,
+#                                      NUL-terminated (for knowledge-classify.py)
 #
 # Per profile: scripts/knowledge-stage.sh builds $KNOWLEDGE_ROOT/<p> from
 # hermes/profiles/<p>/knowledge-sources.txt, then scripts/knowledge-sync.sh copies
@@ -32,11 +34,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$ROOT/scripts/lib.sh"
 
 inventory_only=0
+porcelain=0
 names=()
 for a in "$@"; do
   case "$a" in
     --inventory) inventory_only=1 ;;
-    -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --uncategorized) inventory_only=1; porcelain=1 ;;
+    -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option: $a" ;;
     *) names+=("$a") ;;
   esac
@@ -134,6 +138,10 @@ scan() {   # scan <rel dir>: record the smallest uncovered book paths below it
 while IFS= read -r -d '' c; do
   [[ -L "$c" ]] || scan "$(basename "$c")"
 done < <(find "$books" -mindepth 1 -maxdepth 1 -type d ! -name '.*' -print0 | sort -z)
+if [[ "$porcelain" -eq 1 ]]; then
+  [[ ${#uncategorized[@]} -eq 0 ]] || printf '%s\0' "${uncategorized[@]}"
+  exit 0
+fi
 
 # snap <dir> <out>: content hashes of the .md/.txt files under dir.
 snap() {
@@ -206,6 +214,7 @@ echo
 echo "Uncategorized (${#uncategorized[@]}): books in the library that no book list includes"
 if [[ ${#uncategorized[@]} -gt 0 ]]; then
   echo "  Pick the profile yourself (nothing is assigned automatically), append the line, rerun."
+  echo "  For AI-assisted proposals (dry-run, nothing assigned): make knowledge-classify"
   echo "  Profiles with book lists: ${all[*]}"
   for u in "${uncategorized[@]}"; do
     echo "  - $u"

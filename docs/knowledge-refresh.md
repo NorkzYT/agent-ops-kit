@@ -3,7 +3,10 @@
 Use this after you drop new books into the library (`/mnt/books` by default).
 One command stages and syncs every book-backed profile and tells you what
 changed. It never moves, edits or deletes a book, never deletes staged
-knowledge, and never decides which profile a new book belongs to.
+knowledge, and never decides which profile a new book belongs to. For
+model-proposed profiles, use `make knowledge-classify`
+([knowledge-classify.md](knowledge-classify.md)): it is dry-run by default and
+assigns only with `APPLY=1` or your explicit approval.
 
 ## Fast path
 
@@ -11,7 +14,9 @@ From the repo root:
 
 ```bash
 make knowledge-inventory                  # read-only: what is new, missing or unlisted
-# add each new book to the right profile's book list (lines are printed for you)
+make knowledge-classify                   # optional: AI proposals per book (dry-run)
+# add each new book to the right profile's book list (lines are printed for you),
+# or: make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='<profile>=<library path>'
 make knowledge-refresh                    # stage + sync every profile with a book list
 make knowledge-refresh NAME=strategy      # or only one profile
 ```
@@ -67,7 +72,9 @@ since the folder already covers it). Each comes with the exact line to append:
       printf '%s\n' 'edu/The Code Breaker - Jennifer Doudna, Gene Editing, and the Future of the Human Race' >> hermes/profiles/<profile>/knowledge-sources.txt
 ```
 
-Replace `<profile>` with the profile you choose. The script does not guess.
+Replace `<profile>` with the profile you choose. The inventory does not
+guess; `make knowledge-classify` can propose one (see
+[knowledge-classify.md](knowledge-classify.md)).
 To keep a book out of every profile on purpose, add its line to
 `hermes/knowledge-ignore.txt` instead.
 
@@ -98,7 +105,9 @@ Stale files from books you removed from a book list stay in
 
 ## Discord prompt template
 
-Paste this to Hermes in Discord after adding books. Fill in the brackets.
+Paste this to Hermes in Discord after adding books. Fill in the brackets. To
+have the model propose the mapping first, use the template in
+[knowledge-classify.md](knowledge-classify.md#discord-prompt-template).
 
 ```
 I added books under /mnt/books. Refresh profile knowledge in the agent-ops-kit repo:

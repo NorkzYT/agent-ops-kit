@@ -70,8 +70,10 @@ make hermes-profile NAME=philosophy      # syncs data/knowledge/philosophy
 `KNOWLEDGE_CONVERT=0` to copy text books only.
 
 After adding books to the library, `make knowledge-inventory` lists books in
-no book list, and `make knowledge-refresh` stages and syncs every profile
-and reports which ones need `/learn`. See `docs/knowledge-refresh.md`.
+no book list, `make knowledge-classify` proposes a profile for each one
+(dry-run; `APPLY=1` or an explicit approval assigns), and
+`make knowledge-refresh` stages and syncs every profile and reports which ones
+need `/learn`. See `docs/knowledge-refresh.md` and `docs/knowledge-classify.md`.
 
 ## Talking to a profile
 

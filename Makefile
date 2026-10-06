@@ -24,7 +24,7 @@ endef
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory test-knowledge-stage test-knowledge-refresh test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
+	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-22s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
@@ -146,8 +146,27 @@ knowledge-refresh: ## After adding books: stage + sync every book-backed profile
 knowledge-inventory: ## Read-only: compare the book library with every knowledge-sources.txt; suggest lines for uncategorized books
 	@bash scripts/knowledge-refresh.sh --inventory $(NAME)
 
+# Values reach the script through the environment (command-line make variables
+# are exported), so book paths with spaces or quotes are passed through intact.
+# APPLY counts only when given on the make command line, never from a stray
+# exported shell variable.
+knowledge-classify: ## AI proposals for uncategorized books (dry-run). APPLY=1 assigns guardrail-clean ones; APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1 SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n]
+	@args=(); \
+	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
+	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \
+	 [[ "$${APPROVED_ONLY:-0}" == "1" ]] && args+=(--approved-only); \
+	 [[ "$${METADATA_ONLY:-0}" == "1" ]] && args+=(--metadata-only); \
+	 [[ -n "$${APPROVE:-}" ]] && args+=(--approve "$$APPROVE"); \
+	 [[ -n "$${APPROVALS:-}" ]] && args+=(--approvals "$$APPROVALS"); \
+	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
+	 [[ -n "$${LIMIT:-}" ]] && args+=(--limit "$$LIMIT"); \
+	 python3 scripts/knowledge-classify.py "$${args[@]}"
+
 test-knowledge-refresh: ## Run the knowledge-refresh tests (temp library, profiles, HERMES_HOME; offline)
 	@bash scripts/test_knowledge_refresh.sh
+
+test-knowledge-classify: ## Run the knowledge-classify tests (synthetic library, stub classifier server; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_knowledge_classify.py'
 
 test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub converter, offline)
 	@bash scripts/test_knowledge_stage.sh
