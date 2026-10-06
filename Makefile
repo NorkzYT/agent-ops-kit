@@ -22,12 +22,12 @@ endef
 .PHONY: help init up down restart pull update ps status logs \
 	    cliproxyapi-logs cliproxyapi-logs-follow router-logs router-logs-follow \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
-	    models honcho-health doctor route-smoke test-router specialist-route specialist-status specialist-install specialist-enable specialist-disable test-specialists \
+	    models honcho-health doctor route-smoke test-router specialist-route specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
 help: ## Show this help
-	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-22s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-25s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
 init: ## Create .env with generated secrets and render the CLIProxyAPI config
 	@bash scripts/stack-init.sh
@@ -146,6 +146,9 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 
 test-specialists: ## Run only the specialist-router tests (offline, temp fixtures)
 	@python3 -m unittest discover -s scripts/tests -p 'test_specialist*.py'
+
+test-specialist-activate: ## Run only the specialist activation tests (stub hermes/systemctl, temp HERMES_HOME; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_specialist_activate.py'
 
 route-smoke: ## Read-only routing smoke test: probe /v1/models, degrade-check tiers, run the canary
 	@bash scripts/route-smoke.sh

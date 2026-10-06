@@ -199,5 +199,6 @@ terminal. To undo everything, copy the `config.yaml.bak.<timestamp>` back.
 
 ```bash
 make test-specialists      # specialist-router + activation tests (stub hermes, temp HERMES_HOME)
+make test-specialist-activate  # activation tests only (stub hermes/systemctl, temp HERMES_HOME)
 make test-router           # whole offline suite
 ```
