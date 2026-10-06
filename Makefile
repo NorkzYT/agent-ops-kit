@@ -24,7 +24,7 @@ endef
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router specialist-route test-specialists \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
+	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-22s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
@@ -177,6 +177,29 @@ knowledge-reconcile: ## Proposal only: staged knowledge with no book-list source
 	 [[ -n "$${APPROVALS:-}" ]] && args+=(--approvals "$$APPROVALS"); \
 	 [[ -n "$${SCOPE:-}" ]] && args+=(--scope "$$SCOPE"); \
 	 python3 scripts/knowledge-reconcile.py "$${args[@]}"
+
+# One bounded headless /learn turn per knowledge file into the exact skill
+# <profile>-knowledge; state, logs and a lock live in the profile's
+# knowledge-learn/ folder, so an interrupted run resumes where it stopped.
+knowledge-learn: ## Learn synced books into <NAME>-knowledge, one file per Hermes run, resumable (NAME=<profile>|all [TIMEOUT=1800 MAX_TURNS=200 LIMIT=n JOBS=1 DRY_RUN=1 FORCE=1 RETRY=1])
+	@test -n "$(NAME)" || { echo "usage: make knowledge-learn NAME=<profile>|all [TIMEOUT=s LIMIT=n JOBS=n DRY_RUN=1]   (status: make knowledge-learn-status)"; exit 2; }
+	@args=($(NAME)); \
+	 [[ -n "$${TIMEOUT:-}" ]] && args+=(--timeout "$$TIMEOUT"); \
+	 [[ -n "$${MAX_TURNS:-}" ]] && args+=(--max-turns "$$MAX_TURNS"); \
+	 [[ -n "$${LIMIT:-}" ]] && args+=(--limit "$$LIMIT"); \
+	 [[ -n "$${JOBS:-}" ]] && args+=(--jobs "$$JOBS"); \
+	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
+	 [[ "$${FORCE:-0}" == "1" ]] && args+=(--force); \
+	 [[ "$${RETRY:-0}" == "1" ]] && args+=(--retry); \
+	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/knowledge-learn.py "$${args[@]}"
+
+knowledge-learn-status: ## Read-only: raw synced knowledge vs. learned <profile>-knowledge skill per profile (NAME=<profile> [JSON=1])
+	@args=(--status $(NAME)); \
+	 [[ "$${JSON:-0}" == "1" ]] && args+=(--json); \
+	 python3 scripts/knowledge-learn.py "$${args[@]}"
+
+test-knowledge-learn: ## Run the knowledge-learn tests (temp HERMES_HOME, stub hermes and /learn prompt; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_knowledge_learn.py'
 
 test-knowledge-refresh: ## Run the knowledge-refresh tests (temp library, profiles, HERMES_HOME; offline)
 	@bash scripts/test_knowledge_refresh.sh

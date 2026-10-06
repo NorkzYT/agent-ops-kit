@@ -84,6 +84,11 @@ max 6) drops the lowest scores.
   /learn ~/.hermes/profiles/strategy/knowledge  name the skill strategy-knowledge
   ```
 
+  Or let `make knowledge-learn NAME=<profile>` do it headless with that exact
+  name. The router's `ready` only means the skill exists;
+  `make knowledge-learn-status` shows how many synced files it has learned
+  ([knowledge-learn.md](knowledge-learn.md)).
+
   Unready profiles still route, with their status shown, unless
   `specialist_require_ready: true`.
 - **Ambiguous tasks** (optional): `specialist_classifier: local` lets the

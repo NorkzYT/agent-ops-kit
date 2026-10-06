@@ -283,6 +283,7 @@ if [[ "$inventory_only" -eq 0 ]]; then
     for p in "${learn[@]}"; do
       echo "  hermes -p $p chat      then:   /learn $HERMES_HOME/profiles/$p/knowledge"
     done
+    echo "Or headless, one book per run and resumable: make knowledge-learn NAME=<profile> (progress: make knowledge-learn-status)"
   else
     echo "Next: no profile knowledge changed; /learn is not needed."
   fi

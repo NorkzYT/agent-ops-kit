@@ -32,6 +32,11 @@ hermes -p strategy chat
 the refresh prints the command and leaves it to you. Re-running `/learn` merges
 new material into the profile's existing knowledge skill.
 
+For many books, run it headless instead: `make knowledge-learn NAME=strategy`
+learns one file per bounded Hermes run into `strategy-knowledge`, skips files
+already learned, and resumes after a timeout. See
+[knowledge-learn.md](knowledge-learn.md).
+
 ## What the refresh does
 
 For each profile with `hermes/profiles/<name>/knowledge-sources.txt`:
