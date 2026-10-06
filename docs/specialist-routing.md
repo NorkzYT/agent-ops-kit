@@ -121,47 +121,83 @@ Trace fields: `routes[]` (`profile`, `score`, `reasons`, `high_risk`,
 ## Turn it on
 
 1. Dry-run a few real tasks (above) and check the routes.
-2. Build each profile's knowledge skill. Today every profile reports
-   `needs-learn` until you do this:
+2. Build each profile's knowledge skill. A profile reports `needs-learn`
+   until you do this:
 
    ```bash
    make knowledge-refresh
-   hermes -p <profile> chat     # then: /learn ~/.hermes/profiles/<profile>/knowledge  name the skill <profile>-knowledge
+   make knowledge-learn NAME=<profile>      # headless; or /learn by hand, see above
    ```
 
-3. Install the updated plugin and enable the pilot. `make hermes-install`
-   copies `hermes/plugins/model-router/` into `~/.hermes/plugins/`. It does
-   not overwrite an existing `config.yaml`; it writes `config.yaml.agent-ops-kit`
-   next to it (rendered from `MODEL_ROUTER_SPECIALISTS` and
-   `MODEL_ROUTER_SPECIALIST_MAX` in `.env`). Merge the `specialist_*` keys by
-   hand:
+3. Check where you are. Read-only: plugin files against the repo, the
+   `specialist_*` settings, the gateway, whether a restart is pending, and
+   knowledge readiness per profile.
 
-   ```yaml
-   plugins:
-     entries:
-       model-router:
-         settings:
-           specialist_routing: true
-           specialist_max_profiles: 4        # 0-6
-           specialist_require_ready: false   # true = drop profiles without a knowledge skill
-           specialist_classifier: none       # none | local
-           specialist_profiles: []           # allowlist; empty = all of the above
+   ```bash
+   make specialist-status
    ```
 
-4. Restart the gateway yourself (`make hermes-restart`) when you are ready.
+4. Install. This copies `hermes/plugins/model-router/` into
+   `~/.hermes/plugins/` and sets the keys with `hermes config set`, then reads
+   every key and file back. It **never restarts** the gateway, so the running
+   bot keeps its old settings. Preview first:
+
+   ```bash
+   make specialist-install DRY_RUN=1
+   make specialist-install                        # MAX=4 REQUIRE_READY=0 CLASSIFIER=none PROFILES=all
+   ```
+
+   It sets `specialist_routing: true`. A key you pass (`MAX=0-6`,
+   `REQUIRE_READY=1|0`, `CLASSIFIER=none|local`, `PROFILES=a,b` or `all`) is
+   written. A key you do not pass keeps its current value, or gets the default
+   when it is missing. With `REQUIRE_READY=1` it stops if no allowed profile
+   has a knowledge skill yet, because nothing would route.
+
+   `hermes config set` rewrites `config.yaml` without its comments, so the
+   target saves `config.yaml.bak.<timestamp>` first. It stores `none` as
+   `null`, which the plugin reads as `none`. A replaced plugin copy goes to
+   `~/.hermes/backups/agent-ops-kit/`. The installer needs `model-router` in
+   `plugins.enabled` and stops otherwise; it never edits that list.
+
+5. Enable, **from your own terminal**. This runs step 4, then restarts the
+   gateway and waits until a fresh `model_router registered (...
+   specialists=on)` line appears in `~/.hermes/logs/agent.log`.
+
+   ```bash
+   make specialist-enable                         # asks before restarting
+   make specialist-enable YES=1                   # no question (YES counts only on the command line)
+   ```
+
+   It restarts only when the config or plugin changed after the gateway
+   started, and only a running gateway (a stopped one is left for
+   `hermes gateway start`). It refuses to restart from inside Hermes: a
+   gateway session (`HERMES_GATEWAY_SESSION` and similar), a process under
+   the gateway, or a turn served by `claude-max-proxy.service`. Restarting
+   from there kills the turn that asked. It prints the command to run instead.
+
+   | Exit | Meaning |
+   |------|---------|
+   | 0 | done (restarted and verified, not needed, or you answered no) |
+   | 1 | preflight, write or read-back failed |
+   | 3 | installed and verified, not restarted (refused here, no TTY without `YES=1`, gateway not running) |
+   | 4 | restarted, but no `specialists=on` line within `WAIT` seconds (default 90) |
+
    The hook registers only in the `default` profile
    (`specialist_orchestrators`), never in a specialist or a subagent turn.
-5. Watch the decisions. They are content-free:
+
+6. Watch the decisions. They are content-free:
 
    ```bash
    make hermes-logs | grep 'model_router: specialists'
    ```
 
-Turn it off with `specialist_routing: false` and a restart.
+Turn it off with `make specialist-disable` (sets `specialist_routing: false`
+and reads it back, no restart), then `make hermes-restart` from your own
+terminal. To undo everything, copy the `config.yaml.bak.<timestamp>` back.
 
 ## Verify
 
 ```bash
-make test-specialists      # specialist-router tests only
+make test-specialists      # specialist-router + activation tests (stub hermes, temp HERMES_HOME)
 make test-router           # whole offline suite
 ```

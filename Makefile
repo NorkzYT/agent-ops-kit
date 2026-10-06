@@ -22,7 +22,7 @@ endef
 .PHONY: help init up down restart pull update ps status logs \
 	    cliproxyapi-logs cliproxyapi-logs-follow router-logs router-logs-follow \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
-	    models honcho-health doctor route-smoke test-router specialist-route test-specialists \
+	    models honcho-health doctor route-smoke test-router specialist-route specialist-status specialist-install specialist-enable specialist-disable test-specialists \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
@@ -109,6 +109,40 @@ test-router: ## Run the model-router unit + zero-egress privacy canary suite (of
 
 specialist-route: ## Dry-run the specialist router for TASK="..." (offline, nothing dispatched; PLAN=1 shows the note)
 	@python3 scripts/specialist-route.py $(if $(PLAN),--plan) $(if $(REQUIRE_READY),--require-ready)
+
+# Activation: install = plugin + specialist_* keys via `hermes config set`, read
+# back, never restarts. enable = install + a guarded gateway restart (asks; YES=1
+# on the make command line skips the question; refused inside Hermes or an
+# agent it runs) + a check that the router registered with specialists=on.
+specialist-status: ## Read-only: plugin vs repo, specialist_* settings, gateway, restart pending, knowledge readiness
+	@PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py status
+
+specialist-install: ## Install the router plugin + set specialist_routing on (hermes config set, read back); NO restart [MAX=4 REQUIRE_READY=0|1 CLASSIFIER=none|local PROFILES=a,b|all DRY_RUN=1]
+	@args=(install); \
+	 [[ -n "$${MAX:-}" ]] && args+=(--max "$$MAX"); \
+	 [[ "$${REQUIRE_READY:-}" == "1" ]] && args+=(--require-ready); \
+	 [[ "$${REQUIRE_READY:-}" == "0" ]] && args+=(--no-require-ready); \
+	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
+	 [[ -n "$${PROFILES+x}" ]] && args+=(--profiles "$$PROFILES"); \
+	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
+	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
+
+specialist-enable: ## specialist-install, then restart the gateway (asks; YES=1 skips; refused inside Hermes) and verify specialists=on [same vars, WAIT=90]
+	@args=(enable); \
+	 [[ -n "$${MAX:-}" ]] && args+=(--max "$$MAX"); \
+	 [[ "$${REQUIRE_READY:-}" == "1" ]] && args+=(--require-ready); \
+	 [[ "$${REQUIRE_READY:-}" == "0" ]] && args+=(--no-require-ready); \
+	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
+	 [[ -n "$${PROFILES+x}" ]] && args+=(--profiles "$$PROFILES"); \
+	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
+	 [[ "$(if $(filter command line,$(origin YES)),$(YES))" == "1" ]] && args+=(--yes); \
+	 [[ -n "$${WAIT:-}" ]] && args+=(--wait "$$WAIT"); \
+	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
+
+specialist-disable: ## Set specialist_routing: false (read back); NO restart: then make hermes-restart [DRY_RUN=1]
+	@args=(disable); \
+	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
+	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
 test-specialists: ## Run only the specialist-router tests (offline, temp fixtures)
 	@python3 -m unittest discover -s scripts/tests -p 'test_specialist*.py'

@@ -104,4 +104,6 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - Specialist routing (pilot, off by default): `specialist_routing` in the same
   plugin suggests 0-4 book-backed profiles per current task; private tasks never
   reach cloud-backed profiles; high-risk profiles are advisory only. Dry-run:
-  `TASK="..." make specialist-route`. Reference: `docs/specialist-routing.md`.
+  `TASK="..." make specialist-route`. Activation: `make specialist-status`,
+  `specialist-install` (no restart), `specialist-enable` (guarded restart, never
+  from inside Hermes). Reference: `docs/specialist-routing.md`.
