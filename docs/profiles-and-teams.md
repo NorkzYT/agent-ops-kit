@@ -35,6 +35,10 @@ book does not sit in every prompt. Re-running `/learn` merges new material into
 the existing skill. Ask the profile "which source says that?" and it cites the
 file.
 
+Profiles with a `knowledge-sources.txt` book list refresh in one step after you
+add books to the library: `make knowledge-refresh`. See
+[knowledge-refresh.md](knowledge-refresh.md).
+
 ## Give it its own Discord bot
 
 Create a second application in the Discord developer portal, then:

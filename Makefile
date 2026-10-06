@@ -24,7 +24,7 @@ endef
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-profile knowledge-convert knowledge-stage test-knowledge-stage test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
+	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory test-knowledge-stage test-knowledge-refresh test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-22s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
@@ -139,6 +139,15 @@ knowledge-convert: ## Copy-convert EPUB/PDF books to Markdown (SRC=/mnt/books/ed
 knowledge-stage: ## Build data/knowledge/<NAME> from hermes/profiles/<NAME>/knowledge-sources.txt (NAME=strategy [BOOKS_ROOT=/mnt/books KNOWLEDGE_CONVERT=0])
 	@test -n "$(NAME)" || { echo "usage: make knowledge-stage NAME=<profile> [BOOKS_ROOT=<dir>]"; exit 2; }
 	@bash scripts/knowledge-stage.sh "$(NAME)"
+
+knowledge-refresh: ## After adding books: stage + sync every book-backed profile (or NAME=<profile>) and report updated/current/missing/uncategorized
+	@bash scripts/knowledge-refresh.sh $(NAME)
+
+knowledge-inventory: ## Read-only: compare the book library with every knowledge-sources.txt; suggest lines for uncategorized books
+	@bash scripts/knowledge-refresh.sh --inventory $(NAME)
+
+test-knowledge-refresh: ## Run the knowledge-refresh tests (temp library, profiles, HERMES_HOME; offline)
+	@bash scripts/test_knowledge_refresh.sh
 
 test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub converter, offline)
 	@bash scripts/test_knowledge_stage.sh

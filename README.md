@@ -76,11 +76,22 @@ make hermes-profile NAME=marketing
 hermes kanban create "Positioning for the new plan" --assignee marketing
 ```
 
+Book-backed profiles list their books in `hermes/profiles/<name>/knowledge-sources.txt`.
+After adding books to `/mnt/books`, check what is unlisted, add the printed
+lines to the right book lists, refresh, then `/learn` in each `updated`
+profile. See [docs/knowledge-refresh.md](docs/knowledge-refresh.md), which
+also has a Discord prompt template.
+
+```bash
+make knowledge-inventory     # read-only report: missing and uncategorized books
+make knowledge-refresh       # stage + sync every profile (NAME=<profile> for one)
+```
+
 ## Repository layout
 
 ```
 docker-compose.yml        Honcho, Ollama, CLIProxyAPI
-Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile
+Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile, knowledge-refresh
 .env.example              every setting, commented
 scripts/                  stack-init, hermes-install, hermes-profile, doctor, claude-max-proxy/ (host install), windows-vm/
 vendor/claude-max-api-proxy  vendored proxy sources (UPSTREAM pins the commit; make claude-proxy-update)

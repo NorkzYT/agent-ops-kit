@@ -69,6 +69,10 @@ make hermes-profile NAME=philosophy      # syncs data/knowledge/philosophy
 (gitignored). EPUB/PDF conversion uses the `document-converter` skill; set
 `KNOWLEDGE_CONVERT=0` to copy text books only.
 
+After adding books to the library, `make knowledge-inventory` lists books in
+no book list, and `make knowledge-refresh` stages and syncs every profile
+and reports which ones need `/learn`. See `docs/knowledge-refresh.md`.
+
 ## Talking to a profile
 
 - `marketing chat` from a terminal (launcher created by Hermes)

@@ -1,0 +1,5 @@
+# Library paths (relative to BOOKS_ROOT, default /mnt/books) that are left out of
+# every profile on purpose. `make knowledge-refresh` / `make knowledge-inventory`
+# stop listing them as uncategorized. A folder line covers everything below it.
+# Example:
+# manga
