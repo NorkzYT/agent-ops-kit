@@ -8,7 +8,9 @@ synthetic and constructed to satisfy the deterministic detectors' checksums.
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 import unittest
 from types import SimpleNamespace
@@ -333,6 +335,194 @@ class TestProviderExceptionBoundary(unittest.TestCase):
         result = router.on_llm_execution(request=req("#private synthetic"), next_call=spy)
         self.assertEqual(spy.calls, 0)
         self.assertTrue(result._model_router_refusal)
+
+
+def _local_down(kind):
+    """Backend factory whose every local model fails with ``kind``."""
+    calls = []
+
+    def factory(model):
+        def chat(messages, **kw):
+            calls.append(model)
+            raise local_backend.LocalUnavailable(f"synthetic {kind}", kind)
+        return SimpleNamespace(chat=chat)
+    return factory, calls
+
+
+LOCAL_ROLES = dict(ollama_base_url="http://127.0.0.1:11434/v1", ollama_routine_model="qwen3.5:27b",
+                   ollama_fallback_model="qwen3.6:27b", ollama_agent_model="qwen3.8:27b")
+
+
+class TestPrivateRefusalIsTerminal(unittest.TestCase):
+    """Incident regression: a private request whose local inference timed out was
+    refused, then Hermes activated cloud fallback (gpt-5.6-luna -> opus) because
+    the refusal carried finish_reason=content_filter. The refusal must be final."""
+
+    def _router(self, factory, **over):
+        s = dict(LOCAL_ROLES, privacy_routing=True, complexity_routing=True)
+        s.update(over)
+        return router_mod.Router(config_mod.RouterSettings(**s), backend_factory=factory)
+
+    def test_local_timeout_refuses_with_zero_cloud_calls(self):
+        factory, local_calls = _local_down("timeout")
+        r = self._router(factory)
+        spy = _Spy()
+        with self.assertLogs("hermes.plugin.model_router", level="WARNING") as logs:
+            resp = r.on_llm_execution(request=req(f"#private card {PAN}"), next_call=spy, session_id="inc",
+                                      base_url="http://127.0.0.1:8317/v1", model="gpt-5.6-luna")
+        self.assertIn("private->refuse (local unavailable: timeout)", "\n".join(logs.output))
+        self.assertEqual((spy.calls, spy.bytes), (0, 0), "private payload reached a cloud provider")
+        self.assertEqual(local_calls, ["qwen3.5:27b", "qwen3.6:27b"])  # role model + one local fallback
+        self.assertTrue(resp._model_router_refusal)
+        self.assertEqual(resp._model_router_refusal_reason, "local-unavailable")
+        self.assertEqual(resp.choices[0].finish_reason, "stop")
+        self.assertNotIn(PAN, resp.choices[0].message.content)
+        # The next turn in the session (what a fallback restart would send) stays off the cloud.
+        follow = r.on_llm_execution(request=req("ok, try again"), next_call=spy, session_id="inc",
+                                    base_url="http://127.0.0.1:3456/v1", model="opus")
+        self.assertEqual(spy.calls, 0)
+        self.assertTrue(follow._model_router_refusal)
+
+    def test_no_refusal_path_signals_content_filter(self):
+        factory, _ = _local_down("timeout")
+        cases = {
+            "local-unavailable": (self._router(factory), req(f"ssn {SSN}")),
+            "local-endpoint-not-local": (self._router(factory, ollama_base_url="https://api.example.com/v1"),
+                                         req(f"ssn {SSN}")),
+            "astra-unauthorized": (self._router(factory, astra_policy="never"),
+                                   {"model": "gpt-6-astra", "messages": [{"role": "user", "content": "hi"}]}),
+        }
+        guard = self._router(factory)
+        guard.is_private = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        cases["router-guard"] = (guard, req("benign"))
+        for reason, (router, request) in cases.items():
+            with self.subTest(reason=reason):
+                spy = _Spy()
+                resp = router.on_llm_execution(request=request, next_call=spy, session_id=reason)
+                self.assertEqual(spy.calls, 0)
+                self.assertTrue(resp._model_router_refusal)
+                self.assertEqual(resp._model_router_refusal_reason, reason)
+                self.assertNotEqual(resp.choices[0].finish_reason, "content_filter")
+                self.assertTrue(resp.choices[0].message.content.strip())
+
+    def test_empty_local_content_is_a_local_failure_not_an_answer(self):
+        body = b'{"model": "qwen3.5:27b", "choices": [{"message": {"content": "  "}}]}'
+
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return body
+
+        backend = local_backend.LocalBackend("http://127.0.0.1:11434/v1", "qwen3.5:27b")
+        original = local_backend._OPENER
+        local_backend._OPENER = SimpleNamespace(open=lambda *a, **k: _Resp())
+        try:
+            with self.assertRaises(local_backend.LocalUnavailable) as caught:
+                backend.chat([{"role": "user", "content": "x"}])
+        finally:
+            local_backend._OPENER = original
+        self.assertEqual(caught.exception.kind, "shape")
+
+    def test_disabled_privacy_preserves_provider_exception_for_private_payload(self):
+        factory, local_calls = _local_down("timeout")
+        r = self._router(factory, privacy_routing=False)
+        error = TimeoutError("synthetic provider timeout")
+        calls = []
+
+        def downstream(received):
+            calls.append(received)
+            raise error
+
+        request = req(f"ssn {SSN}")
+        with self.assertRaises(TimeoutError) as caught:
+            r.on_llm_execution(request=request, next_call=downstream, session_id="off")
+        self.assertIs(caught.exception, error)
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0], request)
+        self.assertEqual(local_calls, [])
+
+
+AGENT_DIR = os.environ.get("HERMES_AGENT_DIR") or os.path.expanduser("~/.hermes/hermes-agent")
+VENV_PY = os.path.join(AGENT_DIR, "venv", "bin", "python")
+
+# Runs inside the Hermes venv: the router as registered llm_execution middleware,
+# the real middleware chain, and Hermes' own response checks.
+_CORE_SEAM = r"""
+import json, os, sys, tempfile
+os.environ["HERMES_HOME"] = tempfile.mkdtemp()
+sys.path[:0] = [os.environ["HERMES_AGENT_DIR"], os.environ["TESTS_DIR"]]
+from types import SimpleNamespace
+from _loader import submodule
+router_mod, config_mod, lb = submodule("router"), submodule("router_config"), submodule("local_backend")
+from hermes_cli.middleware import LLM_EXECUTION_MIDDLEWARE, run_llm_execution_middleware
+from hermes_cli.plugins import get_plugin_manager
+from agent.transports import get_transport
+from agent.turn_recovery import validate_response_shape
+from agent.turn_response_check import _derive_finish_reason
+
+def factory(model):
+    def chat(messages, **kw):
+        raise lb.LocalUnavailable("synthetic timeout", "timeout")
+    return SimpleNamespace(chat=chat)
+
+out = {}
+def run(privacy, request, terminal):
+    s = config_mod.RouterSettings(privacy_routing=privacy, complexity_routing=True,
+                                  ollama_base_url="http://127.0.0.1:11434/v1",
+                                  ollama_routine_model="qwen3.5:27b", ollama_fallback_model="qwen3.6:27b")
+    mw = get_plugin_manager()._middleware
+    mw[LLM_EXECUTION_MIDDLEWARE] = [router_mod.Router(s, backend_factory=factory).on_llm_execution]
+    return run_llm_execution_middleware(request, terminal, session_id="seam", model=request["model"],
+                                        base_url="http://127.0.0.1:8317/v1", api_mode="chat_completions")
+
+cloud = []
+private = {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "#private card 4242 4242 4242 4242"}]}
+resp = run(True, private, lambda p: cloud.append(p))
+agent = SimpleNamespace(api_mode="chat_completions", _get_transport=lambda: get_transport("chat_completions"),
+                        _should_treat_stop_as_truncated=lambda *a, **k: False)
+out["cloud_calls"] = len(cloud)
+out["refusal"] = bool(getattr(resp, "_model_router_refusal", False))
+out["shape_invalid"] = validate_response_shape(agent, resp)[0]
+out["finish_reason"] = _derive_finish_reason(agent, resp, private["messages"])
+legacy = lb.make_response("x", model="m", finish_reason="content_filter")
+out["legacy_finish_reason"] = _derive_finish_reason(agent, legacy, private["messages"])
+
+for privacy in (False, True):
+    err = TimeoutError("synthetic provider timeout")
+    def boom(p):
+        raise err
+    try:
+        run(privacy, {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "hello"}]}, boom)
+        out[f"exc_privacy_{privacy}"] = "none"
+    except TimeoutError as caught:
+        out[f"exc_privacy_{privacy}"] = "same" if caught is err else "different"
+print(json.dumps(out))
+"""
+
+
+@unittest.skipUnless(os.path.exists(VENV_PY), "Hermes venv not installed")
+class TestHermesCoreSeam(unittest.TestCase):
+    """The refusal as installed Hermes sees it through the real middleware chain."""
+
+    def test_private_refusal_is_terminal_in_hermes_core(self):
+        r = subprocess.run([VENV_PY, "-c", _CORE_SEAM], capture_output=True, text=True, timeout=180,
+                           env=dict(os.environ, HERMES_AGENT_DIR=AGENT_DIR,
+                                    TESTS_DIR=os.path.dirname(os.path.abspath(__file__))))
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["cloud_calls"], 0)
+        self.assertTrue(out["refusal"])
+        self.assertFalse(out["shape_invalid"])  # an invalid shape also triggers eager fallback
+        self.assertEqual(out["finish_reason"], "stop")
+        # Why the old shape leaked: core routes content_filter to its fallback handler.
+        self.assertEqual(out["legacy_finish_reason"], "content_filter")
+        self.assertEqual(out["exc_privacy_False"], "same")
+        self.assertEqual(out["exc_privacy_True"], "same")
 
 
 class TestComplexityRewrite(unittest.TestCase):

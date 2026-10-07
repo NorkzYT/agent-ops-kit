@@ -92,12 +92,20 @@ DEFAULT_REFUSAL = (
 
 
 def refusal_response(model: str = "model-router/refusal", *, reason: str = "", text: str = "") -> SimpleNamespace:
-    """A fail-closed refusal. Never contains the private content, only a label."""
+    """A fail-closed refusal. Never contains the private content, only a label.
+
+    Terminal ``finish_reason="stop"``, never ``content_filter``: Hermes treats an
+    HTTP-200 ``content_filter`` as a provider safety refusal and answers it by
+    activating the configured fallback chain (``handle_content_policy_refusal``),
+    which moves a private session onto a cloud provider. The router's refusal is
+    a final answer; it is typed by ``_model_router_refusal`` and the model label.
+    """
     body = text or DEFAULT_REFUSAL
     if reason:
         body = f"{body}\n\n(router: {reason})"
-    resp = make_response(body, model=model, finish_reason="content_filter")
+    resp = make_response(body, model=model, finish_reason="stop")
     resp._model_router_refusal = True
+    resp._model_router_refusal_reason = reason or "refused"
     return resp
 
 
@@ -149,8 +157,13 @@ class LocalBackend:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise LocalUnavailable("local backend returned an unexpected shape", "shape") from exc
-        return make_response(content if isinstance(content, str) else str(content),
-                             model=data.get("model") or self.model)
+        text = content if isinstance(content, str) else ("" if content is None else str(content))
+        if not text.strip():
+            # A thinking-only/empty answer is not a result: returned upstream it
+            # trips Hermes' empty-response recovery, whose last rung activates the
+            # configured (cloud) fallback chain.
+            raise LocalUnavailable("local backend returned empty content", "shape")
+        return make_response(text, model=data.get("model") or self.model)
 
 
 # Endpoint-level failures: the fallback model lives on the same endpoint, so
