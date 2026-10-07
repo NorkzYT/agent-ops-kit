@@ -143,7 +143,8 @@ invented, and explicitly disabled reasoning is never re-enabled.
 **Coding requests are exempt:** claude-max-proxy reads `reasoning_effort` and
 owns the Claude CLI effort mapping; the plugin only ever selects `opus` vs
 `fable` there. **Auxiliary** title/compression calls keep their per-entry
-`reasoning_effort` from native config.
+`reasoning_effort` from native config (compression never runs at `high`; see
+[Auxiliary work](#auxiliary-work-title-generation-compression)).
 
 Model selection (which model) and reasoning effort (how hard it thinks) are
 decided independently by the same task classification.
@@ -299,6 +300,16 @@ a synthetic-SSN request produced **zero** cloud calls and a refusal; a benign
 request reached the cloud. See `make test-router` (the `TestPrivacyCanary`
 cases assert zero bytes to `:8317` and `:3456`).
 
+A refusal is a **final answer** (`finish_reason: stop`, typed by
+`_model_router_refusal` / `_model_router_refusal_reason`), never
+`content_filter`: Hermes answers an HTTP-200 `content_filter` with
+`handle_content_policy_refusal`, which activates the configured fallback chain
+(`gpt-5.6-luna -> opus`), so a refused private turn would restart on a cloud
+provider. An empty local answer is likewise a local failure (next local model,
+then refuse), because Hermes' empty-response ladder also ends in fallback.
+`TestHermesCoreSeam` runs the refusal through the installed Hermes middleware
+chain and response checks.
+
 > No real secrets are used in any test. All sensitive-looking fixtures are
 > synthetic values chosen to satisfy the deterministic checksums.
 
@@ -326,6 +337,25 @@ AUX_BASE_URL=http://127.0.0.1:11434/v1
 # AUX_MODEL=qwen3.5:27b          default: OLLAMA_ROUTINE_MODEL
 # AUX_FALLBACK_MODEL=qwen3.6:27b default: OLLAMA_FALLBACK_MODEL
 ```
+
+**Compression on a local route** renders thinking off and prefill-sized
+budgets. Measured on the Tailscale Ollama (qwen3.5:27b, 64k context): prefill
+~200 tok/s, decode ~12 tok/s, so the ~52.6k-token summary prompt Hermes builds
+(its input is capped at 160k chars; there is no aux-side chunking) streams
+nothing for 4+ minutes and the default 120 s no-progress window always fires.
+
+| Key | Local (`AUX_BASE_URL` set) | Inherited (cloud) |
+|-----|----------------------------|-------------------|
+| `auxiliary.compression.reasoning_effort` | `""` | `low` |
+| `auxiliary.compression.extra_body` | `{reasoning_effort: none}` | `{}` |
+| `auxiliary.compression.timeout` | `600` | `120` |
+| `compression.context_timeout_seconds` | `420` | `120` |
+| `compression.context_total_ceiling_seconds` | `900` | `600` |
+
+Ollama's `/v1` honors only a top-level `reasoning_effort`; the `reasoning`
+object Hermes emits for the `reasoning_effort` key is ignored for thinking and
+overrides the top-level field, so the local route disables thinking through
+`extra_body` alone (verified on the wire by `test_local_compression_wire_disables_thinking`).
 
 Re-run the installer (below) to re-render the `auxiliary.*` entries. With an
 explicit provider Hermes still falls back to the main agent model after a

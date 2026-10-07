@@ -121,6 +121,19 @@ aux_fallback_chain() {
   printf '[{provider: custom, model: "%s", base_url: "%s"}]' "$AUX_FALLBACK_MODEL" "$AUX_BASE_URL"
 }
 AUX_FALLBACK_CHAIN="$(aux_fallback_chain)"; export AUX_FALLBACK_CHAIN
+# Compression: never high effort. A local route turns thinking off with a
+# top-level reasoning_effort none in extra_body (Ollama ignores the `reasoning`
+# object the reasoning_effort key renders, and that object would override it)
+# and gets wait budgets sized for local prefill (config.yaml.tmpl, compression).
+if [[ -n "$AUX_BASE_URL" ]]; then
+  AUX_COMPRESSION_EFFORT='""'; AUX_COMPRESSION_EXTRA_BODY='{reasoning_effort: none}'
+  AUX_COMPRESSION_TIMEOUT=600; COMPRESSION_IDLE_SECONDS=420; COMPRESSION_CEILING_SECONDS=900
+else
+  AUX_COMPRESSION_EFFORT=low; AUX_COMPRESSION_EXTRA_BODY='{}'
+  AUX_COMPRESSION_TIMEOUT=120; COMPRESSION_IDLE_SECONDS=120; COMPRESSION_CEILING_SECONDS=600
+fi
+export AUX_COMPRESSION_EFFORT AUX_COMPRESSION_EXTRA_BODY AUX_COMPRESSION_TIMEOUT \
+  COMPRESSION_IDLE_SECONDS COMPRESSION_CEILING_SECONDS
 # model-router plugin knobs. Both default to true when unset in .env:
 #   - complexity_routing: rewrite each request to the cheapest model that fits.
 #   - privacy_routing:     the fail-closed guard that keeps private data off every

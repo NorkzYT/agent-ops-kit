@@ -582,11 +582,24 @@ class InstallerRenderTest(_InstallerFixture):
                       'base_url: "http://100.65.5.47:11434/v1"}]', text)
         top = text.split("# Subagents spawned")[0]
         self.assertLess(top.index("model: qwen3.8:27b"), top.index("model: qwen3.6:27b"))
+        # Local compression: thinking off (extra_body only), prefill-sized budgets.
+        comp = text.split("  compression:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn('reasoning_effort: ""', comp)
+        self.assertIn("extra_body: {reasoning_effort: none}", comp)
+        self.assertIn("timeout: 600", comp)
+        self.assertEqual(self.get(self.home / "config.yaml", "compression.context_timeout_seconds"), "420")
+        self.assertEqual(self.get(self.home / "config.yaml", "compression.context_total_ceiling_seconds"), "900")
         # Without a local aux endpoint provider stays auto (inherit main) with no chain.
         self.install("", "--force")
         text = (self.home / "config.yaml").read_text()
         self.assertEqual(self.get(self.home / "config.yaml", "auxiliary.compression.provider"), "auto")
         self.assertIn("fallback_chain: []", text)
+        self.assertEqual(self.get(self.home / "config.yaml", "auxiliary.compression.reasoning_effort"), "low")
+        self.assertEqual(self.get(self.home / "config.yaml", "compression.context_timeout_seconds"), "120")
+        # Privacy stays default-on in the template; an explicit opt-out is preserved.
+        self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.privacy_routing"), "true")
+        self.install("MODEL_ROUTER_PRIVACY=false\n", "--force")
+        self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.privacy_routing"), "false")
 
     def test_legacy_chat_model_keeps_single_model_installs_working(self):
         r = self.install("OLLAMA_CHAT_MODEL=llama3.1:8b\n", "--force")
@@ -641,6 +654,43 @@ AGENT_DIR = Path(os.environ.get("HERMES_AGENT_DIR") or Path.home() / ".hermes" /
 VENV_PY = AGENT_DIR / "venv" / "bin" / "python"
 
 
+# Runs in the Hermes venv: the rendered compression route against a stub
+# endpoint that records request bodies (primary, then the stall-retry pin).
+_COMPRESSION_WIRE = r"""
+import http.server, json, os, sys, tempfile, threading, yaml
+seen = []
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        seen.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+        out = json.dumps({"id": "x", "object": "chat.completion", "created": 0, "model": "m",
+                          "choices": [{"index": 0, "finish_reason": "stop",
+                                       "message": {"role": "assistant", "content": "ok"}}]}).encode()
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
+    def log_message(self, *a): pass
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+url = f"http://127.0.0.1:{srv.server_port}/v1"
+cfg = yaml.safe_load(open(sys.argv[1]))
+aux = cfg["auxiliary"]["compression"]
+for route in [aux] + aux["fallback_chain"]:
+    route["base_url"] = url
+home = tempfile.mkdtemp()
+yaml.safe_dump({k: cfg[k] for k in ("model", "auxiliary", "compression")}, open(f"{home}/config.yaml", "w"))
+os.environ["HERMES_HOME"] = home
+sys.path.insert(0, os.environ["HERMES_AGENT_DIR"])
+from agent.auxiliary_client import _effective_aux_timeout, call_llm
+from agent.conversation_compression import resolve_context_compression_timeouts
+msgs = [{"role": "user", "content": "summarize"}]
+call_llm(task="compression", messages=msgs)
+call_llm(task="compression", provider="custom", model=aux["fallback_chain"][0]["model"], base_url=url, messages=msgs)
+strip = lambda b: {k: v for k, v in b.items() if k != "messages"}
+print(json.dumps({"primary": strip(seen[0]), "stall_retry": strip(seen[1]),
+                  "aux_timeout": _effective_aux_timeout("compression", None),
+                  "budgets": list(resolve_context_compression_timeouts(cfg["compression"]))}))
+"""
+
+
 @unittest.skipUnless(VENV_PY.exists(), "Hermes venv not installed")
 class HermesNativeTest(_InstallerFixture):
     def native(self, config):
@@ -661,6 +711,21 @@ class HermesNativeTest(_InstallerFixture):
             self.assertEqual((aux["provider"], aux["model"], aux["base_url"]),
                              ("custom", "qwen3.5:27b", "http://100.65.5.47:11434/v1"))
             self.assertEqual([e["model"] for e in aux["fallback_chain"]], ["qwen3.6:27b"])
+
+    def test_local_compression_wire_disables_thinking(self):
+        """Ollama's /v1 honors only a top-level reasoning_effort; a `reasoning`
+        object (what Hermes emits for the reasoning_effort key) overrides it."""
+        out = self.tmp / "render.yaml"
+        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--render-only", str(out))
+        r = subprocess.run([str(VENV_PY), "-c", _COMPRESSION_WIRE, str(out)], capture_output=True, text=True,
+                           timeout=120, env=dict(os.environ, HERMES_AGENT_DIR=str(AGENT_DIR)))
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        res = json.loads(r.stdout.strip().splitlines()[-1])
+        for route in ("primary", "stall_retry"):
+            self.assertEqual(res[route].get("reasoning_effort"), "none", res)
+            self.assertNotIn("reasoning", res[route], res)
+        self.assertEqual(res["aux_timeout"], 600.0)
+        self.assertEqual(res["budgets"], [420.0, 900.0])
 
     def test_auto_provider_with_local_base_url_resolves_to_main(self):
         """Why the installer never renders `auto` next to a local base_url."""

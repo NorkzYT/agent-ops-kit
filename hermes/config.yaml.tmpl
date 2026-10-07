@@ -186,12 +186,30 @@ auxiliary:
     base_url: __AUX_BASE_URL__
     reasoning_effort: high
     fallback_chain: __AUX_FALLBACK_CHAIN__
+  # Compression never runs at high effort. Local route (AUX_BASE_URL set):
+  # thinking off via extra_body reasoning_effort none — the only control
+  # Ollama's /v1 honors (it ignores the `reasoning` object Hermes emits for the
+  # reasoning_effort key, and that object overrides the top-level field, so the
+  # key renders "" there) — and a 600 s per-read timeout so the summary
+  # prompt's prefill is not cut off. Inherited (cloud) route: effort low,
+  # Hermes' default 120 s timeout.
   compression:
     provider: __AUX_PROVIDER__
     model: __AUX_MODEL__
     base_url: __AUX_BASE_URL__
-    reasoning_effort: high
+    reasoning_effort: __AUX_COMPRESSION_EFFORT__
+    extra_body: __AUX_COMPRESSION_EXTRA_BODY__
+    timeout: __AUX_COMPRESSION_TIMEOUT__
     fallback_chain: __AUX_FALLBACK_CHAIN__
+
+# Compression wait budgets. context_timeout_seconds is a NO-PROGRESS window: a
+# local 27B model emits nothing while it prefills a ~50k-token summary prompt
+# (measured ~200 tok/s, i.e. 4+ min), so the Hermes default (120 s) abandons
+# every large local compaction. Local route: 420 s idle / 900 s total; inherited
+# (cloud) route: Hermes defaults 120 / 600. See docs/model-routing.md.
+compression:
+  context_timeout_seconds: __COMPRESSION_IDLE_SECONDS__
+  context_total_ceiling_seconds: __COMPRESSION_CEILING_SECONDS__
 
 # --------------------------------------------------------------- Plugins ---
 # model-router: task-scoped model + effort routing (luna/terra/sol for the
