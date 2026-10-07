@@ -70,6 +70,8 @@ class RouterSettings:
     ollama_base_url: str = ""
     ollama_model: str = ""          # legacy single model: the default for every unset role
     ollama_timeout: float = 60.0
+    # Served context (Ollama num_ctx) that sizes private-turn max_tokens/budget.
+    ollama_context_tokens: int = 65536
     # Explicit local roles on the same endpoint (docs/model-routing.md, Local
     # model roles). routine: ordinary private turns + the specialist classifier;
     # agent: difficult private turns and private coding; fallback: tried once
@@ -136,6 +138,7 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         ollama_base_url=str(val("ollama_base_url", "OLLAMA_BASE_URL", "") or "").rstrip("/"),
         ollama_model=str(val("ollama_model", "OLLAMA_CHAT_MODEL", "") or ""),
         ollama_timeout=float(val("ollama_timeout", "OLLAMA_TIMEOUT", 60.0) or 60.0),
+        ollama_context_tokens=_int(val("ollama_context_tokens", "OLLAMA_CONTEXT_TOKENS", 65536), 65536),
         ollama_routine_model=str(val("ollama_routine_model", "OLLAMA_ROUTINE_MODEL", "") or "").strip(),
         ollama_fallback_model=str(val("ollama_fallback_model", "OLLAMA_FALLBACK_MODEL", "") or "").strip(),
         ollama_agent_model=str(val("ollama_agent_model", "OLLAMA_AGENT_MODEL", "") or "").strip(),

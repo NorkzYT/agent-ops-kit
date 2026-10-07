@@ -229,10 +229,19 @@ there is no fallback (the pre-roles behavior).
 - The private path is answer-only: the local model gets the messages, not the
   tools, so a private turn cannot run tools. Tool-using local agent work is the
   native fallback tail (non-private only).
+- Private turns are sent with top-level `reasoning_effort: "none"` (Ollama
+  0.34 `/v1` honours it; a top-level `think: false` is ignored there) and a
+  bounded `max_tokens`: 2048, reduced to fit what the history leaves of
+  `ollama_context_tokens` (default 65536, the served num_ctx), never below
+  512. Without them qwen3.5:27b spends the turn on `message.reasoning` and an
+  empty `content` is refused. Reasoning text is never used as the answer.
+- The private chain shares one budget: `ollama_timeout` (60 s; model load and
+  queueing) + estimated prefill at 150 tok/s + `max_tokens` at 10 tok/s,
+  capped at 600 s (`budget=` in the `private->local ok` log line). A ~23k-token
+  history took 58 s on the host, so a flat 60 s timed out long sessions.
 - Ollama on the current host keeps one 27b model resident (`ollama ps`).
-  Moving between roles reloads the model, about 20-25 s. Private answers wait
-  for it (`ollama_timeout`, 60 s per attempt). The classifier has a 10 s
-  budget, so its first call after an agent turn usually times out and adds
+  Moving between roles reloads the model, about 20-25 s. The classifier has a
+  10 s budget, so its first call after an agent turn usually times out and adds
   nothing.
 - The native chains walk agent → fallback in a fixed order. The routine
   model is not in them, because a fallback hop has to run full agent turns.

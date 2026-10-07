@@ -29,6 +29,7 @@ from .local_backend import (
     LocalUnavailable,
     is_local_endpoint,
     messages_from_request,
+    private_chat_policy,
     refusal_response,
     run_local_chain,
 )
@@ -240,10 +241,15 @@ class Router:
                                reason, role)
                 return refusal_response(reason="local-endpoint-not-local")
             chain = self.settings.local_chain(role)
-            resp, model, attempt = run_local_chain(chain, messages_from_request(request),
-                                                   self._local_backend)
-            logger.info("model_router: private->local ok reason=%s role=%s model=%s attempt=%d/%d",
-                        reason, role, model, attempt, len(chain))
+            messages = messages_from_request(request)
+            options, budget = private_chat_policy(
+                messages, context_tokens=self.settings.ollama_context_tokens,
+                base_timeout=self.settings.ollama_timeout)
+            resp, model, attempt = run_local_chain(chain, messages, self._local_backend,
+                                                   budget=budget, options=options)
+            logger.info("model_router: private->local ok reason=%s role=%s model=%s attempt=%d/%d "
+                        "max_tokens=%d budget=%.0fs", reason, role, model, attempt, len(chain),
+                        options["max_tokens"], budget)
             return resp
         except LocalUnavailable as exc:
             logger.warning("model_router: private->refuse (local unavailable: %s) reason=%s role=%s",

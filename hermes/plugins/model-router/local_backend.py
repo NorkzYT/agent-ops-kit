@@ -161,9 +161,61 @@ class LocalBackend:
         if not text.strip():
             # A thinking-only/empty answer is not a result: returned upstream it
             # trips Hermes' empty-response recovery, whose last rung activates the
-            # configured (cloud) fallback chain.
-            raise LocalUnavailable("local backend returned empty content", "shape")
+            # configured (cloud) fallback chain. The reasoning text is never used
+            # as the answer.
+            try:
+                finish = str(data["choices"][0].get("finish_reason") or "none")
+            except (AttributeError, KeyError, IndexError, TypeError):
+                finish = "none"
+            raise LocalUnavailable(f"local backend returned empty content (finish_reason={finish})", "shape")
         return make_response(text, model=data.get("model") or self.model)
+
+
+# Private-turn request policy. Measured on the Ollama host (0.34.0, Oct 2026,
+# qwen3.5:27b): prefill ~200 tok/s, decode ~12 tok/s, served context 65536.
+# Without these fields the thinking models spend the turn on ``message.reasoning``
+# (slow, and an empty ``content`` once the output limit or timeout hits).
+# Ollama's /v1 endpoint honours top-level ``reasoning_effort: "none"``; a
+# top-level ``think: false`` is ignored there, so it is not sent.
+PRIVATE_MAX_TOKENS = 2048       # answer cap; thinking is off, so this is visible text
+PRIVATE_MIN_TOKENS = 512        # floor when the history nearly fills the context
+PRIVATE_CONTEXT_TOKENS = 65536  # served num_ctx (OLLAMA_CONTEXT_LENGTH on the host)
+PRIVATE_TIMEOUT_CAP = 600.0     # total seconds for the whole local chain
+_PREFILL_TPS = 150.0            # below measured, so the budget errs long
+_DECODE_TPS = 10.0
+_CONTEXT_MARGIN = 256
+
+
+def estimate_prompt_tokens(messages: Sequence[Any]) -> int:
+    """Conservative token estimate (~3 chars/token over the JSON) — errs high."""
+    try:
+        chars = len(json.dumps(list(messages), ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        chars = sum(len(str(m)) for m in messages)
+    return chars // 3 + 1
+
+
+def private_chat_policy(
+    messages: Sequence[Any],
+    *,
+    context_tokens: int = PRIVATE_CONTEXT_TOKENS,
+    base_timeout: float = 60.0,
+) -> Tuple[Dict[str, Any], float]:
+    """Request options and total time budget for a private local turn.
+
+    ``max_tokens`` fits the room the history leaves in the served context
+    (between the floor and cap); the budget is ``base_timeout`` (model load,
+    queueing) plus estimated prefill and worst-case decode, capped. Returns
+    ``(options, budget_seconds)``.
+    """
+    context_tokens = max(int(context_tokens or PRIVATE_CONTEXT_TOKENS), 2 * PRIVATE_MIN_TOKENS)
+    prompt = estimate_prompt_tokens(messages)
+    room = context_tokens - prompt - _CONTEXT_MARGIN
+    max_tokens = max(PRIVATE_MIN_TOKENS, min(PRIVATE_MAX_TOKENS, room))
+    base = max(float(base_timeout or 0), 1.0)
+    budget = base + min(prompt, context_tokens) / _PREFILL_TPS + max_tokens / _DECODE_TPS
+    budget = min(PRIVATE_TIMEOUT_CAP, max(base, budget))
+    return {"reasoning_effort": "none", "max_tokens": max_tokens}, budget
 
 
 # Endpoint-level failures: the fallback model lives on the same endpoint, so

@@ -242,11 +242,19 @@ class TestPrivacyCanary(unittest.TestCase):
     def test_local_backend_answers_private_without_cloud(self):
         spy = _Spy()
         r = _router(ollama_model="local-model")
-        r._backend = SimpleNamespace(chat=lambda msgs: local_backend.make_response("LOCAL", model="ollama"))
+        seen = []
+
+        def chat(msgs, **kw):
+            seen.append(kw)
+            return local_backend.make_response("LOCAL", model="ollama")
+
+        r._backend = SimpleNamespace(chat=chat)
         resp = r.on_llm_execution(request=req(f"ssn {SSN}"), next_call=spy, session_id="s2",
                                   base_url="http://127.0.0.1:8317/v1")
         self.assertEqual(spy.calls, 0)
         self.assertEqual(resp.choices[0].message.content, "LOCAL")
+        self.assertEqual(seen[0]["options"]["reasoning_effort"], "none")
+        self.assertGreater(seen[0]["options"]["max_tokens"], 256)  # 256 left qwen thinking-only
 
     def test_session_stickiness(self):
         spy = _Spy()

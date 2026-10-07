@@ -188,7 +188,11 @@ class _Ollama(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"error":"model not found"}')
             return
-        data = json.dumps({"model": body["model"], "choices": [{"message": {"content": "philosophy"}}]})
+        if body.get("model") == "thinker":  # qwen3.5 at a small output limit: reasoning only
+            message = {"role": "assistant", "content": "", "reasoning": "THINKING-ONLY-TEXT"}
+            data = json.dumps({"model": "thinker", "choices": [{"message": message, "finish_reason": "length"}]})
+        else:
+            data = json.dumps({"model": body["model"], "choices": [{"message": {"content": "philosophy"}}]})
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -237,6 +241,51 @@ class StubEndpointTest(unittest.TestCase):
             with self.assertRaises(lb.LocalUnavailable) as ctx:
                 backend.chat([{"role": "user", "content": "x"}])
         self.assertEqual(ctx.exception.kind, "connect")
+
+
+    def _private_router(self, routine, fallback):
+        s = config_mod.RouterSettings(ollama_base_url=self.url, ollama_routine_model=routine,
+                                      ollama_fallback_model=fallback, privacy_routing=True)
+        return router_mod.Router(s)
+
+    def test_private_turn_sends_bounded_no_thinking_request(self):
+        _Ollama.bodies = []
+        spy = Spy()
+        resp = self._private_router("qwen3.5:27b", "qwen3.6:27b").on_llm_execution(
+            request=req(f"draft a reply to the client, ssn {SSN}"), next_call=spy, session_id="pv1",
+            base_url="http://127.0.0.1:8317/v1")
+        self.assertEqual(spy.calls, 0)
+        self.assertEqual(resp.choices[0].message.content, "philosophy")
+        self.assertFalse(getattr(resp, "_model_router_refusal", False))
+        body = _Ollama.bodies[-1]
+        self.assertEqual(body["model"], "qwen3.5:27b")
+        self.assertEqual(body["reasoning_effort"], "none")  # top-level: what Ollama /v1 honours
+        self.assertEqual(body["max_tokens"], lb.PRIVATE_MAX_TOKENS)
+        self.assertFalse(body["stream"])
+        for absent in ("think", "extra_body", "reasoning", "tools"):
+            self.assertNotIn(absent, body)
+
+    def test_thinking_only_answer_falls_back_locally_then_refuses(self):
+        _Ollama.bodies = []
+        backend = lb.LocalBackend(self.url, "thinker", timeout=5)
+        with self.assertRaises(lb.LocalUnavailable) as ctx:
+            backend.chat([{"role": "user", "content": "x"}])
+        self.assertEqual(ctx.exception.kind, "shape")
+        self.assertIn("finish_reason=length", str(ctx.exception))
+
+        resp = self._private_router("thinker", "qwen3.6:27b").on_llm_execution(
+            request=req(f"ssn {SSN}"), next_call=Spy(), session_id="pv2", base_url="")
+        self.assertEqual(resp.choices[0].message.content, "philosophy")  # local fallback model
+
+        _Ollama.bodies = []
+        spy = Spy()
+        resp = self._private_router("thinker", "thinker").on_llm_execution(
+            request=req(f"ssn {SSN}"), next_call=spy, session_id="pv3", base_url="")
+        self.assertEqual(spy.calls, 0, "private request reached a cloud provider")
+        self.assertTrue(resp._model_router_refusal)
+        self.assertEqual(resp.choices[0].finish_reason, "stop")  # terminal, never content_filter
+        self.assertNotIn("THINKING-ONLY-TEXT", resp.choices[0].message.content)
+        self.assertEqual(len(_Ollama.bodies), 1)  # duplicate chain entry is not retried
 
 
 class socket_closed_port:
@@ -329,6 +378,73 @@ class PrivateHierarchyTest(unittest.TestCase):
         self.assertIn("role=routine model=qwen3.5:27b", text)
         self.assertNotIn("Zorblax", text)
         self.assertNotIn(SSN, text)
+
+
+# --------------------------------------------------------------------------- #
+# Private request policy: no thinking, bounded output, prefill-sized budget
+# --------------------------------------------------------------------------- #
+def history(tokens):
+    """Messages whose conservative estimate is about ``tokens``."""
+    turn = "lorem ipsum dolor sit amet " * 40
+    msgs, n = [{"role": "system", "content": "You are a helpful assistant."}], 0
+    while lb.estimate_prompt_tokens(msgs) < tokens:
+        msgs.append({"role": "user" if n % 2 == 0 else "assistant", "content": turn})
+        n += 1
+    return msgs
+
+
+class PrivatePolicyTest(unittest.TestCase):
+    def test_short_turn_gets_full_cap_and_modest_budget(self):
+        options, budget = lb.private_chat_policy([{"role": "user", "content": "hi"}], base_timeout=60)
+        self.assertEqual(options, {"reasoning_effort": "none", "max_tokens": lb.PRIVATE_MAX_TOKENS})
+        self.assertGreater(budget, 60 + lb.PRIVATE_MAX_TOKENS / 12)  # survives worst-case decode
+        self.assertLess(budget, 300)
+
+    def test_long_history_fits_the_served_context(self):
+        for tokens in (20_000, 50_000, 64_000, 63_500):
+            msgs = history(tokens)
+            prompt = lb.estimate_prompt_tokens(msgs)
+            options, budget = lb.private_chat_policy(msgs, context_tokens=65536, base_timeout=60)
+            mt = options["max_tokens"]
+            self.assertTrue(lb.PRIVATE_MIN_TOKENS <= mt <= lb.PRIVATE_MAX_TOKENS, (tokens, mt))
+            if prompt + lb.PRIVATE_MIN_TOKENS < 65536 - 256:
+                self.assertLessEqual(prompt + mt, 65536, tokens)
+            self.assertLessEqual(budget, lb.PRIVATE_TIMEOUT_CAP)
+            self.assertGreater(budget, 60)
+        # a 50k-token history needs minutes of prefill at ~200 tok/s, not the 60 s default
+        _, budget = lb.private_chat_policy(history(50_000), base_timeout=60)
+        self.assertGreaterEqual(budget, 60 + 50_000 / 200)
+
+    def test_oversized_history_uses_floor_and_cap(self):
+        options, budget = lb.private_chat_policy(history(90_000), context_tokens=65536, base_timeout=60)
+        self.assertEqual(options["max_tokens"], lb.PRIVATE_MIN_TOKENS)
+        # Ollama truncates the prompt to the served context, so prefill is sized to it
+        self.assertAlmostEqual(budget, 60 + 65536 / 150 + lb.PRIVATE_MIN_TOKENS / 10)
+        self.assertLessEqual(budget, lb.PRIVATE_TIMEOUT_CAP)
+        _, budget = lb.private_chat_policy(history(90_000), base_timeout=300)
+        self.assertEqual(budget, lb.PRIVATE_TIMEOUT_CAP)
+
+    def test_context_setting_is_read(self):
+        s = config_mod.load_settings(lambda k, d: {"ollama_context_tokens": "32768"}.get(k))
+        self.assertEqual(s.ollama_context_tokens, 32768)
+        self.assertEqual(config_mod.RouterSettings().ollama_context_tokens, 65536)
+
+    def test_router_passes_policy_and_shares_budget_across_chain(self):
+        calls = []
+        s = config_mod.RouterSettings(**dict(ROLES, privacy_routing=True))
+        r = router_mod.Router(s, backend_factory=FakeBackend({"qwen3.5:27b": "timeout",
+                                                              "qwen3.6:27b": "LOCAL"}, calls))
+        spy = Spy()
+        request = {"model": "gpt-5.6-luna", "messages": history(30_000) + [
+            {"role": "user", "content": f"ssn {SSN}"}]}
+        resp = r.on_llm_execution(request=request, next_call=spy, session_id="pp", base_url="")
+        self.assertEqual((spy.calls, resp.choices[0].message.content), (0, "LOCAL"))
+        expected, budget = lb.private_chat_policy(request["messages"], base_timeout=s.ollama_timeout)
+        self.assertEqual([c[0] for c in calls], ["qwen3.5:27b", "qwen3.6:27b"])
+        for _model, kw in calls:
+            self.assertEqual(kw["options"], expected)
+            self.assertTrue(0 < kw["timeout"] <= budget)
+        self.assertGreater(calls[0][1]["timeout"], s.ollama_timeout)  # long history: not the 60 s default
 
 
 # --------------------------------------------------------------------------- #
