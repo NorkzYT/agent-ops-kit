@@ -135,6 +135,65 @@ class MatchTest(unittest.TestCase):
                          ("local-engineer", "kanban", False))
 
 
+class UnderSelectionRegressionTest(unittest.TestCase):
+    """Live dry runs under-selected on tasks that name a profile's own domain.
+
+    Root causes: the domain nouns "strategy" and "offer" were weak-only, the
+    weak security pattern ``auth`` never matched "authentication" (word
+    boundary), "authentication design" was not recognised as system design, and
+    negotiation-communication had no signal for drafting/rewriting a message.
+    """
+
+    def test_cross_functional_plan_routes_each_named_commerce_domain(self):
+        t = route("Revise the strategy, marketing, offer, and execution plan for Kairo")
+        # Exactly the directly evidenced profiles: no business / leadership
+        # noise without a deterministic word for them.
+        self.assertEqual(set(names(t)), {"strategy", "marketing", "offers-sales"})
+        scores = [r["score"] for r in t["routes"]]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_domain_nouns_need_commercial_context_to_be_strong(self):
+        # "strategy"/"offer" outside a commercial context stay weak (no route).
+        self.assertNotIn("strategy", names(route("Explain the opening strategy in chess.")))
+        self.assertNotIn("offers-sales", names(route("Should I accept the job offer from them?")))
+        self.assertNotIn("strategy", names(route("Review the architecture and our testing strategy.")))
+        # "marketing strategy" is marketing's domain, not strategy's.
+        self.assertEqual(names(route("Draft our marketing strategy for Q3.")), ["marketing"])
+
+    def test_rewrite_message_routes_negotiation_communication(self):
+        t = route("Rewrite this message to a business partner and keep it clear and firm")
+        self.assertEqual(names(t), ["negotiation-communication"])
+        self.assertIn("negotiation-communication", names(route("Draft an email to the vendor declining the renewal.")))
+        # Code-shaped "message" tasks are not communication drafting.
+        self.assertEqual(route("Rewrite this commit message to follow conventional commits.")["routes"], [])
+        self.assertEqual(route("Reword the error message shown on a failed upload.")["routes"], [])
+
+    def test_auth_design_review_with_fixes_routes_security_engineering_and_local(self):
+        t = route("Review the authentication design and implement fixes with tests")
+        self.assertEqual(set(names(t)), {"security-reviewer", "software-engineering", "local-engineer"})
+        sec = next(r for r in t["routes"] if r["profile"] == "security-reviewer")
+        # High-risk controls are untouched: advisory, short, skills-only, constrained.
+        self.assertTrue(sec["high_risk"])
+        self.assertEqual((sec["execution"], sec["toolsets"]), ("short", sp.ADVISORY_TOOLSETS))
+        self.assertEqual(sec["constraint"], sp.ADVISORY_CONSTRAINT)
+        impl = next(r for r in t["routes"] if r["profile"] == "local-engineer")
+        self.assertEqual(impl["execution"], "kanban")
+
+    def test_authentication_word_counts_as_security_evidence(self):
+        t = route("Harden the authentication flow of the API.")
+        sec = next(r for r in t["routes"] if r["profile"] == "security-reviewer")
+        self.assertIn("kw:security", sec["reasons"])
+        # A bare mention is still only weak evidence.
+        self.assertNotIn("security-reviewer", names(route("Add docs for the authentication module.")))
+
+    def test_private_auth_task_still_local_only(self):
+        t = route("#private review the authentication design and implement fixes with tests")
+        self.assertEqual(t["privacy"], "local-only")
+        self.assertEqual(names(t), ["local-engineer"])
+        dropped = {d["profile"] for d in t["dropped"] if d["reason"] == "privacy:local-only"}
+        self.assertEqual(dropped, {"security-reviewer", "software-engineering"})
+
+
 class HighRiskTest(unittest.TestCase):
     def test_high_risk_routes_are_advisory_short_and_constrained(self):
         t = route("Scope a red team exercise and a security review for our app, build a "

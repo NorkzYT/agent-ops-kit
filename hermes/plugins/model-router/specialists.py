@@ -65,6 +65,28 @@ def _w(label: str, pattern: str) -> Signal:
     return (label, 1, _rx(pattern))
 
 
+_B, _E = r"(?<![A-Za-z0-9_])", r"(?![A-Za-z0-9_])"
+
+
+def _near(noun: str, context: str, span: int = 160) -> str:
+    """``noun`` within ``span`` chars of a ``context`` word, either order.
+
+    Disambiguates a profile's own domain noun that is weak on its own
+    ("offer" the verb, "strategy" in chess) when the task names its context
+    ("strategy, marketing, offer"). Both words are whole-word bounded."""
+    a, b = f"{_B}(?:{noun}){_E}", f"{_B}(?:{context}){_E}"
+    return rf"{a}[\s\S]{{0,{span}}}?{b}|{b}[\s\S]{{0,{span}}}?{a}"
+
+
+_COMMERCE = (r"marketing|sales|pricing|prices?|funnels?|launch(?:es)?|positioning|"
+             r"customers?|clients?|revenue|conversions?|leads|upsells?|competitors?|"
+             r"go[- ]to[- ]market|gtm|business model|execution plan")
+# "strategy" when it is the task's own noun, not a modifier-bound one
+# ("testing strategy" is engineering, "marketing strategy" is marketing).
+_STRATEGY_NOUN = (r"(?<!testing )(?<!test )(?<!content )(?<!marketing )(?<!sales )"
+                  r"(?<!pricing )(?<!chess )(?<!opening )strateg(?:y|ies)")
+
+
 @dataclass(frozen=True)
 class Specialist:
     name: str
@@ -80,7 +102,8 @@ REGISTRY: Tuple[Specialist, ...] = (
         _s("strategic", r"strategic|business strategy|corporate strategy|competitive (?:advantage|position(?:ing)?|landscape|analysis)"),
         _s("moat", r"moats?|business models?|market entry|which market|swot|five forces|blue ocean|pivot"),
         _s("decision", r"decision analysis|one[- ]way doors?|long[- ]term plan|prioriti[sz](?:e|ation|ing)"),
-        _w("strategy", r"(?<!testing )(?<!test )(?<!content )(?<!marketing )(?<!sales )strateg(?:y|ies)"),
+        _s("strategy-topic", _near(_STRATEGY_NOUN, _COMMERCE)),
+        _w("strategy", _STRATEGY_NOUN),
         _w("competitors", r"competitors?|competition|trade[- ]?offs?|roadmap"),
     )),
     Specialist("business", "operations, finance analysis, execution planning", (
@@ -92,6 +115,7 @@ REGISTRY: Tuple[Specialist, ...] = (
         _s("offer", r"offer (?:design|stack)|irresistible offer|grand slam offer|value stack|guarantees?"),
         _s("pricing", r"pricing|price point|how much (?:should|to) (?:i |we )?charge|upsells?|cross[- ]sells?"),
         _s("sales", r"lead gen(?:eration)?|sales (?:funnel|call|script|pitch|pipeline|process)|cold (?:email|outreach|call)(?:ing|s)?|close rate|closing (?:deals|sales)"),
+        _s("offer-topic", _near(r"(?<!job )offers?(?! letter)", _COMMERCE)),
         _w("sell", r"offers?|sales|sell(?:ing)?|leads|prospects?|conversions?"),
     )),
     Specialist("marketing", "positioning, messaging, channels, funnel measurement", (
@@ -106,7 +130,9 @@ REGISTRY: Tuple[Specialist, ...] = (
         _w("team", r"team|teams|manager|employees?|coworkers?|colleagues?|delegat(?:e|ion|ing)|culture"),
     )),
     Specialist("software-engineering", "architecture, review standards, testing strategy (advisory)", (
-        _s("architecture", r"architecture|architectural|system design|design review|api design|microservices?|monolith|design patterns?"),
+        _s("architecture", r"architecture|architectural|design review|microservices?|monolith|design patterns?|"
+                            r"(?:system|api|auth(?:entication|ori[sz]ation|n|z)?|login|session|token|schema|database|db|data model|"
+                            r"service|module|component|protocol|interface|backend|frontend|cache|caching|queue|pipeline|plugin) design"),
         _s("quality", r"code review|review standards?|testing strategy|test strategy|technical debt|tech debt|maintainability"),
         _s("reliability", r"reliability|observability|slos?|scalab(?:le|ility)|ci/cd|deployment pipeline"),
         _w("code", r"code|codebase|repo|repository|service|database|refactor(?:ing)?|tests?|modules?"),
@@ -114,7 +140,10 @@ REGISTRY: Tuple[Specialist, ...] = (
     Specialist("security-reviewer", "defensive security review (advisory)", (
         _s("review", r"security (?:review|audit|assessment)|threat model(?:ing)?|appsec|owasp|harden(?:ing)?"),
         _s("vuln", r"vulnerabilit(?:y|ies)|cve-\d{4}-\d+|xss|csrf|ssrf|sql injection|sqli|rce|auth(?:entication|orization)? bypass|privilege escalation|secrets? (?:leak|exposure)"),
-        _w("security", r"security|secure|insecure|auth|permissions?|encryption"),
+        _s("authz", r"(?:auth(?:entication|ori[sz]ation|n|z)?|login|log[- ]in|sign[- ](?:in|on|up)|passwords?|"
+                    r"access[- ]control|secrets?|credentials?|permissions?|rbac|oauth2?|oidc|sso|jwts?|mfa|2fa) "
+                    r"(?:design|flow|layer|logic|scheme|model|system|handling|storage|middleware|code|implementation)s?"),
+        _w("security", r"security|secure|insecure|auth(?:entication|ori[sz]ation|n|z)?|permissions?|encryption"),
     ), high_risk=True),
     Specialist("red-team", "controlled offensive testing of owned targets (advisory)", (
         _s("redteam", r"red[- ]team(?:ing)?|pen ?test(?:ing)?|penetration test(?:ing)?|offensive security|attack (?:surface|path|chain)s?"),
@@ -124,7 +153,13 @@ REGISTRY: Tuple[Specialist, ...] = (
     Specialist("negotiation-communication", "negotiation plans, hard conversations, message drafts", (
         _s("negotiate", r"negotiat(?:e|es|ed|ion|ions|ing)|counter[- ]?offers?|batna|walk[- ]away (?:point|price)|concessions?"),
         _s("conversation", r"(?:difficult|hard|tough|awkward) (?:conversation|talk|message|email)s?|talking points|push ?back on|objection handling|persua(?:de|sion|sive)"),
+        _s("draft", r"(?:draft|redraft|rewrite|reword|rephrase|compose|polish|soften|tighten|firm up|tone down) "
+                    r"(?:the |this |my |an? |that |our |up )?(?:message|e-?mail|reply|letter|dm)s?"),
         _w("message", r"(?:email|message|reply) to|convince|communicat(?:e|ion)|conflict"),
+        _w("tone", r"(?:clear|firm|polite|professional|friendly|formal|warm|diplomatic|tactful|assertive|respectful)"
+                   r",? (?:and|but|yet) (?:clear|firm|polite|professional|friendly|formal|warm|diplomatic|tactful|assertive|respectful)|"
+                   r"firm(?:ly)? but|tactful(?:ly)?|diplomatic(?:ally)?|tone of voice|"
+                   r"(?:firm|polite|professional|friendly|formal|neutral|warm|diplomatic|right) tone"),
     )),
     Specialist("health-fitness", "training, nutrition, recovery (educational, advisory)", (
         _s("training", r"workouts?|training (?:plan|program|block)|strength training|hypertrophy|cardio|deload|squats?|deadlifts?|bench press|vo2 ?max"),
