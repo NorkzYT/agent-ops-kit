@@ -338,6 +338,77 @@ class ProvenanceTest(unittest.TestCase):
         self.assertRegex(t["task"], r"^[0-9a-f]{16}$")
 
 
+# A Hermes async-delegation completion envelope (tools/process_registry_notifications.py)
+# whose subagent report is full of specialist vocabulary.
+ASYNC_REPORT = (
+    "--- \u2713 TASK 1/1: Fix the router  (status=completed, api_calls=12) ---\n"
+    "Refactored the module and implemented fixes with tests. Drafted the marketing campaign "
+    "and pricing plan, rewrote the email to the vendor to negotiate the renewal, and wrote "
+    "a team leadership plan for the launch."
+)
+
+
+def async_envelope(header, sender="[Norkz] "):
+    return (f"{sender}{header}\n"
+            "A background fan-out unit you dispatched earlier \u2014 1 subagent(s) \u2014 has finished; "
+            "its consolidated results are below.\n"
+            "Dispatched: 2026-10-06 10:00:00 (5m ago)\n"
+            "Role: leaf   Model: opus   Total duration: 300s\n\n" + ASYNC_REPORT)
+
+
+class AsyncDelegationEnvelopeTest(unittest.TestCase):
+    """Hermes re-injects async delegate_task results as a user-role message.
+
+    That envelope is runtime output, not a new operator task: classifying the
+    embedded subagent report fanned out unrelated specialists.
+    """
+
+    HEADERS = (
+        "[ASYNC DELEGATION BATCH COMPLETE \u2014 deleg_2787883d]",
+        "[ASYNC DELEGATION COMPLETE \u2014 deleg_2787883d]",
+        "[ASYNC DELEGATION TASK FAILED \u2014 deleg_2787883d, task 1/3]",
+    )
+
+    def test_report_body_alone_would_route(self):
+        # Guard: the fixture really carries routable vocabulary.
+        self.assertTrue(route(ASYNC_REPORT)["routes"])
+
+    def test_envelopes_route_nothing_and_render_no_note(self):
+        for header in self.HEADERS:
+            for sender in ("[Norkz] ", ""):
+                with self.subTest(header=header, sender=sender):
+                    t = route(async_envelope(header, sender))
+                    self.assertEqual(t["routes"], [])
+                    self.assertEqual(t["dropped"], [])
+                    self.assertEqual(t["reason"], "runtime-envelope")
+                    self.assertEqual(sp.render_plan(t), "")
+
+    def test_envelope_with_runtime_wrappers_routes_nothing(self):
+        env = async_envelope(self.HEADERS[0])
+        backfill = "[alice] earlier chatter\n\n[New message]\n" + env
+        memory = env + "\n\n<memory-context>\nnotes\n</memory-context>"
+        for wire in (backfill, memory):
+            with self.subTest(wire=wire[:30]):
+                self.assertEqual(route(wire)["routes"], [])
+
+    def test_prose_about_async_delegation_still_routes(self):
+        prose = ("Write a marketing campaign explaining how our ASYNC DELEGATION BATCH "
+                 "COMPLETE notices work.")
+        self.assertEqual(names(route(prose)), ["marketing"])
+        quoted = ("Draft a marketing campaign for the launch. The log showed "
+                  "[ASYNC DELEGATION BATCH COMPLETE \u2014 deleg_1] earlier.")
+        self.assertEqual(names(route(quoted)), ["marketing"])
+        self.assertNotEqual(route(quoted).get("reason"), "runtime-envelope")
+
+    def test_hook_returns_none_for_envelope(self):
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
+            self.assertIsNone(h.on_pre_llm_call(
+                session_id="s", user_message=async_envelope(self.HEADERS[0])))
+            self.assertIsNotNone(h.on_pre_llm_call(
+                session_id="s", user_message="[Norkz] Write a marketing campaign for the launch."))
+
+
 class CapAndStateTest(unittest.TestCase):
     WIDE = ("Plan marketing positioning, pricing for the offer, a business plan with unit "
             "economics, competitive advantage, negotiation of the contract, and one-on-ones "

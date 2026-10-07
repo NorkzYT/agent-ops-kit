@@ -478,6 +478,11 @@ def route_text(
     if not task.found:
         trace["reason"] = "no-current-task"
         return trace
+    if ti.is_runtime_envelope(task.text):
+        # Hermes-generated async delegation result: the operator asked for that
+        # work earlier; the embedded subagent report must not fan out specialists.
+        trace["reason"] = "runtime-envelope"
+        return trace
 
     pdec = _privacy(raw_text, settings, session_private)
     if pdec.private:

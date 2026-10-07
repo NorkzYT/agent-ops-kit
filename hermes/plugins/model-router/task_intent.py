@@ -92,6 +92,17 @@ _STEER_OPEN_PREFIX = "[OUT-OF-BAND USER MESSAGE"
 _STEER_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"
 # Gateway placeholder for a message with no text content (runtime text, not a task).
 _EMPTY_PLACEHOLDER = "(The user sent a message with no text content)"
+# Async delegate_task completion re-injected as a user-role message
+# (tools/process_registry_notifications.py): "[ASYNC DELEGATION COMPLETE — id]",
+# "... BATCH COMPLETE — id]", "... TASK FAILED — id, task i/n]". Only the
+# header at the very start of the sender segment counts; prose that mentions it
+# elsewhere is still a task.
+_ASYNC_DELEGATION_RE = re.compile(r"^\[ASYNC DELEGATION [A-Z][A-Z ]* [\u2014\u2013-] [^\]\n]+\]")
+
+
+def is_runtime_envelope(task_text: str) -> bool:
+    """True when the sender segment is a Hermes runtime notification, not a task."""
+    return bool(_ASYNC_DELEGATION_RE.match(task_text))
 
 
 def genuine_user_text(text: str) -> str:
