@@ -439,6 +439,168 @@ TRIGGER = ("[Triggering message id: `1427` — use as `message_id` for reply/rea
            "via the discord tools.]")
 
 
+# The live Kanban completion wake (gateway/kanban_watchers_notifier.py
+# ``build_wake_text`` + locales/en.yaml ``gateway.kanban.wake.*``), verbatim from
+# state.db: Hermes admitted it as a user-role turn and the router routed its
+# title/summary to offers-sales,strategy as if the operator had asked again.
+KANBAN_LIVE = (
+    "[kanban] Task t_6edfcd92 completed.\n"
+    "Title: Develop Kairo Amazon-seller pricing and offer strategy\n"
+    "Assignee: @offers-sales\n"
+    "Board: default\n\n"
+    "Check the result or decide the next step.\n"
+    "Result: Created a repository-grounded Kairo Amazon-seller pricing and offer strategy at "
+    "/home/polymath-dev/.hermes/kanban/workspaces/t_6edfcd92/kairo-pricing-offer-strategy.md. "
+    "It keeps the current $19.95/$39\n\n"
+    "This is an automatic task-status notification, not a request to decompose the task again. "
+    "Inspect the current board before creating follow-up tasks; do not recreate tasks or graphs "
+    "that already exist."
+)
+# en.yaml gateway.kanban.wake.<kind> for every _WAKE_KINDS entry.
+KANBAN_STATUSES = (
+    "completed",
+    "gave up (retries exhausted)",
+    "crashed (worker exited); dispatcher will retry",
+    "timed out; dispatcher will retry",
+    "blocked; needs attention",
+    "handed off for review; the implementation is done",
+    "review requested changes (BLOCK); implementation is not approved",
+    "routed to triage after repeated blocks; needs a decision",
+    "status changed",
+    "completed, blocked; needs attention",
+)
+KANBAN_TITLE = "Write a marketing campaign and pricing plan for the launch"
+KANBAN_GUIDANCE = (
+    "This is an automatic task-status notification, not a request to decompose the task again. "
+    "Inspect the current board before creating follow-up tasks; do not recreate tasks or graphs "
+    "that already exist.")
+
+
+def kanban_wake(status, title=KANBAN_TITLE, handoff="", review="", assignee="marketing",
+                board="default", task_id="t_6edfcd92"):
+    synth = (f"[kanban] Task {task_id} {status}.\nTitle: {title}\nAssignee: @{assignee}\n"
+             f"Board: {board}\n\nCheck the result or decide the next step.")
+    if handoff:
+        synth += f"\nResult: {handoff}"
+    if review:
+        synth += (f"\nReview feedback: {review}\nInspect the existing card and its current review "
+                  "run; return work to the same implementation task. Do not treat this BLOCK as "
+                  "approval and do not create a duplicate task.")
+    return synth + "\n\n" + KANBAN_GUIDANCE
+
+
+# Background process notices (tools/process_registry_notifications.py and
+# gateway/run_notifications.py), re-injected as internal user-role turns.
+PROCESS_ENVELOPES = (
+    "[IMPORTANT: Background process proc_1a2b3c exited (exit code 0).\nCommand: make draft\n"
+    "Output:\nDrafted the marketing campaign and pricing plan for the offer.]",
+    "[IMPORTANT: Background process proc_1a2b3c matched watch pattern \"DONE\".\nCommand: make draft\n"
+    "Matched output:\nDONE marketing campaign and pricing plan for the offer]",
+    "[IMPORTANT: 2 background processes completed. Treat these results as one batch and give one "
+    "consolidated response; preserve failures and actionable results.]\n\n"
+    "[IMPORTANT: Background process proc_1 exited (exit code 0).\nCommand: a\nOutput:\n"
+    "Drafted the marketing campaign and pricing plan for the offer.]",
+    "[IMPORTANT: 3 background processes completed for this session.\nTreat these results as one "
+    "completion batch and send at most one consolidated user-facing response.\n"
+    "- proc_1: Drafted the marketing campaign and pricing plan for the offer.",
+    "[IMPORTANT: 2 background subagent delegations completed for this session. Treat these "
+    "results as one completion batch and send at most one consolidated user-facing response. If "
+    "a result does not change the current conclusion, absorb it silently.]\n\n"
+    "[ASYNC DELEGATION COMPLETE — deleg_1]\n" + ASYNC_REPORT,
+)
+
+
+class KanbanNotifierEnvelopeTest(unittest.TestCase):
+    """Kanban wakes and background notices are runtime turns, not operator tasks.
+
+    ``[kanban] `` also fits the inline ``[sender] `` prefix shape, so it was
+    stripped as a sender name and the card title + result routed as a fresh
+    task (live: task=6a986244 source=sender routes=offers-sales,strategy).
+    """
+
+    def assert_suppressed(self, wire):
+        t = route(wire)
+        self.assertEqual(t["routes"], [])
+        self.assertEqual(t["dropped"], [])
+        self.assertEqual(t["reason"], "runtime-envelope")
+        self.assertEqual(sp.render_plan(t), "")
+
+    def test_live_body_without_header_would_route(self):
+        # Guard: the live card body really carries routable vocabulary.
+        body = KANBAN_LIVE.split("\n", 1)[1]
+        self.assertIn("offers-sales", names(route(body)))
+        self.assertTrue(route(kanban_wake("completed").split("\n", 1)[1])["routes"])
+        for env in (PROCESS_ENVELOPES[0], PROCESS_ENVELOPES[1], PROCESS_ENVELOPES[3]):
+            # (the batch headers' remainders are themselves envelopes)
+            with self.subTest(env=env[:40]):
+                self.assertTrue(route(env.split("\n", 1)[1])["routes"])
+
+    def test_live_completion_routes_nothing(self):
+        self.assert_suppressed(KANBAN_LIVE)
+        self.assertEqual(task_intent.runtime_envelope(KANBAN_LIVE), "kanban")
+
+    def test_every_wake_kind_routes_nothing(self):
+        for status in KANBAN_STATUSES:
+            for sender in ("", "[Norkz] "):
+                with self.subTest(status=status, sender=sender):
+                    self.assert_suppressed(sender + kanban_wake(
+                        status, handoff="Drafted the marketing campaign and pricing plan."))
+        self.assert_suppressed(kanban_wake(
+            KANBAN_STATUSES[6], review="Pricing plan misses the offer stack; rewrite the campaign."))
+        self.assert_suppressed(kanban_wake("completed", assignee=""))
+
+    def test_localized_wakes_route_nothing(self):
+        zh = (f"[kanban] 任务 t_6edfcd92 已完成。\n标题: {KANBAN_TITLE}\n"
+              "执行者: @marketing\n看板: default\n\n" + KANBAN_GUIDANCE)
+        ar = (f"[kanban] المهمة t_6edfcd92 completed.\n"
+              f"العنوان: {KANBAN_TITLE}\n"
+              "المُكلَّف: @marketing\n" + KANBAN_GUIDANCE)
+        for wire in (zh, ar):
+            with self.subTest(wire=wire[:20]):
+                self.assert_suppressed(wire)
+
+    def test_background_process_notices_route_nothing(self):
+        for env in PROCESS_ENVELOPES:
+            for sender in ("", "[Norkz] "):
+                with self.subTest(env=env[:40], sender=sender):
+                    self.assert_suppressed(sender + env)
+
+    def test_wake_with_runtime_wrappers_routes_nothing(self):
+        backfill = "[alice] earlier chatter\n\n[New message]\n" + KANBAN_LIVE
+        memory = KANBAN_LIVE + "\n\n<memory-context>\nnotes\n</memory-context>"
+        routing = KANBAN_LIVE + "\n\n<specialist-routing>\nnote\n</specialist-routing>"
+        for wire in (backfill, memory, routing):
+            with self.subTest(wire=wire[:30]):
+                self.assert_suppressed(wire)
+
+    def test_prose_mentioning_kanban_still_routes(self):
+        for prose in (
+            "Write a marketing campaign for our kanban board launch.",
+            "[kanban] Write a marketing campaign for the launch.",  # a sender named "kanban"
+            "[Norkz] Write a marketing campaign. The notifier said:\n" + KANBAN_LIVE,
+            "Write a marketing campaign for the launch.\n\n> [kanban] Task t_6edfcd92 completed.",
+            "[kanban] Task t_6edfcd92 completed. Now write a marketing campaign for the launch.",
+            "Write a marketing campaign; the Background process proc_1 exited (exit code 0).",
+        ):
+            with self.subTest(prose=prose[:40]):
+                t = route(prose)
+                self.assertIn("marketing", names(t))
+                self.assertNotEqual(t.get("reason"), "runtime-envelope")
+                self.assertEqual(task_intent.runtime_envelope(prose), "")
+
+    def test_hook_returns_none_for_wake(self):
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
+            self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=KANBAN_LIVE))
+            self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=PROCESS_ENVELOPES[0]))
+            self.assertIsNotNone(h.on_pre_llm_call(
+                session_id="s", user_message="[Norkz] Write a marketing campaign for the launch."))
+
+    def test_tier_routing_unchanged(self):
+        # Only specialist fan-out is suppressed; the turn itself still classifies.
+        self.assertTrue(task_intent.task_from_text(KANBAN_LIVE).found)
+
+
 def _display(name):
     return re.sub(r"[^\w.\- ]", "_", name)
 
@@ -624,6 +786,8 @@ class AttachmentRelayTest(unittest.TestCase):
     def test_attachment_runtime_envelopes_route_nothing(self):
         bodies = [
             async_envelope(AsyncDelegationEnvelopeTest.HEADERS[0], sender=""),
+            KANBAN_LIVE,
+            PROCESS_ENVELOPES[0],
             "[Replying to: \"earlier\"]\n\nWrite a marketing campaign for the launch.\n",
             "[OUT-OF-BAND USER MESSAGE \u2014 steer]\nWrite a marketing campaign for the launch.\n"
             "[/OUT-OF-BAND USER MESSAGE]\n",

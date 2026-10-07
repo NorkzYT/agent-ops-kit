@@ -43,6 +43,16 @@ max 6) drops the lowest scores.
   system prompts and tool output never pick a profile. Its own note is
   wrapped in `<specialist-routing>` and stripped again on later API calls,
   thus neither router classifies it.
+- **Hermes notifications are not tasks.** When the current sender segment
+  starts with a notice Hermes injects as a user turn, nothing routes
+  (`runtime-envelope`): an async delegation result
+  (`[ASYNC DELEGATION ... — id]`), a Kanban wake
+  (`[kanban] Task t_<id> <status>.` then `Title:` and `Assignee: @...`, any
+  wake kind or locale), or a background process notice
+  (`[IMPORTANT: Background process <id> ... (exit code` / `matched watch
+  pattern`, or the `[IMPORTANT: N background processes|subagent delegations
+  completed` batch header). Prose that mentions or quotes one later still
+  routes. Model tier routing is unchanged.
 - **Inline attachments are not the task.** A text file the platform inlines
   (`[Content of NAME]:` plus the file text, with no end marker) is cut out by
   comparing it with the cached copy the gateway note names. Only a regular,
@@ -58,8 +68,8 @@ max 6) drops the lowest scores.
   `make specialist-route` mark it `attachment-derived`; the live log line says
   `source=attachment`. The same checks apply first, so an unverified relay
   still routes nothing. Inside the file, `#max`/`#opus`/`#quick` control
-  lines carry no authority. Gateway or runtime text in it (an async
-  delegation envelope, `[Replying to`, a trigger id, a steer block, a relay
+  lines carry no authority. Gateway or runtime text in it (a Hermes
+  notification as above, `[Replying to`, a trigger id, a steer block, a relay
   header or document note) routes nothing (`attachment-envelope`). The
   optional classifier never sees file text (`skipped:attachment`). A document
   the gateway did not inline (large text, PDF, DOCX) is never read for

@@ -98,11 +98,51 @@ _EMPTY_PLACEHOLDER = "(The user sent a message with no text content)"
 # header at the very start of the sender segment counts; prose that mentions it
 # elsewhere is still a task.
 _ASYNC_DELEGATION_RE = re.compile(r"^\[ASYNC DELEGATION [A-Z][A-Z ]* [\u2014\u2013-] [^\]\n]+\]")
+# Kanban wake (gateway/kanban_watchers_notifier.py ``build_wake_text``, locale key
+# gateway.kanban.wake.message): "[kanban] Task t_<8 hex> <status>.\nTitle: ...\n
+# Assignee: @...". Labels are localized; the "[kanban] " tag, the task id, the
+# full-stop header line and the "<label>: @assignee" line are not. "[kanban] "
+# also fits the inline sender-prefix shape, so this is matched before that strip.
+_KANBAN_WAKE_RE = re.compile(r"^\[kanban\] [^\n]*\bt_[0-9a-f]{8}\b[^\n]*[.\u3002]\n[^\n:]{1,32}: ")
+_KANBAN_ASSIGNEE_RE = re.compile(r"(?m)^[^\n:]{1,32}: @[^\s]*$")
+_KANBAN_HEAD_SPAN = 400  # header + title (clipped to 120 chars) + assignee line
+# Background process completions/watch matches and their batch headers
+# (tools/process_registry_notifications.py, gateway/run_notifications.py).
+_PROCESS_NOTICE_RE = re.compile(
+    r"^\[IMPORTANT: (?:Background process \S+ (?:matched watch pattern \"|[^\n]*\(exit code )"
+    r"|\d+ background (?:processes|subagent delegations) completed\b)"
+)
+
+
+def _envelope_label(text: str) -> str:
+    """Label of the Hermes runtime notification ``text`` starts with ('' when none)."""
+    if _ASYNC_DELEGATION_RE.match(text):
+        return "async-delegation"
+    if _KANBAN_WAKE_RE.match(text) and _KANBAN_ASSIGNEE_RE.search(text, 0, _KANBAN_HEAD_SPAN):
+        return "kanban"
+    if _PROCESS_NOTICE_RE.match(text):
+        return "background-process"
+    return ""
 
 
 def is_runtime_envelope(task_text: str) -> bool:
-    """True when the sender segment is a Hermes runtime notification, not a task."""
-    return bool(_ASYNC_DELEGATION_RE.match(task_text))
+    """True when ``task_text`` opens with a Hermes runtime notification, not a task."""
+    return bool(_envelope_label(task_text))
+
+
+def runtime_envelope(text: str) -> str:
+    """Label of the runtime notification opening the current sender segment ('' when none).
+
+    Checked on the segment before the inline ``[sender] `` strip (which would
+    eat a "[kanban] " tag) and after one such prefix (shared sessions). Only
+    the segment start counts: a sender who quotes a notice later still routes.
+    """
+    seg = _sender_region(text)[2]
+    label = _envelope_label(seg)
+    prefix = _SENDER_PREFIX_RE.match(seg)
+    if not label and prefix:
+        label = _envelope_label(seg[prefix.end():].lstrip())
+    return label
 
 
 def runtime_marker(text: str) -> str:
@@ -112,7 +152,7 @@ def runtime_marker(text: str) -> str:
     task): any template this module strips or refuses counts, wherever the
     cut would apply, so routing never runs on gateway or runtime envelopes."""
     t = text.strip()
-    if _ASYNC_DELEGATION_RE.match(t):
+    if _envelope_label(t):
         return "runtime-envelope"
     if t.startswith(_STEER_OPEN_PREFIX) or _STEER_CLOSE in t:
         return "steer"
@@ -125,14 +165,9 @@ def runtime_marker(text: str) -> str:
     return ""
 
 
-def split_sender_segment(text: str) -> Tuple[str, str]:
-    """``(head, segment)``: the sender-authored segment and the runtime text before it.
-
-    ``segment`` is :func:`genuine_user_text`; ``head`` is what was stripped in
-    front of it (backfill through the gateway's ``[New message]`` marker, or the
-    leading runtime blocks), which is where the gateway's per-attachment
-    document notes live (``attachments.separate_sender_prose``).
-    """
+def _sender_region(text: str) -> Tuple[str, int, str]:
+    """``(t, start, seg)``: ``text`` minus steer wrapper and appendix, the offset of
+    the sender segment in it, and that segment (stripped, sender prefix kept)."""
     t = text
     stripped = t.strip()
     if stripped.startswith(_STEER_OPEN_PREFIX):
@@ -157,7 +192,18 @@ def split_sender_segment(text: str) -> Tuple[str, str]:
             start = len(t) - len(rest.lstrip())
     seg = t[start:]
     start += len(seg) - len(seg.lstrip())
-    seg = seg.strip()
+    return t, start, seg.strip()
+
+
+def split_sender_segment(text: str) -> Tuple[str, str]:
+    """``(head, segment)``: the sender-authored segment and the runtime text before it.
+
+    ``segment`` is :func:`genuine_user_text`; ``head`` is what was stripped in
+    front of it (backfill through the gateway's ``[New message]`` marker, or the
+    leading runtime blocks), which is where the gateway's per-attachment
+    document notes live (``attachments.separate_sender_prose``).
+    """
+    t, start, seg = _sender_region(text)
     prefix = _SENDER_PREFIX_RE.match(seg)
     if prefix:
         rest = seg[prefix.end():]

@@ -489,9 +489,10 @@ def route_text(
     if not task.found:
         trace["reason"] = "no-current-task"
         return trace
-    if ti.is_runtime_envelope(task.text):
-        # Hermes-generated async delegation result: the operator asked for that
-        # work earlier; the embedded subagent report must not fan out specialists.
+    if ti.runtime_envelope(raw_text or ""):
+        # Hermes-generated notification (async delegation result, Kanban wake,
+        # background process notice): the operator asked for that work earlier;
+        # the embedded report/card must not fan out specialists again.
         trace["reason"] = "runtime-envelope"
         return trace
     sep = att.separate_sender_prose(raw_text or "")
