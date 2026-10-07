@@ -1,0 +1,705 @@
+"""Local model roles, bounded local fallback, hybrid specialist classifier and
+the installer render that carries them.
+
+Run: python3 -m unittest discover -s scripts/tests -p 'test_local_route.py'
+
+Offline: local endpoints are fakes or a stub HTTP server on 127.0.0.1, the
+installer renders into a temp HERMES_HOME from a fixture .env, and the
+Hermes-native checks (skipped without a Hermes venv) only parse a temp config.
+"""
+
+from __future__ import annotations
+
+import http.server
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(__file__))
+from _loader import REPO, submodule  # noqa: E402
+
+lb = submodule("local_backend")
+config_mod = submodule("router_config")
+router_mod = submodule("router")
+sp = submodule("specialists")
+hook_mod = submodule("specialist_hook")
+
+LOCAL = "http://127.0.0.1:11434/v1"
+ROLES = dict(ollama_base_url=LOCAL, ollama_model="legacy:1b", ollama_routine_model="qwen3.5:27b",
+             ollama_fallback_model="qwen3.6:27b", ollama_agent_model="qwen3.8:27b")
+SSN = "219-09-9999"  # synthetic, passes the detector's area/group/serial checks
+AMBIGUOUS = ("I keep changing my strategy for the family move and the trade-offs feel endless; "
+             "help me think it through calmly.")
+NO_MATCH = ("I keep going back and forth on what to do next with my life and the people around "
+            "me, and I would like a structured way to think it through.")
+HARD = ("Architect a multi-region, zero-downtime migration of our billing database with rollback, "
+        "data integrity verification across shards, and a phased cutover plan; analyze the "
+        "failure modes and tradeoffs.")
+
+
+def ready(_name):
+    return sp.Readiness("ready", True, 3, "knowledge/x-knowledge")
+
+
+def answer(text, model="m"):
+    return lb.make_response(text, model=model)
+
+
+class FakeBackend:
+    """Per-model fake: ``plan`` maps model -> response text or a LocalUnavailable kind."""
+
+    def __init__(self, plan, calls):
+        self.plan, self.calls = plan, calls
+
+    def __call__(self, model):
+        backend = SimpleNamespace()
+
+        def chat(messages, **kw):
+            self.calls.append((model, kw))
+            outcome = self.plan.get(model, "http")
+            if outcome in ("http", "timeout", "connect", "shape", "config"):
+                raise lb.LocalUnavailable(f"synthetic {outcome}", outcome)
+            return answer(outcome, model)
+
+        backend.chat = chat
+        return backend
+
+
+class Spy:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, request):
+        self.calls += 1
+        return SimpleNamespace(model="CLOUD", choices=[], usage=None)
+
+
+def req(text, model="gpt-5.6-luna"):
+    return {"model": model, "messages": [{"role": "user", "content": text}]}
+
+
+# --------------------------------------------------------------------------- #
+# Settings: explicit roles, legacy single model, bounded chain
+# --------------------------------------------------------------------------- #
+class LocalRoleSettingsTest(unittest.TestCase):
+    def test_explicit_roles(self):
+        s = config_mod.RouterSettings(**ROLES)
+        self.assertEqual(s.local_model("routine"), "qwen3.5:27b")
+        self.assertEqual(s.local_model("fallback"), "qwen3.6:27b")
+        self.assertEqual(s.local_model("agent"), "qwen3.8:27b")
+        self.assertEqual(s.local_chain("routine"), ["qwen3.5:27b", "qwen3.6:27b"])
+        self.assertEqual(s.local_chain("agent"), ["qwen3.8:27b", "qwen3.6:27b"])
+
+    def test_legacy_single_model_keeps_old_behaviour(self):
+        s = config_mod.RouterSettings(ollama_base_url=LOCAL, ollama_model="llama3.1:8b")
+        self.assertEqual(s.local_chain("routine"), ["llama3.1:8b"])
+        self.assertEqual(s.local_chain("agent"), ["llama3.1:8b"])
+
+    def test_chain_is_deduplicated_and_at_most_two(self):
+        s = config_mod.RouterSettings(ollama_base_url=LOCAL, ollama_routine_model="a",
+                                      ollama_fallback_model="a", ollama_agent_model="b")
+        self.assertEqual(s.local_chain("routine"), ["a"])
+        self.assertEqual(s.local_chain("agent"), ["b", "a"])
+
+    def test_settings_from_config_and_env(self):
+        cfg = {"ollama_routine_model": "r", "ollama_fallback_model": "f", "ollama_agent_model": "g",
+               "specialist_classifier": "local", "specialist_classifier_timeout": "12"}
+        s = config_mod.load_settings(lambda k, d: cfg.get(k))
+        self.assertEqual((s.local_model("routine"), s.local_model("fallback"), s.local_model("agent")),
+                         ("r", "f", "g"))
+        self.assertEqual(s.specialist_classifier, "local")
+        self.assertEqual(s.specialist_classifier_timeout, 12.0)
+        with mock.patch.dict(os.environ, {"OLLAMA_ROUTINE_MODEL": "er", "OLLAMA_AGENT_MODEL": "eg",
+                                          "MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT": "999"}):
+            env = config_mod.load_settings(None)
+        self.assertEqual((env.local_model("routine"), env.local_model("agent")), ("er", "eg"))
+        self.assertEqual(env.specialist_classifier_timeout, 25.0)  # capped under the 30 s hook limit
+
+
+class LocalEndpointTest(unittest.TestCase):
+    def test_local_and_remote(self):
+        for url in ("http://127.0.0.1:11434/v1", "http://localhost:11434", "http://100.65.5.47:11434/v1",
+                    "http://192.168.1.9:11434", "http://10.0.0.2", "http://[::1]:11434",
+                    "http://ollama:11434/v1", "http://gpu-box.tail1234.ts.net:11434", "http://gpu.local"):
+            self.assertTrue(lb.is_local_endpoint(url), url)
+        for url in ("https://api.openai.com/v1", "http://8.8.8.8:11434", "http://100.128.0.1",
+                    "https://ollama.example.com/v1", "", "not a url",
+                    "http://134744072:11434/v1", "http://0x08080808/v1"):  # numeric 8.8.8.8
+            self.assertFalse(lb.is_local_endpoint(url), url)
+
+
+# --------------------------------------------------------------------------- #
+# Bounded local chain
+# --------------------------------------------------------------------------- #
+class LocalChainTest(unittest.TestCase):
+    def test_model_level_failure_tries_fallback_once(self):
+        for kind in ("http", "timeout", "shape"):
+            calls = []
+            resp, model, attempt = lb.run_local_chain(
+                ["a", "b"], [], FakeBackend({"a": kind, "b": "ok"}, calls))
+            self.assertEqual((model, attempt, resp.choices[0].message.content), ("b", 2, "ok"), kind)
+            self.assertEqual([c[0] for c in calls], ["a", "b"])
+
+    def test_endpoint_down_does_not_try_fallback(self):
+        calls = []
+        with self.assertRaises(lb.LocalUnavailable) as ctx:
+            lb.run_local_chain(["a", "b"], [], FakeBackend({"a": "connect", "b": "ok"}, calls))
+        self.assertEqual(ctx.exception.kind, "connect")
+        self.assertEqual([c[0] for c in calls], ["a"])
+
+    def test_all_fail_raises_and_empty_chain_is_config(self):
+        with self.assertRaises(lb.LocalUnavailable):
+            lb.run_local_chain(["a", "b"], [], FakeBackend({}, []))
+        with self.assertRaises(lb.LocalUnavailable) as ctx:
+            lb.run_local_chain(["", ""], [], FakeBackend({}, []))
+        self.assertEqual(ctx.exception.kind, "config")
+
+    def test_budget_is_passed_down_and_bounds_the_walk(self):
+        calls = []
+        lb.run_local_chain(["a", "b"], [], FakeBackend({"a": "timeout", "b": "ok"}, calls),
+                           budget=5.0, options={"max_tokens": 4})
+        self.assertTrue(all(0 < c[1]["timeout"] <= 5.0 for c in calls))
+        self.assertEqual(calls[0][1]["options"], {"max_tokens": 4})
+        calls = []
+        with mock.patch.object(lb.time, "monotonic", side_effect=[0.0, 0.0, 10.0]):
+            with self.assertRaises(lb.LocalUnavailable):
+                lb.run_local_chain(["a", "b"], [], FakeBackend({"a": "timeout", "b": "ok"}, calls), budget=5.0)
+        self.assertEqual([c[0] for c in calls], ["a"])  # budget spent: no second attempt
+
+
+class _Ollama(http.server.BaseHTTPRequestHandler):
+    """Stub OpenAI-compatible endpoint: model 'missing' 404s, anything else answers."""
+
+    bodies: list = []
+
+    def do_POST(self):  # noqa: N802
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        type(self).bodies.append(body)
+        if body.get("model") == "missing":
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'{"error":"model not found"}')
+            return
+        data = json.dumps({"model": body["model"], "choices": [{"message": {"content": "philosophy"}}]})
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(data.encode())
+
+    def log_message(self, *a):
+        pass
+
+
+class StubEndpointTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = http.server.HTTPServer(("127.0.0.1", 0), _Ollama)
+        cls.url = f"http://127.0.0.1:{cls.server.server_port}/v1"
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def test_real_backend_404_falls_back_and_sends_options(self):
+        _Ollama.bodies = []
+        s = config_mod.RouterSettings(ollama_base_url=self.url, ollama_routine_model="missing",
+                                      ollama_fallback_model="qwen3.6:27b", specialist_classifier="local")
+        fn = hook_mod.local_classifier(s)
+        picks = fn("task", ["philosophy", "strategy"])
+        self.assertEqual(list(picks), ["philosophy"])
+        self.assertEqual(picks.meta, {"model": "qwen3.6:27b", "attempt": 2, "outcome": "ok"})
+        self.assertEqual([b["model"] for b in _Ollama.bodies], ["missing", "qwen3.6:27b"])
+        self.assertEqual(_Ollama.bodies[-1]["reasoning_effort"], "none")
+        self.assertEqual(_Ollama.bodies[-1]["temperature"], 0)
+
+    def test_proxy_environment_is_ignored(self):
+        _Ollama.bodies = []
+        with socket_closed_port() as port, mock.patch.dict(os.environ, {
+                "http_proxy": f"http://127.0.0.1:{port}", "HTTP_PROXY": f"http://127.0.0.1:{port}",
+                "no_proxy": "", "NO_PROXY": ""}):
+            resp = lb.LocalBackend(self.url, "m", timeout=5).chat([{"role": "user", "content": "x"}])
+        self.assertEqual(resp.choices[0].message.content, "philosophy")
+        self.assertEqual(len(_Ollama.bodies), 1)  # reached the endpoint directly
+
+    def test_closed_port_is_connect_and_refuses(self):
+        with socket_closed_port() as port:
+            backend = lb.LocalBackend(f"http://127.0.0.1:{port}/v1", "m", timeout=2)
+            with self.assertRaises(lb.LocalUnavailable) as ctx:
+                backend.chat([{"role": "user", "content": "x"}])
+        self.assertEqual(ctx.exception.kind, "connect")
+
+
+class socket_closed_port:
+    def __enter__(self):
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        self.port = s.getsockname()[1]
+        s.close()
+        return self.port
+
+    def __exit__(self, *a):
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# Private routing: role hierarchy, local fallback, never cloud
+# --------------------------------------------------------------------------- #
+class PrivateHierarchyTest(unittest.TestCase):
+    def _router(self, plan, calls, **over):
+        s = dict(ROLES, privacy_routing=True, complexity_routing=True)
+        s.update(over)
+        return router_mod.Router(config_mod.RouterSettings(**s), backend_factory=FakeBackend(plan, calls))
+
+    def _run(self, router, request, base_url="http://127.0.0.1:8317/v1", sid="s"):
+        spy = Spy()
+        resp = router.on_llm_execution(request=request, next_call=spy, session_id=sid, base_url=base_url,
+                                       model=request.get("model"))
+        self.assertEqual(spy.calls, 0, "private request reached a cloud provider")
+        return resp
+
+    def test_ordinary_private_task_uses_routine_model(self):
+        calls = []
+        resp = self._run(self._router({"qwen3.5:27b": "LOCAL"}, calls), req(f"my ssn is {SSN}, file it"))
+        self.assertEqual(resp.choices[0].message.content, "LOCAL")
+        self.assertEqual([c[0] for c in calls], ["qwen3.5:27b"])
+
+    def test_difficult_private_task_uses_agent_model(self):
+        calls = []
+        self._run(self._router({"qwen3.8:27b": "LOCAL"}, calls), req(f"{HARD} ssn {SSN}"))
+        self.assertEqual([c[0] for c in calls], ["qwen3.8:27b"])
+
+    def test_private_coding_uses_agent_model(self):
+        calls = []
+        self._run(self._router({"qwen3.8:27b": "LOCAL"}, calls), req(f"fix it, ssn {SSN}", model="opus"),
+                  base_url="http://127.0.0.1:3456/v1")
+        self.assertEqual([c[0] for c in calls], ["qwen3.8:27b"])
+
+    def test_role_failure_falls_back_to_local_fallback_model(self):
+        calls = []
+        resp = self._run(self._router({"qwen3.5:27b": "http", "qwen3.6:27b": "FALLBACK"}, calls),
+                         req(f"ssn {SSN}"))
+        self.assertEqual(resp.choices[0].message.content, "FALLBACK")
+        self.assertEqual([c[0] for c in calls], ["qwen3.5:27b", "qwen3.6:27b"])
+
+    def test_local_chain_exhausted_refuses_never_cloud(self):
+        calls = []
+        resp = self._run(self._router({}, calls), req(f"ssn {SSN}"))
+        self.assertTrue(resp._model_router_refusal)
+        self.assertEqual(len(calls), 2)  # bounded: role model + one fallback
+
+    def test_endpoint_down_refuses_without_fallback(self):
+        calls = []
+        resp = self._run(self._router({"qwen3.5:27b": "connect", "qwen3.6:27b": "OK"}, calls), req(f"ssn {SSN}"))
+        self.assertTrue(resp._model_router_refusal)
+        self.assertEqual([c[0] for c in calls], ["qwen3.5:27b"])
+
+    def test_non_local_endpoint_is_refused_unsent(self):
+        calls = []
+        r = self._router({"qwen3.5:27b": "LOCAL"}, calls, ollama_base_url="https://api.example.com/v1")
+        resp = self._run(r, req(f"ssn {SSN}"))
+        self.assertTrue(resp._model_router_refusal)
+        self.assertIn("local-endpoint-not-local", resp.choices[0].message.content)
+        self.assertEqual(calls, [])
+
+    def test_public_request_is_untouched_by_local_roles(self):
+        calls = []
+        r = self._router({"qwen3.5:27b": "LOCAL"}, calls)
+        spy = Spy()
+        resp = r.on_llm_execution(request=req("what is 2+2?"), next_call=spy, session_id="p",
+                                  base_url="http://127.0.0.1:8317/v1")
+        self.assertEqual((spy.calls, resp.model, calls), (1, "CLOUD", []))
+
+    def test_private_logs_carry_labels_not_content(self):
+        calls = []
+        r = self._router({"qwen3.5:27b": "LOCAL"}, calls)
+        with self.assertLogs("hermes.plugin.model_router", level="INFO") as logs:
+            self._run(r, req(f"Zorblax account ssn {SSN}"))
+        text = "\n".join(logs.output)
+        self.assertIn("role=routine model=qwen3.5:27b", text)
+        self.assertNotIn("Zorblax", text)
+        self.assertNotIn(SSN, text)
+
+
+# --------------------------------------------------------------------------- #
+# Hybrid specialist classifier: gate, privacy, high-risk, caps, failure
+# --------------------------------------------------------------------------- #
+def settings(**kw):
+    base = dict(enabled=True, classifier="local")
+    base.update(kw)
+    return sp.SpecialistSettings(**base)
+
+
+class ClassifierGateTest(unittest.TestCase):
+    def test_strong_keyword_match_never_calls_classifier(self):
+        called = []
+        t = sp.route_text("Write a marketing campaign for the launch.", settings(), readiness=ready,
+                          classifier=lambda v, p: called.append(1) or ["philosophy"])
+        self.assertEqual((called, t["classifier"]), ([], "not-needed"))
+
+    def test_no_match_and_weak_only_are_the_gates(self):
+        seen = []
+
+        def fake(visible, pool):
+            seen.append(list(pool))
+            return ["philosophy"]
+
+        none = sp.route_text(NO_MATCH, settings(), readiness=ready, classifier=fake)
+        self.assertEqual((none["classifier_gate"], [r["profile"] for r in none["routes"]]),
+                         ("no-match", ["philosophy"]))
+        weak = sp.route_text(AMBIGUOUS, settings(), readiness=ready, classifier=fake)
+        self.assertEqual(weak["classifier_gate"], "ambiguous")
+        self.assertEqual([r["profile"] for r in weak["routes"]], ["strategy", "philosophy"])
+        self.assertNotIn("strategy", seen[1])  # the pool never repeats a deterministic match
+
+    def test_at_most_two_additions_and_never_high_risk(self):
+        def greedy(visible, pool):
+            return ["security-reviewer", "red-team", "health-fitness", "herbalism", "local-engineer",
+                    "philosophy", "marketing", "business", "survival"]
+
+        t = sp.route_text(NO_MATCH, settings(max_profiles=6), readiness=ready, classifier=greedy)
+        added = [r["profile"] for r in t["routes"] if r["reasons"] == ["classifier"]]
+        self.assertEqual(added, ["philosophy", "marketing"])
+        self.assertTrue(set(added).isdisjoint(sp.CLASSIFIER_FORBIDDEN))
+        reasons = {d["profile"]: d["reason"] for d in t["dropped"]}
+        for name in ("security-reviewer", "red-team", "health-fitness", "herbalism", "local-engineer"):
+            self.assertEqual(reasons[name], "classifier:not-eligible")
+        self.assertEqual(reasons["business"], "classifier:cap")
+        self.assertEqual(sp.MAX_CLASSIFIER_ADDITIONS, 2)
+        self.assertEqual(set(sp.HIGH_RISK), {"security-reviewer", "red-team", "health-fitness", "herbalism"})
+
+    def test_private_task_never_reaches_classifier(self):
+        called = []
+        for kwargs in ({"session_private": True}, {}):
+            text = NO_MATCH if kwargs else f"{NO_MATCH} #private"
+            t = sp.route_text(text, settings(), readiness=ready,
+                              classifier=lambda v, p: called.append(1) or ["philosophy"], **kwargs)
+            self.assertEqual(t["classifier"], "skipped:private")
+        self.assertEqual(called, [])
+
+    def test_timeout_or_failure_adds_nothing(self):
+        def timeout(visible, pool):
+            return hook_mod.Picks([], {"model": "-", "attempt": 0, "outcome": "unavailable:timeout"})
+
+        t = sp.route_text(NO_MATCH, settings(), readiness=ready, classifier=timeout)
+        self.assertEqual((t["routes"], t["classifier_detail"]["outcome"]), ([], "unavailable:timeout"))
+        w = sp.route_text(AMBIGUOUS, settings(), readiness=ready,
+                          classifier=lambda v, p: (_ for _ in ()).throw(TimeoutError()))
+        self.assertEqual(([r["profile"] for r in w["routes"]], w["classifier"]),
+                         (["strategy"], "error:TimeoutError"))
+
+
+class LocalClassifierTest(unittest.TestCase):
+    def _fn(self, plan, calls, **over):
+        s = config_mod.RouterSettings(**dict(ROLES, specialist_classifier="local", **over))
+        return hook_mod.local_classifier(s, factory=FakeBackend(plan, calls))
+
+    def test_routine_model_first_with_bounded_options(self):
+        calls = []
+        picks = self._fn({"qwen3.5:27b": "philosophy, strategy, marketing"}, calls)(
+            "task", ["philosophy", "strategy", "marketing"])
+        self.assertEqual(list(picks), ["philosophy", "strategy"])  # capped at two
+        self.assertEqual(picks.meta["model"], "qwen3.5:27b")
+        model, kw = calls[0]
+        self.assertEqual(kw["options"], hook_mod.CLASSIFIER_OPTIONS)
+        self.assertEqual(kw["options"]["reasoning_effort"], "none")
+        self.assertLessEqual(kw["timeout"], 10.0)
+
+    def test_fallback_model_then_nothing(self):
+        calls = []
+        picks = self._fn({"qwen3.5:27b": "http", "qwen3.6:27b": "<think>x</think>philosophy"}, calls)(
+            "task", ["philosophy"])
+        self.assertEqual((list(picks), picks.meta["model"]), (["philosophy"], "qwen3.6:27b"))
+        calls = []
+        picks = self._fn({"qwen3.5:27b": "connect", "qwen3.6:27b": "philosophy"}, calls)("task", ["philosophy"])
+        self.assertEqual((list(picks), picks.meta["outcome"], len(calls)), ([], "unavailable:connect", 1))
+
+    def test_refuses_non_local_or_unconfigured(self):
+        self.assertIsNone(hook_mod.local_classifier(config_mod.RouterSettings(
+            **dict(ROLES, ollama_base_url="https://api.example.com/v1"))))
+        self.assertIsNone(hook_mod.local_classifier(config_mod.RouterSettings(ollama_base_url=LOCAL)))
+
+    def test_hook_logs_no_prompt_content(self):
+        calls = []
+        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_classifier="local"))
+        h = hook_mod.SpecialistHook(s, backend_factory=FakeBackend({"qwen3.5:27b": "philosophy"}, calls))
+        self.assertTrue(h.classifier_ready)
+        secret_word = "Quuxbarian"
+        with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)), \
+                self.assertLogs("hermes.plugin.model_router", level="INFO") as logs:
+            out = h.on_pre_llm_call(session_id="s", user_message=f"{NO_MATCH} {secret_word}")
+        text = "\n".join(logs.output)
+        self.assertIn("gate=no-match classifier_model=qwen3.5:27b classifier_outcome=ok", text)
+        self.assertNotIn(secret_word, text)
+        self.assertNotIn("structured way", text)
+        self.assertIn("philosophy", out["context"])
+
+    def test_hook_private_session_never_calls_local_classifier(self):
+        calls = []
+        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_classifier="local"))
+        h = hook_mod.SpecialistHook(s, session_private=lambda sid: True,
+                                    backend_factory=FakeBackend({"qwen3.5:27b": "philosophy"}, calls))
+        with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
+            self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=NO_MATCH))
+        self.assertEqual(calls, [])
+
+
+# --------------------------------------------------------------------------- #
+# Installer render: presence-aware specialist knobs, roles, aux provider
+# --------------------------------------------------------------------------- #
+FIXTURE_ENV = """CLIPROXY_PORT=8317
+CLIPROXY_API_KEY=cptest
+CLAUDE_MAX_PROXY_PORT=3456
+CLAUDE_MAX_PROXY_API_KEY=secrettoken123
+HERMES_MODEL=gpt-5.6-luna
+HERMES_CODING_MODEL=opus
+REPOS_DIR={tmp}/repos
+HERMES_HOME={home}
+DISCORD_BOT_TOKEN={token}
+OLLAMA_BASE_URL=http://100.65.5.47:11434/v1
+"""
+LIVE_CONFIG = """plugins:
+  enabled:
+  - model-router
+  entries:
+    model-router:
+      settings:
+        specialist_routing: true
+        specialist_max_profiles: 2
+        specialist_require_ready: true
+        specialist_classifier: local
+        specialist_classifier_timeout: 12
+        specialist_profiles:
+        - strategy
+        - philosophy
+"""
+SETTINGS = "plugins.entries.model-router.settings"
+config_get = None
+
+
+def _config_get():
+    global config_get
+    if config_get is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("config_get", REPO / "scripts" / "config-get.py")
+        config_get = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(config_get)
+    return config_get
+
+
+class _InstallerFixture(unittest.TestCase):
+    """Temp HERMES_HOME, fixture .env and a stub `hermes` that logs its calls."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.home = self.tmp / "hermes"
+        self.home.mkdir()
+        self.bin = self.tmp / ".local" / "bin"
+        self.bin.mkdir(parents=True)
+        self.hermes_log = self.tmp / "hermes-calls.log"
+        stub = self.bin / "hermes"
+        stub.write_text(f'#!/usr/bin/env bash\necho "$@" >> "{self.hermes_log}"\n'
+                        'case "$1" in --version) echo "hermes-stub 0.0.0";; esac\nexit 0\n')
+        stub.chmod(0o755)
+
+    def install(self, extra="", *args, live=None, token="", env=None):
+        envf = self.tmp / "fixture.env"
+        envf.write_text(FIXTURE_ENV.format(tmp=self.tmp, home=self.home, token=token) + extra)
+        if live is not None:
+            (self.home / "config.yaml").write_text(live)
+        run_env = dict(HOME=str(self.tmp), PATH=f"{self.bin}:/usr/bin:/bin", ENV_FILE=str(envf),
+                       HERMES_SKIP_INSTALL="1", HERMES_SKIP_GATEWAY="1")
+        run_env.update(env or {})
+        return subprocess.run(["bash", "scripts/hermes-install.sh", *args], cwd=REPO, env=run_env,
+                              capture_output=True, text=True, timeout=120)
+
+    def get(self, path, key):
+        found, value = _config_get().lookup(Path(path).read_text(), key)
+        self.assertTrue(found, f"{key} missing from {path}")
+        return value
+
+
+class InstallerRenderTest(_InstallerFixture):
+    def test_force_keeps_live_specialist_values_when_env_is_silent(self):
+        r = self.install("", "--force", live=LIVE_CONFIG)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        cfg = self.home / "config.yaml"
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_routing"), "true")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_max_profiles"), "2")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_require_ready"), "true")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_classifier"), "local")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_classifier_timeout"), "12")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_profiles"), "strategy,philosophy")
+        self.assertIn("specialist_routing=true (live config)", r.stdout)
+        self.assertTrue(list(self.home.glob("config.yaml.bak.*")))
+
+    def test_explicit_env_false_and_true_win_over_live(self):
+        r = self.install("MODEL_ROUTER_SPECIALISTS=false\nMODEL_ROUTER_SPECIALIST_MAX=0\n"
+                         "MODEL_ROUTER_SPECIALIST_CLASSIFIER=none\nMODEL_ROUTER_SPECIALIST_PROFILES=all\n",
+                         "--force", live=LIVE_CONFIG)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = self.home / "config.yaml"
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_routing"), "false")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_max_profiles"), "0")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_classifier"), "none")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_profiles"), "")
+        live_off = LIVE_CONFIG.replace("specialist_routing: true", "specialist_routing: false")
+        r = self.install("MODEL_ROUTER_SPECIALISTS=yes\n", "--force", live=live_off)
+        self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.specialist_routing"), "true")
+
+    def test_fresh_install_defaults_and_invalid_values(self):
+        r = self.install("MODEL_ROUTER_SPECIALISTS=maybe\nMODEL_ROUTER_SPECIALIST_MAX=9\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = self.home / "config.yaml"
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_routing"), "false")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_max_profiles"), "4")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_classifier"), "none")
+        self.assertIn("is not a boolean", r.stderr)
+        self.assertIn("is not 0-6", r.stderr)
+
+    def test_local_roles_fallback_chains_and_aux_provider(self):
+        r = self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\nAUX_PROVIDER=auto\n", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        text = (self.home / "config.yaml").read_text()
+        self.assertNotRegex(text, r"__[A-Z0-9_]+__")
+        self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.ollama_routine_model"), "qwen3.5:27b")
+        self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.ollama_fallback_model"), "qwen3.6:27b")
+        self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.ollama_agent_model"), "qwen3.8:27b")
+        self.assertEqual(self.get(self.home / "config.yaml", "auxiliary.compression.provider"), "custom")
+        self.assertEqual(self.get(self.home / "config.yaml", "auxiliary.compression.model"), "qwen3.5:27b")
+        self.assertIn('fallback_chain: [{provider: custom, model: "qwen3.6:27b", '
+                      'base_url: "http://100.65.5.47:11434/v1"}]', text)
+        top = text.split("# Subagents spawned")[0]
+        self.assertLess(top.index("model: qwen3.8:27b"), top.index("model: qwen3.6:27b"))
+        # Without a local aux endpoint provider stays auto (inherit main) with no chain.
+        self.install("", "--force")
+        text = (self.home / "config.yaml").read_text()
+        self.assertEqual(self.get(self.home / "config.yaml", "auxiliary.compression.provider"), "auto")
+        self.assertIn("fallback_chain: []", text)
+
+    def test_legacy_chat_model_keeps_single_model_installs_working(self):
+        r = self.install("OLLAMA_CHAT_MODEL=llama3.1:8b\n", "--force")
+        cfg = self.home / "config.yaml"
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.ollama_routine_model"), "llama3.1:8b")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.ollama_agent_model"), "llama3.1:8b")
+        self.assertIsNone(self.get(cfg, f"{SETTINGS}.ollama_fallback_model"))  # no unpulled default
+        self.assertIn("set OLLAMA_ROUTINE_MODEL", r.stderr)
+        self.install("OLLAMA_CHAT_MODEL=llama3.1:8b\nOLLAMA_ROUTINE_MODEL=qwen3.5:27b\n"
+                     "OLLAMA_FALLBACK_MODEL=qwen3.6:27b\nOLLAMA_AGENT_MODEL=qwen3.8:27b\n", "--force")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.ollama_routine_model"), "qwen3.5:27b")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.ollama_fallback_model"), "qwen3.6:27b")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.ollama_agent_model"), "qwen3.8:27b")
+
+    def test_private_terms_survive_force_and_env_wins(self):
+        live = LIVE_CONFIG + '        private_terms:\n        - Project Neptune\n        - say "hi"\n' \
+                             '        private_paths: ["/vault/"]\n'
+        r = self.install("", "--force", live=live)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = self.home / "config.yaml"
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.private_terms"), 'Project Neptune,say "hi"')
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.private_paths"), "/vault/")
+        self.assertNotIn("Neptune", r.stdout + r.stderr)  # never logged
+        before = cfg.read_text()
+        self.install("", "--force")  # re-render from the rendered file: stable, no re-escaping
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.private_terms"), 'Project Neptune,say "hi"')
+        self.assertEqual(before.count("Neptune"), cfg.read_text().count("Neptune"))
+        self.install("MODEL_ROUTER_PRIVATE_TERMS=acme-internal, Project: X\n", "--force")
+        self.assertEqual(self.get(cfg, f"{SETTINGS}.private_terms"), "acme-internal,Project: X")
+
+    def test_render_only_writes_nothing_under_hermes_home(self):
+        out = self.tmp / "render.yaml"
+        r = self.install("", "--force", "--render-only", str(out), live=LIVE_CONFIG)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.get(out, f"{SETTINGS}.specialist_routing"), "true")
+        self.assertEqual(sorted(p.name for p in self.home.iterdir()), ["config.yaml"])
+        self.assertEqual((self.home / "config.yaml").read_text(), LIVE_CONFIG)
+        self.assertFalse(self.hermes_log.exists())
+
+    def test_no_gateway_restart_from_inside_hermes(self):
+        r = self.install("", "--force", token="t0ken", env={"HERMES_SKIP_GATEWAY": "0",
+                                                            "HERMES_GATEWAY_SESSION": "1"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("not restarting the gateway", r.stderr)
+        self.assertNotIn("gateway", self.hermes_log.read_text())
+
+
+# --------------------------------------------------------------------------- #
+# Hermes' own resolver on the rendered config (skipped without a Hermes venv)
+# --------------------------------------------------------------------------- #
+AGENT_DIR = Path(os.environ.get("HERMES_AGENT_DIR") or Path.home() / ".hermes" / "hermes-agent")
+VENV_PY = AGENT_DIR / "venv" / "bin" / "python"
+
+
+@unittest.skipUnless(VENV_PY.exists(), "Hermes venv not installed")
+class HermesNativeTest(_InstallerFixture):
+    def native(self, config):
+        r = subprocess.run([str(VENV_PY), str(REPO / "scripts" / "hermes-native-check.py"), "--config", str(config)],
+                           capture_output=True, text=True, timeout=120,
+                           env=dict(os.environ, HERMES_AGENT_DIR=str(AGENT_DIR)))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_hermes_walks_three_tier_chain_and_custom_aux(self):
+        out = self.tmp / "render.yaml"
+        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--render-only", str(out))
+        nat = self.native(out)
+        self.assertEqual([e["model"] for e in nat["fallback_providers"]], ["opus", "qwen3.8:27b", "qwen3.6:27b"])
+        self.assertEqual([e["model"] for e in nat["delegation_fallback_providers"]], ["qwen3.8:27b", "qwen3.6:27b"])
+        for task in ("title_generation", "compression"):
+            aux = nat["auxiliary"][task]
+            self.assertEqual((aux["provider"], aux["model"], aux["base_url"]),
+                             ("custom", "qwen3.5:27b", "http://100.65.5.47:11434/v1"))
+            self.assertEqual([e["model"] for e in aux["fallback_chain"]], ["qwen3.6:27b"])
+
+    def test_auto_provider_with_local_base_url_resolves_to_main(self):
+        """Why the installer never renders `auto` next to a local base_url."""
+        out = self.tmp / "auto.yaml"
+        out.write_text("auxiliary:\n  compression:\n    provider: auto\n    model: qwen3.8:27b\n"
+                       "    base_url: http://100.65.5.47:11434/v1\n")
+        aux = self.native(out)["auxiliary"]["compression"]
+        self.assertEqual((aux["provider"], aux["base_url"]), ("auto", ""))
+
+    def test_readback_matches_render_and_flags_drift(self):
+        cfg = self.home / "config.yaml"
+        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--render-only", str(cfg))
+        env = dict(os.environ, HERMES_HOME=str(self.home), HERMES_AGENT_DIR=str(AGENT_DIR),
+                   ENV_FILE=str(self.tmp / "fixture.env"))
+        ok = subprocess.run([sys.executable, "scripts/local-route.py", "readback"], cwd=REPO, env=env,
+                            capture_output=True, text=True, timeout=300)
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        self.assertIn("live config matches the render", ok.stdout)
+        cfg.write_text(cfg.read_text().replace("provider: custom\n    model: qwen3.5:27b",
+                                               "provider: auto\n    model: qwen3.5:27b", 1))
+        bad = subprocess.run([sys.executable, "scripts/local-route.py", "readback"], cwd=REPO, env=env,
+                             capture_output=True, text=True, timeout=300)
+        self.assertEqual(bad.returncode, 1, bad.stdout)
+        self.assertIn("DIFF auxiliary", bad.stdout)
+        self.assertIn("resolves to the MAIN (cloud) provider", bad.stdout)
+
+
+class ConfigGetTest(unittest.TestCase):
+    def test_subset_reader(self):
+        cg = _config_get()
+        text = LIVE_CONFIG + "x:\n  a:\n    settings:\n      k: wrong\n  settings:\n    k: right  # c\n" \
+                             "y:\n  n: null\n  q: 'v: 1'\n  f: [a, \"b\"]\n"
+        self.assertEqual(cg.lookup(text, "x.settings.k"), (True, "right"))
+        self.assertEqual(cg.lookup(text, "y.n"), (True, None))
+        self.assertEqual(cg.lookup(text, "y.q"), (True, "v: 1"))
+        self.assertEqual(cg.lookup(text, "y.f"), (True, "a,b"))
+        self.assertEqual(cg.lookup(text, f"{SETTINGS}.specialist_profiles"), (True, "strategy,philosophy"))
+        self.assertEqual(cg.lookup(text, f"{SETTINGS}.missing"), (False, None))
+
+
+if __name__ == "__main__":
+    unittest.main()

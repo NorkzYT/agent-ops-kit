@@ -49,11 +49,17 @@ def register(ctx) -> None:
                          description="Dry-run the specialist router for a task (nothing dispatched)",
                          args_hint="<task>")
     logger.info(
-        "model_router registered (privacy=%s complexity=%s local=%s specialists=%s)",
+        "model_router registered (privacy=%s complexity=%s local=%s specialists=%s) "
+        "local_models=routine:%s,fallback:%s,agent:%s classifier=%s",
         settings.privacy_routing,
         settings.complexity_routing,
-        "configured" if (settings.ollama_base_url and settings.ollama_model) else "unset",
+        "configured" if (settings.ollama_base_url and settings.local_chain("routine")) else "unset",
         "on" if specialists.active else "off",
+        settings.local_model("routine") or "-",
+        settings.local_model("fallback") or "-",
+        settings.local_model("agent") or "-",
+        settings.specialist_classifier if specialists.classifier_ready or
+        settings.specialist_classifier == "none" else "local-unavailable",
     )
 
 

@@ -50,14 +50,24 @@ Two Hermes middleware behaviors in one bundled plugin:
   operator-configured terms/paths. Once a session is flagged private it stays
   local. Classifier errors are treated as private. The handler never raises, so
   Hermes' fail-open middleware path can never leak private data to the cloud.
+  The local answer comes from an explicit role on the same endpoint: the
+  **routine** model for ordinary turns, the **agent** model for high/max-tier
+  turns, delegated coding and `#opus`/`#fable`; the **fallback** model is tried
+  once on a model-level failure (404, timeout, bad response), never after a
+  connection failure; then the request is refused. A non-local
+  `ollama_base_url` is refused unsent.
 
 - **Specialist routing pilot** (`pre_llm_call` hook, off by default) —
   `specialists.py` deterministically picks 0-4 book-backed profiles for the
   current genuine user task and appends a `<specialist-routing>` note to the
   orchestrator's turn (privacy first, high-risk profiles advisory with the
   `skills` toolset only, readiness from the installed profile's `/learn`
-  skill). `/route-specialists <task>` and `make specialist-route` are offline
-  dry-runs. See `docs/specialist-routing.md`.
+  skill). With `specialist_classifier: local` a public task with no or only
+  weak keyword matches asks the routine local model (then the fallback model,
+  one total budget) for at most two non-high-risk additions. `/route-specialists
+  <task>` and `make specialist-route` are offline dry-runs; `make
+  specialist-classify-probe` exercises the live local classifier. See
+  `docs/specialist-routing.md`.
 
 ## Configuration
 
@@ -74,8 +84,11 @@ plugins:
         effort_routing: true           # per-task effort rewrite (gpt family)
         astra_policy: task             # task | always | never
         task_ttl_seconds: 1800         # per-session task-state TTL
-        ollama_base_url: "http://127.0.0.1:11434/v1"   # host-reachable Ollama
-        ollama_model: "llama3.1:8b"                     # a pulled CHAT model
+        ollama_base_url: "http://127.0.0.1:11434/v1"   # host-reachable, local-only Ollama
+        ollama_model: "qwen3.5:27b"                     # legacy: default for unset roles
+        ollama_routine_model: "qwen3.5:27b"             # ordinary private turns + classifier
+        ollama_fallback_model: "qwen3.6:27b"            # tried once after a role-model failure
+        ollama_agent_model: "qwen3.8:27b"               # difficult private turns + private coding
         private_terms: []                               # extra local-only terms
         private_paths: []                               # extra local-only path fragments
         available_gpt_models: []                        # optional probe cache
@@ -84,11 +97,13 @@ plugins:
         specialist_max_profiles: 4
         specialist_require_ready: false
         specialist_classifier: none      # none | local
+        specialist_classifier_timeout: 10  # seconds, both models, max 25
         specialist_profiles: []
 ```
 
 Environment fallbacks (used when a setting is unset): `OLLAMA_BASE_URL`,
-`OLLAMA_CHAT_MODEL`, `MODEL_ROUTER_COMPLEXITY`, `MODEL_ROUTER_PRIVACY`,
+`OLLAMA_CHAT_MODEL`, `OLLAMA_ROUTINE_MODEL`, `OLLAMA_FALLBACK_MODEL`,
+`OLLAMA_AGENT_MODEL`, `MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT`, `MODEL_ROUTER_COMPLEXITY`, `MODEL_ROUTER_PRIVACY`,
 `MODEL_ROUTER_EFFORT`, `MODEL_ROUTER_ASTRA`, `MODEL_ROUTER_TASK_TTL`,
 `MODEL_ROUTER_PRIVATE_TERMS`, `MODEL_ROUTER_PRIVATE_PATHS`.
 

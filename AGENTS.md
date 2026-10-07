@@ -95,8 +95,14 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - Task routing + fail-closed privacy live in the `model-router` plugin
   (`hermes/plugins/model-router/`). Private data (SSN/PAN/ABA/IBAN/secrets/
   `#private`) never reaches a cloud provider — local Ollama or refuse.
+- Local Ollama roles (one endpoint, `OLLAMA_*_MODEL`): routine `qwen3.5:27b`
+  (ordinary private turns, aux, specialist classifier), agent `qwen3.8:27b`
+  (difficult private turns, private coding, fallback agent), fallback
+  `qwen3.6:27b` (one retry, then refuse). Private routing never falls back to
+  cloud. `make local-route-status` / `local-route-readback` show the result.
 - Native fallback chains (non-private only): orchestrator CLIProxyAPI →
-  claude-max-proxy → Ollama; delegation claude-max-proxy → Ollama.
+  claude-max-proxy → Ollama agent → Ollama fallback; delegation
+  claude-max-proxy → Ollama agent → Ollama fallback.
 - Honcho reasoning: CLIProxyAPI. Embeddings: local Ollama.
 - No vendor API keys anywhere in the stack.
 - Full reference: `docs/model-routing.md`. Verify: `make route-smoke`,

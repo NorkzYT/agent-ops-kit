@@ -27,8 +27,10 @@ from . import task_intent as ti
 from .local_backend import (
     LocalBackend,
     LocalUnavailable,
+    is_local_endpoint,
     messages_from_request,
     refusal_response,
+    run_local_chain,
 )
 from .router_config import RouterSettings
 from .task_state import TaskState, TaskStateStore
@@ -166,11 +168,13 @@ def _usage_summary(response: Any) -> str:
 
 
 class Router:
-    def __init__(self, settings: RouterSettings, *, backend: Optional[LocalBackend] = None) -> None:
+    def __init__(self, settings: RouterSettings, *, backend: Optional[LocalBackend] = None,
+                 backend_factory: Optional[Callable[[str], Any]] = None) -> None:
         self.settings = settings
-        self._backend = backend if backend is not None else LocalBackend(
-            settings.ollama_base_url, settings.ollama_model, timeout=settings.ollama_timeout
-        )
+        # ``backend`` (tests) answers for every local model; otherwise each
+        # model in the role chain gets its own client on the same endpoint.
+        self._backend = backend
+        self._backend_factory = backend_factory
         self._private_sessions: Set[str] = set()
         self._tasks = TaskStateStore(ttl=settings.task_ttl)
         # Request-stage decisions keyed by api_request_id so the execution seam
@@ -202,13 +206,48 @@ class Router:
         """True once the privacy guard has flagged this session (sticky)."""
         return bool(session_id) and session_id in self._private_sessions
 
-    def _local_or_refuse(self, request: Any, reason: str) -> Any:
+    def _local_backend(self, model: str) -> Any:
+        if self._backend is not None:
+            return self._backend
+        if self._backend_factory is not None:
+            return self._backend_factory(model)
+        return LocalBackend(self.settings.ollama_base_url, model, timeout=self.settings.ollama_timeout)
+
+    def local_role(self, request: Any, session_id: str, kwargs: Dict[str, Any]) -> str:
+        """Which local role answers a private request: ``agent`` for delegated
+        coding, a forced coding control or a high/max task; ``routine`` for
+        everything else. Decided from the current task only; an error picks
+        the stronger ``agent`` model (the role never affects where data goes)."""
         try:
-            resp = self._backend.chat(messages_from_request(request))
-            logger.info("model_router: private->local ok reason=%s", reason)
+            model = str((request.get("model") if isinstance(request, dict) else "")
+                        or kwargs.get("model") or "")
+            if _is_coding_family(request, model, str(kwargs.get("base_url") or "")):
+                return "agent"
+            decision = ti.classify(ti.extract_current_user_task(request), self._tasks.get(session_id))
+            if decision.forced_coding or decision.tier in ("high", "max"):
+                return "agent"
+            return "routine"
+        except Exception:
+            return "agent"
+
+    def _local_or_refuse(self, request: Any, reason: str, *, role: str = "routine") -> Any:
+        """Answer locally (role model, then the one fallback model) or refuse.
+        Never calls a cloud provider; a non-local endpoint is refused unsent."""
+        try:
+            url = self.settings.ollama_base_url
+            if self._backend is None and url and not is_local_endpoint(url):
+                logger.warning("model_router: private->refuse (endpoint not local) reason=%s role=%s",
+                               reason, role)
+                return refusal_response(reason="local-endpoint-not-local")
+            chain = self.settings.local_chain(role)
+            resp, model, attempt = run_local_chain(chain, messages_from_request(request),
+                                                   self._local_backend)
+            logger.info("model_router: private->local ok reason=%s role=%s model=%s attempt=%d/%d",
+                        reason, role, model, attempt, len(chain))
             return resp
-        except LocalUnavailable:
-            logger.warning("model_router: private->refuse (local unavailable) reason=%s", reason)
+        except LocalUnavailable as exc:
+            logger.warning("model_router: private->refuse (local unavailable: %s) reason=%s role=%s",
+                           getattr(exc, "kind", "error"), reason, role)
             return refusal_response(reason="local-unavailable")
         except Exception:  # defensive: still must not raise
             logger.warning("model_router: private->refuse (unexpected local error)")
@@ -246,7 +285,8 @@ class Router:
                 decision = self.is_private(request, session_id)
                 if decision.private:
                     logger.info("model_router: private detected reasons=%s (no cloud egress)", decision.label)
-                    return self._local_or_refuse(request, decision.label)
+                    return self._local_or_refuse(request, decision.label,
+                                                 role=self.local_role(request, session_id, kwargs))
         except Exception:  # privacy failures must never fall open to cloud
             logger.warning("model_router: llm_execution guard tripped; refusing")
             return refusal_response(reason="router-guard")

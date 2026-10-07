@@ -23,12 +23,20 @@ from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence
 
 from . import specialists as sp
-from .local_backend import LocalBackend, LocalUnavailable
+from .local_backend import (
+    BackendFactory,
+    LocalBackend,
+    LocalUnavailable,
+    is_local_endpoint,
+    run_local_chain,
+)
 from .router_config import RouterSettings
 
 logger = logging.getLogger("hermes.plugin.model_router")
 
-CLASSIFIER_TIMEOUT = 8.0
+# Deterministic, short and without thinking: the answer is a few names.
+CLASSIFIER_OPTIONS = {"temperature": 0, "max_tokens": 48, "reasoning_effort": "none"}
+_THINK_RE = re.compile(r"(?s)<think>.*?</think>")
 
 
 def specialist_settings(settings: RouterSettings) -> sp.SpecialistSettings:
@@ -47,27 +55,54 @@ def specialist_settings(settings: RouterSettings) -> sp.SpecialistSettings:
     )
 
 
-def local_classifier(backend: LocalBackend) -> Optional[sp.Classifier]:
-    """Ambiguity tie-breaker on the LOCAL Ollama model only (never cloud).
+class Picks(list):
+    """Classifier answer plus content-free metadata (model id, attempt, outcome)."""
 
-    ``route_text`` calls it only for non-private tasks with no deterministic
-    match and filters the answer to the non-high-risk pool.
+    def __init__(self, names: Sequence[str] = (), meta: Optional[dict] = None) -> None:
+        super().__init__(names)
+        self.meta = meta or {}
+
+
+def local_classifier(settings: RouterSettings, *,
+                     factory: Optional[BackendFactory] = None) -> Optional[sp.Classifier]:
+    """Ambiguity tie-breaker on the LOCAL Ollama endpoint only (never cloud).
+
+    Models: the routine role (``ollama_routine_model``), then the fallback
+    role once on a model-level failure, inside one total budget
+    (``specialist_classifier_timeout``). ``route_text`` calls it only for
+    public tasks with no or only weak keyword matches and keeps at most two
+    non-high-risk answers. Any failure or timeout returns no names. Neither
+    the prompt nor the answer is logged.
     """
-    if not backend.configured:
+    chain = settings.local_chain("routine")
+    base_url = settings.ollama_base_url
+    if not base_url or not chain:
         return None
+    if not is_local_endpoint(base_url):
+        logger.warning("model_router: specialist classifier disabled (endpoint not local)")
+        return None
+    budget = settings.specialist_classifier_timeout
+    make = factory or (lambda model: LocalBackend(base_url, model, timeout=budget))
 
     def classify(visible: str, pool: Sequence[str]) -> List[str]:
+        if not pool:
+            return Picks([], {"model": "-", "attempt": 0, "outcome": "empty-pool"})
         prompt = (
             "Pick the specialist profiles whose domain this task needs. Answer with a "
             "comma-separated list of names from this list only, or 'none'.\n"
             f"Profiles: {', '.join(pool)}\n\nTask:\n{visible[:2000]}"
         )
         try:
-            resp = backend.chat([{"role": "user", "content": prompt}])
-        except LocalUnavailable:
-            return []
-        text = str(resp.choices[0].message.content or "").lower()
-        return [t for t in re.split(r"[^a-z\-]+", text) if t in pool][:2]
+            resp, model, attempt = run_local_chain(
+                chain, [{"role": "user", "content": prompt}], make,
+                budget=budget, options=CLASSIFIER_OPTIONS)
+        except LocalUnavailable as exc:
+            return Picks([], {"model": "-", "attempt": 0,
+                              "outcome": f"unavailable:{getattr(exc, 'kind', 'error')}"})
+        text = _THINK_RE.sub("", str(resp.choices[0].message.content or "")).lower()
+        names = [t for t in dict.fromkeys(re.split(r"[^a-z\-]+", text)) if t in pool]
+        return Picks(names[:sp.MAX_CLASSIFIER_ADDITIONS],
+                     {"model": model, "attempt": attempt, "outcome": "ok"})
 
     return classify
 
@@ -90,15 +125,18 @@ def _message_text(message: Any) -> str:
 class SpecialistHook:
     def __init__(self, settings: RouterSettings, *, profile_name: str = "default",
                  session_private: Optional[Callable[[str], bool]] = None,
-                 backend: Optional[LocalBackend] = None) -> None:
+                 backend_factory: Optional[BackendFactory] = None) -> None:
         self.settings = specialist_settings(settings)
         self.profile_name = profile_name or "default"
         self.orchestrators = tuple(settings.specialist_orchestrators or ("default",))
         self._session_private = session_private or (lambda _sid: False)
         self._classifier: Optional[sp.Classifier] = None
         if self.settings.classifier == "local":
-            self._classifier = local_classifier(backend or LocalBackend(
-                settings.ollama_base_url, settings.ollama_model, timeout=CLASSIFIER_TIMEOUT))
+            self._classifier = local_classifier(settings, factory=backend_factory)
+
+    @property
+    def classifier_ready(self) -> bool:
+        return self._classifier is not None
 
     @property
     def active(self) -> bool:
@@ -118,12 +156,15 @@ class SpecialistHook:
             routes = trace.get("routes") or []
             logger.info(
                 "model_router: specialists task=%s privacy=%s tier=%s source=%s routes=%s dropped=%s "
-                "classifier=%s reason=%s",
+                "classifier=%s gate=%s classifier_model=%s classifier_outcome=%s reason=%s",
                 str(trace.get("task", "-"))[:8], trace.get("privacy"), trace.get("tier"),
                 trace.get("task_source", "-"),
                 ",".join(f"{r['profile']}:{r['execution']}:{r['knowledge']['status']}" for r in routes) or "-",
                 ",".join(f"{d['profile']}:{d['reason']}" for d in trace.get("dropped") or []) or "-",
-                trace.get("classifier"), trace.get("reason", "-"),
+                trace.get("classifier"), trace.get("classifier_gate", "-"),
+                (trace.get("classifier_detail") or {}).get("model", "-"),
+                (trace.get("classifier_detail") or {}).get("outcome", "-"),
+                trace.get("reason", "-"),
             )
             plan = sp.render_plan(trace)
             return {"context": plan} if plan else None

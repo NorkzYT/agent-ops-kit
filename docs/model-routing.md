@@ -14,7 +14,7 @@ Secrets stay in `.env`; only routing knobs live in `config.yaml`.
 |------|----------|----------|--------|
 | Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-astra` |
 | Coding (delegation) | claude-max-proxy (Claude Max) | `:3456/v1` | `opus`, `sonnet`, `haiku`, `fable`, `default` |
-| Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` | a pulled chat model (readiness below) |
+| Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` (or a Tailscale host) | routine `qwen3.5:27b`, fallback `qwen3.6:27b`, agent `qwen3.8:27b` ([Local model roles](#local-model-roles)) |
 
 ## Task-scoped routing (`llm_request` middleware)
 
@@ -181,14 +181,77 @@ provider *attempt* (native fallback hops re-enter it with their own
 usage evidence exists at this seam, so none is logged. View with
 `make router-logs`.
 
+## Local model roles
+
+Three explicit roles on the one local endpoint (`OLLAMA_BASE_URL`), rendered
+into the plugin settings and the native chains. No role relies on
+`provider: auto`.
+
+| Role | Default | `.env` | Plugin setting | Used by |
+|------|---------|--------|----------------|---------|
+| routine | `qwen3.5:27b` | `OLLAMA_ROUTINE_MODEL` | `ollama_routine_model` | ordinary private turns, title/compression (`AUX_MODEL` default), specialist classifier |
+| fallback | `qwen3.6:27b` | `OLLAMA_FALLBACK_MODEL` | `ollama_fallback_model` | one retry after a role-model failure; last hop of both native chains; aux `fallback_chain` |
+| agent | `qwen3.8:27b` | `OLLAMA_AGENT_MODEL` | `ollama_agent_model` | difficult private turns (high/max tier), private delegated coding, `#opus`/`#fable` when private, the native fallback agent |
+
+`OLLAMA_CHAT_MODEL` is the legacy single-model knob. When it is set, it is
+the default for routine and agent, there is no default fallback, and the
+installer warns. That way an upgraded single-model install keeps using the
+model it has pulled. Set the three `OLLAMA_*_MODEL` roles to get the hierarchy.
+
+Cloud stays primary for normal work: the orchestrator on CLIProxyAPI
+(luna/terra/sol), coding on claude-max-proxy (opus/fable). The local roles
+answer only private traffic, auxiliary calls pinned to Ollama, the specialist
+classifier, and the native fallback tail after both cloud providers failed.
+
+**Private traffic (plugin seam).** Hermes' native `fallback_providers` cannot
+pick a model by task difficulty, and private traffic must never enter it, so
+the selection lives in the plugin's `llm_execution` privacy path:
+
+1. Role from the current task only: `agent` for a coding-family request
+   (claude-max-proxy seam), a forced coding control, or a `high`/`max` tier;
+   `routine` otherwise.
+2. The role model answers. On a model-level failure (HTTP error such as a
+   404 for a missing model, a timeout, an unreadable response) the fallback
+   model is tried **once**. A connection failure stops at once: the fallback
+   lives on the same endpoint.
+3. Still nothing: a typed refusal. Never `next_call`, never a cloud provider.
+4. An `ollama_base_url` that is not local (loopback, RFC-1918, CGNAT/Tailscale,
+   link-local, `localhost`, a single-label host or `*.local`/`*.lan`/
+   `*.internal`/`*.home.arpa`/`*.ts.net`) is refused unsent.
+
+Log line: `model_router: private->local ok reason=<labels> role=routine model=qwen3.5:27b attempt=1/2`.
+With only the legacy `ollama_model` set every role is that one model and
+there is no fallback (the pre-roles behavior).
+
+**Limits.**
+
+- The private path is answer-only: the local model gets the messages, not the
+  tools, so a private turn cannot run tools. Tool-using local agent work is the
+  native fallback tail (non-private only).
+- Ollama on the current host keeps one 27b model resident (`ollama ps`).
+  Moving between roles reloads the model, about 20-25 s. Private answers wait
+  for it (`ollama_timeout`, 60 s per attempt). The classifier has a 10 s
+  budget, so its first call after an agent turn usually times out and adds
+  nothing.
+- The native chains walk agent → fallback in a fixed order. The routine
+  model is not in them, because a fallback hop has to run full agent turns.
+
 ## Fallback chains (native Hermes config)
 
-For **normal, non-private** traffic only. On a 429/503/connection failure Hermes
-walks the chain. Each entry is a distinct endpoint, so none duplicates the
-primary provider:
+For **normal, non-private** traffic only. Hermes walks the chain on a 429,
+on a 503/timeout/connection failure (after its retries), and immediately on a
+404 model-not-found. No entry duplicates the primary:
 
-- Orchestrator: CLIProxyAPI → claude-max-proxy → Ollama (`fallback_providers`)
-- Delegation: claude-max-proxy → Ollama (`delegation.fallback_providers`)
+- Orchestrator: CLIProxyAPI → claude-max-proxy (`opus`) → Ollama agent
+  (`qwen3.8:27b`) → Ollama fallback (`qwen3.6:27b`) (`fallback_providers`)
+- Delegation: claude-max-proxy → Ollama agent → Ollama fallback
+  (`delegation.fallback_providers`)
+
+Hermes 0.21.2 keeps two entries on one `base_url` when their models differ.
+It drops only an exact (provider, model, base_url) duplicate, and skips an
+entry whose model matches the backend that just failed. So both local hops are
+real, and `OLLAMA_FALLBACK_MODEL` equal to the agent model collapses to one
+hop. `make local-route-status` prints the chains as Hermes resolves them.
 
 Private traffic never reaches these chains: the privacy guard short-circuits
 before any provider call.
@@ -242,26 +305,32 @@ cases assert zero bytes to `:8317` and `:3456`).
 ## Auxiliary work (title generation, compression)
 
 Cheap, high-volume helper calls (`auxiliary.title_generation` /
-`auxiliary.compression`), rendered from `AUX_PROVIDER` / `AUX_MODEL` /
-`AUX_BASE_URL`. Behavior on **Hermes 0.21.2**:
+`auxiliary.compression`), rendered from `AUX_BASE_URL` / `AUX_MODEL` /
+`AUX_FALLBACK_MODEL` / `AUX_PROVIDER`. Behavior on **Hermes 0.21.2**
+(`agent/auxiliary_client.py:_resolve_task_provider_model`):
 
-| `AUX_PROVIDER` | `AUX_BASE_URL` | Result |
-|----------------|----------------|--------|
-| `auto` (default) | empty | Use the **main provider + model**, following the top-level `fallback_providers` policy. Install never breaks when Ollama is absent. |
-| any value | **non-empty** | Route to that endpoint; the **provider field is ignored**. Pair with `AUX_MODEL`. |
-| `custom` | empty | Custom provider with no endpoint override — only useful if a provider default endpoint applies; prefer setting `AUX_BASE_URL`. |
+| `.env` | Rendered | Hermes resolves |
+|--------|----------|-----------------|
+| no `AUX_BASE_URL` (default) | `provider: auto`, empty model/base_url, `fallback_chain: []` | the **main provider + model**, following the top-level fallback policy. Install never breaks when Ollama is absent. |
+| `AUX_BASE_URL` set | `provider: custom`, `model: AUX_MODEL` (default: routine role), `fallback_chain: [{provider: custom, model: AUX_FALLBACK_MODEL (default: fallback role), base_url: AUX_BASE_URL}]` | that local endpoint, then the fallback model on it |
 
-`AUX_PROVIDER=auto` therefore has one meaningful behavior — inherit the main
-provider/model — and any custom routing is driven by `AUX_BASE_URL`, not by the
-provider name. To keep title/compression work off the cloud, set the base_url to
-a local chat model in `.env`:
+`provider: auto` next to a base_url **without an api_key** resolves back to
+`auto`, so Hermes drops the base_url and calls the main (cloud) provider with
+the local model name. Ollama needs no key, so that layout silently leaves the
+aux calls on the cloud. The installer therefore renders `custom` whenever
+`AUX_BASE_URL` is set. `make local-route-readback` fails on the old layout. To keep
+title/compression off the cloud:
 
 ```
-AUX_MODEL=llama3.1:8b
 AUX_BASE_URL=http://127.0.0.1:11434/v1
+# AUX_MODEL=qwen3.5:27b          default: OLLAMA_ROUTINE_MODEL
+# AUX_FALLBACK_MODEL=qwen3.6:27b default: OLLAMA_FALLBACK_MODEL
 ```
 
-Re-run `make hermes-install` to re-render the `auxiliary.*` entries.
+Re-run the installer (below) to re-render the `auxiliary.*` entries. With an
+explicit provider Hermes still falls back to the main agent model after a
+non-outage error (for example both local models rejected). The guard below
+blocks that for an outage and for private payloads.
 
 ### Auxiliary pre-egress guard — fail-closed
 
@@ -325,14 +394,107 @@ and their `.env` fallbacks:
 | `effort_routing` | `MODEL_ROUTER_EFFORT` | per-task reasoning-effort rewrite for managed GPT requests (default **true**; never above the config ceiling) |
 | `astra_policy` | `MODEL_ROUTER_ASTRA` | `task` (default: leading standalone `#max`/`#astra` line authorizes), `always` (legacy allow), `never` |
 | `task_ttl_seconds` | `MODEL_ROUTER_TASK_TTL` | sliding TTL for per-session task state / authorization (default 1800) |
-| `ollama_base_url` | `OLLAMA_BASE_URL` | host-reachable local endpoint |
-| `ollama_model` | `OLLAMA_CHAT_MODEL` | a pulled **chat** model |
-| `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | extra local-only terms |
-| `private_paths` | `MODEL_ROUTER_PRIVATE_PATHS` | extra local-only path fragments |
+| `ollama_base_url` | `OLLAMA_BASE_URL` | host-reachable **local** endpoint (a non-local URL is refused) |
+| `ollama_model` | `OLLAMA_CHAT_MODEL` | legacy single model: the default for every unset role (rendered as the routine model) |
+| `ollama_routine_model` | `OLLAMA_ROUTINE_MODEL` | routine role (`qwen3.5:27b`) |
+| `ollama_fallback_model` | `OLLAMA_FALLBACK_MODEL` | fallback role (`qwen3.6:27b`); empty = no local fallback |
+| `ollama_agent_model` | `OLLAMA_AGENT_MODEL` | agent role (`qwen3.8:27b`) |
+| `specialist_*` | `MODEL_ROUTER_SPECIALIST*` | specialist router and hybrid classifier ([specialist-routing.md](specialist-routing.md)); presence-aware on `--force` |
+| `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | extra local-only terms (comma-separated; presence-aware on `--force`, never logged) |
+| `private_paths` | `MODEL_ROUTER_PRIVATE_PATHS` | extra local-only path fragments (same rule) |
 
 All knobs are backwards-compatible: a pre-upgrade config without the new keys
 gets the balanced defaults (effort rewrite on, Astra opt-in per task), and
 explicit `false`/`never` values render and load verbatim.
+
+## Activate the local hierarchy
+
+Run these from your own terminal in the repo checkout, not from a Hermes or
+Discord turn. Nothing below restarts the gateway except step 6.
+
+1. Offline checks, then what the endpoint has:
+
+   ```bash
+   cd /opt/repos/claude-code-autopilot
+   make test-local-route && make test-router
+   make local-models            # qwen3.5:27b, qwen3.6:27b, qwen3.8:27b present with "tools"
+   ```
+
+2. Set the roles in `.env`. `MODEL_ROUTER_PRIVACY=true` is required for
+   private turns to stay local. With `false` the guard is off, and private text
+   in ordinary turns can reach the cloud.
+
+   ```
+   OLLAMA_BASE_URL=http://100.65.5.47:11434/v1
+   OLLAMA_ROUTINE_MODEL=qwen3.5:27b
+   OLLAMA_FALLBACK_MODEL=qwen3.6:27b
+   OLLAMA_AGENT_MODEL=qwen3.8:27b
+   AUX_BASE_URL=http://100.65.5.47:11434/v1
+   AUX_MODEL=qwen3.5:27b
+   MODEL_ROUTER_PRIVACY=true
+   MODEL_ROUTER_SPECIALISTS=true
+   MODEL_ROUTER_SPECIALIST_MAX=4
+   MODEL_ROUTER_SPECIALIST_CLASSIFIER=local
+   ```
+
+3. Probe and preview. Nothing is written:
+
+   ```bash
+   make specialist-classify-probe MODEL=qwen3.5:27b FALLBACK_MODEL=qwen3.6:27b TIMEOUT=25 \
+     TASK="I keep going back and forth on what to do next with my bakery and the people around me"
+   bash scripts/hermes-install.sh --render-only /tmp/hermes-next.yaml
+   diff ~/.hermes/config.yaml /tmp/hermes-next.yaml
+   ```
+
+4. Back up the current config and plugin for rollback:
+
+   ```bash
+   stamp=$(date +%Y%m%d%H%M%S)
+   cp -a ~/.hermes/config.yaml ~/.hermes/config.yaml.pre-local-roles.$stamp
+   cp -a ~/.hermes/plugins/model-router ~/.hermes/backups/model-router.pre-local-roles.$stamp
+   ```
+
+5. Render and install, without restarting. `--force` also refreshes SOUL.md,
+   honcho.json, the skills and the plugin, keeping `.bak` copies of the files
+   it replaces:
+
+   ```bash
+   HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
+   make local-route-readback    # "live config matches the render; local-only invariants hold"
+   ```
+
+6. Restart, then read back:
+
+   ```bash
+   make hermes-restart
+   make router-logs LINES=5     # model_router registered (... specialists=on) local_models=routine:qwen3.5:27b,fallback:qwen3.6:27b,agent:qwen3.8:27b classifier=local
+   make local-route-status
+   make specialist-status
+   ```
+
+7. One real turn each: a `#private` question
+   (`make router-logs` shows `private->local ok ... role=routine model=qwen3.5:27b`),
+   and an open-ended public question with no clear domain
+   (`make specialist-logs` shows `gate=no-match classifier_model=...`).
+
+**Rollback.**
+
+- Classifier only: set `MODEL_ROUTER_SPECIALIST_CLASSIFIER=none` in `.env`,
+  re-run step 5, then `make hermes-restart`.
+- Specialists off: set `MODEL_ROUTER_SPECIALISTS=false` in `.env`. A `true` in
+  `.env` wins on the next `--force`. Then `make specialist-disable` and
+  `make hermes-restart`.
+- Everything: restore the step-4 copies, revert the `.env` lines, restart.
+
+  ```bash
+  cp -a ~/.hermes/config.yaml.pre-local-roles.<stamp> ~/.hermes/config.yaml
+  rm -rf ~/.hermes/plugins/model-router
+  cp -a ~/.hermes/backups/model-router.pre-local-roles.<stamp> ~/.hermes/plugins/model-router
+  make hermes-restart
+  ```
+
+The previous plugin ignores the new settings keys, and the new plugin reads an
+old config through `ollama_model`, so either half can be rolled back alone.
 
 ## Readiness — when is private routing *live*?
 
@@ -341,8 +503,10 @@ Private routing is **fully active only** when both hold:
 1. **Ollama is reachable from the host** where Hermes runs. In `docker-compose`
    Ollama is loopback-only *inside* Docker (`11434/tcp`, not published). Publish
    it to the host loopback (or run a host Ollama) and set `OLLAMA_BASE_URL`.
-2. **A chat model is pulled** (the compose Ollama only pulls the *embedding*
-   model for Honcho). e.g. `ollama pull llama3.1:8b`, then set `OLLAMA_CHAT_MODEL`.
+2. **The role models are pulled** (the compose Ollama only pulls the
+   *embedding* model for Honcho): `ollama pull qwen3.5:27b` (and the fallback
+   and agent models), then set the `OLLAMA_*_MODEL` roles. `make local-models`
+   lists what the endpoint has.
 
 Until both hold, the guard still protects you: private requests are **refused**
 (never sent to the cloud), proven by `make test-router`. `make route-smoke`
@@ -377,4 +541,8 @@ make test-router     # offline: unit + zero-egress privacy canary
 make models          # what each proxy exposes
 make router-logs     # last 20 model_router lines from ~/.hermes/logs/agent.log (LINES=<n>)
 make router-logs-follow  # same, then follow live (survives log rotation)
+make local-route-status  # local roles vs endpoint, native chains + aux as Hermes resolves them
+make local-models        # endpoint catalog: capabilities, size, loaded model, role
+make local-route-readback  # live config vs the current render + local-only invariants (exit 1 on drift)
+make test-local-route    # offline: roles, local fallback, classifier gate, installer render
 ```

@@ -13,6 +13,8 @@
 #           installs + starts the gateway service, then `hermes doctor`.
 #
 # Usage: scripts/hermes-install.sh [--force]   (--force rewrites config.yaml and SOUL.md, keeping .bak copies)
+#        scripts/hermes-install.sh --render-only OUT   (render config.yaml to OUT and stop: no
+#                                                       hermes, no writes under HERMES_HOME)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +23,15 @@ cd "$ROOT"
 . "$ROOT/scripts/lib.sh"
 
 FORCE=0
-[[ "${1:-}" == "--force" ]] && FORCE=1
+RENDER_ONLY=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force) FORCE=1 ;;
+    --render-only) RENDER_ONLY="${2:-}"; [[ -n "$RENDER_ONLY" ]] || die "usage: $0 --render-only OUT"; shift ;;
+    *) die "unknown argument: $1 (usage: $0 [--force] | --render-only OUT)" ;;
+  esac
+  shift
+done
 
 # ENV_FILE defaults to ./.env; overridable so tests can point at a fixture
 # instead of the operator's real .env (which must never be rewritten by a test).
@@ -35,7 +45,9 @@ HERMES_HOME="$(getenv HERMES_HOME "$HOME/.hermes")"
 export HERMES_HOME
 
 # ------------------------------------------------------------ 1. Hermes ---
-if ! have hermes; then
+if [[ -n "$RENDER_ONLY" ]]; then
+  :  # render-only: hermes is not needed
+elif ! have hermes; then
   if [[ "${HERMES_SKIP_INSTALL:-0}" == "1" ]]; then
     die "hermes not found and HERMES_SKIP_INSTALL=1"
   fi
@@ -44,8 +56,10 @@ if ! have hermes; then
   export PATH="$HOME/.local/bin:$PATH"
   have hermes || die "hermes still not on PATH; open a new shell and re-run: make hermes-install"
 fi
-log "hermes: $(hermes --version 2>/dev/null | head -n1 || echo present)"
-mkdir -p "$HERMES_HOME" "$HERMES_HOME/memories" "$HERMES_HOME/skills"
+if [[ -z "$RENDER_ONLY" ]]; then
+  log "hermes: $(hermes --version 2>/dev/null | head -n1 || echo present)"
+  mkdir -p "$HERMES_HOME" "$HERMES_HOME/memories" "$HERMES_HOME/skills"
+fi
 
 # --------------------------------------------------------- 2. config.yaml ---
 HERMES_MODEL="$(getenv HERMES_MODEL gpt-5.6-luna)"; export HERMES_MODEL
@@ -53,22 +67,60 @@ HERMES_CODING_MODEL="$(getenv HERMES_CODING_MODEL opus)"; export HERMES_CODING_M
 CLIPROXY_BASE_URL="http://127.0.0.1:$(getenv CLIPROXY_PORT 8317)/v1"; export CLIPROXY_BASE_URL
 CLAUDE_MAX_PROXY_BASE_URL="http://127.0.0.1:$(getenv CLAUDE_MAX_PROXY_PORT 3456)/v1"; export CLAUDE_MAX_PROXY_BASE_URL
 REPOS_DIR="$(getenv REPOS_DIR /opt/repos)"; export REPOS_DIR
+cfg="$HERMES_HOME/config.yaml"
+
 # Local Ollama (OpenAI-compatible) — used by the model-router plugin for private
 # and auxiliary work, and as the tail of the fallback chains. These render into
 # config.yaml even when Ollama is not yet host-reachable; until then private work
 # fails closed (refuses) and the fallback tail is simply inert. See
 # docs/model-routing.md for the readiness steps (publish the port, pull a chat model).
 OLLAMA_BASE_URL="$(getenv OLLAMA_BASE_URL "http://127.0.0.1:$(getenv OLLAMA_PORT 11434)/v1")"; export OLLAMA_BASE_URL
-OLLAMA_CHAT_MODEL="$(getenv OLLAMA_CHAT_MODEL llama3.1:8b)"; export OLLAMA_CHAT_MODEL
-# Auxiliary (title/compression) routing. Default AUX_PROVIDER=auto with an empty
-# AUX_MODEL/AUX_BASE_URL means "use the main provider + model" (with the top-level
-# fallback policy), so install never breaks when Ollama is absent. Per Hermes
-# 0.21.2, a non-empty base_url routes to that endpoint and the provider field is
-# ignored — so to keep these cheap calls OFF the cloud, set AUX_BASE_URL to your
-# Ollama endpoint and a pulled AUX_MODEL (AUX_PROVIDER is then irrelevant).
-AUX_PROVIDER="$(getenv AUX_PROVIDER auto)"; export AUX_PROVIDER
-AUX_MODEL="$(getenv AUX_MODEL "")"; export AUX_MODEL
+# Explicit local model roles (docs/model-routing.md, Local model roles), all on
+# OLLAMA_BASE_URL:
+#   routine  — ordinary private turns, title/compression, specialist classifier
+#   fallback — tried once when a role model fails (and the last native fallback hop)
+#   agent    — difficult private turns, private coding, the native fallback agent
+# OLLAMA_CHAT_MODEL is the legacy single-model knob. When it is set, it is the
+# default for routine and agent and there is no default fallback, so an
+# upgraded single-model install keeps answering on the model it has pulled.
+LEGACY_CHAT_MODEL="$(getenv OLLAMA_CHAT_MODEL "")"
+OLLAMA_ROUTINE_MODEL="$(getenv OLLAMA_ROUTINE_MODEL "${LEGACY_CHAT_MODEL:-qwen3.5:27b}")"; export OLLAMA_ROUTINE_MODEL
+OLLAMA_AGENT_MODEL="$(getenv OLLAMA_AGENT_MODEL "${LEGACY_CHAT_MODEL:-qwen3.8:27b}")"; export OLLAMA_AGENT_MODEL
+if [[ -n "$LEGACY_CHAT_MODEL" ]]; then
+  OLLAMA_FALLBACK_MODEL="$(getenv OLLAMA_FALLBACK_MODEL "")"
+else
+  OLLAMA_FALLBACK_MODEL="$(getenv OLLAMA_FALLBACK_MODEL qwen3.6:27b)"
+fi
+export OLLAMA_FALLBACK_MODEL
+if [[ -n "$LEGACY_CHAT_MODEL" ]] && ! env_file_get OLLAMA_ROUTINE_MODEL "$ENV_FILE" >/dev/null; then
+  warn "OLLAMA_CHAT_MODEL=$LEGACY_CHAT_MODEL names the routine/agent models; set OLLAMA_ROUTINE_MODEL," \
+       "OLLAMA_FALLBACK_MODEL and OLLAMA_AGENT_MODEL for the local hierarchy (docs/model-routing.md)"
+fi
+# Auxiliary (title/compression) routing. AUX_BASE_URL empty: provider auto =
+# inherit the main provider + model (install never breaks when Ollama is absent).
+# AUX_BASE_URL set: rendered as provider custom, because Hermes 0.21.2 resolves
+# `provider: auto` + base_url WITHOUT an api_key back to the main (cloud)
+# provider. The model defaults to the routine role and the fallback role is
+# rendered as auxiliary.<task>.fallback_chain on the same endpoint.
 AUX_BASE_URL="$(getenv AUX_BASE_URL "")"; export AUX_BASE_URL
+AUX_PROVIDER="$(getenv AUX_PROVIDER auto)"
+if [[ -n "$AUX_BASE_URL" && "$AUX_PROVIDER" == "auto" ]]; then AUX_PROVIDER=custom; fi
+export AUX_PROVIDER
+if [[ -n "$AUX_BASE_URL" ]]; then
+  AUX_MODEL="$(getenv AUX_MODEL "$OLLAMA_ROUTINE_MODEL")"
+  AUX_FALLBACK_MODEL="$(getenv AUX_FALLBACK_MODEL "$OLLAMA_FALLBACK_MODEL")"
+else
+  AUX_MODEL="$(getenv AUX_MODEL "")"
+  AUX_FALLBACK_MODEL=""
+fi
+export AUX_MODEL
+# YAML flow list for auxiliary.<task>.fallback_chain. The double quotes are
+# literal YAML: a model id like qwen3.6:27b holds a colon.
+aux_fallback_chain() {
+  [[ -n "$AUX_FALLBACK_MODEL" && "$AUX_FALLBACK_MODEL" != "$AUX_MODEL" ]] || { echo "[]"; return; }
+  printf '[{provider: custom, model: "%s", base_url: "%s"}]' "$AUX_FALLBACK_MODEL" "$AUX_BASE_URL"
+}
+AUX_FALLBACK_CHAIN="$(aux_fallback_chain)"; export AUX_FALLBACK_CHAIN
 # model-router plugin knobs. Both default to true when unset in .env:
 #   - complexity_routing: rewrite each request to the cheapest model that fits.
 #   - privacy_routing:     the fail-closed guard that keeps private data off every
@@ -89,12 +141,78 @@ MODEL_ROUTER_PRIVACY="$(getenv MODEL_ROUTER_PRIVACY true)"; export MODEL_ROUTER_
 MODEL_ROUTER_EFFORT="$(getenv MODEL_ROUTER_EFFORT true)"; export MODEL_ROUTER_EFFORT
 MODEL_ROUTER_ASTRA="$(getenv MODEL_ROUTER_ASTRA task)"; export MODEL_ROUTER_ASTRA
 MODEL_ROUTER_TASK_TTL="$(getenv MODEL_ROUTER_TASK_TTL 1800)"; export MODEL_ROUTER_TASK_TTL
-# Specialist-router pilot (docs/specialist-routing.md): off unless set to true.
-#   - MODEL_ROUTER_SPECIALIST_MAX: route cap per task (0-6, default 4).
-MODEL_ROUTER_SPECIALISTS="$(getenv MODEL_ROUTER_SPECIALISTS false)"; export MODEL_ROUTER_SPECIALISTS
-MODEL_ROUTER_SPECIALIST_MAX="$(getenv MODEL_ROUTER_SPECIALIST_MAX 4)"; export MODEL_ROUTER_SPECIALIST_MAX
 
-cfg="$HERMES_HOME/config.yaml"
+# Specialist router (docs/specialist-routing.md). Presence-aware: a value set in
+# .env wins (explicit false stays false); a key absent from .env keeps the value
+# already in $HERMES_HOME/config.yaml (what `make specialist-install` wrote), so
+# --force never resets a live setting; only a fresh install gets the default.
+#   MODEL_ROUTER_SPECIALISTS                   true|false        (default false)
+#   MODEL_ROUTER_SPECIALIST_MAX                0-6               (default 4)
+#   MODEL_ROUTER_SPECIALIST_REQUIRE_READY      true|false        (default false)
+#   MODEL_ROUTER_SPECIALIST_CLASSIFIER         none|local        (default none)
+#   MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT seconds, total    (default 10, max 25)
+#   MODEL_ROUTER_SPECIALIST_PROFILES           a,b allowlist     (default all)
+SETTINGS_KEY="plugins.entries.model-router.settings"
+live_setting() { python3 "$ROOT/scripts/config-get.py" "$cfg" "$SETTINGS_KEY.$1" 2>/dev/null; }
+norm_bool() {
+  case "${1,,}" in
+    1|true|yes|on) echo true ;;
+    0|false|no|off) echo false ;;
+    *) return 1 ;;
+  esac
+}
+# yaml_list "a, b" -> ["a", "b"]: comma-separated, trimmed, double-quoted.
+yaml_list() {
+  local item out="" items=()
+  IFS=',' read -ra items <<< "$1"
+  for item in "${items[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"; item="${item%"${item##*[![:space:]]}"}"
+    [[ -n "$item" ]] || continue
+    item="${item//\\/\\\\}"; item="${item//\"/\\\"}"
+    out+="${out:+, }\"$item\""
+  done
+  printf '[%s]' "$out"
+}
+# router_knob VAR KEY DEFAULT KIND -> sets/exports VAR and VAR_SOURCE.
+router_knob() {
+  local var="$1" key="$2" def="$3" kind="$4" raw="" src="" val=""
+  if raw="$(env_file_get "$var" "$ENV_FILE")"; then src=".env"
+  elif [[ -f "$cfg" ]] && raw="$(live_setting "$key")"; then src="live config"
+  else raw="$def"; src="default"; fi
+  case "$kind" in
+    bool) val="$(norm_bool "$raw")" || { warn "$var=$raw ($src) is not a boolean; using $def"; val="$def"; src="default"; } ;;
+    int) [[ "$raw" =~ ^[0-9]+$ ]] && (( 10#$raw <= 6 )) && val="$((10#$raw))" || { warn "$var=$raw ($src) is not 0-6; using $def"; val="$def"; src="default"; } ;;
+    seconds) [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]] && val="$raw" || { warn "$var=$raw ($src) is not a number; using $def"; val="$def"; src="default"; } ;;
+    classifier) raw="${raw,,}"; [[ -z "$raw" || "$raw" == "null" ]] && raw=none
+                [[ "$raw" == none || "$raw" == local ]] && val="$raw" || { warn "$var=$raw ($src) is not none|local; using $def"; val="$def"; src="default"; } ;;
+    list) [[ "${raw// /}" == all ]] && raw=""; val="$(yaml_list "$raw")" ;;
+  esac
+  printf -v "$var" '%s' "$val"; export "${var?}"
+  printf -v "${var}_SOURCE" '%s' "$src"
+}
+router_knob MODEL_ROUTER_SPECIALISTS specialist_routing false bool
+router_knob MODEL_ROUTER_SPECIALIST_MAX specialist_max_profiles 4 int
+router_knob MODEL_ROUTER_SPECIALIST_REQUIRE_READY specialist_require_ready false bool
+router_knob MODEL_ROUTER_SPECIALIST_CLASSIFIER specialist_classifier none classifier
+router_knob MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT specialist_classifier_timeout 10 seconds
+router_knob MODEL_ROUTER_SPECIALIST_PROFILES specialist_profiles "" list
+# Operator privacy signals follow the same rule, so --force never wipes terms
+# set in config.yaml. Values are never logged.
+router_knob MODEL_ROUTER_PRIVATE_TERMS private_terms "" list
+router_knob MODEL_ROUTER_PRIVATE_PATHS private_paths "" list
+log "specialist_routing=$MODEL_ROUTER_SPECIALISTS ($MODEL_ROUTER_SPECIALISTS_SOURCE)" \
+    "max=$MODEL_ROUTER_SPECIALIST_MAX ($MODEL_ROUTER_SPECIALIST_MAX_SOURCE)" \
+    "classifier=$MODEL_ROUTER_SPECIALIST_CLASSIFIER ($MODEL_ROUTER_SPECIALIST_CLASSIFIER_SOURCE)"
+[[ "$MODEL_ROUTER_PRIVACY" == "false" ]] && \
+  warn "MODEL_ROUTER_PRIVACY=false: private data is NOT kept local in ordinary turns (docs/model-routing.md)"
+
+if [[ -n "$RENDER_ONLY" ]]; then
+  render_template hermes/config.yaml.tmpl "$RENDER_ONLY"
+  chmod 600 "$RENDER_ONLY"
+  log "rendered $RENDER_ONLY (render-only: nothing else written)"
+  exit 0
+fi
+
 if [[ -f "$cfg" && "$FORCE" != "1" ]]; then
   render_template hermes/config.yaml.tmpl "$cfg.agent-ops-kit"
   warn "config.yaml exists; wrote the kit version to $cfg.agent-ops-kit"
@@ -184,7 +302,15 @@ if [[ -d hermes/plugins ]]; then
 fi
 
 # ------------------------------------------------------------ 7. gateway ---
-if [[ "${HERMES_SKIP_GATEWAY:-0}" != "1" ]]; then
+# Restarting the gateway from inside a Hermes turn kills that turn; the same
+# markers scripts/specialist-activate.py checks make this step a no-op there.
+in_hermes=""
+for marker in _HERMES_GATEWAY HERMES_GATEWAY HERMES_GATEWAY_MODE HERMES_GATEWAY_SESSION HERMES_CRON_SESSION; do
+  case "${!marker:-}" in ""|0|false|no|off) ;; *) in_hermes="$marker" ;; esac
+done
+if [[ -n "$in_hermes" && "${HERMES_SKIP_GATEWAY:-0}" != "1" ]]; then
+  warn "$in_hermes is set (running inside Hermes): not restarting the gateway. Run in your own terminal: make hermes-restart"
+elif [[ "${HERMES_SKIP_GATEWAY:-0}" != "1" ]]; then
   if [[ -n "$(getenv DISCORD_BOT_TOKEN)" ]]; then
     if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
       log "installing the gateway as a user service"

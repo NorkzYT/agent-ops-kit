@@ -23,6 +23,7 @@ endef
 	    cliproxyapi-logs cliproxyapi-logs-follow router-logs router-logs-follow \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
+	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
@@ -149,6 +150,32 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 	@args=(disable); \
 	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
+
+# Local model roles (routine qwen3.5 / fallback qwen3.6 / agent qwen3.8 by
+# default; docs/model-routing.md, Local model roles). All read-only: metadata
+# calls go only to the configured local endpoint; nothing is restarted.
+local-route-status: ## Read-only: local roles vs endpoint, native fallback chains + aux routes as Hermes resolves them, privacy, specialist knobs
+	@PATH="$$HOME/.local/bin:$$PATH" python3 scripts/local-route.py status
+
+local-models: ## Read-only: models on the local Ollama endpoint (capabilities, size, loaded, role) [JSON=1 BASE_URL=...]
+	@args=(catalog); \
+	 [[ "$${JSON:-0}" == "1" ]] && args+=(--json); \
+	 [[ -n "$${BASE_URL:-}" ]] && args+=(--base-url "$$BASE_URL"); \
+	 python3 scripts/local-route.py "$${args[@]}"
+
+local-route-readback: ## Read-only: live config vs what hermes-install.sh --force renders now (Hermes' own resolver) + local-only invariants; exit 1 on drift
+	@python3 scripts/local-route.py readback
+
+specialist-classify-probe: ## Dry-run the hybrid specialist router with the LIVE local classifier for TASK="..." (content-free trace; nothing dispatched) [NO_CALL=1 MODEL= FALLBACK_MODEL= TIMEOUT=]
+	@args=(probe); \
+	 [[ "$${NO_CALL:-0}" == "1" ]] && args+=(--no-call); \
+	 [[ -n "$${MODEL:-}" ]] && args+=(--model "$$MODEL"); \
+	 [[ -n "$${FALLBACK_MODEL+x}" ]] && args+=(--fallback-model "$$FALLBACK_MODEL"); \
+	 [[ -n "$${TIMEOUT:-}" ]] && args+=(--timeout "$$TIMEOUT"); \
+	 python3 scripts/local-route.py "$${args[@]}"
+
+test-local-route: ## Run the local-role / hybrid classifier / config-render tests (temp HERMES_HOME, stub endpoint; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_local_route.py'
 
 test-specialists: ## Run only the specialist-router tests (offline, temp fixtures)
 	@python3 -m unittest discover -s scripts/tests -p 'test_specialist*.py'

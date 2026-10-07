@@ -36,6 +36,15 @@ def _int(raw: Any, default: int) -> int:
         return default
 
 
+def _seconds(raw: Any, default: float, cap: float = 25.0) -> float:
+    """A positive timeout, capped below Hermes' 30 s pre_llm_call hook limit."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(cap, value) if value > 0 else default
+
+
 def _astra_policy(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     return value if value in ("task", "always", "never") else "task"
@@ -59,8 +68,16 @@ class RouterSettings:
     task_ttl: float = 1800.0
     # Local (Ollama) OpenAI-compatible endpoint used for private/aux work.
     ollama_base_url: str = ""
-    ollama_model: str = ""
+    ollama_model: str = ""          # legacy single model: the default for every unset role
     ollama_timeout: float = 60.0
+    # Explicit local roles on the same endpoint (docs/model-routing.md, Local
+    # model roles). routine: ordinary private turns + the specialist classifier;
+    # agent: difficult private turns and private coding; fallback: tried once
+    # when the role model fails on a model-level error. Empty = ollama_model
+    # (routine/agent) or no fallback.
+    ollama_routine_model: str = ""
+    ollama_fallback_model: str = ""
+    ollama_agent_model: str = ""
     # Operator-configured private signals.
     private_terms: List[str] = field(default_factory=list)
     private_paths: List[str] = field(default_factory=list)
@@ -74,8 +91,22 @@ class RouterSettings:
     specialist_profiles: List[str] = field(default_factory=list)   # allowlist; empty = all
     specialist_require_ready: bool = False
     specialist_classifier: str = "none"                            # none | local (Ollama)
+    specialist_classifier_timeout: float = 10.0                    # total seconds, both models
     specialist_orchestrators: List[str] = field(default_factory=lambda: ["default"])
     specialist_profiles_root: str = ""                             # '' = $HERMES_HOME/profiles
+
+
+    def local_model(self, role: str) -> str:
+        """The model for a local role (``routine`` | ``agent`` | ``fallback``)."""
+        if role == "fallback":
+            return self.ollama_fallback_model
+        explicit = self.ollama_agent_model if role == "agent" else self.ollama_routine_model
+        return explicit or self.ollama_model
+
+    def local_chain(self, role: str) -> List[str]:
+        """Bounded local chain for a role: the role model, then the fallback
+        model, de-duplicated (at most two entries, same endpoint)."""
+        return [m for m in dict.fromkeys((self.local_model(role), self.ollama_fallback_model)) if m]
 
 
 def _classifier(raw: Any) -> str:
@@ -105,6 +136,9 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         ollama_base_url=str(val("ollama_base_url", "OLLAMA_BASE_URL", "") or "").rstrip("/"),
         ollama_model=str(val("ollama_model", "OLLAMA_CHAT_MODEL", "") or ""),
         ollama_timeout=float(val("ollama_timeout", "OLLAMA_TIMEOUT", 60.0) or 60.0),
+        ollama_routine_model=str(val("ollama_routine_model", "OLLAMA_ROUTINE_MODEL", "") or "").strip(),
+        ollama_fallback_model=str(val("ollama_fallback_model", "OLLAMA_FALLBACK_MODEL", "") or "").strip(),
+        ollama_agent_model=str(val("ollama_agent_model", "OLLAMA_AGENT_MODEL", "") or "").strip(),
         private_terms=_split(val("private_terms", "MODEL_ROUTER_PRIVATE_TERMS", [])),
         private_paths=_split(val("private_paths", "MODEL_ROUTER_PRIVATE_PATHS", [])),
         available_gpt_models=_split(val("available_gpt_models", "MODEL_ROUTER_GPT_MODELS", [])),
@@ -114,6 +148,8 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         specialist_profiles=_split(val("specialist_profiles", "MODEL_ROUTER_SPECIALIST_PROFILES", [])),
         specialist_require_ready=_truthy(val("specialist_require_ready", "MODEL_ROUTER_SPECIALIST_REQUIRE_READY", None), False),
         specialist_classifier=_classifier(val("specialist_classifier", "MODEL_ROUTER_SPECIALIST_CLASSIFIER", "none")),
+        specialist_classifier_timeout=_seconds(val("specialist_classifier_timeout",
+                                                   "MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT", 10.0), 10.0),
         specialist_orchestrators=_split(val("specialist_orchestrators", "MODEL_ROUTER_SPECIALIST_ORCHESTRATORS", ["default"])) or ["default"],
         specialist_profiles_root=str(val("specialist_profiles_root", "MODEL_ROUTER_SPECIALIST_PROFILES_ROOT", "") or ""),
     )

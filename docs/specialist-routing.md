@@ -123,10 +123,27 @@ max 6) drops the lowest scores.
 
   Unready profiles still route, with their status shown, unless
   `specialist_require_ready: true`.
-- **Ambiguous tasks** (optional): `specialist_classifier: local` lets the
-  local Ollama model suggest at most two non-high-risk profiles. It runs only
-  when the task is not private, has no keyword match and is long enough to
-  be real work. The default is `none`. There is no cloud option.
+- **Hybrid classifier** (optional, `specialist_classifier: local`; default
+  `none`, there is no cloud option). Keywords always run first. The local
+  classifier is asked only when the keywords found nothing (`gate=no-match`)
+  or only weak signals (`gate=ambiguous`), and only when the task is public,
+  typed by the sender (not attachment-derived), substantive and at least 60
+  characters. It may add at most **two** profiles, never one already
+  matched, never `security-reviewer`, `red-team`, `health-fitness`,
+  `herbalism` or `local-engineer` (those need keyword evidence). It runs on
+  the routine local model (`ollama_routine_model`, qwen3.5:27b by default),
+  then once on the fallback model (`ollama_fallback_model`, qwen3.6:27b) after
+  a model-level failure, all inside `specialist_classifier_timeout` seconds
+  (default 10, max 25; Hermes caps `pre_llm_call` at 30). Thinking is off,
+  temperature 0, at most 48 output tokens. A non-local `ollama_base_url`
+  disables it. A timeout, an unreachable endpoint or an error adds nothing.
+  Logs carry `gate`, `classifier_model` and `classifier_outcome` labels,
+  never the prompt or the answer.
+
+  Ollama keeps one 27b model resident on a single GPU: the first classifier
+  call after an agent-model turn reloads qwen3.5 (about 20-25 s on the
+  current host) and times out at the default budget, so that turn routes on
+  keywords only. Probe it with `make specialist-classify-probe` (below).
 
 ## Dry run first
 
@@ -155,6 +172,17 @@ profiles root /home/you/.hermes/profiles
 why, for example `no specialist selected (no-match)`; dropped profiles are
 listed with their reason.
 
+Probe the hybrid classifier against the live local endpoint. Same trace, plus
+`classifier_gate`, `classifier_detail` (model, attempt, outcome) and the time
+taken; still content-free and nothing is dispatched. The task text goes only
+to the local endpoint and only when the gate opens:
+
+```bash
+make specialist-classify-probe TASK="I keep going back and forth on what to do next with my bakery and the people around me"
+make specialist-classify-probe TASK="..." NO_CALL=1                 # show the gate, do not call the model
+make specialist-classify-probe TASK="..." MODEL=qwen3.5:27b FALLBACK_MODEL=qwen3.6:27b TIMEOUT=25   # before activation
+```
+
 In any Hermes chat, after the plugin reloads:
 
 ```
@@ -164,7 +192,7 @@ In any Hermes chat, after the plugin reloads:
 Trace fields: `routes[]` (`profile`, `score`, `reasons`, `high_risk`,
 `advisory_only`, `execution`, `toolsets`, `constraint`, `knowledge`),
 `dropped[]` (`privacy:local-only`, `cap`, `not-allowed`,
-`readiness:<status>`, `classifier:not-eligible`), `privacy`, `tier`, `task`
+`readiness:<status>`, `classifier:not-eligible`, `classifier:cap`), `privacy`, `tier`, `task`
 (hash), `task_source` (`sender` | `attachment`), `attachment` (separation
 label), `classifier` and, when nothing routes, `reason` (`no-match`,
 `all-dropped`, `no-current-task`, `runtime-envelope`, `attachment-unverified`,
@@ -259,10 +287,37 @@ Turn it off with `make specialist-disable` (sets `specialist_routing: false`
 and reads it back, no restart), then `make hermes-restart` from your own
 terminal. To undo everything, copy the `config.yaml.bak.<timestamp>` back.
 
+### Keep it on across `hermes-install.sh --force`
+
+The installer renders the `specialist_*` keys presence-aware:
+
+| `.env` | Rendered value |
+|--------|----------------|
+| key set (`MODEL_ROUTER_SPECIALISTS=false`, `=true`, `=yes`, ...) | that value, normalized; an explicit `false` stays `false` |
+| key absent (or empty) | the value already in `~/.hermes/config.yaml` (what `make specialist-install` wrote) |
+| key absent, no live value | the default (`false`, `4`, `false`, `none`, `10`, all profiles) |
+
+Keys: `MODEL_ROUTER_SPECIALISTS`, `MODEL_ROUTER_SPECIALIST_MAX` (0-6),
+`MODEL_ROUTER_SPECIALIST_REQUIRE_READY`, `MODEL_ROUTER_SPECIALIST_CLASSIFIER`
+(`none|local`), `MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT` (seconds),
+`MODEL_ROUTER_SPECIALIST_PROFILES` (`a,b` or `all`). An invalid value warns
+and renders the default. The installer logs where each came from, e.g.
+`specialist_routing=true (live config)`. To pin the hybrid router in `.env`:
+
+```
+MODEL_ROUTER_SPECIALISTS=true
+MODEL_ROUTER_SPECIALIST_MAX=4
+MODEL_ROUTER_SPECIALIST_CLASSIFIER=local
+```
+
+Activation and rollback of the whole local hierarchy (roles, fallback chains,
+aux, classifier) are in [model-routing.md](model-routing.md#activate-the-local-hierarchy).
+
 ## Verify
 
 ```bash
 make test-specialists      # specialist-router + activation tests (stub hermes, temp HERMES_HOME)
+make test-local-route      # hybrid classifier gate/caps/privacy, local roles, installer render
 make test-specialist-activate  # activation tests only (stub hermes/systemctl, temp HERMES_HOME)
 make test-router           # whole offline suite
 ```

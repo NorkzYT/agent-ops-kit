@@ -1377,11 +1377,15 @@ class IntegrationTest(unittest.TestCase):
         self.assertIn({"profile": "marketing", "reason": "readiness:not-installed"}, out["dropped"])
 
     def test_local_classifier_requires_configured_local_backend(self):
-        self.assertIsNone(hook_mod.local_classifier(SimpleNamespace(configured=False)))
-        backend = SimpleNamespace(configured=True, chat=lambda msgs: SimpleNamespace(
+        self.assertIsNone(hook_mod.local_classifier(config_mod.RouterSettings()))
+        local = dict(ollama_base_url="http://127.0.0.1:11434/v1", ollama_model="m")
+        backend = SimpleNamespace(chat=lambda msgs, **kw: SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="philosophy, strategy"))]))
-        fn = hook_mod.local_classifier(backend)
+        fn = hook_mod.local_classifier(config_mod.RouterSettings(**local), factory=lambda m: backend)
         self.assertEqual(fn("x", ["philosophy", "strategy", "business"]), ["philosophy", "strategy"])
+        # A non-local endpoint is never used, even for a public task.
+        self.assertIsNone(hook_mod.local_classifier(config_mod.RouterSettings(
+            ollama_base_url="https://api.example.com/v1", ollama_model="m")))
 
     def test_cli_dry_run(self):
         with tempfile.TemporaryDirectory() as tmp:

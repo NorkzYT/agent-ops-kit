@@ -60,6 +60,9 @@ from . import task_intent as ti
 Signal = Tuple[str, int, "re.Pattern[str]"]
 SELECT_THRESHOLD = 2
 DEFAULT_MAX_PROFILES = 4
+# The optional classifier adds at most this many profiles, never a high-risk
+# or local-only one (CLASSIFIER_FORBIDDEN, checked again after the pool filter).
+MAX_CLASSIFIER_ADDITIONS = 2
 HARD_MAX_PROFILES = 6
 
 
@@ -204,6 +207,7 @@ REGISTRY: Tuple[Specialist, ...] = (
 
 BY_NAME: Dict[str, Specialist] = {s.name: s for s in REGISTRY}
 HIGH_RISK: Tuple[str, ...] = tuple(s.name for s in REGISTRY if s.high_risk)
+CLASSIFIER_FORBIDDEN = frozenset(HIGH_RISK) | {s.name for s in REGISTRY if s.local}
 
 # Wraps the injected note. ``task_intent`` cuts the current user message at the
 # opening line, so neither router ever classifies its own suggestion.
@@ -425,13 +429,15 @@ _PROGRESS_RE = re.compile(
 Classifier = Callable[[str, Sequence[str]], Sequence[str]]
 
 
-def _score(spec: Specialist, visible: str) -> Tuple[int, List[str]]:
-    score, labels = 0, []
+def _score(spec: Specialist, visible: str) -> Tuple[int, List[str], bool]:
+    """(score, reason labels, any strong signal matched)."""
+    score, labels, strong = 0, [], False
     for label, weight, rx in spec.signals:
         if rx.search(visible):
             score += weight
             labels.append(f"kw:{label}")
-    return score, labels
+            strong = strong or weight >= SELECT_THRESHOLD
+    return score, labels, strong
 
 
 def _privacy(raw_text: str, settings: SpecialistSettings, session_private: bool) -> pv.PrivacyDecision:
@@ -538,10 +544,12 @@ def route_text(
 
     allowed = set(settings.allowed) if settings.allowed else set(BY_NAME)
     candidates: List[Tuple[int, int, Specialist, List[str]]] = []
+    any_strong = False
     for order, spec in enumerate(REGISTRY):
-        score, labels = _score(spec, task.visible)
+        score, labels, strong = _score(spec, task.visible)
         if score < SELECT_THRESHOLD:
             continue
+        any_strong = any_strong or strong
         if spec.name not in allowed:
             trace["dropped"].append({"profile": spec.name, "reason": "not-allowed"})
             continue
@@ -550,7 +558,13 @@ def route_text(
             continue
         candidates.append((-score, order, spec, labels))
 
-    if not candidates and settings.classifier != "none" and classifier is not None:
+    # Keywords first. The classifier is a tie-breaker only when the keywords
+    # found nothing (``no-match``) or only weak-signal matches (``ambiguous``),
+    # never for a private task or an attachment-derived one. It adds at most
+    # MAX_CLASSIFIER_ADDITIONS non-high-risk, non-local profiles; an error or
+    # timeout adds nothing.
+    gate = "no-match" if not candidates else ("ambiguous" if not any_strong else "")
+    if gate and settings.classifier != "none" and classifier is not None:
         if pdec.private:
             trace["classifier"] = "skipped:private"
         elif source == "attachment":
@@ -558,20 +572,31 @@ def route_text(
         elif not decision.substantive or len(task.visible) < 60:
             trace["classifier"] = "skipped:not-ambiguous"
         else:
-            pool = [s.name for s in REGISTRY
-                    if s.name in allowed and not s.high_risk and not s.local]
+            trace["classifier_gate"] = gate
+            have = {c[2].name for c in candidates}
+            pool = [s.name for s in REGISTRY if s.name in allowed and s.name not in have
+                    and s.name not in CLASSIFIER_FORBIDDEN]
             try:
-                picked = [str(p).strip().lower() for p in (classifier(task.visible, pool) or ())]
+                result = classifier(task.visible, pool)
+                picked = [str(p).strip().lower() for p in (result or ())]
                 trace["classifier"] = "used"
+                meta = getattr(result, "meta", None)
+                if isinstance(meta, dict):
+                    trace["classifier_detail"] = {k: meta[k] for k in ("model", "attempt", "outcome")
+                                                  if k in meta}
             except Exception as exc:  # classifier is optional; never fatal
                 picked = []
                 trace["classifier"] = f"error:{type(exc).__name__}"
+            added = 0
             for p in dict.fromkeys(picked):
-                if p in pool:
-                    candidates.append((-1, len(candidates), BY_NAME[p], ["classifier"]))
+                if p in pool and p not in CLASSIFIER_FORBIDDEN and added < MAX_CLASSIFIER_ADDITIONS:
+                    candidates.append((-1, len(REGISTRY) + added, BY_NAME[p], ["classifier"]))
+                    added += 1
                 else:
+                    eligible = p in pool and p not in CLASSIFIER_FORBIDDEN
                     trace["dropped"].append({"profile": p if p in BY_NAME else "?",
-                                             "reason": "classifier:not-eligible"})
+                                             "reason": "classifier:cap" if eligible
+                                             else "classifier:not-eligible"})
 
     candidates.sort(key=lambda c: (c[0], c[1]))
     rdy = readiness or (lambda name: knowledge_readiness(
