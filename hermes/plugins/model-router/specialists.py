@@ -19,7 +19,9 @@ Rules:
   * **Current task only.** Signals come from ``CurrentTask.visible`` — fenced
     code and ``>``-quoted lines are inert, as are control tags. An inline
     attachment relay (``[Content of NAME]:``) is not task text: only the
-    sender's prose after it routes (``task_intent.outside_attachment_relay``).
+    sender's own prose routes, separated exactly against the cached file
+    (``attachments.separate_sender_prose``); an unprovable boundary routes
+    nothing.
   * **High-risk profiles are advisory.** ``health-fitness``, ``herbalism``,
     ``security-reviewer`` and ``red-team`` are routed review/advice only: no
     tool action with external or high-impact effect. The optional classifier
@@ -44,6 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from . import attachments as att
 from . import privacy as pv
 from . import task_intent as ti
 
@@ -461,7 +464,8 @@ def route_text(
 
     ``raw_text`` is the current user message as it arrived (wire format is
     fine — provenance stripping happens here). Pure apart from ``readiness``
-    (stat-only) and the optional ``classifier``.
+    (stat-only), the optional ``classifier``, and bounded reads of the
+    attachment files a gateway note names in the document cache.
     """
     task = ti.task_from_text(raw_text or "")
     trace: Dict[str, Any] = {
@@ -485,14 +489,20 @@ def route_text(
         # work earlier; the embedded subagent report must not fan out specialists.
         trace["reason"] = "runtime-envelope"
         return trace
-    prose = ti.outside_attachment_relay(task.text)
-    if prose != task.text:
+    sep = att.separate_sender_prose(raw_text or "")
+    if sep.attachment:
         # Inline attachment relay: the file text is not the task. Route on the
-        # sender's own prose only (trace keeps the full-turn hash).
-        task = ti.task_from_text(prose)
-        if not task.found:
-            trace["reason"] = "attachment-only"
+        # sender's own prose only, verbatim (trace keeps the full-turn hash);
+        # when the boundary cannot be proven exactly, route nothing.
+        trace["attachment"] = sep.reason
+        if not sep.proven:
+            trace["reason"] = "attachment-unverified"
             return trace
+        if sep.prose != task.text:
+            task = ti.task_from_sender_text(sep.prose)
+            if not task.found:
+                trace["reason"] = "attachment-only"
+                return trace
 
     pdec = _privacy(raw_text, settings, session_private)
     if pdec.private:

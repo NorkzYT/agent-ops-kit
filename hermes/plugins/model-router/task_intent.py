@@ -74,7 +74,7 @@ _APPENDED_CUT_RE = re.compile(
 # Channel backfill terminator: f"{context}\n\n[New message]\n{sender_text}".
 # The gateway's own marker is the LAST one in the (already appendix-free)
 # string — anything a prior channel message or reply quote embeds sits earlier.
-_NEW_MESSAGE_MARKER = "\n[New message]\n"
+NEW_MESSAGE_MARKER = "\n[New message]\n"
 # Prepended single-paragraph runtime blocks on the DM path (no backfill).
 # Deliberately narrow: only templates the gateway itself emits. Arbitrary
 # leading bracket lines a user pastes are NOT stripped, so pasted transcripts
@@ -105,39 +105,13 @@ def is_runtime_envelope(task_text: str) -> bool:
     return bool(_ASYNC_DELEGATION_RE.match(task_text))
 
 
-# Inline text-attachment relay (platform adapters, e.g. plugins/platforms/discord):
-# f"[Content of {name}]:\n{file_text}" is PREPENDED to the sender's text with a
-# blank line (several files are joined the same way), and the gateway puts its
-# "[The user sent a text document: ...]" note in front. The file text has no
-# closing delimiter, so where the sender's own prose starts is unknowable.
-_CONTENT_RELAY_RE = re.compile(r"^\[Content of [^\[\]\n]{1,256}\]:\n")
-_PARAGRAPH_SPLIT_RE = re.compile(r"\n[ \t]*\n")
+def split_sender_segment(text: str) -> Tuple[str, str]:
+    """``(head, segment)``: the sender-authored segment and the runtime text before it.
 
-
-def outside_attachment_relay(task_text: str) -> str:
-    """Sender prose outside a leading inline attachment relay.
-
-    Text that does not start with a relay header passes through unchanged.
-    Otherwise only the final paragraph is trusted as the sender's own text —
-    an earlier sender paragraph is lost (fail-safe) and at most one trailing
-    paragraph of attached content can leak in (a multi-paragraph file sent
-    with no text). '' when the final paragraph is still the relay header.
-    """
-    if not _CONTENT_RELAY_RE.match(task_text):
-        return task_text
-    tail = _PARAGRAPH_SPLIT_RE.split(task_text.rstrip())[-1].strip()
-    return "" if _CONTENT_RELAY_RE.match(tail) else tail
-
-
-def genuine_user_text(text: str) -> str:
-    """Reduce a wire-format user message to its sender-authored segment.
-
-    Strips, in provenance-safe order: appended memory/attached context (first
-    marker wins), everything up to the gateway's ``[New message]`` marker
-    (last marker wins — see comments above for why the directions differ), the
-    known prepended runtime metadata blocks on the marker-less DM path, and a
-    single inline ``[sender] `` prefix. Plain text without any runtime markers
-    passes through unchanged. Returns '' when nothing sender-authored remains.
+    ``segment`` is :func:`genuine_user_text`; ``head`` is what was stripped in
+    front of it (backfill through the gateway's ``[New message]`` marker, or the
+    leading runtime blocks), which is where the gateway's per-attachment
+    document notes live (``attachments.separate_sender_prose``).
     """
     t = text
     stripped = t.strip()
@@ -150,23 +124,43 @@ def genuine_user_text(text: str) -> str:
     m = _APPENDED_CUT_RE.search(t)
     if m:
         t = t[: m.start()]
-    idx = t.rfind(_NEW_MESSAGE_MARKER)
+    idx = t.rfind(NEW_MESSAGE_MARKER)
     if idx != -1:
-        t = t[idx + len(_NEW_MESSAGE_MARKER):]
+        start = idx + len(NEW_MESSAGE_MARKER)
     else:
-        t = t.lstrip()
+        start = len(t) - len(t.lstrip())
         while True:
-            blk = _LEADING_RUNTIME_BLOCK_RE.match(t)
+            blk = _LEADING_RUNTIME_BLOCK_RE.match(t[start:])
             if not blk:
                 break
-            t = t[blk.end():].lstrip()
-    t = t.strip()
-    prefix = _SENDER_PREFIX_RE.match(t)
+            rest = t[start + blk.end():]
+            start = len(t) - len(rest.lstrip())
+    seg = t[start:]
+    start += len(seg) - len(seg.lstrip())
+    seg = seg.strip()
+    prefix = _SENDER_PREFIX_RE.match(seg)
     if prefix:
-        t = t[prefix.end():].strip()
-    if t == _EMPTY_PLACEHOLDER:
-        return ""
-    return t
+        rest = seg[prefix.end():]
+        start += prefix.end() + len(rest) - len(rest.lstrip())
+        seg = rest.strip()
+    if seg == _EMPTY_PLACEHOLDER:
+        seg = ""
+    return t[:start], seg
+
+
+def genuine_user_text(text: str) -> str:
+    """Reduce a wire-format user message to its sender-authored segment.
+
+    Strips, in provenance-safe order: appended memory/attached context (first
+    marker wins), everything up to the gateway's ``[New message]`` marker
+    (last marker wins — see comments above for why the directions differ), the
+    known prepended runtime metadata blocks on the marker-less DM path, and a
+    single inline ``[sender] `` prefix. Plain text without any runtime markers
+    passes through unchanged. Returns '' when nothing sender-authored remains.
+    An inline attachment relay stays in the segment; callers that must not
+    score it use ``attachments.separate_sender_prose``.
+    """
+    return split_sender_segment(text)[1]
 
 
 # Responses API item types that are never a user task.
@@ -314,7 +308,11 @@ def task_from_text(text: str) -> CurrentTask:
     so the hash stays stable across tool iterations even as backfill and
     recalled memory around the same task change.
     """
-    text = genuine_user_text(text)
+    return task_from_sender_text(genuine_user_text(text))
+
+
+def task_from_sender_text(text: str) -> CurrentTask:
+    """:func:`task_from_text` for text that is already sender-authored (verbatim)."""
     if not text:
         # Runtime-only content (placeholder, bare memory block): no current
         # textual task. Callers fall back to the conservative middle tier

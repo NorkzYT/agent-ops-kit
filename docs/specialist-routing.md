@@ -43,6 +43,15 @@ max 6) drops the lowest scores.
   system prompts and tool output never pick a profile. Its own note is
   wrapped in `<specialist-routing>` and stripped again on later API calls,
   thus neither router classifies it.
+- **Inline attachments are not the task.** A text file the platform inlines
+  (`[Content of NAME]:` plus the file text, with no end marker) is cut out by
+  comparing it with the cached copy the gateway note names. Only a regular,
+  non-symlink file directly in `$HERMES_HOME/cache/documents` is read, at most
+  1 MiB. Every typed paragraph routes. If the file and the relay do not match
+  exactly, the note path is outside the cache, or the boundary is ambiguous,
+  the turn routes nothing (`attachment-unverified`). The legacy
+  `document_cache/` layout and plugin terminal backends with a custom cache
+  base always fail closed this way.
 - **Privacy first.** The raw current message, including any quoted or
   appended text, goes through the privacy guard's deterministic detectors:
   `#private`/`#local`, ID numbers, cards, bank numbers, secrets, credentials,
