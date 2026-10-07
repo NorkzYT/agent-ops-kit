@@ -17,7 +17,9 @@ Rules:
     is never called. Only profiles declared ``local`` (``local-engineer``) stay
     eligible.
   * **Current task only.** Signals come from ``CurrentTask.visible`` — fenced
-    code and ``>``-quoted lines are inert, as are control tags.
+    code and ``>``-quoted lines are inert, as are control tags. An inline
+    attachment relay (``[Content of NAME]:``) is not task text: only the
+    sender's prose after it routes (``task_intent.outside_attachment_relay``).
   * **High-risk profiles are advisory.** ``health-fitness``, ``herbalism``,
     ``security-reviewer`` and ``red-team`` are routed review/advice only: no
     tool action with external or high-impact effect. The optional classifier
@@ -483,6 +485,14 @@ def route_text(
         # work earlier; the embedded subagent report must not fan out specialists.
         trace["reason"] = "runtime-envelope"
         return trace
+    prose = ti.outside_attachment_relay(task.text)
+    if prose != task.text:
+        # Inline attachment relay: the file text is not the task. Route on the
+        # sender's own prose only (trace keeps the full-turn hash).
+        task = ti.task_from_text(prose)
+        if not task.found:
+            trace["reason"] = "attachment-only"
+            return trace
 
     pdec = _privacy(raw_text, settings, session_private)
     if pdec.private:

@@ -409,6 +409,115 @@ class AsyncDelegationEnvelopeTest(unittest.TestCase):
                 session_id="s", user_message="[Norkz] Write a marketing campaign for the launch."))
 
 
+# A terminal transcript (Discord's auto "message.txt" for a long paste) full of
+# specialist-route examples: alone it routes strategy/offers-sales/marketing/leadership.
+TERMINAL_TRANSCRIPT = (
+    "polymath-dev@host:/opt/repos/claude-code-autopilot$ make specialist-route TASK=\"...\"\n"
+    "routes: strategy, offers-sales, marketing, leadership-teamwork\n\n"
+    "  strategy             score=4 kw:competitive-advantage kw:strategic-plan\n"
+    "  offers-sales         score=4 kw:pricing kw:offer\n"
+    "  marketing            score=4 kw:marketing kw:positioning\n"
+    "  leadership-teamwork  score=2 kw:direct-reports\n\n"
+    "$ tail -n 3 gateway.log\n"
+    "INFO specialist-router: Plan marketing positioning, pricing for the offer, competitive "
+    "advantage and a strategic plan, plus one-on-ones with my direct reports.\n"
+    "INFO specialist-router: Write a marketing campaign and a sales pitch for the launch.\n"
+)
+DOC_NOTE = ("[The user sent a text document: 'message.txt'. Its content has been included below. "
+            "The file is also saved at: /home/polymath-dev/.hermes/cache/documents/1_2_message.txt]")
+
+
+def attachment_relay(user_text, content=TERMINAL_TRANSCRIPT, sender="[Norkz] ", name="message.txt"):
+    """Exact wire shape: gateway note, then adapter relay prepended to the sender's text."""
+    body = f"[Content of {name}]:\n{content}"
+    if user_text:
+        body = f"{body}\n\n{user_text}"
+    return f"{DOC_NOTE}\n\n{sender}{body}"
+
+
+class AttachmentRelayTest(unittest.TestCase):
+    """An inline attachment relay is document content, not the current task.
+
+    Live: a Discord message.txt holding a terminal transcript of route examples
+    fanned out strategy/offers-sales/marketing/leadership although the sender
+    only asked to read it and fix the problem.
+    """
+
+    USER = "I do not want to enable privacy right now.\n\nRead the attached. And resolve until fixed please."
+
+    def test_transcript_alone_would_route(self):
+        # Guard: the fixture really carries routable vocabulary.
+        self.assertGreaterEqual(len(route(TERMINAL_TRANSCRIPT)["routes"]), 3)
+
+    def test_relay_with_trailing_user_task_routes_nothing(self):
+        for sender in ("[Norkz] ", ""):
+            with self.subTest(sender=sender):
+                t = route(attachment_relay(self.USER, sender=sender))
+                self.assertTrue(t["task_found"])
+                self.assertEqual(t["routes"], [])
+                self.assertEqual(t["dropped"], [])
+                self.assertEqual(sp.render_plan(t), "")
+
+    def test_relay_vocabulary_never_reaches_classifier(self):
+        seen = []
+
+        def fake(text, pool):
+            seen.append(text)
+            return []
+        sp.route_text(attachment_relay(self.USER), settings(classifier="local"), readiness=ready,
+                      classifier=fake)
+        for text in seen:
+            self.assertNotIn("marketing", text)
+            self.assertNotIn("Content of", text)
+
+    def test_relay_without_user_text_routes_nothing(self):
+        single = attachment_relay("", content="Plan marketing positioning and pricing for the offer.")
+        t = route(single)
+        self.assertEqual(t["routes"], [])
+        self.assertEqual(t["reason"], "attachment-only")
+        # Known limit: a multi-paragraph file sent with no text has no boundary on
+        # the wire, so its final paragraph is read as the sender's (one paragraph max).
+
+    def test_two_attachments_then_user_task(self):
+        two = (f"{DOC_NOTE}\n\n{DOC_NOTE}\n\n[Norkz] [Content of a.txt]:\n{TERMINAL_TRANSCRIPT}"
+               f"\n\n[Content of b.log]:\n{TERMINAL_TRANSCRIPT}\n\nRead both and fix the router.")
+        self.assertEqual(route(two)["routes"], [])
+
+    def test_direct_request_outside_relay_still_routes(self):
+        plan = "Q3 plan\n\nChannels: newsletter, podcast ads.\n\nBudget: 5k."
+        t = route(attachment_relay("Review this attached marketing plan and tighten the positioning.",
+                                   content=plan, name="plan.txt"))
+        self.assertEqual(names(t), ["marketing"])
+        t = route(attachment_relay("Write a marketing campaign for the launch."))
+        self.assertEqual(names(t), ["marketing"])
+
+    def test_ordinary_text_without_relay_unchanged(self):
+        self.assertEqual(names(route("[Norkz] Write a marketing campaign for the launch.")), ["marketing"])
+        prose = ("Plan marketing positioning, pricing for the offer, competitive advantage and a "
+                 "strategic plan. [Content of the deck]: see slide 3.")
+        self.assertEqual(route(prose)["routes"], route(prose.replace("[Content of the deck]: ", ""))["routes"])
+
+    def test_document_note_without_inlined_content_keeps_user_text(self):
+        note = ("[The user sent a text document: 'plan.txt'. It is saved at: /tmp/plan.txt. "
+                "Its content is not inlined here. Read the cached file yourself before answering "
+                "when the user's request involves its contents.]")
+        t = route(f"{note}\n\n[Norkz] Review this attached marketing plan and tighten the positioning.")
+        self.assertEqual(names(t), ["marketing"])
+
+    def test_outside_attachment_relay_helper(self):
+        f = task_intent.outside_attachment_relay
+        self.assertEqual(f("plain text\n\nmore"), "plain text\n\nmore")
+        self.assertEqual(f("[Content of x.txt]:\nbody\n\n  \nask  "), "ask")
+        self.assertEqual(f("[Content of x.txt]:\nonly body"), "")
+
+    def test_hook_returns_none_for_relay(self):
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
+            self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=attachment_relay(self.USER)))
+            self.assertIsNotNone(h.on_pre_llm_call(
+                session_id="s", user_message=attachment_relay("Write a marketing campaign for the launch.")))
+
+
 class CapAndStateTest(unittest.TestCase):
     WIDE = ("Plan marketing positioning, pricing for the offer, a business plan with unit "
             "economics, competitive advantage, negotiation of the contract, and one-on-ones "

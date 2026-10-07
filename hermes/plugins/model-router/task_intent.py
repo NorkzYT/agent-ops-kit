@@ -105,6 +105,30 @@ def is_runtime_envelope(task_text: str) -> bool:
     return bool(_ASYNC_DELEGATION_RE.match(task_text))
 
 
+# Inline text-attachment relay (platform adapters, e.g. plugins/platforms/discord):
+# f"[Content of {name}]:\n{file_text}" is PREPENDED to the sender's text with a
+# blank line (several files are joined the same way), and the gateway puts its
+# "[The user sent a text document: ...]" note in front. The file text has no
+# closing delimiter, so where the sender's own prose starts is unknowable.
+_CONTENT_RELAY_RE = re.compile(r"^\[Content of [^\[\]\n]{1,256}\]:\n")
+_PARAGRAPH_SPLIT_RE = re.compile(r"\n[ \t]*\n")
+
+
+def outside_attachment_relay(task_text: str) -> str:
+    """Sender prose outside a leading inline attachment relay.
+
+    Text that does not start with a relay header passes through unchanged.
+    Otherwise only the final paragraph is trusted as the sender's own text —
+    an earlier sender paragraph is lost (fail-safe) and at most one trailing
+    paragraph of attached content can leak in (a multi-paragraph file sent
+    with no text). '' when the final paragraph is still the relay header.
+    """
+    if not _CONTENT_RELAY_RE.match(task_text):
+        return task_text
+    tail = _PARAGRAPH_SPLIT_RE.split(task_text.rstrip())[-1].strip()
+    return "" if _CONTENT_RELAY_RE.match(tail) else tail
+
+
 def genuine_user_text(text: str) -> str:
     """Reduce a wire-format user message to its sender-authored segment.
 
