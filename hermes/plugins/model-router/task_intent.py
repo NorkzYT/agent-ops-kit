@@ -105,6 +105,26 @@ def is_runtime_envelope(task_text: str) -> bool:
     return bool(_ASYNC_DELEGATION_RE.match(task_text))
 
 
+def runtime_marker(text: str) -> str:
+    """Label of the Hermes wire/runtime text in ``text`` ('' when none).
+
+    For text that must be pure content (a verified attachment routed as the
+    task): any template this module strips or refuses counts, wherever the
+    cut would apply, so routing never runs on gateway or runtime envelopes."""
+    t = text.strip()
+    if _ASYNC_DELEGATION_RE.match(t):
+        return "runtime-envelope"
+    if t.startswith(_STEER_OPEN_PREFIX) or _STEER_CLOSE in t:
+        return "steer"
+    if _LEADING_RUNTIME_BLOCK_RE.match(t):
+        return "runtime-block"
+    if _APPENDED_CUT_RE.search(t):
+        return "appended-context"
+    if NEW_MESSAGE_MARKER.strip() in t:
+        return "backfill-marker"
+    return ""
+
+
 def split_sender_segment(text: str) -> Tuple[str, str]:
     """``(head, segment)``: the sender-authored segment and the runtime text before it.
 

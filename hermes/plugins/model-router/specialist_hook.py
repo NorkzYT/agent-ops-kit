@@ -117,11 +117,13 @@ class SpecialistHook:
             trace = self.route(_message_text(kwargs.get("user_message")), session_id)
             routes = trace.get("routes") or []
             logger.info(
-                "model_router: specialists task=%s privacy=%s tier=%s routes=%s dropped=%s classifier=%s",
+                "model_router: specialists task=%s privacy=%s tier=%s source=%s routes=%s dropped=%s "
+                "classifier=%s reason=%s",
                 str(trace.get("task", "-"))[:8], trace.get("privacy"), trace.get("tier"),
+                trace.get("task_source", "-"),
                 ",".join(f"{r['profile']}:{r['execution']}:{r['knowledge']['status']}" for r in routes) or "-",
                 ",".join(f"{d['profile']}:{d['reason']}" for d in trace.get("dropped") or []) or "-",
-                trace.get("classifier"),
+                trace.get("classifier"), trace.get("reason", "-"),
             )
             plan = sp.render_plan(trace)
             return {"context": plan} if plan else None

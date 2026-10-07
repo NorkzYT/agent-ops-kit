@@ -52,6 +52,19 @@ max 6) drops the lowest scores.
   the turn routes nothing (`attachment-unverified`). The legacy
   `document_cache/` layout and plugin terminal backends with a custom cache
   base always fail closed this way.
+- **A bare upload is the prompt.** When the sender typed nothing (for example
+  only `prompt.txt` was sent), the verified relay text routes instead and the
+  trace says `task_source: attachment`. The note to the orchestrator and
+  `make specialist-route` mark it `attachment-derived`; the live log line says
+  `source=attachment`. The same checks apply first, so an unverified relay
+  still routes nothing. Inside the file, `#max`/`#opus`/`#quick` control
+  lines carry no authority. Gateway or runtime text in it (an async
+  delegation envelope, `[Replying to`, a trigger id, a steer block, a relay
+  header or document note) routes nothing (`attachment-envelope`). The
+  optional classifier never sees file text (`skipped:attachment`). A document
+  the gateway did not inline (large text, PDF, DOCX) is never read for
+  routing (`attachment-only`). Typed prose always wins over the file. The
+  privacy scan and the trace hash cover the full raw turn, file included.
 - **Privacy first.** The raw current message, including any quoted or
   appended text, goes through the privacy guard's deterministic detectors:
   `#private`/`#local`, ID numbers, cards, bank numbers, secrets, credentials,
@@ -112,8 +125,25 @@ Offline. Nothing is dispatched, and the output never contains the task text.
 ```bash
 TASK="Design an offer and pricing for my course, and a launch campaign" make specialist-route
 TASK="..." make specialist-route PLAN=1            # also print the note the orchestrator gets
+make specialist-route TASK=- < prompt.txt          # the task text from a file
+make specialist-route                              # no task: usage, exit 0
 python3 scripts/specialist-route.py --profiles-root /tmp/empty "..."   # fixture root
 ```
+
+The JSON trace is followed by a summary:
+
+```
+--- summary ---
+task 91d1e4d8c8b9d337  source typed  privacy public  tier elevated  classifier off
+selected 2/4:
+  security-reviewer          short  knowledge no-knowledge  reasons kw:review,kw:authz,kw:security  [HIGH-RISK advisory-only]
+  marketing                  kanban knowledge ready  reasons kw:marketing  [advisory]
+profiles root /home/you/.hermes/profiles
+```
+
+`source` is `typed` or `attachment-derived`. With no route the summary says
+why, for example `no specialist selected (no-match)`; dropped profiles are
+listed with their reason.
 
 In any Hermes chat, after the plugin reloads:
 
@@ -125,7 +155,10 @@ Trace fields: `routes[]` (`profile`, `score`, `reasons`, `high_risk`,
 `advisory_only`, `execution`, `toolsets`, `constraint`, `knowledge`),
 `dropped[]` (`privacy:local-only`, `cap`, `not-allowed`,
 `readiness:<status>`, `classifier:not-eligible`), `privacy`, `tier`, `task`
-(hash) and `classifier`.
+(hash), `task_source` (`sender` | `attachment`), `attachment` (separation
+label), `classifier` and, when nothing routes, `reason` (`no-match`,
+`all-dropped`, `no-current-task`, `runtime-envelope`, `attachment-unverified`,
+`attachment-only`, `attachment-envelope`, `status-or-continuation`).
 
 ## Turn it on
 
@@ -194,11 +227,23 @@ Trace fields: `routes[]` (`profile`, `score`, `reasons`, `high_risk`,
    The hook registers only in the `default` profile
    (`specialist_orchestrators`), never in a specialist or a subagent turn.
 
-6. Watch the decisions. They are content-free:
+6. Watch the decisions. They are content-free (task hash, profiles, labels):
 
    ```bash
-   make hermes-logs | grep 'model_router: specialists'
+   make specialist-logs                # last 20 decisions (LINES=<n>)
+   make specialist-logs-follow         # same, then follow live
    ```
+
+   ```
+   2026-10-07 08:22:10,111 INFO hermes.plugin.model_router: model_router: specialists task=1a2b3c4d privacy=public tier=medium source=attachment routes=marketing:short:ready dropped=- classifier=off reason=-
+   ```
+
+   `source` is `sender` or `attachment`, `routes` is
+   `profile:execution:readiness`, and `reason` says why nothing routed. Only
+   the plugin logger's own records are shown (anchored on timestamp, level
+   and logger name), never another component's line that quotes them. Lines
+   written before this change have no `source`/`reason` fields.
+   `make router-logs` shows every `model_router` line.
 
 Turn it off with `make specialist-disable` (sets `specialist_routing: false`
 and reads it back, no restart), then `make hermes-restart` from your own

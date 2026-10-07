@@ -22,7 +22,7 @@ endef
 .PHONY: help init up down restart pull update ps status logs \
 	    cliproxyapi-logs cliproxyapi-logs-follow router-logs router-logs-follow \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
-	    models honcho-health doctor route-smoke test-router specialist-route specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
+	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
@@ -107,8 +107,14 @@ models: ## List models exposed by both proxies (distinguishes down from empty)
 test-router: ## Run the model-router unit + zero-egress privacy canary suite (offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
-specialist-route: ## Dry-run the specialist router for TASK="..." (offline, nothing dispatched; PLAN=1 shows the note)
+specialist-route: ## Dry-run the specialist router for TASK="..." or TASK=- < prompt.txt (offline; PLAN=1 shows the note; no TASK prints usage)
 	@python3 scripts/specialist-route.py $(if $(PLAN),--plan) $(if $(REQUIRE_READY),--require-ready)
+
+specialist-logs: ## Last 20 live specialist-routing decisions from the Hermes agent log (content-free; LINES=<n>)
+	@bash scripts/router-logs.sh snapshot specialists
+
+specialist-logs-follow: ## Recent specialist-routing decisions, then follow live (survives log rotation)
+	@bash scripts/router-logs.sh follow specialists
 
 # Activation: install = plugin + specialist_* keys via `hermes config set`, read
 # back, never restarts. enable = install + a guarded gateway restart (asks; YES=1

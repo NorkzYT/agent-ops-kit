@@ -1,7 +1,8 @@
 """Deterministic specialist routing for the book-backed Hermes profiles (pilot).
 
 Given the CURRENT genuine user task (``task_intent.genuine_user_text`` — never
-history, system prompts, recalled memory, attachments or tool output), pick the
+history, system prompts, recalled memory or tool output; an attachment only
+when it is the whole verified prompt, see below), pick the
 0-4 specialist profiles whose domain the task is about and say how the
 orchestrator should run them. Everything here is deterministic, offline and
 side-effect free except :func:`knowledge_readiness`, which only ``stat``s a
@@ -21,7 +22,10 @@ Rules:
     attachment relay (``[Content of NAME]:``) is not task text: only the
     sender's own prose routes, separated exactly against the cached file
     (``attachments.separate_sender_prose``); an unprovable boundary routes
-    nothing.
+    nothing. When the sender typed nothing (the upload is the prompt), the
+    verified relay text routes instead, marked ``task_source: attachment``:
+    its control lines are inert, wire/runtime text in it routes nothing, and
+    the optional classifier never sees it.
   * **High-risk profiles are advisory.** ``health-fitness``, ``herbalism``,
     ``security-reviewer`` and ``red-team`` are routed review/advice only: no
     tool action with external or high-impact effect. The optional classifier
@@ -40,6 +44,7 @@ Rules:
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 from dataclasses import dataclass, field
@@ -490,9 +495,10 @@ def route_text(
         trace["reason"] = "runtime-envelope"
         return trace
     sep = att.separate_sender_prose(raw_text or "")
+    source = "sender"
     if sep.attachment:
-        # Inline attachment relay: the file text is not the task. Route on the
-        # sender's own prose only, verbatim (trace keeps the full-turn hash);
+        # Inline attachment relay: the file text is not the sender's prose.
+        # Route on the prose only, verbatim (trace keeps the full-turn hash);
         # when the boundary cannot be proven exactly, route nothing.
         trace["attachment"] = sep.reason
         if not sep.proven:
@@ -501,8 +507,18 @@ def route_text(
         if sep.prose != task.text:
             task = ti.task_from_sender_text(sep.prose)
             if not task.found:
-                trace["reason"] = "attachment-only"
-                return trace
+                # Nothing typed: the verified upload IS the prompt. Its control
+                # lines carry no authority and wire text in it routes nothing.
+                if not sep.attached:
+                    trace["reason"] = "attachment-only"
+                    return trace
+                if att.wire_text_marker(sep.attached):
+                    trace["reason"] = "attachment-envelope"
+                    return trace
+                task = dataclasses.replace(ti.task_from_sender_text(sep.attached),
+                                           authorized_max=False, forced_routine=False, forced_coding="")
+                source = "attachment"
+    trace["task_source"] = source
 
     pdec = _privacy(raw_text, settings, session_private)
     if pdec.private:
@@ -536,6 +552,8 @@ def route_text(
     if not candidates and settings.classifier != "none" and classifier is not None:
         if pdec.private:
             trace["classifier"] = "skipped:private"
+        elif source == "attachment":
+            trace["classifier"] = "skipped:attachment"
         elif not decision.substantive or len(task.visible) < 60:
             trace["classifier"] = "skipped:not-ambiguous"
         else:
@@ -604,8 +622,10 @@ def render_plan(trace: Dict[str, Any]) -> str:
     routes = trace.get("routes") or []
     if not routes:
         return ""
+    derived = ("attachment-derived: no typed instruction, routed on the verified attached "
+               "file's content; " if trace.get("task_source") == "attachment" else "")
     lines = [PLAN_OPEN, "[specialist-router pilot] Suggested specialists for the current task "
-             f"(deterministic, task {trace.get('task', '-')}, privacy {trace.get('privacy')}):"]
+             f"({derived}deterministic, task {trace.get('task', '-')}, privacy {trace.get('privacy')}):"]
     for r in routes:
         k = r["knowledge"]
         knowledge = k["status"] + (" (stale: re-run /learn)" if k.get("stale") else "")

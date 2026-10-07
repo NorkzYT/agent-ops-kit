@@ -21,7 +21,9 @@ matching at different lengths, wire markers inside a file, a relay header left
 in the remaining prose) is ``proven=False`` and the caller routes nothing.
 
 Only the bounded file bytes are read, never echoed: the result carries the
-sender's prose and stable labels, not file content.
+sender's prose, stable labels and (``attached``, never in ``repr``) the text of
+the verified relays exactly as they appear in the turn, so a caller can route
+an attachment-only turn on the file the sender uploaded as the prompt.
 """
 
 from __future__ import annotations
@@ -71,12 +73,15 @@ _BLANK = "\n\n"
 class Separation:
     """``attachment``: a relay or document note is present. ``proven``: the
     sender's prose was separated exactly (always True without an attachment).
-    ``prose``: sender-typed text ('' when attachment-only or unproven)."""
+    ``prose``: sender-typed text ('' when attachment-only or unproven).
+    ``attached``: the verified relay bodies, blank-line joined ('' unless
+    proven; a non-inlined document is never read for its text)."""
 
     attachment: bool
     proven: bool
     prose: str = field(repr=False)
     reason: str = "none"
+    attached: str = field(default="", repr=False)
 
 
 @dataclass
@@ -104,12 +109,24 @@ def separate_sender_prose(raw_text: str, *, cache_dir: Optional[Path] = None) ->
         return Separation(False, True, seg)
     try:
         docs = _load_docs(head, len(raw_text), headers, cache_dir or active_cache_dir())
-        prose = _strip_relays(seg, headers, docs)
+        prose, attached = _strip_relays(seg, headers, docs)
     except _Unproven as exc:
         return Separation(True, False, "", f"unproven:{exc}")
     except OSError:
         return Separation(True, False, "", "unproven:io")
-    return Separation(True, True, prose, "separated" if prose else "attachment-only")
+    return Separation(True, True, prose, "separated" if prose else "attachment-only", attached)
+
+
+def wire_text_marker(text: str) -> str:
+    """Label of gateway/runtime wire text inside attachment content ('' when
+    none): runtime envelopes and blocks (``task_intent.runtime_marker``) plus
+    relay headers and document notes the file itself quotes."""
+    marker = ti.runtime_marker(text)
+    if marker:
+        return marker
+    if _HEADER_ANYWHERE_RE.search(text) or _NOTE_LOOSE_RE.search(text):
+        return "relay"
+    return ""
 
 
 def _load_docs(head: str, raw_len: int, headers: list, cache_dir: Path) -> List[_Doc]:
@@ -233,8 +250,10 @@ def _relay_end(seg: str, at: int, name: str, docs: List[_Doc]) -> int:
     return ends.pop()
 
 
-def _strip_relays(seg: str, headers: list, docs: List[_Doc]) -> str:
+def _strip_relays(seg: str, headers: list, docs: List[_Doc]) -> Tuple[str, str]:
+    """``(prose, attached)``: the sender's paragraphs and the verified relay bodies."""
     parts: List[str] = []
+    bodies: List[str] = []
     pos = 0
     for header in headers:
         at = header.start()
@@ -246,8 +265,9 @@ def _strip_relays(seg: str, headers: list, docs: List[_Doc]) -> str:
                 raise _Unproven("boundary")
             parts.append(before[: -len(_BLANK)])
         pos = _relay_end(seg, at, header.group("name"), docs)
+        bodies.append(seg[header.end() + 1:pos].strip())
     parts.append(seg[pos:])
     prose = _BLANK.join(p.strip() for p in parts if p.strip())
     if _HEADER_ANYWHERE_RE.search(prose) or _NOTE_LOOSE_RE.search(prose):
         raise _Unproven("residual-relay")
-    return prose
+    return prose, _BLANK.join(b for b in bodies if b)
