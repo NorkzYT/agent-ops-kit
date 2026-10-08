@@ -23,7 +23,7 @@ endef
 	    cliproxyapi-logs cliproxyapi-logs-follow router-logs router-logs-follow \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
-	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route \
+	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
@@ -173,6 +173,9 @@ specialist-classify-probe: ## Dry-run the hybrid specialist router with the LIVE
 	 [[ -n "$${FALLBACK_MODEL+x}" ]] && args+=(--fallback-model "$$FALLBACK_MODEL"); \
 	 [[ -n "$${TIMEOUT:-}" ]] && args+=(--timeout "$$TIMEOUT"); \
 	 python3 scripts/local-route.py "$${args[@]}"
+
+test-private-honcho: ## Run the #private marker / private Honcho validator tests (offline, explicit env; no live Honcho)
+	@python3 -m unittest discover -s scripts/tests -p 'test_private_honcho.py'
 
 test-local-route: ## Run the local-role / hybrid classifier / config-render tests (temp HERMES_HOME, stub endpoint; offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_local_route.py'

@@ -2,13 +2,14 @@
 
 Policy: a request is private (answered by the local model or refused, never
 sent to a cloud provider) when, and only when, the CURRENT genuine user turn
-carries a standalone ``#privacy`` token in the sender's own text. Nothing else
-makes a request private:
+carries a standalone ``#privacy`` or ``#private`` token in the sender's own
+text (the two are equivalent; ``#private`` also selects the private memory
+route, see ``private_honcho``). Nothing else makes a request private:
 
   * no content classification — ID numbers, cards, bank numbers, secrets,
     credentials and configured terms/paths do not route anything
     (``privacy.scan_request`` remains for offline tooling only);
-  * ``#private`` / ``#local`` are inert;
+  * ``#local`` is inert;
   * no session state — the next turn without the marker is public again.
 
 Provenance (the marker must be authored by the sender for this request):
@@ -44,7 +45,8 @@ from . import task_intent as ti
 from .privacy import PrivacyDecision
 
 MARKER = "#privacy"
-_MARKER_RE = re.compile(r"(?<![A-Za-z0-9_#])#privacy(?![A-Za-z0-9_\-])", re.IGNORECASE)
+MARKERS = ("#privacy", "#private")
+_MARKER_RE = re.compile(r"(?<![A-Za-z0-9_#])#(?:privacy|private)(?![A-Za-z0-9_\-])", re.IGNORECASE)
 
 WITHHELD = "[withheld: this earlier turn was marked private and answered locally]"
 
@@ -53,7 +55,7 @@ MARKED = PrivacyDecision(True, ("marker",))
 
 
 def has_marker(text: str) -> bool:
-    """A standalone ``#privacy`` token anywhere in ``text`` (case-insensitive)."""
+    """A standalone ``#privacy`` / ``#private`` token in ``text`` (case-insensitive)."""
     return bool(_MARKER_RE.search(text or ""))
 
 

@@ -135,7 +135,7 @@ class TestPrivacyMarker(unittest.TestCase):
 
     def test_marker_word_boundaries(self):
         for text in ("#privacy-policy page", "#privacyx", "foo#privacy", "##privacy", "privacy please",
-                     "#private draft this", "#local draft this"):
+                     "#private-beta page", "#privates", "foo#private", "#local draft this"):
             with self.subTest(text=text):
                 self.assertFalse(self._private(req(text)))
 
@@ -276,7 +276,7 @@ class TestPrivateHistoryWithheld(unittest.TestCase):
         self.assertNotIn(SSN, json.dumps(seen[0]))
 
     def test_unmarked_history_passes_the_same_object(self):
-        request = req("#private old", f"ssn {SSN}", "now implement it")
+        request = req("#local old", f"ssn {SSN}", "now implement it")
         _, seen = self._send(request)
         self.assertIs(seen[0], request)
 

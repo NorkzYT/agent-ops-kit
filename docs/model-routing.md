@@ -301,7 +301,8 @@ Nothing else makes a request private:
 - **No content classification.** ID numbers, card/bank numbers, IBANs,
   secrets, credentials, private keys, `private_terms` and `private_paths` do
   not route anything. Type `#privacy` when a turn must stay local.
-- **`#private` / `#local` are inert** (breaking change from plugin 0.4).
+- **`#private` is equivalent to `#privacy`** (same provenance rules, same
+  fail-closed local-or-refuse path); `#local` stays inert.
 
 Only the sender's own text counts. These never activate the marker: system or
 developer prompts, assistant turns, tool results (including Responses function
@@ -330,7 +331,8 @@ Limits (see [Honcho and private sessions](#honcho-and-private-sessions--known-li
   and reason over the transcript on their own route, so derived memories of a
   marked turn can come back in recalled context.
 - The auxiliary guard in Hermes core (title/compression) still uses its own
-  scanner (`#private`/`#local`, secrets) and does not recognize `#privacy`.
+  scanner (`#private`/`#local`, secrets) and does not recognize `#privacy`
+  (prefer `#private`, which both guards recognize).
   Keep `AUX_BASE_URL` local so compression of a session that held a marked
   turn stays on Ollama.
 - A `#privacy` sent as a mid-turn steer inside a tool result does not move an
@@ -610,6 +612,37 @@ Fail-closed options until a core gate exists:
 - Point every Honcho reasoning model (`HONCHO_MODEL`) at a local endpoint so no
   transcript-derived reasoning leaves the host, or
 - Globally set `save_messages: false` for private operating periods.
+
+### Private Honcho route for `#private` (validator only; refuses today)
+
+`hermes/plugins/model-router/private_honcho.py` holds the private memory route
+so it can be reviewed and tested before Hermes can use it. It is **not wired
+into Hermes** and changes nothing in the public Honcho (`HONCHO_*`,
+`honcho.json`, the compose `honcho-*` services).
+
+- **Config** (`PRIVATE_HONCHO_*` in `.env.example`): a separate Honcho API,
+  its workspace, and its reasoning model/endpoint and embedding endpoint.
+- **Validator** (`validate`, fail-closed): reasoning and embeddings must be a
+  local Ollama (`:11434` or host `ollama`); CLIProxyAPI (`cliproxyapi`,
+  `:8317`), claude-max-proxy (`:3456`), any configured proxy URL and every
+  public host are refused. The private Honcho API must be local and a
+  different instance from the public one: a second workspace on the public
+  server is not isolation, because that server's reasoning goes through
+  CLIProxyAPI.
+- **Decision** (`decide` / `dispatch`): an unmarked turn keeps the public
+  route exactly as configured. A marked turn gets the private route only with
+  a valid config **and** a Hermes seam; otherwise it is a typed refusal
+  (`PrivateHonchoRefused`) and neither Honcho is called. There is no path from
+  a marked turn to the public route.
+- **Seam:** `HERMES_MEMORY_ROUTE_SEAM = False`. Hermes 0.21.2
+  `MemoryManager.sync_all` / `prefetch_all` / `queue_prefetch_all` /
+  `on_pre_compress` take no host or route, and the Honcho provider binds one
+  `baseUrl` per profile at startup, so every marked turn resolves to
+  `refuse` (`kind="seam"`). Hermes core still syncs that turn to the public
+  Honcho on its own (the limitation above is unchanged) until item 1 below
+  lands and is wired here.
+
+`make test-private-honcho` runs the hermetic tests.
 
 ### Pending design: private specialists and private memory (not implemented)
 

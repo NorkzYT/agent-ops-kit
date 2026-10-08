@@ -94,8 +94,9 @@ the job id. If scheduling fails, say so and ask to be pinged.
   GPT alias; privacy takes precedence).
 - Task routing + fail-closed privacy live in the `model-router` plugin
   (`hermes/plugins/model-router/`). A request whose current user turn carries
-  `#privacy` never reaches a cloud provider — local Ollama or refuse. Only that
-  marker counts (no content detection, `#private`/`#local` inert, not sticky);
+  `#privacy` (or the equivalent `#private`) never reaches a cloud provider —
+  local Ollama or refuse. Only that marker counts (no content detection,
+  `#local` inert, not sticky);
   earlier marked turns are withheld from later public requests.
 - Local Ollama roles (one endpoint, `OLLAMA_*_MODEL`): routine `qwen3.5:27b`
   (ordinary private turns, aux, specialist classifier), agent `qwen3.8:27b`

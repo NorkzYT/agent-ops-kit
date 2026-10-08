@@ -259,16 +259,25 @@ class PrivacyTest(unittest.TestCase):
                       [d["profile"] for d in t["dropped"] if d["reason"] == "privacy:local-only"])
 
     def test_content_is_never_classified_private(self):
-        # Only #privacy routes local: credentials, legacy tags and the old
+        # Only #privacy/#private route local: credentials, #local and the old
         # operator-term path no longer do.
         for text in ("Write a marketing campaign. username: ops password: hunter2xyz",
-                     "#private Write a marketing campaign for the launch.",
                      "#local Write a marketing campaign for the launch.",
                      "Positioning for Project Neptune launch campaign"):
             with self.subTest(text=text[:24]):
                 t = route(text)
                 self.assertEqual(t["privacy"], "public")
                 self.assertEqual(t["privacy_reasons"], [])
+
+    def test_private_marker_is_equivalent_to_privacy(self):
+        t = route("#private Write a marketing campaign for the launch.")
+        self.assertEqual(t["privacy"], "local-only")
+        self.assertEqual(t["privacy_reasons"], ["marker"])
+        for text in ("> #private note\nWrite a marketing campaign.",
+                     "```\n#private\n```\nWrite a marketing campaign.",
+                     "#private-beta Write a marketing campaign."):
+            with self.subTest(text=text[:24]):
+                self.assertEqual(route(text)["privacy"], "public")
 
     def test_marker_outside_the_sender_segment_is_inert(self):
         for text in ("> #privacy note\nWrite a marketing campaign.",

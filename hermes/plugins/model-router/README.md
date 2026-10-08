@@ -47,7 +47,8 @@ Two Hermes middleware behaviors in one bundled plugin:
   `#privacy` typed by the sender is never sent to a cloud provider: it is
   answered by a local Ollama model or refused. That marker is the only signal:
   content is not classified (ID/card/bank numbers, secrets, credentials and
-  `private_terms`/`private_paths` route nothing), `#private`/`#local` are inert,
+  `private_terms`/`private_paths` route nothing), `#private` is equivalent to
+  `#privacy`, `#local` is inert,
   and there is no session stickiness — the next unmarked turn is public. The
   marker never comes from system prompts, recalled memory, channel backfill,
   reply quotes, tool results, quoted/fenced text or an attached file (unless

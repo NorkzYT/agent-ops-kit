@@ -220,8 +220,8 @@ compression:
 # are preserved. Privacy routing is ENABLED by default: a request whose current
 # user turn carries #privacy never reaches a cloud provider (local Ollama, or
 # refuse when local inference is down — it never auto-escalates to the cloud).
-# Only that per-request marker counts: no content detection, #private/#local
-# inert, no session stickiness; earlier #privacy turns are withheld from later
+# Only that per-request marker (#private is equivalent) counts: no content
+# detection, #local inert, no session stickiness; earlier #privacy turns are withheld from later
 # public requests. Setting MODEL_ROUTER_PRIVACY=false renders privacy_routing:
 # false here — a deliberate opt-out that disables the guard (and #privacy)
 # entirely. When enabled it remains fail-closed. effort_routing rewrites the reasoning-effort fields

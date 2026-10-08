@@ -26,7 +26,7 @@ Rules implemented here (all deterministic, no network, no LLM calls):
     the first non-empty line of the current task being exactly ``#max`` or
     ``#astra``. Inline ``#max`` / ``#deep`` / ``#hard`` only *hint* at a hard
     task (Sol at most); they never grant Astra.
-  * A standalone ``#privacy`` line may sit above the control line (the
+  * A standalone ``#privacy`` (or ``#private``) line may sit above the control line (the
     privacy marker itself is checked in ``privacy_marker.py``).
   * Tags inside fenced code blocks or ``>``-quoted lines are inert.
   * Classification never returns the task text — callers get a tier, an
@@ -396,7 +396,7 @@ def task_from_sender_text(text: str) -> CurrentTask:
         if not stripped:
             continue
         low = stripped.lower()
-        if low == "#privacy":
+        if low in ("#privacy", "#private"):
             continue  # the privacy marker may sit above the control line
         # Precedence on the single control line: coding force (#opus/#fable)
         # first, then max authorization, then routine force.
