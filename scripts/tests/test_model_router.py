@@ -16,9 +16,10 @@ import unittest
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(__file__))
-from _loader import submodule  # noqa: E402
+from _loader import load_plugin, submodule  # noqa: E402
 
 privacy = submodule("privacy")
+marker = submodule("privacy_marker")
 complexity = submodule("complexity")
 router_mod = submodule("router")
 config_mod = submodule("router_config")
@@ -46,6 +47,9 @@ FAKE_PEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE K
 
 
 class TestPrivacyDetectors(unittest.TestCase):
+    """The offline content scanner (knowledge-classify). Request routing never
+    uses it — see TestPrivacyMarker / TestNoContentClassification."""
+
     def _private(self, request, expect):
         d = privacy.scan_request(request)
         self.assertTrue(d.private, f"expected private for {expect}: got {d.reasons}")
@@ -110,6 +114,188 @@ class TestPrivacyDetectors(unittest.TestCase):
         blob = "".join(d.reasons)
         self.assertNotIn("219", blob)
         self.assertNotIn("4242", blob)
+
+
+def _user(text):
+    return {"role": "user", "content": text}
+
+
+class TestPrivacyMarker(unittest.TestCase):
+    """Only a sender-authored #privacy in the CURRENT user turn makes a request private."""
+
+    def _private(self, request):
+        return marker.decide(request).private
+
+    def test_marker_in_current_turn(self):
+        for text in ("#privacy draft this", "draft this #privacy", "#PRIVACY\ndraft this",
+                     "[Norkz] draft this (#privacy)", "#privacy, draft this"):
+            with self.subTest(text=text):
+                self.assertTrue(self._private(req(text)))
+        self.assertEqual(marker.decide(req("#privacy x")).reasons, ("marker",))
+
+    def test_marker_word_boundaries(self):
+        for text in ("#privacy-policy page", "#privacyx", "foo#privacy", "##privacy", "privacy please",
+                     "#private draft this", "#local draft this"):
+            with self.subTest(text=text):
+                self.assertFalse(self._private(req(text)))
+
+    def test_non_sender_sources_cannot_activate(self):
+        cases = {
+            "system": req("draft this", system="#privacy is on for everything"),
+            "tool-result": req("draft this", tool="file says #privacy"),
+            "assistant": {"messages": [_user("draft this"),
+                                       {"role": "assistant", "content": "#privacy"}]},
+            "developer": {"messages": [{"role": "developer", "content": "#privacy"}, _user("draft this")]},
+            "earlier-user-turn": req("#privacy old secret task", "now implement the parser"),
+            "memory": req("draft this\n<memory-context>\n#privacy\n</memory-context>"),
+            "attached-context": req("draft this\n--- Attached Context ---\n#privacy"),
+            "backfill": req("[alice] #privacy notes\n\n[New message]\n[Norkz] draft this"),
+            "reply-quote": req('[Replying to: "#privacy notes"]\ndraft this'),
+            "quoted": req("> #privacy\ndraft this"),
+            "fenced": req("```\n#privacy\n```\ndraft this"),
+            "kanban-wake": req("[kanban] Task t_0123abcd done.\nTitle: #privacy card\nAssignee: @coder"),
+            "tool-result-user-part": {"messages": [_user("draft this"), {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "#privacy"}]}]},
+            "responses-output": {"input": [_user("draft this"),
+                                           {"type": "function_call_output", "call_id": "c", "output": "#privacy"}]},
+            "responses-instructions": {"instructions": "#privacy", "input": "draft this"},
+        }
+        for name, request in cases.items():
+            with self.subTest(source=name):
+                self.assertFalse(self._private(request))
+
+    def test_current_turn_wins_over_tool_loop_items(self):
+        # The marked task's own tool loop keeps it private on every call.
+        request = {"messages": [_user("#privacy fix the parser"),
+                                {"role": "assistant", "content": None, "tool_calls": [
+                                    {"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}]},
+                                {"role": "tool", "tool_call_id": "c1", "content": "ok"}]}
+        self.assertTrue(self._private(request))
+
+    def test_responses_and_steer_shapes(self):
+        self.assertTrue(self._private({"input": "#privacy draft this"}))
+        self.assertTrue(self._private({"input": [{"role": "user", "content": [
+            {"type": "input_text", "text": "#privacy draft this"}]}]}))
+        steer = "[OUT-OF-BAND USER MESSAGE \u2014 x]\n#privacy draft this\n[/OUT-OF-BAND USER MESSAGE]"
+        self.assertTrue(self._private(req(steer)))
+
+    def test_malformed_requests_are_public(self):
+        for request in (None, {}, {"messages": None}, {"messages": ["x", 3]}, "#privacy"):
+            with self.subTest(request=repr(request)[:20]):
+                self.assertFalse(self._private(request))
+
+
+class TestNoContentClassification(unittest.TestCase):
+    def test_sensitive_content_without_marker_is_public(self):
+        r = _router()
+        for text in (f"my ssn is {SSN}", f"card {PAN}", f"routing {ABA}", f"iban {IBAN}", FAKE_SECRET,
+                     FAKE_PEM, "username: alice\npassword: hunter2ish", "clone https://user:pw@example.com/x.git"):
+            with self.subTest(text=text[:12]):
+                self.assertFalse(r.is_private(req(text), "s").private)
+
+    def test_configured_terms_and_paths_do_not_route(self):
+        r = _router(private_terms=["ProjectNeptune"], private_paths=["/vault/"])
+        self.assertFalse(r.is_private(req("open the ProjectNeptune brief at /vault/x"), "s").private)
+
+    def test_register_warns_that_terms_are_ignored(self):
+        settings = {"private_terms": ["x"]}
+        ctx = SimpleNamespace(get_config=lambda k, d=None: settings.get(k, d), profile_name="default",
+                              register_middleware=lambda *a: None, register_hook=lambda *a: None)
+        with self.assertLogs("hermes.plugin.model_router", level="WARNING") as logs:
+            load_plugin().register(ctx)
+        self.assertIn("private_terms/private_paths are ignored", "\n".join(logs.output))
+
+
+class TestPrivateHistoryWithheld(unittest.TestCase):
+    """A public request after a #privacy turn never replays that turn to the cloud."""
+
+    def _send(self, request, router=None):
+        seen = []
+        r = router or _router()
+        resp = r.on_llm_execution(request=request, next_call=lambda p: seen.append(p) or "CLOUD",
+                                  session_id="h", base_url="http://127.0.0.1:8317/v1")
+        return resp, seen
+
+    def test_marked_exchange_is_withheld_and_input_not_mutated(self):
+        request = {"model": "m", "messages": [
+            {"role": "system", "content": "be helpful"},
+            _user(f"#privacy card {PAN}"),
+            {"role": "assistant", "content": f"noted {PAN}", "reasoning_content": f"think {PAN}"},
+            _user("hello"),
+            {"role": "assistant", "content": "hi"},
+            _user("now implement the parser")]}
+        snapshot = json.dumps(request)
+        resp, seen = self._send(request)
+        self.assertEqual(resp, "CLOUD")
+        sent = seen[0]["messages"]
+        self.assertEqual(json.dumps(request), snapshot)
+        self.assertEqual([m["role"] for m in sent], ["system", "user", "assistant", "user", "assistant", "user"])
+        self.assertEqual(sent[1]["content"], marker.WITHHELD)
+        self.assertEqual(sent[2], {"role": "assistant", "content": marker.WITHHELD})
+        self.assertEqual(sent[0], request["messages"][0])
+        self.assertEqual(sent[3:], request["messages"][3:])
+        self.assertNotIn("4242", json.dumps(seen[0]))
+
+    def test_tool_pairing_is_preserved(self):
+        request = {"messages": [
+            _user("#privacy read my notes"),
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read", "arguments": '{"p": "/n"}'}}]},
+            {"role": "tool", "tool_call_id": "c1", "name": "read", "content": f"ssn {SSN}"},
+            {"role": "assistant", "content": [{"type": "text", "text": f"ssn {SSN}"}]},
+            _user("public task"),
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c2", "type": "function", "function": {"name": "ls", "arguments": '{"d": "."}'}}]},
+            {"role": "tool", "tool_call_id": "c2", "content": "a.py"}]}
+        _, seen = self._send(request)
+        sent = seen[0]["messages"]
+        self.assertEqual(sent[1]["tool_calls"],
+                         [{"id": "c1", "type": "function", "function": {"name": "read", "arguments": "{}"}}])
+        self.assertIsNone(sent[1]["content"])
+        self.assertEqual(sent[2], {"role": "tool", "tool_call_id": "c1", "name": "read", "content": marker.WITHHELD})
+        self.assertEqual(sent[3]["content"], [{"type": "text", "text": marker.WITHHELD}])
+        self.assertEqual(sent[4:], request["messages"][4:])  # the current task's own loop is untouched
+        self.assertNotIn(SSN, json.dumps(seen[0]))
+
+    def test_responses_items(self):
+        request = {"model": "m", "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": f"#privacy {SSN}"}]},
+            {"type": "reasoning", "id": "r1", "summary": [{"type": "summary_text", "text": SSN}]},
+            {"type": "function_call", "call_id": "f1", "name": "read", "arguments": f'{{"q": "{SSN}"}}'},
+            {"type": "function_call_output", "call_id": "f1", "output": SSN},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": SSN}]},
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "public task"}]}]}
+        _, seen = self._send(request)
+        sent = seen[0]["input"]
+        self.assertEqual([i["type"] for i in sent],
+                         ["message", "function_call", "function_call_output", "message", "message"])
+        self.assertEqual(sent[1], {"type": "function_call", "call_id": "f1", "name": "read", "arguments": "{}"})
+        self.assertEqual(sent[2]["output"], marker.WITHHELD)
+        self.assertEqual(sent[3]["content"], [{"type": "output_text", "text": marker.WITHHELD}])
+        self.assertEqual(sent[4], request["input"][5])
+        self.assertNotIn(SSN, json.dumps(seen[0]))
+
+    def test_unmarked_history_passes_the_same_object(self):
+        request = req("#private old", f"ssn {SSN}", "now implement it")
+        _, seen = self._send(request)
+        self.assertIs(seen[0], request)
+
+    def test_withholding_error_stays_local(self):
+        r = _router()
+        spy = _Spy()
+        original = marker.withhold_marked_history
+        marker.withhold_marked_history = lambda request: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            resp = r.on_llm_execution(request=req("#privacy a", "b"), next_call=spy, session_id="e")
+        finally:
+            marker.withhold_marked_history = original
+        self.assertEqual(spy.calls, 0)
+        self.assertTrue(resp._model_router_refusal)
+
+    def test_privacy_disabled_does_not_withhold(self):
+        request = req("#privacy a", "b")
+        _, seen = self._send(request, router=_router(privacy_routing=False))
+        self.assertIs(seen[0], request)
 
 
 class TestComplexity(unittest.TestCase):
@@ -224,13 +410,13 @@ class TestPrivacyCanary(unittest.TestCase):
         return spy, resp
 
     def test_private_sends_zero_bytes_to_orchestrator_8317(self):
-        spy, resp = self._run(req(f"ssn {SSN}"), "http://127.0.0.1:8317/v1")
+        spy, resp = self._run(req(f"#privacy ssn {SSN}"), "http://127.0.0.1:8317/v1")
         self.assertEqual(spy.calls, 0, "cloud provider was called for private data")
         self.assertEqual(spy.bytes, 0, "private bytes reached the cloud")
         self.assertTrue(getattr(resp, "_model_router_refusal", False))
 
     def test_private_sends_zero_bytes_to_delegation_3456(self):
-        spy, resp = self._run(req(f"card {PAN}"), "http://127.0.0.1:3456/v1")
+        spy, resp = self._run(req(f"#privacy card {PAN}"), "http://127.0.0.1:3456/v1")
         self.assertEqual(spy.calls, 0)
         self.assertEqual(spy.bytes, 0)
 
@@ -249,23 +435,34 @@ class TestPrivacyCanary(unittest.TestCase):
             return local_backend.make_response("LOCAL", model="ollama")
 
         r._backend = SimpleNamespace(chat=chat)
-        resp = r.on_llm_execution(request=req(f"ssn {SSN}"), next_call=spy, session_id="s2",
+        resp = r.on_llm_execution(request=req(f"#privacy ssn {SSN}"), next_call=spy, session_id="s2",
                                   base_url="http://127.0.0.1:8317/v1")
         self.assertEqual(spy.calls, 0)
         self.assertEqual(resp.choices[0].message.content, "LOCAL")
         self.assertEqual(seen[0]["options"]["reasoning_effort"], "none")
         self.assertGreater(seen[0]["options"]["max_tokens"], 256)  # 256 left qwen thinking-only
 
-    def test_session_stickiness(self):
+    def test_marker_is_not_sticky(self):
         spy = _Spy()
-        r = _router()
-        # first turn is private
-        r.on_llm_execution(request=req(f"ssn {SSN}"), next_call=spy, session_id="sticky",
-                           base_url="http://127.0.0.1:8317/v1")
-        # later benign turn in the SAME session must stay local
-        r.on_llm_execution(request=req("thanks, summarize that"), next_call=spy, session_id="sticky",
-                           base_url="http://127.0.0.1:8317/v1")
-        self.assertEqual(spy.calls, 0)
+        r = _router(ollama_model="local-model")
+        r._backend = SimpleNamespace(chat=lambda msgs, **kw: local_backend.make_response("LOCAL", model="ollama"))
+        first = req(f"#privacy ssn {SSN}")
+        resp = r.on_llm_execution(request=first, next_call=spy, session_id="turns",
+                                  base_url="http://127.0.0.1:8317/v1")
+        self.assertEqual((spy.calls, resp.choices[0].message.content), (0, "LOCAL"))
+        # The next turn in the SAME session has no marker: it goes downstream normally.
+        later = {"model": "gpt-5.6-terra", "messages": first["messages"] + [
+            {"role": "assistant", "content": f"LOCAL answer about {SSN}"},
+            {"role": "user", "content": "now implement the parser"}]}
+        resp = r.on_llm_execution(request=later, next_call=spy, session_id="turns",
+                                  base_url="http://127.0.0.1:8317/v1")
+        self.assertEqual((spy.calls, resp.model), (1, "CLOUD"))
+        self.assertFalse(hasattr(r, "_private_sessions"))
+
+    def test_unmarked_sensitive_content_reaches_cloud(self):
+        # Policy: only #privacy forces local; content is never auto-classified.
+        spy, resp = self._run(req(f"ssn {SSN} card {PAN} {FAKE_SECRET}"), "http://127.0.0.1:8317/v1")
+        self.assertEqual((spy.calls, resp.model), (1, "CLOUD"))
 
     def test_classifier_error_is_fail_closed(self):
         spy = _Spy()
@@ -279,7 +476,7 @@ class TestPrivacyCanary(unittest.TestCase):
     def test_privacy_disabled_toggle_allows_cloud(self):
         spy = _Spy()
         r = _router(privacy_routing=False)
-        r.on_llm_execution(request=req(f"ssn {SSN}"), next_call=spy, session_id="s4",
+        r.on_llm_execution(request=req(f"#privacy ssn {SSN}"), next_call=spy, session_id="s4",
                            base_url="http://127.0.0.1:8317/v1")
         self.assertEqual(spy.calls, 1)  # documents that the guard is what blocks egress
 
@@ -311,7 +508,6 @@ class TestProviderExceptionBoundary(unittest.TestCase):
                     self.assertIs(caught.exception, error)
                     self.assertEqual(len(calls), 1)
                     self.assertIs(calls[0], request)
-                    self.assertEqual(router._private_sessions, set())
 
     def test_disabled_privacy_does_not_classify_or_call_local(self):
         router = _router(privacy_routing=False)
@@ -330,7 +526,7 @@ class TestProviderExceptionBoundary(unittest.TestCase):
             raise RuntimeError("synthetic local failure")
         router._backend = SimpleNamespace(chat=broken_local)
         spy = _Spy()
-        result = router.on_llm_execution(request=req("#private synthetic"), next_call=spy)
+        result = router.on_llm_execution(request=req("#privacy synthetic"), next_call=spy)
         self.assertEqual(spy.calls, 0)
         self.assertTrue(result._model_router_refusal)
 
@@ -340,7 +536,7 @@ class TestProviderExceptionBoundary(unittest.TestCase):
             raise RuntimeError("synthetic guard failure")
         router._local_or_refuse = broken_guard
         spy = _Spy()
-        result = router.on_llm_execution(request=req("#private synthetic"), next_call=spy)
+        result = router.on_llm_execution(request=req("#privacy synthetic"), next_call=spy)
         self.assertEqual(spy.calls, 0)
         self.assertTrue(result._model_router_refusal)
 
@@ -376,7 +572,7 @@ class TestPrivateRefusalIsTerminal(unittest.TestCase):
         r = self._router(factory)
         spy = _Spy()
         with self.assertLogs("hermes.plugin.model_router", level="WARNING") as logs:
-            resp = r.on_llm_execution(request=req(f"#private card {PAN}"), next_call=spy, session_id="inc",
+            resp = r.on_llm_execution(request=req(f"#privacy card {PAN}"), next_call=spy, session_id="inc",
                                       base_url="http://127.0.0.1:8317/v1", model="gpt-5.6-luna")
         self.assertIn("private->refuse (local unavailable: timeout)", "\n".join(logs.output))
         self.assertEqual((spy.calls, spy.bytes), (0, 0), "private payload reached a cloud provider")
@@ -385,18 +581,25 @@ class TestPrivateRefusalIsTerminal(unittest.TestCase):
         self.assertEqual(resp._model_router_refusal_reason, "local-unavailable")
         self.assertEqual(resp.choices[0].finish_reason, "stop")
         self.assertNotIn(PAN, resp.choices[0].message.content)
-        # The next turn in the session (what a fallback restart would send) stays off the cloud.
-        follow = r.on_llm_execution(request=req("ok, try again"), next_call=spy, session_id="inc",
-                                    base_url="http://127.0.0.1:3456/v1", model="opus")
+        # A fallback restart re-sends the same marked turn: it stays off the cloud.
+        retry = r.on_llm_execution(request=req(f"#privacy card {PAN}"), next_call=spy, session_id="inc",
+                                   base_url="http://127.0.0.1:3456/v1", model="opus")
         self.assertEqual(spy.calls, 0)
-        self.assertTrue(follow._model_router_refusal)
+        self.assertTrue(retry._model_router_refusal)
+        # A new unmarked turn is public, but the marked turn is withheld from it.
+        seen = []
+        follow = r.on_llm_execution(request=req(f"#privacy card {PAN}", "ok, write the release notes"),
+                                    next_call=lambda p: seen.append(p) or "CLOUD", session_id="inc",
+                                    base_url="http://127.0.0.1:3456/v1", model="opus")
+        self.assertEqual(follow, "CLOUD")
+        self.assertNotIn(PAN.replace(" ", ""), str(seen).replace(" ", ""))
 
     def test_no_refusal_path_signals_content_filter(self):
         factory, _ = _local_down("timeout")
         cases = {
-            "local-unavailable": (self._router(factory), req(f"ssn {SSN}")),
+            "local-unavailable": (self._router(factory), req(f"#privacy ssn {SSN}")),
             "local-endpoint-not-local": (self._router(factory, ollama_base_url="https://api.example.com/v1"),
-                                         req(f"ssn {SSN}")),
+                                         req(f"#privacy ssn {SSN}")),
             "astra-unauthorized": (self._router(factory, astra_policy="never"),
                                    {"model": "gpt-6-astra", "messages": [{"role": "user", "content": "hi"}]}),
         }
@@ -446,7 +649,7 @@ class TestPrivateRefusalIsTerminal(unittest.TestCase):
             calls.append(received)
             raise error
 
-        request = req(f"ssn {SSN}")
+        request = req(f"#privacy ssn {SSN}")
         with self.assertRaises(TimeoutError) as caught:
             r.on_llm_execution(request=request, next_call=downstream, session_id="off")
         self.assertIs(caught.exception, error)
@@ -489,7 +692,7 @@ def run(privacy, request, terminal):
                                         base_url="http://127.0.0.1:8317/v1", api_mode="chat_completions")
 
 cloud = []
-private = {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "#private card 4242 4242 4242 4242"}]}
+private = {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "#privacy card 4242 4242 4242 4242"}]}
 resp = run(True, private, lambda p: cloud.append(p))
 agent = SimpleNamespace(api_mode="chat_completions", _get_transport=lambda: get_transport("chat_completions"),
                         _should_treat_stop_as_truncated=lambda *a, **k: False)
@@ -499,6 +702,13 @@ out["shape_invalid"] = validate_response_shape(agent, resp)[0]
 out["finish_reason"] = _derive_finish_reason(agent, resp, private["messages"])
 legacy = lb.make_response("x", model="m", finish_reason="content_filter")
 out["legacy_finish_reason"] = _derive_finish_reason(agent, legacy, private["messages"])
+
+sent = []
+later = {"model": "gpt-5.6-luna", "messages": private["messages"] + [
+    {"role": "assistant", "content": "local answer"}, {"role": "user", "content": "now write the notes"}]}
+run(True, later, lambda p: sent.append(p) or lb.make_response("cloud", model="c"))
+out["public_after_private_calls"] = len(sent)
+out["public_after_private_leaks"] = "4242" in json.dumps(sent)
 
 for privacy in (False, True):
     err = TimeoutError("synthetic provider timeout")
@@ -529,6 +739,9 @@ class TestHermesCoreSeam(unittest.TestCase):
         self.assertEqual(out["finish_reason"], "stop")
         # Why the old shape leaked: core routes content_filter to its fallback handler.
         self.assertEqual(out["legacy_finish_reason"], "content_filter")
+        # Not sticky: the next unmarked turn reaches the provider, minus the marked turn.
+        self.assertEqual(out["public_after_private_calls"], 1)
+        self.assertFalse(out["public_after_private_leaks"])
         self.assertEqual(out["exc_privacy_False"], "same")
         self.assertEqual(out["exc_privacy_True"], "same")
 

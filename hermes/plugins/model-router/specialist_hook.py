@@ -20,7 +20,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 
 from . import specialists as sp
 from .local_backend import (
@@ -50,8 +50,6 @@ def specialist_settings(settings: RouterSettings) -> sp.SpecialistSettings:
         require_ready=settings.specialist_require_ready,
         classifier=settings.specialist_classifier,
         profiles_root=Path(root).expanduser() if root else None,
-        private_terms=tuple(settings.private_terms),
-        private_paths=tuple(settings.private_paths),
     )
 
 
@@ -124,12 +122,10 @@ def _message_text(message: Any) -> str:
 
 class SpecialistHook:
     def __init__(self, settings: RouterSettings, *, profile_name: str = "default",
-                 session_private: Optional[Callable[[str], bool]] = None,
                  backend_factory: Optional[BackendFactory] = None) -> None:
         self.settings = specialist_settings(settings)
         self.profile_name = profile_name or "default"
         self.orchestrators = tuple(settings.specialist_orchestrators or ("default",))
-        self._session_private = session_private or (lambda _sid: False)
         self._classifier: Optional[sp.Classifier] = None
         if self.settings.classifier == "local":
             self._classifier = local_classifier(settings, factory=backend_factory)
@@ -142,17 +138,14 @@ class SpecialistHook:
     def active(self) -> bool:
         return self.settings.enabled and self.profile_name in self.orchestrators
 
-    def route(self, text: str, session_id: str = "") -> dict:
-        return sp.route_text(text, self.settings,
-                             session_private=self._session_private(session_id),
-                             classifier=self._classifier)
+    def route(self, text: str) -> dict:
+        return sp.route_text(text, self.settings, classifier=self._classifier)
 
     def on_pre_llm_call(self, **kwargs: Any) -> Optional[dict]:
         if not self.active or kwargs.get("parent_session_id"):
             return None
         try:
-            session_id = str(kwargs.get("session_id") or "")
-            trace = self.route(_message_text(kwargs.get("user_message")), session_id)
+            trace = self.route(_message_text(kwargs.get("user_message")))
             routes = trace.get("routes") or []
             logger.info(
                 "model_router: specialists task=%s privacy=%s tier=%s source=%s routes=%s dropped=%s "

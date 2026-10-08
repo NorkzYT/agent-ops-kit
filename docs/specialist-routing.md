@@ -74,14 +74,16 @@ max 6) drops the lowest scores.
   optional classifier never sees file text (`skipped:attachment`). A document
   the gateway did not inline (large text, PDF, DOCX) is never read for
   routing (`attachment-only`). Typed prose always wins over the file. The
-  privacy scan and the trace hash cover the full raw turn, file included.
-- **Privacy first.** The raw current message, including any quoted or
-  appended text, goes through the privacy guard's deterministic detectors:
-  `#private`/`#local`, ID numbers, cards, bank numbers, secrets, credentials,
-  and your `private_terms`/`private_paths`. A session the guard has already
-  flagged also counts. A private task routes `local-only`. Every cloud-backed
-  profile is dropped and the optional classifier is never called. Only
-  `local-engineer`, which runs on private Ollama, stays eligible.
+  trace hash covers the full raw turn, file included.
+- **Privacy first.** A turn is private only when the sender typed `#privacy`
+  in it — the same per-request check as the privacy guard
+  ([model-routing.md](model-routing.md#privacy-routing)). Quoted, fenced,
+  appended, backfilled or attached text does not count (an upload sent with
+  no typed text is the prompt, so its `#privacy` does), content is never
+  classified, and an earlier private turn does not make this one private. A
+  private task routes `local-only`. Every cloud-backed profile is dropped and
+  the optional classifier is never called. Only `local-engineer`, which runs
+  on private Ollama, stays eligible.
 - **High-risk is advisory.** `health-fitness`, `herbalism`,
   `security-reviewer` and `red-team` always run `short` with only the
   `skills` toolset. That means no terminal, files, web, browser, messages or

@@ -1,10 +1,13 @@
 """Router: task-scoped complexity rewrite (llm_request) + fail-closed privacy
 and Astra budget enforcement (llm_execution).
 
-The privacy handler is the load-bearing security boundary. Errors while
-classifying or routing private traffic must return a local result or refusal,
-never fall through to cloud. Once a provider call is permitted, its exceptions
-propagate unchanged instead of being mislabeled as privacy refusals.
+The privacy handler is the load-bearing security boundary. A request is private
+only when its current user turn carries a sender-authored ``#privacy`` marker
+(``privacy_marker``); there is no content classification and no session
+stickiness. Errors while classifying or routing private traffic must return a
+local result or refusal, never fall through to cloud. Once a provider call is
+permitted, its exceptions propagate unchanged instead of being mislabeled as
+privacy refusals.
 
 Routing decisions come from the CURRENT user task only (``task_intent``), with
 bounded per-session state (``task_state``) so a "continue" retains the running
@@ -19,10 +22,11 @@ import hashlib
 import inspect
 import logging
 from collections import OrderedDict
-from typing import Any, Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional
 
 from . import complexity as cx
 from . import privacy as pv
+from . import privacy_marker as pm
 from . import task_intent as ti
 from .local_backend import (
     LocalBackend,
@@ -176,7 +180,6 @@ class Router:
         # model in the role chain gets its own client on the same endpoint.
         self._backend = backend
         self._backend_factory = backend_factory
-        self._private_sessions: Set[str] = set()
         self._tasks = TaskStateStore(ttl=settings.task_ttl)
         # Request-stage decisions keyed by api_request_id so the execution seam
         # can enforce Astra authorization and correlate outcomes without
@@ -184,28 +187,15 @@ class Router:
         self._decisions: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 
     # ---------------------------------------------------------------- privacy
-    def is_private(self, request: Any, session_id: str) -> pv.PrivacyDecision:
-        """Sticky, fail-closed privacy decision. Any internal error => private."""
+    def is_private(self, request: Any, session_id: str = "") -> pv.PrivacyDecision:
+        """Per-request, fail-closed decision: private only when the current user
+        turn carries ``#privacy``. Nothing is remembered for the session. Any
+        internal error => private."""
         try:
-            if session_id and session_id in self._private_sessions:
-                return pv.PrivacyDecision(True, ("session-sticky",))
-            decision = pv.scan_request(
-                request,
-                private_terms=self.settings.private_terms,
-                private_paths=self.settings.private_paths,
-            )
-            if decision.private and session_id:
-                self._private_sessions.add(session_id)  # keep the session local
-            return decision
+            return pm.decide(request)
         except Exception:  # never let classification failure fall open
-            logger.warning("model_router: privacy scan errored; treating as private")
-            if session_id:
-                self._private_sessions.add(session_id)
+            logger.warning("model_router: privacy marker check errored; treating as private")
             return pv.PrivacyDecision(True, ("classifier-error",))
-
-    def session_is_private(self, session_id: str) -> bool:
-        """True once the privacy guard has flagged this session (sticky)."""
-        return bool(session_id) and session_id in self._private_sessions
 
     def _local_backend(self, model: str) -> Any:
         if self._backend is not None:
@@ -293,6 +283,17 @@ class Router:
                     logger.info("model_router: private detected reasons=%s (no cloud egress)", decision.label)
                     return self._local_or_refuse(request, decision.label,
                                                  role=self.local_role(request, session_id, kwargs))
+                # Public request: earlier #privacy exchanges in the history stay
+                # off the cloud. A withholding error keeps the request local.
+                try:
+                    request, withheld = pm.withhold_marked_history(request)
+                except Exception:
+                    logger.warning("model_router: private-history withholding errored; treating as private")
+                    return self._local_or_refuse(request, "withhold-error",
+                                                 role=self.local_role(request, session_id, kwargs))
+                if withheld:
+                    logger.info("model_router: public request; withheld %d private-history item(s) "
+                                "sid=%s", withheld, _hash8(session_id))
         except Exception:  # privacy failures must never fall open to cloud
             logger.warning("model_router: llm_execution guard tripped; refusing")
             return refusal_response(reason="router-guard")

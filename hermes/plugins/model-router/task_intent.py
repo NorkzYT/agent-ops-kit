@@ -26,6 +26,8 @@ Rules implemented here (all deterministic, no network, no LLM calls):
     the first non-empty line of the current task being exactly ``#max`` or
     ``#astra``. Inline ``#max`` / ``#deep`` / ``#hard`` only *hint* at a hard
     task (Sol at most); they never grant Astra.
+  * A standalone ``#privacy`` line may sit above the control line (the
+    privacy marker itself is checked in ``privacy_marker.py``).
   * Tags inside fenced code blocks or ``>``-quoted lines are inert.
   * Classification never returns the task text — callers get a tier, an
     effort, stable reason labels, and an opaque hash for correlation.
@@ -230,7 +232,7 @@ def genuine_user_text(text: str) -> str:
 
 
 # Responses API item types that are never a user task.
-_SKIP_ITEM_TYPES = {
+SKIP_ITEM_TYPES = {
     "function_call", "function_call_output", "tool_result", "item_reference",
     "reasoning", "web_search_call", "computer_call", "computer_call_output",
     "file_search_call",
@@ -306,7 +308,7 @@ class Decision:
 # --------------------------------------------------------------------------- #
 # Current-task extraction
 # --------------------------------------------------------------------------- #
-def _user_part_texts(content: Any) -> List[str]:
+def user_part_texts(content: Any) -> List[str]:
     """Text parts of a user message; tool_result/image/output parts are skipped."""
     out: List[str] = []
     if isinstance(content, str):
@@ -323,7 +325,7 @@ def _user_part_texts(content: Any) -> List[str]:
     return out
 
 
-def _iter_items(request: Any) -> Iterator[Any]:
+def iter_items(request: Any) -> Iterator[Any]:
     if not isinstance(request, dict):
         return
     for key in ("messages", "input"):
@@ -342,16 +344,16 @@ def extract_current_user_task(request: Any) -> CurrentTask:
     skipping tool results, function-call outputs, assistant/reasoning items and
     anything that only carries non-text parts.
     """
-    for item in reversed(list(_iter_items(request))):
+    for item in reversed(list(iter_items(request))):
         if not isinstance(item, dict):
             continue
-        if item.get("type") in _SKIP_ITEM_TYPES:
+        if item.get("type") in SKIP_ITEM_TYPES:
             continue
         if item.get("role") != "user":
             continue
         if item.get("tool_call_id") or item.get("tool_calls"):
             continue
-        text = "\n".join(t for t in _user_part_texts(item.get("content")) if t).strip()
+        text = "\n".join(t for t in user_part_texts(item.get("content")) if t).strip()
         if text:
             return task_from_text(text)
     return CurrentTask(False, "", "", "", False, False, False)
@@ -394,6 +396,8 @@ def task_from_sender_text(text: str) -> CurrentTask:
         if not stripped:
             continue
         low = stripped.lower()
+        if low == "#privacy":
+            continue  # the privacy marker may sit above the control line
         # Precedence on the single control line: coding force (#opus/#fable)
         # first, then max authorization, then routine force.
         if low in CONTROL_CODING:
@@ -402,7 +406,7 @@ def task_from_sender_text(text: str) -> CurrentTask:
             authorized, control_index = True, i
         elif low in CONTROL_MIN:
             forced, control_index = True, i
-        break  # only the first non-empty line can be a control line
+        break  # only the first non-empty line (after #privacy) can be a control line
     body = "\n".join(l for i, l in enumerate(lines) if i != control_index) if control_index is not None else text
     visible = _strip_quoted(body)
     if not forced and _FORCE_MIN_RE.search(visible):

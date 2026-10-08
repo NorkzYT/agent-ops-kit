@@ -10,12 +10,12 @@ profile's directories (it never opens a book or a skill reference file).
 
 Rules:
 
-  * **Privacy first.** The raw current user message (before provenance
-    stripping, so nothing private hides in a quoted or appended block) and the
-    session-sticky flag are checked with the same deterministic detectors as
-    the privacy guard (``privacy.py``). A private task routes ``local-only``:
-    every cloud-backed specialist is dropped and the optional model classifier
-    is never called. Only profiles declared ``local`` (``local-engineer``) stay
+  * **Privacy first.** The current turn is private only when the sender typed
+    ``#privacy`` in it — the same per-request marker check as the privacy guard
+    (``privacy_marker.turn_is_marked``); there is no content detection and no
+    session stickiness. A private task routes ``local-only``: every
+    cloud-backed specialist is dropped and the optional model classifier is
+    never called. Only profiles declared ``local`` (``local-engineer``) stay
     eligible.
   * **Current task only.** Signals come from ``CurrentTask.visible`` — fenced
     code and ``>``-quoted lines are inert, as are control tags. An inline
@@ -53,6 +53,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 from . import attachments as att
 from . import privacy as pv
+from . import privacy_marker as pm
 from . import task_intent as ti
 
 # A signal is (label, weight, pattern). Strong = 2, weak = 1. A profile is
@@ -400,8 +401,6 @@ class SpecialistSettings:
     require_ready: bool = False            # drop profiles whose knowledge is not ready
     classifier: str = "none"               # none | local (Ollama; non-private, ambiguous only)
     profiles_root: Optional[Path] = None   # None = default_profiles_root()
-    private_terms: Tuple[str, ...] = ()
-    private_paths: Tuple[str, ...] = ()
     unknown: Tuple[str, ...] = field(default_factory=tuple)  # rejected allowlist names
 
 
@@ -440,13 +439,9 @@ def _score(spec: Specialist, visible: str) -> Tuple[int, List[str], bool]:
     return score, labels, strong
 
 
-def _privacy(raw_text: str, settings: SpecialistSettings, session_private: bool) -> pv.PrivacyDecision:
-    if session_private:
-        return pv.PrivacyDecision(True, ("session-sticky",))
+def _privacy(raw_text: str) -> pv.PrivacyDecision:
     try:
-        return pv.scan_request({"messages": [{"role": "user", "content": raw_text}]},
-                               private_terms=settings.private_terms,
-                               private_paths=settings.private_paths)
+        return pm.MARKED if pm.turn_is_marked(raw_text) else pm.PUBLIC
     except Exception:  # fail closed
         return pv.PrivacyDecision(True, ("classifier-error",))
 
@@ -467,7 +462,6 @@ def route_text(
     raw_text: str,
     settings: SpecialistSettings,
     *,
-    session_private: bool = False,
     classifier: Optional[Classifier] = None,
     readiness: Optional[Callable[[str], Readiness]] = None,
 ) -> Dict[str, Any]:
@@ -527,7 +521,7 @@ def route_text(
                 source = "attachment"
     trace["task_source"] = source
 
-    pdec = _privacy(raw_text, settings, session_private)
+    pdec = _privacy(raw_text)
     if pdec.private:
         trace["privacy"] = "local-only"
         trace["privacy_reasons"] = list(pdec.reasons)

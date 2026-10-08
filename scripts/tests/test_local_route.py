@@ -252,7 +252,7 @@ class StubEndpointTest(unittest.TestCase):
         _Ollama.bodies = []
         spy = Spy()
         resp = self._private_router("qwen3.5:27b", "qwen3.6:27b").on_llm_execution(
-            request=req(f"draft a reply to the client, ssn {SSN}"), next_call=spy, session_id="pv1",
+            request=req(f"draft a reply to the client, #privacy ssn {SSN}"), next_call=spy, session_id="pv1",
             base_url="http://127.0.0.1:8317/v1")
         self.assertEqual(spy.calls, 0)
         self.assertEqual(resp.choices[0].message.content, "philosophy")
@@ -274,13 +274,13 @@ class StubEndpointTest(unittest.TestCase):
         self.assertIn("finish_reason=length", str(ctx.exception))
 
         resp = self._private_router("thinker", "qwen3.6:27b").on_llm_execution(
-            request=req(f"ssn {SSN}"), next_call=Spy(), session_id="pv2", base_url="")
+            request=req(f"#privacy ssn {SSN}"), next_call=Spy(), session_id="pv2", base_url="")
         self.assertEqual(resp.choices[0].message.content, "philosophy")  # local fallback model
 
         _Ollama.bodies = []
         spy = Spy()
         resp = self._private_router("thinker", "thinker").on_llm_execution(
-            request=req(f"ssn {SSN}"), next_call=spy, session_id="pv3", base_url="")
+            request=req(f"#privacy ssn {SSN}"), next_call=spy, session_id="pv3", base_url="")
         self.assertEqual(spy.calls, 0, "private request reached a cloud provider")
         self.assertTrue(resp._model_router_refusal)
         self.assertEqual(resp.choices[0].finish_reason, "stop")  # terminal, never content_filter
@@ -319,44 +319,44 @@ class PrivateHierarchyTest(unittest.TestCase):
 
     def test_ordinary_private_task_uses_routine_model(self):
         calls = []
-        resp = self._run(self._router({"qwen3.5:27b": "LOCAL"}, calls), req(f"my ssn is {SSN}, file it"))
+        resp = self._run(self._router({"qwen3.5:27b": "LOCAL"}, calls), req(f"#privacy my ssn is {SSN}, file it"))
         self.assertEqual(resp.choices[0].message.content, "LOCAL")
         self.assertEqual([c[0] for c in calls], ["qwen3.5:27b"])
 
     def test_difficult_private_task_uses_agent_model(self):
         calls = []
-        self._run(self._router({"qwen3.8:27b": "LOCAL"}, calls), req(f"{HARD} ssn {SSN}"))
+        self._run(self._router({"qwen3.8:27b": "LOCAL"}, calls), req(f"{HARD} #privacy ssn {SSN}"))
         self.assertEqual([c[0] for c in calls], ["qwen3.8:27b"])
 
     def test_private_coding_uses_agent_model(self):
         calls = []
-        self._run(self._router({"qwen3.8:27b": "LOCAL"}, calls), req(f"fix it, ssn {SSN}", model="opus"),
+        self._run(self._router({"qwen3.8:27b": "LOCAL"}, calls), req(f"fix it, #privacy ssn {SSN}", model="opus"),
                   base_url="http://127.0.0.1:3456/v1")
         self.assertEqual([c[0] for c in calls], ["qwen3.8:27b"])
 
     def test_role_failure_falls_back_to_local_fallback_model(self):
         calls = []
         resp = self._run(self._router({"qwen3.5:27b": "http", "qwen3.6:27b": "FALLBACK"}, calls),
-                         req(f"ssn {SSN}"))
+                         req(f"#privacy ssn {SSN}"))
         self.assertEqual(resp.choices[0].message.content, "FALLBACK")
         self.assertEqual([c[0] for c in calls], ["qwen3.5:27b", "qwen3.6:27b"])
 
     def test_local_chain_exhausted_refuses_never_cloud(self):
         calls = []
-        resp = self._run(self._router({}, calls), req(f"ssn {SSN}"))
+        resp = self._run(self._router({}, calls), req(f"#privacy ssn {SSN}"))
         self.assertTrue(resp._model_router_refusal)
         self.assertEqual(len(calls), 2)  # bounded: role model + one fallback
 
     def test_endpoint_down_refuses_without_fallback(self):
         calls = []
-        resp = self._run(self._router({"qwen3.5:27b": "connect", "qwen3.6:27b": "OK"}, calls), req(f"ssn {SSN}"))
+        resp = self._run(self._router({"qwen3.5:27b": "connect", "qwen3.6:27b": "OK"}, calls), req(f"#privacy ssn {SSN}"))
         self.assertTrue(resp._model_router_refusal)
         self.assertEqual([c[0] for c in calls], ["qwen3.5:27b"])
 
     def test_non_local_endpoint_is_refused_unsent(self):
         calls = []
         r = self._router({"qwen3.5:27b": "LOCAL"}, calls, ollama_base_url="https://api.example.com/v1")
-        resp = self._run(r, req(f"ssn {SSN}"))
+        resp = self._run(r, req(f"#privacy ssn {SSN}"))
         self.assertTrue(resp._model_router_refusal)
         self.assertIn("local-endpoint-not-local", resp.choices[0].message.content)
         self.assertEqual(calls, [])
@@ -373,7 +373,7 @@ class PrivateHierarchyTest(unittest.TestCase):
         calls = []
         r = self._router({"qwen3.5:27b": "LOCAL"}, calls)
         with self.assertLogs("hermes.plugin.model_router", level="INFO") as logs:
-            self._run(r, req(f"Zorblax account ssn {SSN}"))
+            self._run(r, req(f"Zorblax account #privacy ssn {SSN}"))
         text = "\n".join(logs.output)
         self.assertIn("role=routine model=qwen3.5:27b", text)
         self.assertNotIn("Zorblax", text)
@@ -436,7 +436,7 @@ class PrivatePolicyTest(unittest.TestCase):
                                                               "qwen3.6:27b": "LOCAL"}, calls))
         spy = Spy()
         request = {"model": "gpt-5.6-luna", "messages": history(30_000) + [
-            {"role": "user", "content": f"ssn {SSN}"}]}
+            {"role": "user", "content": f"#privacy ssn {SSN}"}]}
         resp = r.on_llm_execution(request=request, next_call=spy, session_id="pp", base_url="")
         self.assertEqual((spy.calls, resp.choices[0].message.content), (0, "LOCAL"))
         expected, budget = lb.private_chat_policy(request["messages"], base_timeout=s.ollama_timeout)
@@ -496,10 +496,9 @@ class ClassifierGateTest(unittest.TestCase):
 
     def test_private_task_never_reaches_classifier(self):
         called = []
-        for kwargs in ({"session_private": True}, {}):
-            text = NO_MATCH if kwargs else f"{NO_MATCH} #private"
+        for text in (f"{NO_MATCH} #privacy", f"#privacy\n{NO_MATCH}"):
             t = sp.route_text(text, settings(), readiness=ready,
-                              classifier=lambda v, p: called.append(1) or ["philosophy"], **kwargs)
+                              classifier=lambda v, p: called.append(1) or ["philosophy"])
             self.assertEqual(t["classifier"], "skipped:private")
         self.assertEqual(called, [])
 
@@ -560,13 +559,12 @@ class LocalClassifierTest(unittest.TestCase):
         self.assertNotIn("structured way", text)
         self.assertIn("philosophy", out["context"])
 
-    def test_hook_private_session_never_calls_local_classifier(self):
+    def test_hook_private_turn_never_calls_local_classifier(self):
         calls = []
         s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_classifier="local"))
-        h = hook_mod.SpecialistHook(s, session_private=lambda sid: True,
-                                    backend_factory=FakeBackend({"qwen3.5:27b": "philosophy"}, calls))
+        h = hook_mod.SpecialistHook(s, backend_factory=FakeBackend({"qwen3.5:27b": "philosophy"}, calls))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
-            self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=NO_MATCH))
+            self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=f"#privacy {NO_MATCH}"))
         self.assertEqual(calls, [])
 
 

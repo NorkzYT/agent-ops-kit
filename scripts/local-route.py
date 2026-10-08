@@ -172,7 +172,7 @@ def status(args) -> int:
     cfg = router_settings(config)
     out(f"local route status  (HERMES_HOME={home})")
     out(f"  privacy_routing : {cfg.privacy_routing}"
-        + ("" if cfg.privacy_routing else "   WARN: private turns are NOT kept local "
+        + ("" if cfg.privacy_routing else "   WARN: #privacy turns are NOT kept local "
            "(set MODEL_ROUTER_PRIVACY=true)"))
     url = cfg.ollama_base_url
     out(f"  local endpoint  : {url or '(unset)'}  local={'yes' if lb.is_local_endpoint(url) else 'NO'}")
@@ -258,8 +258,7 @@ def probe(args) -> int:
     settings = sp.SpecialistSettings(
         enabled=True, max_profiles=sp.clamp_max(cfg.specialist_max_profiles), allowed=known,
         unknown=unknown, require_ready=cfg.specialist_require_ready, classifier="local",
-        profiles_root=Path(cfg.specialist_profiles_root).expanduser() if cfg.specialist_profiles_root else None,
-        private_terms=tuple(cfg.private_terms), private_paths=tuple(cfg.private_paths))
+        profiles_root=Path(cfg.specialist_profiles_root).expanduser() if cfg.specialist_profiles_root else None)
     if args.no_call:
         classifier = lambda visible, pool: hook.Picks([], {"model": "-", "attempt": 0, "outcome": "not-called"})  # noqa: E731
     else:

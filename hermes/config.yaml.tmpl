@@ -177,8 +177,9 @@ auxiliary:
   # times out or is unreachable, the request is refused/skipped rather than
   # spilled to the main cloud provider. Set true to opt back into cloud fallback
   # for a pinned local endpoint. This NEVER overrides the private-payload guard:
-  # a payload flagged private (#private/#local tags, secrets/credentials) is never
-  # sent to a cloud provider regardless. See docs/model-routing.md (§ Auxiliary work).
+  # a payload flagged private by the core scanner (#private/#local tags,
+  # secrets/credentials) is never sent to a cloud provider regardless. That core
+  # scanner does not recognize the plugin's #privacy marker: keep aux local. See docs/model-routing.md (§ Auxiliary work).
   allow_cloud_fallback: false
   title_generation:
     provider: __AUX_PROVIDER__
@@ -216,12 +217,14 @@ compression:
 # orchestrator, opus/fable for coding; gpt-6-astra ONLY with explicit per-task
 # authorization) + fail-closed privacy routing.
 # Knobs are rendered from MODEL_ROUTER_* in .env; explicit false/never values
-# are preserved. Privacy routing is ENABLED by default: requests with private
-# data never reach a cloud provider (local Ollama, or refuse when local
-# inference is down — it never auto-escalates private data to the cloud).
-# Setting MODEL_ROUTER_PRIVACY=false renders privacy_routing: false here — a
-# deliberate, risky opt-out that disables the guard entirely. When enabled it
-# remains fail-closed. effort_routing rewrites the reasoning-effort fields
+# are preserved. Privacy routing is ENABLED by default: a request whose current
+# user turn carries #privacy never reaches a cloud provider (local Ollama, or
+# refuse when local inference is down — it never auto-escalates to the cloud).
+# Only that per-request marker counts: no content detection, #private/#local
+# inert, no session stickiness; earlier #privacy turns are withheld from later
+# public requests. Setting MODEL_ROUTER_PRIVACY=false renders privacy_routing:
+# false here — a deliberate opt-out that disables the guard (and #privacy)
+# entirely. When enabled it remains fail-closed. effort_routing rewrites the reasoning-effort fields
 # already present on managed orchestrator requests per task (never above the
 # configured ceiling below). astra_policy: task = a leading standalone
 # #max/#astra line in the current user task authorizes gpt-6-astra; always =
@@ -240,8 +243,9 @@ compression:
 # specialist_classifier: local, public tasks with no or only weak keyword
 # matches ask the routine local model for at most two non-high-risk profiles.
 # The specialist_* values and private_terms/private_paths keep what is already
-# in config.yaml when their MODEL_ROUTER_* key is absent from .env. See
-# docs/specialist-routing.md.
+# in config.yaml when their MODEL_ROUTER_* key is absent from .env.
+# private_terms/private_paths no longer affect request routing (#privacy only).
+# See docs/specialist-routing.md.
 plugins:
   enabled:
     - model-router

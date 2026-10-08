@@ -7,12 +7,13 @@ Registers two middleware callbacks with Hermes:
     gpt-6-astra only with explicit per-task authorization; opus/fable for
     delegated coding, effort untouched there).
   * ``llm_execution`` — fail-closed privacy guard plus the Astra budget seam.
-    Requests carrying private data (SSN, PAN, ABA, IBAN, secrets, credentials,
-    ``#private``/``#local``, or configured terms/paths) never reach a cloud
-    provider: they are answered by a local Ollama model or refused. It never
-    raises, so Hermes' fail-open middleware behavior can never route private
-    data to the cloud. Unauthorized max-tier (Astra) requests are refused with
-    a typed response instead of being sent.
+    A request whose current user turn carries a sender-authored ``#privacy``
+    marker never reaches a cloud provider: it is answered by a local Ollama
+    model or refused. The marker is per request (no session stickiness, no
+    content detection); earlier marked exchanges are withheld from later
+    public requests. It never raises, so Hermes' fail-open middleware behavior
+    can never route a marked request to the cloud. Unauthorized max-tier
+    (Astra) requests are refused with a typed response instead of being sent.
 
 Optionally (``specialist_routing: true``, off by default) a ``pre_llm_call``
 hook adds a deterministic specialist-routing note to the orchestrator's
@@ -39,8 +40,7 @@ def register(ctx) -> None:
     ctx.register_middleware("llm_request", router.on_llm_request)
     ctx.register_middleware("llm_execution", router.on_llm_execution)
     profile = str(getattr(ctx, "profile_name", "") or "default")
-    specialists = SpecialistHook(settings, profile_name=profile,
-                                 session_private=router.session_is_private)
+    specialists = SpecialistHook(settings, profile_name=profile)
     if specialists.active:
         ctx.register_hook("pre_llm_call", specialists.on_pre_llm_call)
     register_command = getattr(ctx, "register_command", None)
@@ -48,6 +48,9 @@ def register(ctx) -> None:
         register_command("route-specialists", specialists.dry_run,
                          description="Dry-run the specialist router for a task (nothing dispatched)",
                          args_hint="<task>")
+    if settings.private_terms or settings.private_paths:
+        logger.warning("model_router: private_terms/private_paths are ignored by request routing; "
+                       "only a #privacy marker in the current turn keeps a request local")
     logger.info(
         "model_router registered (privacy=%s complexity=%s local=%s specialists=%s) "
         "local_models=routine:%s,fallback:%s,agent:%s classifier=%s",

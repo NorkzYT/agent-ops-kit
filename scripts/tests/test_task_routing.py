@@ -975,12 +975,18 @@ class TestForcedCodingControl(unittest.TestCase):
     def test_privacy_precedes_forced_coding(self):
         r = make_router()  # no local backend configured -> private refuses
         req = {"model": "fable", "messages": [
-            {"role": "user", "content": "#opus\nreview this #private internal note"}]}
+            {"role": "user", "content": "#opus\nreview this #privacy internal note"}]}
         spy = _Spy()
         resp = r.on_llm_execution(request=req, next_call=spy, session_id="pf",
                                   api_request_id="", base_url=CODE_URL, model="fable")
         self.assertEqual(spy.calls, 0, "private forced-coding must never reach the cloud coding proxy")
         self.assertTrue(getattr(resp, "_model_router_refusal", False))
+
+    def test_privacy_line_may_precede_the_control_line(self):
+        task = task_intent.task_from_text("#privacy\n#opus\nfix the parser")
+        self.assertEqual(task.forced_coding, "opus")
+        self.assertIn("#privacy", task.visible)
+        self.assertTrue(task_intent.task_from_text("#privacy\n#max\nplan it").authorized_max)
 
     # ---- no state bleed ---------------------------------------------------
     def test_forced_coding_does_not_bleed_to_next_task(self):

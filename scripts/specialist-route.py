@@ -18,7 +18,6 @@ Options:
   --max N               route cap (default 4, max 6)
   --allow a,b           allowlist of profiles (default: all book-backed + local-engineer)
   --require-ready       drop profiles whose /learn knowledge skill is missing
-  --private-session     treat the session as already flagged private
   --plan                also print the note the orchestrator would receive
 """
 
@@ -102,7 +101,6 @@ def main(argv=None) -> int:
     ap.add_argument("--max", type=int, default=None)
     ap.add_argument("--allow", default=os.environ.get("ALLOW", ""))
     ap.add_argument("--require-ready", action="store_true")
-    ap.add_argument("--private-session", action="store_true")
     ap.add_argument("--plan", action="store_true")
     args = ap.parse_args(argv)
 
@@ -122,9 +120,8 @@ def main(argv=None) -> int:
         allowed=known, unknown=unknown,
         require_ready=args.require_ready or cfg.specialist_require_ready,
         profiles_root=Path(args.profiles_root).expanduser() if args.profiles_root else None,
-        private_terms=tuple(cfg.private_terms), private_paths=tuple(cfg.private_paths),
     )
-    trace = sp.route_text(text, settings, session_private=args.private_session)
+    trace = sp.route_text(text, settings)
     trace["profiles_root"] = str(settings.profiles_root or sp.default_profiles_root())
     print(json.dumps(trace, indent=2, sort_keys=True))
     print(summary(trace))

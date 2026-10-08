@@ -201,7 +201,7 @@ model it has pulled. Set the three `OLLAMA_*_MODEL` roles to get the hierarchy.
 
 Cloud stays primary for normal work: the orchestrator on CLIProxyAPI
 (luna/terra/sol), coding on claude-max-proxy (opus/fable). The local roles
-answer only private traffic, auxiliary calls pinned to Ollama, the specialist
+answer only `#privacy` turns, auxiliary calls pinned to Ollama, the specialist
 classifier, and the native fallback tail after both cloud providers failed.
 
 **Private traffic (plugin seam).** Hermes' native `fallback_providers` cannot
@@ -280,23 +280,61 @@ A `router-guard` refusal identifies an internal privacy-path failure, not a
 provider timeout. Repository changes require installation and a gateway restart
 to update an already-running plugin instance.
 
-The guard inspects the **entire** outbound request — system prompt, every
-message, and tool results — for private signals:
+### The `#privacy` marker — the only signal
 
-- explicit `#private` / `#local` tags
-- US SSN (area/group/serial validated)
-- Luhn-valid PAN (13–19 digits)
-- ABA routing number (checksum)
-- IBAN (mod-97)
-- private keys, provider secrets (`AKIA…`, `sk-…`, `ghp_…`, Slack, Google…),
-  bearer tokens, generic `key = secret`
-- credential/login pairs and creds-in-URL
-- operator-configured `private_terms` and `private_paths`
+A request is private **only** when the current user turn carries a standalone
+`#privacy` token that the sender typed (anywhere in the text, any case:
+`#privacy`, `#PRIVACY`, `(#privacy)`; not `#privacy-policy` or `foo#privacy`).
+Typing `#privacy` on its own first line still lets a `#max`/`#astra`/`#opus`/
+`#fable`/`#quick` control line follow it.
 
-When a request is private it is **never sent to a cloud provider**. It is
-answered by the local Ollama model, or — if local inference is unavailable —
-**refused**. Once a session is flagged private it stays local for the rest of
-the session. A classifier error is treated as private.
+A marked request is **never sent to a cloud provider**: the local Ollama model
+answers it, or, when local inference is unavailable, it is **refused**. That
+covers every model call of the turn and a Hermes fallback restart of the same
+turn. A check error is treated as private.
+
+Nothing else makes a request private:
+
+- **Not sticky.** Privacy is decided per request from the current turn. The
+  next turn without `#privacy` is public and goes to the normal (cloud) route,
+  in the same session.
+- **No content classification.** ID numbers, card/bank numbers, IBANs,
+  secrets, credentials, private keys, `private_terms` and `private_paths` do
+  not route anything. Type `#privacy` when a turn must stay local.
+- **`#private` / `#local` are inert** (breaking change from plugin 0.4).
+
+Only the sender's own text counts. These never activate the marker: system or
+developer prompts, assistant turns, tool results (including Responses function
+outputs and tool-result parts), earlier user turns, appended memory
+(`<memory-context>`, `--- Attached Context ---`), channel backfill before
+`[New message]`, reply quotes and other prepended gateway blocks, Hermes
+runtime envelopes (delegation results, Kanban wakes, process notices), and
+`>`-quoted or fenced text. In an inline attachment relay only the typed prose
+counts; an upload sent with no typed text is the prompt, so its `#privacy`
+counts, and when the relay boundary cannot be proven the whole sender segment
+is checked (both fail toward local).
+
+**Earlier marked turns stay off the cloud.** On a public request the guard
+withholds every earlier marked exchange (the marked user turn and every item up
+to the next user turn: the local answer, tool calls and results) before it is
+sent: text becomes `[withheld: this earlier turn was marked private and
+answered locally]`, tool-call arguments become `{}`, reasoning items and extra
+fields are dropped, and roles plus tool-call ids/names are kept so provider
+pairing rules hold. The current turn and its own tool loop are untouched. A
+withholding error keeps the request local. Log line: `public request; withheld
+N private-history item(s)`.
+
+Limits (see [Honcho and private sessions](#honcho-and-private-sessions--known-limitation)):
+
+- Only the main-loop LLM call is guarded. Memory providers (Honcho) persist
+  and reason over the transcript on their own route, so derived memories of a
+  marked turn can come back in recalled context.
+- The auxiliary guard in Hermes core (title/compression) still uses its own
+  scanner (`#private`/`#local`, secrets) and does not recognize `#privacy`.
+  Keep `AUX_BASE_URL` local so compression of a session that held a marked
+  turn stays on Ollama.
+- A `#privacy` sent as a mid-turn steer inside a tool result does not move an
+  already-public turn local.
 
 ### Why this is fail-closed
 
@@ -305,8 +343,9 @@ warning and continues to the base cloud path. The guard therefore **never
 raises** — every path returns a local result or a refusal object, and the cloud
 callback (`next_call`) is invoked only for traffic proven public. This was
 verified end-to-end through Hermes' own `run_llm_execution_middleware` dispatch:
-a synthetic-SSN request produced **zero** cloud calls and a refusal; a benign
-request reached the cloud. See `make test-router` (the `TestPrivacyCanary`
+a `#privacy` request produced **zero** cloud calls and a refusal; a benign
+request reached the cloud, and the next unmarked turn reached it without the
+marked turn's content. See `make test-router` (the `TestPrivacyCanary`
 cases assert zero bytes to `:8317` and `:3456`).
 
 A refusal is a **final answer** (`finish_reason: stop`, typed by
@@ -389,19 +428,21 @@ a failed auxiliary request may reach a **cloud** provider:
    Non-outage failures on a local endpoint (a rejected model, an operator's
    explicit `auxiliary.<task>.fallback_chain` hop) keep the documented fallback.
 
-2. **Private payload — never to cloud.** A payload the deterministic scanner
-   flags as private (`#private` / `#local` tags, secrets/credentials, and the
-   operator `MODEL_ROUTER_PRIVATE_TERMS` / `MODEL_ROUTER_PRIVATE_PATHS` signals)
-   is **never** sent to a cloud provider — on the primary call or on fallback —
+2. **Private payload — never to cloud.** A payload the core scanner flags as
+   private (`#private` / `#local` tags, secrets/credentials, and the operator
+   `MODEL_ROUTER_PRIVATE_TERMS` / `MODEL_ROUTER_PRIVATE_PATHS` signals) is
+   **never** sent to a cloud provider — on the primary call or on fallback —
    regardless of `allow_cloud_fallback`. This guard is always on for the
-   auxiliary path and does not depend on `MODEL_ROUTER_PRIVACY`.
+   auxiliary path and does not depend on `MODEL_ROUTER_PRIVACY`. It lives in
+   Hermes core and has not adopted the plugin's `#privacy` policy: it does not
+   recognize `#privacy`, and it still matches content.
 
 Both checks fail closed: an unreadable config or a scanner error denies cloud
 egress. `AUX_PROVIDER=auto` with **no** local `AUX_BASE_URL` keeps its documented
 behavior — public traffic still follows the main provider + fallback policy.
 
 > **`MODEL_ROUTER_PRIVACY=false` is unsafe.** It disables the main-loop privacy
-> guard entirely, so private data in ordinary (non-auxiliary) turns can reach the
+> guard entirely, so a `#privacy` turn (and its later history) can reach the
 > cloud. The auxiliary pre-egress guard above still protects auxiliary calls, but
 > it is **not** a substitute for main-loop privacy routing. Leave
 > `MODEL_ROUTER_PRIVACY=true` in production.
@@ -416,7 +457,7 @@ behavior — public traffic still follows the main provider + fallback policy.
 
 The same plugin can suggest book-backed specialist profiles per task through a
 `pre_llm_call` hook. It is off by default (`specialist_routing`), uses the same
-current-task extraction and privacy detectors, and only runs in the `default`
+current-task extraction and `#privacy` marker check, and only runs in the `default`
 profile. See [specialist-routing.md](specialist-routing.md).
 
 ## Configuration
@@ -429,7 +470,7 @@ and their `.env` fallbacks:
 | Setting | `.env` fallback | Purpose |
 |---------|-----------------|---------|
 | `complexity_routing` | `MODEL_ROUTER_COMPLEXITY` | enable the task-scoped model rewrite (default **true**) |
-| `privacy_routing` | `MODEL_ROUTER_PRIVACY` | the fail-closed guard, **enabled by default**; `MODEL_ROUTER_PRIVACY=false` is a deliberate, risky opt-out that disables it entirely |
+| `privacy_routing` | `MODEL_ROUTER_PRIVACY` | the fail-closed `#privacy` guard, **enabled by default**; `MODEL_ROUTER_PRIVACY=false` is a deliberate, risky opt-out that disables it (and `#privacy`) entirely |
 | `effort_routing` | `MODEL_ROUTER_EFFORT` | per-task reasoning-effort rewrite for managed GPT requests (default **true**; never above the config ceiling) |
 | `astra_policy` | `MODEL_ROUTER_ASTRA` | `task` (default: leading standalone `#max`/`#astra` line authorizes), `always` (legacy allow), `never` |
 | `task_ttl_seconds` | `MODEL_ROUTER_TASK_TTL` | sliding TTL for per-session task state / authorization (default 1800) |
@@ -439,8 +480,8 @@ and their `.env` fallbacks:
 | `ollama_fallback_model` | `OLLAMA_FALLBACK_MODEL` | fallback role (`qwen3.6:27b`); empty = no local fallback |
 | `ollama_agent_model` | `OLLAMA_AGENT_MODEL` | agent role (`qwen3.8:27b`) |
 | `specialist_*` | `MODEL_ROUTER_SPECIALIST*` | specialist router and hybrid classifier ([specialist-routing.md](specialist-routing.md)); presence-aware on `--force` |
-| `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | extra local-only terms (comma-separated; presence-aware on `--force`, never logged) |
-| `private_paths` | `MODEL_ROUTER_PRIVATE_PATHS` | extra local-only path fragments (same rule) |
+| `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | **ignored by request routing** (only `#privacy`); a warning is logged at load when set. Still read by knowledge-classify's offline gate (presence-aware on `--force`, never logged) |
+| `private_paths` | `MODEL_ROUTER_PRIVATE_PATHS` | same as `private_terms` |
 
 All knobs are backwards-compatible: a pre-upgrade config without the new keys
 gets the balanced defaults (effort rewrite on, Astra opt-in per task), and
@@ -511,7 +552,7 @@ Discord turn. Nothing below restarts the gateway except step 6.
    make specialist-status
    ```
 
-7. One real turn each: a `#private` question
+7. One real turn each: a `#privacy` question
    (`make router-logs` shows `private->local ok ... role=routine model=qwen3.5:27b`),
    and an open-ended public question with no clear domain
    (`make specialist-logs` shows `gate=no-match classifier_model=...`).
@@ -553,14 +594,16 @@ confirms tier resolution against the live proxies.
 
 ## Honcho and private sessions — known limitation
 
-Hermes 0.21.2 has **no per-session "private/ephemeral" flag**: the only Honcho
-write gates are global (`save_messages`) or launch-time (`skip_memory`). So a
-plugin cannot, per-turn, stop Honcho from persisting a transcript or deriving
-cloud representations of it. The privacy guard prevents the *orchestrator's*
-cloud LLM calls from leaking private data, but Honcho isolation for a single
-private turn is **not** yet active.
+Hermes 0.21.2 has **no per-turn or per-session "private" memory gate**: the
+only Honcho write gates are global (`save_messages`) or launch-time
+(`skip_memory`). `MemoryManager.sync_all` (called after every completed turn,
+`run_agent.py`) and `prefetch_all`/`queue_prefetch_all` take the turn text with
+no policy hook a plugin can drive. So a `#privacy` turn keeps the main-loop LLM
+call local, but Honcho still persists that turn and may derive cloud
+representations of it, and recalled memories can carry it into later public
+turns. Private Honcho isolation is **not** active.
 
-Proven fail-closed options until a core per-session hook exists:
+Fail-closed options until a core gate exists:
 
 - Run private work under a Hermes **profile with memory disabled**
   (`memory.provider` unset / `memory_enabled: false`), or
@@ -568,9 +611,29 @@ Proven fail-closed options until a core per-session hook exists:
   transcript-derived reasoning leaves the host, or
 - Globally set `save_messages: false` for private operating periods.
 
-This is tracked as a follow-up: add a memory-provider `should_persist(session)`
-gate the plugin can drive. **Do not treat private Honcho isolation as active
-until that lands.**
+### Pending design: private specialists and private memory (not implemented)
+
+Neither exists yet. Blockers and the proposed shape, for review before any
+build:
+
+1. **Memory gate (Hermes core).** Add a plugin-drivable per-turn policy, for
+   example a `memory_policy(session_id, user_message) -> "default" | "skip" |
+   "local"` hook, consulted by `sync_all`, `prefetch_all`,
+   `queue_prefetch_all` and `on_pre_compress`. model-router answers `local`
+   for a turn where `privacy_marker.turn_is_marked` is true.
+2. **Local Honcho.** A separate self-hosted Honcho workspace whose deriver and
+   dialectic models are on Ollama, used only for `local` turns, with no
+   cross-reads from the cloud-backed workspace. Until (1) exists, `skip` is
+   the only safe action.
+3. **Private specialists.** Today a private turn is answer-only (the local
+   model gets no tools), so it cannot create a Kanban task or delegate. A
+   private specialist needs: a tool-capable local path; profile variants whose
+   main, auxiliary and memory routes are all local (as `local-engineer` is
+   for the model); Kanban cards and delegation briefs that never reach a cloud
+   model or the shared board in clear text; and the gate in (1) for the
+   specialist's own memory.
+4. **Aux guard.** The core auxiliary guard must recognize `#privacy`
+   (it matches `#private`/`#local` and content today).
 
 ## Verify
 

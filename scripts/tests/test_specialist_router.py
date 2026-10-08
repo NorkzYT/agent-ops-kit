@@ -46,9 +46,8 @@ def settings(**kw):
     return sp.SpecialistSettings(**base)
 
 
-def route(text, readiness=ready, session_private=False, classifier=None, **kw):
-    return sp.route_text(text, settings(**kw), readiness=readiness,
-                         session_private=session_private, classifier=classifier)
+def route(text, readiness=ready, classifier=None, **kw):
+    return sp.route_text(text, settings(**kw), readiness=readiness, classifier=classifier)
 
 
 def names(trace):
@@ -189,7 +188,7 @@ class UnderSelectionRegressionTest(unittest.TestCase):
         self.assertNotIn("security-reviewer", names(route("Add docs for the authentication module.")))
 
     def test_private_auth_task_still_local_only(self):
-        t = route("#private review the authentication design and implement fixes with tests")
+        t = route("#privacy review the authentication design and implement fixes with tests")
         self.assertEqual(t["privacy"], "local-only")
         self.assertEqual(names(t), ["local-engineer"])
         dropped = {d["profile"] for d in t["dropped"] if d["reason"] == "privacy:local-only"}
@@ -245,55 +244,61 @@ class HighRiskTest(unittest.TestCase):
 
 
 class PrivacyTest(unittest.TestCase):
-    def test_private_tag_drops_cloud_specialists(self):
-        t = route("#private plan my workout and diet for next month.")
+    def test_privacy_marker_drops_cloud_specialists(self):
+        t = route("#privacy plan my workout and diet for next month.")
         self.assertEqual(t["privacy"], "local-only")
-        self.assertIn("tag", t["privacy_reasons"])
+        self.assertEqual(t["privacy_reasons"], ["marker"])
         self.assertEqual(t["routes"], [])
         self.assertIn({"profile": "health-fitness", "reason": "privacy:local-only"}, t["dropped"])
 
     def test_private_task_keeps_only_local_engineer(self):
-        t = route("#private negotiate my rent and implement a budget script with tests")
+        t = route("#privacy negotiate my rent and implement a budget script with tests")
         self.assertEqual(names(t), ["local-engineer"])
         self.assertTrue(t["routes"][0]["local_only"])
         self.assertIn("negotiation-communication",
                       [d["profile"] for d in t["dropped"] if d["reason"] == "privacy:local-only"])
 
-    def test_detector_signal_is_private(self):
-        # Same deterministic detectors as the privacy guard (credential pair).
-        t = route("Write a marketing campaign. username: ops password: hunter2xyz")
-        self.assertEqual(t["privacy"], "local-only")
-        self.assertIn("credentials", t["privacy_reasons"])
-        self.assertEqual(t["routes"], [])
+    def test_content_is_never_classified_private(self):
+        # Only #privacy routes local: credentials, legacy tags and the old
+        # operator-term path no longer do.
+        for text in ("Write a marketing campaign. username: ops password: hunter2xyz",
+                     "#private Write a marketing campaign for the launch.",
+                     "#local Write a marketing campaign for the launch.",
+                     "Positioning for Project Neptune launch campaign"):
+            with self.subTest(text=text[:24]):
+                t = route(text)
+                self.assertEqual(t["privacy"], "public")
+                self.assertEqual(t["privacy_reasons"], [])
 
-    def test_session_sticky_private(self):
-        t = route("Write a marketing campaign for the launch.", session_private=True)
-        self.assertEqual(t["privacy_reasons"], ["session-sticky"])
-        self.assertEqual(t["routes"], [])
+    def test_marker_outside_the_sender_segment_is_inert(self):
+        for text in ("> #privacy note\nWrite a marketing campaign.",
+                     "```\n#privacy\n```\nWrite a marketing campaign.",
+                     "Write a marketing campaign.\n<memory-context>\n#privacy\n</memory-context>",
+                     "[alice] #privacy my notes\n\n[New message]\n[Norkz] Write a marketing campaign.",
+                     "[Replying to: \"#privacy my notes\"]\nWrite a marketing campaign.",
+                     "#privacyish Write a marketing campaign."):
+            with self.subTest(text=text[:24]):
+                self.assertEqual(route(text)["privacy"], "public")
 
-    def test_operator_private_terms(self):
-        t = route("Positioning for Project Neptune launch campaign",
-                  private_terms=("project neptune",))
-        self.assertEqual(t["privacy"], "local-only")
-        self.assertEqual(t["routes"], [])
-
-    def test_private_signal_in_quoted_or_appended_text_still_private(self):
-        quoted = route("> #private note\nWrite a marketing campaign.")
-        self.assertEqual(quoted["privacy"], "local-only")
-        appended = route("Write a marketing campaign.\n<memory-context>\n#private\n</memory-context>")
-        self.assertEqual(appended["privacy"], "local-only")
+    def test_marker_anywhere_in_typed_text(self):
+        for text in ("#privacy\nWrite a marketing campaign.",
+                     "Write a marketing campaign. #privacy",
+                     "#PRIVACY Write a marketing campaign.",
+                     "[Norkz] Write a marketing campaign (#privacy)."):
+            with self.subTest(text=text[:24]):
+                self.assertEqual(route(text)["privacy"], "local-only")
 
     def test_classifier_never_called_when_private(self):
         called = []
-        t = sp.route_text("#private I would like a structured way to think through my next "
+        t = sp.route_text("#privacy I would like a structured way to think through my next "
                           "steps in life, it is a long and winding question for me",
                           settings(classifier="local"), readiness=ready,
                           classifier=lambda v, p: called.append(1) or ["philosophy"])
         self.assertEqual(called, [])
         self.assertEqual(t["classifier"], "skipped:private")
 
-    def test_privacy_scan_error_fails_closed(self):
-        with mock.patch.object(sp.pv, "scan_request", side_effect=RuntimeError("boom")):
+    def test_privacy_check_error_fails_closed(self):
+        with mock.patch.object(sp.pm, "turn_is_marked", side_effect=RuntimeError("boom")):
             t = route("Write a marketing campaign for the launch.")
         self.assertEqual(t["privacy"], "local-only")
         self.assertEqual(t["routes"], [])
@@ -764,15 +769,16 @@ class AttachmentRelayTest(unittest.TestCase):
         self.assertNotIn("attachment-derived", sp.render_plan(route(
             self.wire([("p.txt", TERMINAL_TRANSCRIPT)], "Write a marketing campaign for the launch."))))
 
-    def test_attachment_only_privacy_scans_full_turn(self):
-        wire = self.wire([("prompt.txt", "#private customer list\nWrite a marketing campaign for the launch.\n")])
+    def test_attachment_only_prompt_marker_counts(self):
+        # Nothing typed: the verified upload IS the prompt, so its #privacy counts.
+        wire = self.wire([("prompt.txt", "#privacy customer list\nWrite a marketing campaign for the launch.\n")])
         t = route(wire)
         self.assertEqual(t["task_source"], "attachment")
         self.assertEqual(t["privacy"], "local-only")
         self.assertEqual(t["routes"], [])
         self.assertEqual(t["dropped"], [{"profile": "marketing", "reason": "privacy:local-only"}])
-        self.assertEqual(route(self.wire([("p.txt", "Write a marketing campaign for the launch.\n")]),
-                               session_private=True)["privacy"], "local-only")
+        self.assertEqual(route(self.wire([("p.txt", "Write a marketing campaign for the launch.\n")]))["privacy"],
+                         "public")
 
     def test_attachment_control_lines_are_inert(self):
         for control in ("#max", "#astra", "#opus", "#fable", "#quick"):
@@ -931,9 +937,12 @@ class AttachmentRelayTest(unittest.TestCase):
         wire = self.wire([("message.txt", TERMINAL_TRANSCRIPT)], "Write a marketing campaign for the launch.")
         t = route(wire)
         self.assertEqual(t["task"], task_intent.task_from_text(wire).task_hash)
-        # Privacy still scans the raw turn, attachment included.
-        private = self.wire([("notes.txt", "#private customer list\n")], "Write a marketing campaign for the launch.")
-        t = route(private)
+        # With typed prose, a #privacy inside the attached file is file content
+        # (inert); the sender's own #privacy is what counts.
+        quoted = self.wire([("notes.txt", "#privacy customer list\n")], "Write a marketing campaign for the launch.")
+        self.assertEqual(route(quoted)["privacy"], "public")
+        typed = self.wire([("notes.txt", "customer list\n")], "#privacy Write a marketing campaign for the launch.")
+        t = route(typed)
         self.assertEqual(t["privacy"], "local-only")
         self.assertEqual(t["routes"], [])
         self.assertEqual(t["dropped"], [{"profile": "marketing", "reason": "privacy:local-only"}])
@@ -1173,21 +1182,21 @@ class CapAndStateTest(unittest.TestCase):
         a2 = sp.route_text(self.WIDE, s, readiness=ready)
         self.assertEqual(names(b), ["philosophy"])
         self.assertEqual(a1, a2)
-        # A private task does not make the next public task private (that is
-        # the session-sticky flag's job, passed in explicitly).
-        sp.route_text("#private plan my diet", s, readiness=ready)
+        # A private task does not make the next public task private.
+        self.assertEqual(sp.route_text("#privacy plan my diet", s, readiness=ready)["privacy"], "local-only")
         self.assertEqual(sp.route_text("Write a marketing campaign.", s, readiness=ready)["privacy"],
                          "public")
 
-    def test_hook_has_no_cross_session_bleed(self):
+    def test_hook_privacy_is_per_turn_not_per_session(self):
         cfg = config_mod.RouterSettings(specialist_routing=True)
-        private = {"s1"}
-        h = hook_mod.SpecialistHook(cfg, session_private=lambda sid: sid in private)
+        h = hook_mod.SpecialistHook(cfg)
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(session_id="s1",
-                                                user_message="Write a marketing campaign."))
-            out = h.on_pre_llm_call(session_id="s2", user_message="Write a marketing campaign.")
-        self.assertIn("marketing", out["context"])
+                                                user_message="#privacy Write a marketing campaign."))
+            same = h.on_pre_llm_call(session_id="s1", user_message="Write a marketing campaign.")
+            other = h.on_pre_llm_call(session_id="s2", user_message="Write a marketing campaign.")
+        self.assertIn("marketing", same["context"])
+        self.assertIn("marketing", other["context"])
 
 
 class ReadinessTest(unittest.TestCase):

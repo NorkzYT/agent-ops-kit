@@ -85,9 +85,10 @@ def make_response(content: str, *, model: str, finish_reason: str = "stop") -> S
 
 
 DEFAULT_REFUSAL = (
-    "This request was classified as private and no local model is available to "
-    "handle it, so it was not sent to any cloud provider. Connect a local Ollama "
-    "chat model (see docs/model-routing.md) or remove the private data to proceed."
+    "This request was kept local (it was marked #privacy, or the privacy guard "
+    "could not prove it public) and no local model is available to handle it, so "
+    "it was not sent to any cloud provider. Connect a local Ollama chat model (see "
+    "docs/model-routing.md), or resend without #privacy to use the cloud."
 )
 
 

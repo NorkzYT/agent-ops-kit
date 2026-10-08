@@ -136,11 +136,11 @@ export AUX_COMPRESSION_EFFORT AUX_COMPRESSION_EXTRA_BODY AUX_COMPRESSION_TIMEOUT
   COMPRESSION_IDLE_SECONDS COMPRESSION_CEILING_SECONDS
 # model-router plugin knobs. Both default to true when unset in .env:
 #   - complexity_routing: rewrite each request to the cheapest model that fits.
-#   - privacy_routing:     the fail-closed guard that keeps private data off every
-#     cloud provider (local Ollama or refuse). Setting MODEL_ROUTER_PRIVACY=false
-#     is a deliberate, risky opt-out that disables that guard entirely; leave it
-#     on unless you fully understand the tradeoff. When on, it stays fail-closed:
-#     a private request never auto-escalates to the cloud on a local outage.
+#   - privacy_routing:     the fail-closed guard that keeps a #privacy-marked
+#     request off every cloud provider (local Ollama or refuse). Setting
+#     MODEL_ROUTER_PRIVACY=false is a deliberate opt-out that disables the guard
+#     (and #privacy) entirely. When on, it stays fail-closed: a marked request
+#     never auto-escalates to the cloud on a local outage.
 # Explicit false is preserved verbatim (not forced back to true by --force).
 MODEL_ROUTER_COMPLEXITY="$(getenv MODEL_ROUTER_COMPLEXITY true)"; export MODEL_ROUTER_COMPLEXITY
 MODEL_ROUTER_PRIVACY="$(getenv MODEL_ROUTER_PRIVACY true)"; export MODEL_ROUTER_PRIVACY
@@ -209,8 +209,8 @@ router_knob MODEL_ROUTER_SPECIALIST_REQUIRE_READY specialist_require_ready false
 router_knob MODEL_ROUTER_SPECIALIST_CLASSIFIER specialist_classifier none classifier
 router_knob MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT specialist_classifier_timeout 10 seconds
 router_knob MODEL_ROUTER_SPECIALIST_PROFILES specialist_profiles "" list
-# Operator privacy signals follow the same rule, so --force never wipes terms
-# set in config.yaml. Values are never logged.
+# Legacy privacy terms/paths follow the same rule, so --force never wipes them.
+# Request routing ignores them (#privacy only). Values are never logged.
 router_knob MODEL_ROUTER_PRIVATE_TERMS private_terms "" list
 router_knob MODEL_ROUTER_PRIVATE_PATHS private_paths "" list
 log "specialist_routing=$MODEL_ROUTER_SPECIALISTS ($MODEL_ROUTER_SPECIALISTS_SOURCE)" \

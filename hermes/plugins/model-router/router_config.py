@@ -80,7 +80,9 @@ class RouterSettings:
     ollama_routine_model: str = ""
     ollama_fallback_model: str = ""
     ollama_agent_model: str = ""
-    # Operator-configured private signals.
+    # Legacy content signals. Request routing ignores them (only a #privacy
+    # marker makes a request private); kept so existing configs still load.
+    # knowledge-classify reads MODEL_ROUTER_PRIVATE_* for its offline gate.
     private_terms: List[str] = field(default_factory=list)
     private_paths: List[str] = field(default_factory=list)
     # Live-available model ids (kept in sync by the probe); empty = trust config.

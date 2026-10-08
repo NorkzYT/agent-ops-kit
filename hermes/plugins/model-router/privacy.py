@@ -1,4 +1,10 @@
-"""Deterministic private-data detection for the model-router plugin.
+"""Deterministic private-data content scanner (offline tooling only).
+
+Request routing does NOT use this module's detectors: a live request is
+private only when its current user turn carries ``#privacy``
+(``privacy_marker.py``). ``scan_request`` remains for offline tooling under
+``scripts/``, which loads this file standalone, so it must stay
+dependency-free. :class:`PrivacyDecision` is shared with the marker check.
 
 Pure, dependency-free, side-effect-free: given the outbound provider request
 (system + messages + tool results) it returns a :class:`PrivacyDecision`. It

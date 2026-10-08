@@ -42,14 +42,19 @@ Two Hermes middleware behaviors in one bundled plugin:
   streaming response logs `stream-opened` (completion unobserved) rather than
   a fabricated `completed`, and is returned unconsumed.
 
-- **Privacy routing** (`llm_execution`) — **fail-closed**. If the outbound
-  request (system + messages + tool results) carries private data, it is never
-  sent to a cloud provider: it is answered by a local Ollama model or refused.
-  Signals: `#private`/`#local` tags, US SSN, Luhn-valid PAN, ABA routing number,
-  IBAN, private keys / provider secrets / bearer tokens, credential pairs, and
-  operator-configured terms/paths. Once a session is flagged private it stays
-  local. Classifier errors are treated as private. The handler never raises, so
-  Hermes' fail-open middleware path can never leak private data to the cloud.
+- **Privacy routing** (`llm_execution`) — **per-request `#privacy` marker,
+  fail-closed**. A request whose current user turn carries a standalone
+  `#privacy` typed by the sender is never sent to a cloud provider: it is
+  answered by a local Ollama model or refused. That marker is the only signal:
+  content is not classified (ID/card/bank numbers, secrets, credentials and
+  `private_terms`/`private_paths` route nothing), `#private`/`#local` are inert,
+  and there is no session stickiness — the next unmarked turn is public. The
+  marker never comes from system prompts, recalled memory, channel backfill,
+  reply quotes, tool results, quoted/fenced text or an attached file (unless
+  the upload is the whole prompt). Earlier marked exchanges are withheld from
+  later public requests (placeholder text; tool-call ids kept). Check errors
+  are treated as private. The handler never raises, so Hermes' fail-open
+  middleware path can never send a marked request to the cloud.
   The local answer comes from an explicit role on the same endpoint: the
   **routine** model for ordinary turns, the **agent** model for high/max-tier
   turns, delegated coding and `#opus`/`#fable`; the **fallback** model is tried
@@ -89,8 +94,8 @@ plugins:
         ollama_routine_model: "qwen3.5:27b"             # ordinary private turns + classifier
         ollama_fallback_model: "qwen3.6:27b"            # tried once after a role-model failure
         ollama_agent_model: "qwen3.8:27b"               # difficult private turns + private coding
-        private_terms: []                               # extra local-only terms
-        private_paths: []                               # extra local-only path fragments
+        private_terms: []                               # ignored by routing (#privacy only)
+        private_paths: []                               # ignored by routing (#privacy only)
         available_gpt_models: []                        # optional probe cache
         available_coding_models: []
         specialist_routing: false        # pilot; docs/specialist-routing.md
