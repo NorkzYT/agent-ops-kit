@@ -94,8 +94,15 @@ class RouterSettings:
     specialist_max_profiles: int = 4
     specialist_profiles: List[str] = field(default_factory=list)   # allowlist; empty = all
     specialist_require_ready: bool = False
-    specialist_classifier: str = "none"                            # none | local (Ollama)
+    specialist_classifier: str = "none"                            # none | local (Ollama) | cliproxy
     specialist_classifier_timeout: float = 10.0                    # total seconds, both models
+    # cliproxy classifier: CLIProxyAPI (OpenAI-compatible, ChatGPT subscription).
+    # '' base URL = $CLIPROXY_BASE_URL or http://127.0.0.1:$CLIPROXY_PORT/v1;
+    # the key is read from the environment variable named here, never config.
+    specialist_classifier_model: str = "gpt-5.6-terra"
+    specialist_classifier_effort: str = "medium"                   # minimal | low | medium | high
+    specialist_classifier_base_url: str = ""
+    specialist_classifier_key_env: str = "CLIPROXY_API_KEY"
     specialist_orchestrators: List[str] = field(default_factory=lambda: ["default"])
     specialist_profiles_root: str = ""                             # '' = $HERMES_HOME/profiles
 
@@ -112,10 +119,27 @@ class RouterSettings:
         model, de-duplicated (at most two entries, same endpoint)."""
         return [m for m in dict.fromkeys((self.local_model(role), self.ollama_fallback_model)) if m]
 
+    def cliproxy_base_url(self) -> str:
+        """CLIProxyAPI base URL for the cliproxy specialist classifier."""
+        explicit = (self.specialist_classifier_base_url or os.environ.get("CLIPROXY_BASE_URL", "")).strip()
+        if explicit:
+            return explicit.rstrip("/")
+        port = os.environ.get("CLIPROXY_PORT", "").strip() or "8317"
+        return f"http://127.0.0.1:{port}/v1"
+
+
+CLASSIFIERS = ("none", "local", "cliproxy")
+CLASSIFIER_EFFORTS = ("minimal", "low", "medium", "high")
+
 
 def _classifier(raw: Any) -> str:
     value = str(raw or "").strip().lower()
-    return value if value in ("none", "local") else "none"
+    return value if value in CLASSIFIERS else "none"
+
+
+def _effort(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in CLASSIFIER_EFFORTS else "medium"
 
 
 def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterSettings:
@@ -155,6 +179,15 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         specialist_classifier=_classifier(val("specialist_classifier", "MODEL_ROUTER_SPECIALIST_CLASSIFIER", "none")),
         specialist_classifier_timeout=_seconds(val("specialist_classifier_timeout",
                                                    "MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT", 10.0), 10.0),
+        specialist_classifier_model=str(val("specialist_classifier_model", "MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL",
+                                            "gpt-5.6-terra") or "gpt-5.6-terra").strip(),
+        specialist_classifier_effort=_effort(val("specialist_classifier_effort",
+                                                 "MODEL_ROUTER_SPECIALIST_CLASSIFIER_EFFORT", "medium")),
+        specialist_classifier_base_url=str(val("specialist_classifier_base_url",
+                                               "MODEL_ROUTER_SPECIALIST_CLASSIFIER_BASE_URL", "") or "").strip(),
+        specialist_classifier_key_env=str(val("specialist_classifier_key_env",
+                                              "MODEL_ROUTER_SPECIALIST_CLASSIFIER_KEY_ENV",
+                                              "CLIPROXY_API_KEY") or "CLIPROXY_API_KEY").strip(),
         specialist_orchestrators=_split(val("specialist_orchestrators", "MODEL_ROUTER_SPECIALIST_ORCHESTRATORS", ["default"])) or ["default"],
         specialist_profiles_root=str(val("specialist_profiles_root", "MODEL_ROUTER_SPECIALIST_PROFILES_ROOT", "") or ""),
     )

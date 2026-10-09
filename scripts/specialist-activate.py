@@ -401,8 +401,8 @@ def desired(args, current: Dict[str, Any], enable: bool) -> Dict[str, Any]:
     if args.require_ready is not None:
         want["specialist_require_ready"] = args.require_ready
     if args.classifier is not None:
-        if args.classifier not in ("none", "local"):
-            raise Fail("--classifier must be none or local")
+        if args.classifier not in ("none", "local", "cliproxy"):
+            raise Fail("--classifier must be none, local or cliproxy")
         want["specialist_classifier"] = args.classifier
     if args.profiles is not None:
         names = [] if args.profiles.strip() in ("", "all") else args.profiles.split(",")
@@ -443,6 +443,10 @@ def apply(args, enable: bool, label: str) -> int:
         if want["specialist_classifier"] == "local" and len(read_settings(h, OLLAMA_KEYS)) < 2:
             warn("classifier local needs ollama_base_url and ollama_model in the plugin settings; "
                  "until then it never suggests anything")
+        if want["specialist_classifier"] == "cliproxy":
+            warn("classifier cliproxy sends public turns that reach the classifier (typed task plus "
+                 "verified attachments) to CLIProxyAPI; it needs CLIPROXY_API_KEY in the gateway "
+                 "environment (~/.hermes/.env) and never runs for #privacy turns")
 
     dest = home / "plugins" / PLUGIN
     changed = plugin_diff(dest) if enable else []
@@ -561,7 +565,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     rr = ap.add_mutually_exclusive_group()
     rr.add_argument("--require-ready", dest="require_ready", action="store_true", default=None)
     rr.add_argument("--no-require-ready", dest="require_ready", action="store_false")
-    ap.add_argument("--classifier", default=None, help="none | local")
+    ap.add_argument("--classifier", default=None, help="none | local | cliproxy")
     ap.add_argument("--profiles", default=None, help="allowlist a,b,c (all = every profile)")
     ap.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
     ap.add_argument("--yes", action="store_true", help="enable: restart without asking")

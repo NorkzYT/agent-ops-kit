@@ -8,10 +8,11 @@ local (Ollama) model roles of the model-router plugin.
   catalog   Read-only. Models on the local endpoint: capabilities (tools,
             thinking), size, quantization, which one is loaded, which role uses it.
   probe     Dry-run of the hybrid specialist router for one task with the LIVE
-            local classifier: keywords first, the classifier only for a public
-            task with no or only weak keyword matches. Prints the content-free
-            trace (no task text) and the classifier model/outcome. Nothing is
-            dispatched or written. --no-call shows the gate without calling.
+            classifier (local, or --classifier cliproxy): keywords first, the
+            classifier only for a public task with no or only weak keyword
+            matches. Prints the content-free trace (no task text) and the
+            classifier model/outcome. Nothing is dispatched or written.
+            --no-call shows the gate without calling.
   readback  Renders what the installer would write now (hermes-install.sh
             --render-only, temp file) and compares it with the live config as
             Hermes resolves both (hermes-native-check.py in the Hermes venv),
@@ -20,7 +21,8 @@ local (Ollama) model roles of the model-router plugin.
 Never reads secrets, never prints private_terms/private_paths, never restarts
 anything. Metadata calls (/v1/models, /api/tags, /api/ps, /api/show) go only to
 the configured local endpoint; probe sends the task text only to that endpoint
-and only when the router allows the classifier.
+(or, with --classifier cliproxy, to CLIProxyAPI using CLIPROXY_API_KEY from the
+shell environment) and only when the router allows the classifier.
 
 Environment: HERMES_HOME (default ~/.hermes), HERMES_AGENT_DIR (default
 $HERMES_HOME/hermes-agent), ENV_FILE (default .env, read for readback only
@@ -252,15 +254,18 @@ def probe(args) -> int:
         cfg.ollama_fallback_model = args.fallback_model
     if args.timeout:
         cfg.specialist_classifier_timeout = args.timeout
+    kind = args.classifier or ("cliproxy" if cfg.specialist_classifier == "cliproxy" else "local")
     sp = plugin("specialists")
     hook = plugin("specialist_hook")
     known, unknown = sp.split_allowed(cfg.specialist_profiles)
     settings = sp.SpecialistSettings(
         enabled=True, max_profiles=sp.clamp_max(cfg.specialist_max_profiles), allowed=known,
-        unknown=unknown, require_ready=cfg.specialist_require_ready, classifier="local",
+        unknown=unknown, require_ready=cfg.specialist_require_ready, classifier=kind,
         profiles_root=Path(cfg.specialist_profiles_root).expanduser() if cfg.specialist_profiles_root else None)
     if args.no_call:
         classifier = lambda visible, pool: hook.Picks([], {"model": "-", "attempt": 0, "outcome": "not-called"})  # noqa: E731
+    elif kind == "cliproxy":
+        classifier = hook.cliproxy_classifier(cfg)
     else:
         classifier = hook.local_classifier(cfg)
     started = time.monotonic()
@@ -278,7 +283,9 @@ def probe(args) -> int:
         f"model {detail.get('model', '-')}  outcome {detail.get('outcome', '-')}  {elapsed} ms")
     out("routes: " + (", ".join(f"{r['profile']}({','.join(r['reasons'])})" for r in trace["routes"]) or "none"))
     if not classifier:
-        out("classifier unavailable: needs ollama_base_url on a local endpoint and a routine model")
+        out("classifier unavailable: " + ("needs CLIPROXY_API_KEY in this shell's environment"
+                                          if kind == "cliproxy" else
+                                          "needs ollama_base_url on a local endpoint and a routine model"))
     return 0
 
 
@@ -352,6 +359,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     c.add_argument("--json", action="store_true")
     p = sub.add_parser("probe")
     p.add_argument("task", nargs="?", default=None, help="task text, - for stdin (default $TASK)")
+    p.add_argument("--classifier", choices=("local", "cliproxy"), default="",
+                   help="classifier to probe (default: cliproxy when that is live, else local)")
     p.add_argument("--no-call", action="store_true", help="show the gate; do not call the classifier")
     p.add_argument("--model", default="", help="routine model for this probe only")
     p.add_argument("--fallback-model", default=None, help="fallback model for this probe only ('' = none)")

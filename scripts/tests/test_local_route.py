@@ -668,6 +668,13 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_max_profiles"), "0")
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_classifier"), "none")
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_profiles"), "")
+        r = self.install("MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy\n", "--force", live=LIVE_CONFIG)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.specialist_classifier"), "cliproxy")
+        r = self.install("", "--force", live=LIVE_CONFIG.replace("specialist_classifier: local",
+                                                                 "specialist_classifier: cliproxy"))
+        self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.specialist_classifier"), "cliproxy")
+        self.assertIn("classifier=cliproxy (live config)", r.stdout)
         live_off = LIVE_CONFIG.replace("specialist_routing: true", "specialist_routing: false")
         r = self.install("MODEL_ROUTER_SPECIALISTS=yes\n", "--force", live=live_off)
         self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.specialist_routing"), "true")
