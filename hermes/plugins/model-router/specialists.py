@@ -31,8 +31,13 @@ Rules:
     (large text, PDF, DOCX), read or extracted locally and bounded
     (``attachments.read_documents``). Each document is delimited as data;
     control tags in it are removed, and a document carrying wire/runtime
-    text, a privacy marker or a routing note is withheld. Keywords never
-    score attachment text when the sender typed something.
+    text, a privacy marker or a routing note is withheld.
+  * **Attachment signals.** The same verified, cleaned documents also score
+    keywords (:func:`attachment_signals`, ``att:<label>`` reasons) for a
+    public turn: a profile is added on at least one strong signal, never a
+    high-risk or local one, and a document carrying router diagnostics
+    scores nothing. Typed evidence ranks first, then attachment evidence,
+    then the classifier's additions; the cap applies to the combined list.
   * **High-risk profiles are advisory.** ``health-fitness``, ``herbalism``,
     ``security-reviewer`` and ``red-team`` are routed review/advice only: no
     tool action with external or high-impact effect. The optional classifier
@@ -43,8 +48,9 @@ Rules:
     (``hermes -p <profile> -z <brief> -t skills``) for one bounded answer.
     The specialist loads its own ``/learn`` knowledge skill on demand; no book
     or skill content is ever put into the orchestrator prompt.
-  * **Bounded.** At most ``max_profiles`` routes (default 4), ordered by score
-    then registry order. Unknown names in settings are reported, never routed.
+  * **Bounded.** At most ``max_profiles`` routes (default 4, max 6), ordered by
+    source (typed, attachment, classifier), score, then registry order. Unknown
+    names in settings are reported, never routed.
   * **No content in traces.** A trace carries profile names, stable reason
     labels, a 16-hex task hash and readiness status — never task text.
 """
@@ -458,6 +464,12 @@ _CONTROL_TAG_RE = re.compile(
     r"(?![A-Za-z0-9_\-])")
 _BARE_SENDER_RE = re.compile(r"\[[^\[\]\n]{1,96}\]")
 _DOC_FENCE_RE = re.compile(r"(?:<<<|>>>)\s*DOCUMENT|DOCUMENT\s*(?:<<<|>>>)")
+# Router diagnostics (a pasted dry-run, trace or log line) name profiles and
+# signal labels; an attachment carrying them never scores keywords.
+_ROUTER_TRACE_RE = re.compile(r"(?<![\w-])(?:kw|att):[a-z]|model_router: specialists|"
+                              r"specialist-route|\[specialist-router")
+# Candidate source rank: typed keywords, attachment keywords, classifier.
+_TYPED, _ATTACHED, _CLASSIFIED = 0, 1, 2
 
 
 def _document_for_classifier(text: str) -> Tuple[str, str]:
@@ -472,28 +484,24 @@ def _document_for_classifier(text: str) -> Tuple[str, str]:
     return clean.strip()[:CLASSIFIER_DOC_CHARS], ""
 
 
-def classifier_context(task: "ti.CurrentTask", source: str, sep: "att.Separation", raw_text: str,
-                       *, deadline: Optional[float] = None) -> Tuple[ClassifierText, Dict[str, Any]]:
-    """The classifier input for the current turn and its content-free summary.
+def verified_documents(sep: "att.Separation", raw_text: str, *, deadline: Optional[float] = None
+                       ) -> Tuple[List[Tuple[str, str]], Dict[str, Any]]:
+    """``([(kind, clean text)], labels)`` for the current turn's verified attachments.
 
-    Sender part: ``task.visible`` when the sender typed the task (control
-    line, quotes and fenced code already removed). Documents: the verified
-    inline relays (``sep.attached_parts``) and the non-inlined documents
-    ``attachments.read_documents`` accepts, each cleaned by
-    :func:`_document_for_classifier`. Without a usable document the text is
-    exactly ``task.visible`` (the pre-attachment behaviour). Never history,
-    tool output or runtime text: only the current turn's sender segment and
-    files a gateway note names in the active document cache.
+    The inline relays proven against the cache (``sep.attached_parts``) and
+    the non-inlined documents ``attachments.read_documents`` accepts, each
+    cleaned and bounded by :func:`_document_for_classifier`. ``labels`` is
+    content-free (``extracted``, ``withheld``). Nothing unless ``sep`` is a
+    proven attachment.
     """
-    typed = task.visible.strip() if source == "sender" else ""
-    info: Dict[str, Any] = {"sender": bool(typed), "documents": 0}
-    raw_docs: List[Tuple[str, str]] = []
-    if sep.attachment and sep.proven:
-        raw_docs = [("text", part) for part in sep.attached_parts]
-        extracted, labels = att.read_documents(raw_text, deadline=deadline)
-        raw_docs += [(d.kind, d.text) for d in extracted]
-        if labels:
-            info["extracted"] = labels
+    info: Dict[str, Any] = {}
+    if not (sep.attachment and sep.proven):
+        return [], info
+    raw_docs = [("text", part) for part in sep.attached_parts]
+    extracted, labels = att.read_documents(raw_text, deadline=deadline)
+    raw_docs += [(d.kind, d.text) for d in extracted]
+    if labels:
+        info["extracted"] = labels
     docs: List[Tuple[str, str]] = []
     withheld: List[str] = []
     for kind, text in raw_docs:
@@ -504,6 +512,56 @@ def classifier_context(task: "ti.CurrentTask", source: str, sep: "att.Separation
             docs.append((kind, clean))
     if withheld:
         info["withheld"] = withheld
+    return docs, info
+
+
+def attachment_signals(docs: Sequence[Tuple[str, str]]) -> Dict[str, Tuple[int, List[str]]]:
+    """``{profile: (score, att:<label> reasons)}`` from verified, cleaned documents.
+
+    Each document is scored on its own, within :data:`CLASSIFIER_CONTEXT_CHARS`
+    in total. A profile needs ``SELECT_THRESHOLD`` with at least one strong
+    signal (long documents collect weak words by chance). High-risk and local
+    profiles (:data:`CLASSIFIER_FORBIDDEN`) need the sender's own words, and a
+    document carrying router diagnostics scores nothing. The best document
+    score per profile wins."""
+    found: Dict[str, Tuple[int, List[str]]] = {}
+    room = CLASSIFIER_CONTEXT_CHARS
+    for _kind, text in docs:
+        body = text[:room]
+        if not body:
+            break
+        room -= len(body)
+        if _ROUTER_TRACE_RE.search(body):
+            continue
+        for spec in REGISTRY:
+            if spec.name in CLASSIFIER_FORBIDDEN:
+                continue
+            score, labels, strong = _score(spec, body)
+            if strong and score >= SELECT_THRESHOLD and score > found.get(spec.name, (0, []))[0]:
+                found[spec.name] = (score, ["att:" + label[3:] for label in labels])
+    return found
+
+
+def classifier_context(task: "ti.CurrentTask", source: str, sep: "att.Separation", raw_text: str,
+                       *, deadline: Optional[float] = None,
+                       documents: Optional[Tuple[List[Tuple[str, str]], Dict[str, Any]]] = None,
+                       ) -> Tuple[ClassifierText, Dict[str, Any]]:
+    """The classifier input for the current turn and its content-free summary.
+
+    Sender part: ``task.visible`` when the sender typed the task (control
+    line, quotes and fenced code already removed). Documents: the verified
+    inline relays (``sep.attached_parts``) and the non-inlined documents
+    ``attachments.read_documents`` accepts, each cleaned by
+    :func:`_document_for_classifier`. Without a usable document the text is
+    exactly ``task.visible`` (the pre-attachment behaviour). Never history,
+    tool output or runtime text: only the current turn's sender segment and
+    files a gateway note names in the active document cache. ``documents``
+    reuses an earlier :func:`verified_documents` result (nothing re-read).
+    """
+    typed = task.visible.strip() if source == "sender" else ""
+    docs, labels = documents if documents is not None else verified_documents(
+        sep, raw_text, deadline=deadline)
+    info: Dict[str, Any] = {"sender": bool(typed), "documents": 0, **labels}
     if not docs:
         out = ClassifierText(task.visible if source == "sender" else "")
         out.deadline = deadline
@@ -664,7 +722,7 @@ def route_text(
         if pdec.private and not spec.local:
             trace["dropped"].append({"profile": spec.name, "reason": "privacy:local-only"})
             continue
-        candidates.append((-score, order, spec, labels))
+        candidates.append((_TYPED, -score, order, spec, labels))
 
     # Keywords first. The classifier runs when the keywords found nothing
     # (``no-match``), only weak-signal matches (``ambiguous``), or the turn
@@ -676,20 +734,37 @@ def route_text(
     gate = "no-match" if not candidates else ("ambiguous" if not any_strong else "")
     if not gate and sep.attachment and sep.proven:
         gate = "attachment"
+
+    # Verified attachments of a public turn add the profiles their own strong
+    # signals name (attachment_signals); never for a private turn, which
+    # reads no attachment for routing at all.
+    documents: Optional[Tuple[List[Tuple[str, str]], Dict[str, Any]]] = None
+    if sep.attachment and sep.proven and not pdec.private:
+        documents = verified_documents(sep, raw_text or "", deadline=started + ROUTE_BUDGET)
+        have = {c[3].name for c in candidates} | {d["profile"] for d in trace["dropped"]}
+        found = attachment_signals(documents[0])
+        for order, spec in enumerate(REGISTRY):
+            if spec.name not in found or spec.name in have:
+                continue
+            if spec.name not in allowed:
+                trace["dropped"].append({"profile": spec.name, "reason": "not-allowed"})
+                continue
+            score, labels = found[spec.name]
+            candidates.append((_ATTACHED, -score, order, spec, labels))
     if gate and settings.classifier != "none" and classifier is not None:
         context: Optional[ClassifierText] = None
         if pdec.private:
             trace["classifier"] = "skipped:private"
         else:
             context, trace["classifier_context"] = classifier_context(
-                task, source, sep, raw_text or "", deadline=started + ROUTE_BUDGET)
+                task, source, sep, raw_text or "", deadline=started + ROUTE_BUDGET, documents=documents)
             if not context.documents and (gate == "attachment" or not decision.substantive
                                           or len(task.visible) < 60):
                 trace["classifier"] = "skipped:not-ambiguous"
                 context = None
         if context is not None:
             trace["classifier_gate"] = gate
-            have = {c[2].name for c in candidates}
+            have = {c[3].name for c in candidates}
             pool = [s.name for s in REGISTRY if s.name in allowed and s.name not in have
                     and s.name not in CLASSIFIER_FORBIDDEN]
             try:
@@ -706,7 +781,7 @@ def route_text(
             added = 0
             for p in dict.fromkeys(picked):
                 if p in pool and p not in CLASSIFIER_FORBIDDEN and added < MAX_CLASSIFIER_ADDITIONS:
-                    candidates.append((-1, len(REGISTRY) + added, BY_NAME[p], ["classifier"]))
+                    candidates.append((_CLASSIFIED, -1, added, BY_NAME[p], ["classifier"]))
                     added += 1
                 else:
                     eligible = p in pool and p not in CLASSIFIER_FORBIDDEN
@@ -714,11 +789,13 @@ def route_text(
                                              "reason": "classifier:cap" if eligible
                                              else "classifier:not-eligible"})
 
-    candidates.sort(key=lambda c: (c[0], c[1]))
+    candidates.sort(key=lambda c: c[:3])
+    if documents is not None:
+        trace["attachment_signals"] = [c[3].name for c in candidates if c[0] == _ATTACHED]
     rdy = readiness or (lambda name: knowledge_readiness(
         name, settings.profiles_root if settings.profiles_root is not None else default_profiles_root()))
     selected: List[Tuple[Specialist, int, List[str], Readiness]] = []
-    for neg_score, _order, spec, labels in candidates:
+    for _rank, neg_score, _order, spec, labels in candidates:
         r = rdy(spec.name)
         if r.status in ("not-installed", "unknown-profile"):
             trace["dropped"].append({"profile": spec.name, "reason": f"readiness:{r.status}"})

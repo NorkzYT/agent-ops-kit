@@ -862,7 +862,12 @@ class AttachmentRelayTest(unittest.TestCase):
         self.assertEqual(attachments.separate_sender_prose(wire).attached,
                          "\n\n".join(data.strip() for _, data in docs))
         self.assert_attachment_routed(wire, "\n\n".join(data for _, data in docs))
-        self.assertEqual(route(self.wire(docs, NEUTRAL_ASK))["routes"], [])
+        # With typed prose the files are attachment evidence: the two router
+        # transcripts score nothing, the plan's own strong signal adds marketing.
+        t = route(self.wire(docs, NEUTRAL_ASK))
+        self.assertEqual(names(t), ["marketing"])
+        self.assertEqual(t["attachment_signals"], ["marketing"])
+        self.assertTrue(all(r.startswith("att:") for r in t["routes"][0]["reasons"]))
         wire = self.wire(docs, MULTI_PARAGRAPH_ASK, backfill="[alice] hi there", trigger=True)
         self.assertEqual(attachments.separate_sender_prose(wire).prose, MULTI_PARAGRAPH_ASK)
         self.assertEqual(route(wire)["routes"], route(MULTI_PARAGRAPH_ASK)["routes"])
@@ -899,7 +904,9 @@ class AttachmentRelayTest(unittest.TestCase):
             body = f"[Content of {os.path.basename(p)}]:\n{text}\n\n{body}"
         wire = f"{doc_note(p2)}\n\n{doc_note(p1)}\n\n{body}"
         self.assertEqual(attachments.separate_sender_prose(wire).prose, NEUTRAL_ASK)
-        self.assertEqual(route(wire)["routes"], [])
+        t = route(wire)
+        self.assertEqual(t["task_source"], "sender")
+        self.assertEqual(t["attachment_signals"], ["offers-sales", "marketing"])  # one.txt; two.txt is a router transcript
         # Feishu: strict read_text, display name from the cache basename, text replaced.
         p3 = self.cache_doc("brief.md", b"Write a marketing campaign\r\nfor the launch.\r\n")
         wire = f"{doc_note(p3)}\n\n[Content of brief.md]:\n{Path(p3).read_text(encoding='utf-8')}"
@@ -1023,7 +1030,8 @@ class AttachmentRelayTest(unittest.TestCase):
         self.assertIn("routes=marketing:", lines[0])
         self.assertIn("reason=-", lines[0])
         self.assertIn("source=sender", lines[1])
-        self.assertIn("reason=no-match", lines[2])
+        self.assertIn("routes=marketing:", lines[2])  # verified attachment evidence
+        self.assertIn("attach=marketing", lines[2])
         self.assertIn("reason=attachment-unverified", lines[3])
 
     # -- fail closed: separation not provable -------------------------------- #
@@ -1148,7 +1156,9 @@ class AttachmentRelayTest(unittest.TestCase):
         wire = self.wire([("big.pdf", "")], "Write a marketing campaign for the launch.", paths=[big],
                          relays=[], kinds={0: "binary"}, backfill="[alice] earlier chatter")
         with mock.patch.object(attachments.os, "open", side_effect=AssertionError("read")):
-            (t, seen) = self.touched(lambda: route(wire))
+            self.assertTrue(attachments.separate_sender_prose(wire).proven)
+        # Routing then reads only that cache file, bounded, for attachment signals.
+        (t, seen) = self.touched(lambda: route(wire))
         self.assertEqual(names(t), ["marketing"])
         self.assertEqual(set(seen), {big})
 

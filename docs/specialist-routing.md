@@ -32,17 +32,20 @@ classifier, and never puts book or skill content into the orchestrator prompt.
 
 The keyword rules live in `hermes/plugins/model-router/specialists.py`
 (`REGISTRY`). A strong signal scores 2 and a weak one scores 1. A profile is
-picked at score 2 or more. Ties keep registry order, and the cap (default 4,
-max 6) drops the lowest scores.
+picked at score 2 or more. Routes are ranked by source (typed keywords,
+then attachment signals, then classifier additions), then score, then
+registry order. The cap (default 4, max 6) applies once, to that combined
+list, and drops the lowest-ranked.
 
 ## Rules
 
 - **Current task only.** The router uses the same provenance stripping as
   model routing (`task_intent.genuine_user_text`). Channel backfill, quoted
   replies, `>` quotes, fenced code, recalled memory, history, system prompts
-  and tool output never pick a profile. Attachments reach keywords only when
-  they are the whole prompt (below) and the optional classifier only as
-  verified, delimited document data (see **Classifier context**). Its own note is
+  and tool output never pick a profile. Attachments are the task only when
+  they are the whole prompt (below); otherwise verified attachments add
+  profiles through **Attachment signals** and reach the optional classifier
+  as delimited document data (see **Classifier context**). Its own note is
   wrapped in `<specialist-routing>` and stripped again on later API calls,
   thus neither router classifies it.
 - **Hermes notifications are not tasks.** When the current sender segment
@@ -73,11 +76,27 @@ max 6) drops the lowest scores.
   lines carry no authority. Gateway or runtime text in it (a Hermes
   notification as above, `[Replying to`, a trigger id, a steer block, a relay
   header or document note) routes nothing (`attachment-envelope`). A
-  document the gateway did not inline (large text, PDF, DOCX) is never read
-  for keywords; with a classifier configured it is read for the classifier
-  only (`task_source: document` when nothing was typed), otherwise nothing
-  routes (`attachment-only`). Typed prose always wins over the file for
-  keywords. The trace hash covers the full raw turn, file included.
+  document the gateway did not inline (large text, PDF, DOCX) sent with no
+  typed text routes only through a configured classifier
+  (`task_source: document`), otherwise nothing routes (`attachment-only`).
+  With typed prose, the typed words are the task and the files only add
+  profiles through **Attachment signals**. The trace hash covers the full raw
+  turn, file included.
+- **Attachment signals.** On a public turn, the same verified documents the
+  classifier would see (below: proven inline relays plus bounded PDF/DOCX/
+  large-text extraction, cleaned, withheld ones excluded) are scored with
+  the keyword rules too, each document on its first 6000 characters and
+  16000 in total. A profile is added when one document gives it score 2 with
+  at least one strong signal (weak words alone never count in a long file).
+  Its reasons are `att:<label>` and the trace lists the added profiles in
+  `attachment_signals` (the log says `attach=`). Never from a `#privacy`
+  turn (no file is read), an unverified relay, history, tool output or a
+  runtime envelope. Never `security-reviewer`, `red-team`, `health-fitness`,
+  `herbalism` or `local-engineer`: those need the sender's own words. A
+  document holding router diagnostics (a dry-run, trace or log line with
+  `kw:` labels or `model_router: specialists`) scores nothing, so a pasted
+  router transcript does not fan out again. This runs with or without a
+  classifier.
 - **Classifier context.** When the classifier runs it gets the sender's typed
   task plus the verified attachments of the current turn, nothing else:
   inline relays proven against the cache, and documents the gateway did not
@@ -155,7 +174,8 @@ max 6) drops the lowest scores.
   (`gate=no-match`), only weak signals (`gate=ambiguous`), or the turn
   carries verified attachments (`gate=attachment`). Without an attached
   document the task must also be substantive and at least 60 characters.
-  It may add at most **two** profiles, never one already matched, never
+  It may add at most **two** profiles, never one already matched by typed
+  keywords or attachment signals, never
   `security-reviewer`, `red-team`, `health-fitness`, `herbalism` or
   `local-engineer` (those need keyword evidence). Its answer is only parsed
   for profile names in the eligible pool; tags or other text in it do
@@ -241,7 +261,8 @@ In any Hermes chat, after the plugin reloads:
 
 Trace fields: `routes[]` (`profile`, `score`, `reasons`, `high_risk`,
 `advisory_only`, `execution`, `toolsets`, `constraint`, `knowledge`),
-`dropped[]` (`privacy:local-only`, `cap`, `not-allowed`,
+`attachment_signals` (profiles added from verified attachments, `att:`
+reasons), `dropped[]` (`privacy:local-only`, `cap`, `not-allowed`,
 `readiness:<status>`, `classifier:not-eligible`, `classifier:cap`), `privacy`, `tier`, `task`
 (hash), `task_source` (`sender` | `attachment` | `document`), `attachment` (separation
 label), `classifier`, `classifier_gate` (`no-match` | `ambiguous` |
@@ -327,11 +348,12 @@ label), `classifier`, `classifier_gate` (`no-match` | `ambiguous` |
    ```
    2026-10-07 08:22:10,111 INFO hermes.plugin.model_router: model_router: specialists task=1a2b3c4d privacy=public tier=medium source=attachment routes=marketing:short:ready dropped=- classifier=off reason=-
    2026-10-09 10:02:41,507 INFO hermes.plugin.model_router: model_router: specialists task=5e6f7a8b privacy=public tier=routine source=sender routes=negotiation-communication:short:ready,business:short:ready dropped=- classifier=used gate=no-match classifier_model=gpt-5.6-terra classifier_outcome=ok context=sender:1,docs:1,withheld:0,extract:pdf:ok reason=-
+   2026-10-09 19:40:12,031 INFO hermes.plugin.model_router: model_router: specialists task=5e6f7a8b privacy=public tier=routine source=sender routes=negotiation-communication:short:ready,software-engineering:short:ready,strategy:short:ready,business:short:ready dropped=- classifier=used gate=attachment classifier_model=gpt-5.6-terra classifier_outcome=ok context=sender:1,docs:2,withheld:0,extract:text:ok/pdf:ok reason=- attach=software-engineering,strategy
    ```
 
    `source` is `sender`, `attachment` or `document`, `context` counts what
    the classifier saw (typed text, documents, withheld documents, extraction
-   labels), `routes` is
+   labels), `attach` names the profiles verified attachments added, `routes` is
    `profile:execution:readiness`, and `reason` says why nothing routed. Only
    the plugin logger's own records are shown (anchored on timestamp, level
    and logger name), never another component's line that quotes them. Lines

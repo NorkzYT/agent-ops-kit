@@ -260,7 +260,7 @@ class SpecialistHook:
             ctx = trace.get("classifier_context") or {}
             logger.info(
                 "model_router: specialists task=%s privacy=%s tier=%s source=%s routes=%s dropped=%s "
-                "classifier=%s gate=%s classifier_model=%s classifier_outcome=%s context=%s reason=%s",
+                "classifier=%s gate=%s classifier_model=%s classifier_outcome=%s context=%s reason=%s attach=%s",
                 str(trace.get("task", "-"))[:8], trace.get("privacy"), trace.get("tier"),
                 trace.get("task_source", "-"),
                 ",".join(f"{r['profile']}:{r['execution']}:{r['knowledge']['status']}" for r in routes) or "-",
@@ -272,6 +272,7 @@ class SpecialistHook:
                  f"withheld:{len(ctx.get('withheld') or [])},extract:{'/'.join(ctx.get('extracted') or []) or '-'}"
                  if ctx else "-"),
                 trace.get("reason", "-"),
+                ",".join(trace.get("attachment_signals") or []) or "-",
             )
             plan = sp.render_plan(trace)
             return {"context": plan} if plan else None
