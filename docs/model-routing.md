@@ -385,7 +385,9 @@ Cheap, high-volume helper calls (`auxiliary.title_generation` /
 
 - **Title generation** uses the main route: CLIProxyAPI with the orchestrator
   model (`HERMES_MODEL`, `gpt-5.6-luna`). `.env.example` sets no `AUX_*` title
-  variables, so the installer renders `provider: auto`.
+  variables, so the installer renders `provider: auto` with
+  `reasoning_effort: low`. `make local-route-readback` accepts this route only
+  while the main model points at the configured CLIProxyAPI.
 - **Compression** uses CLIProxyAPI `gpt-5.6-terra`, then `gpt-5.6-luna`
   ([below](#compression-on-cliproxyapi-default)).
 

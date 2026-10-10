@@ -5,9 +5,9 @@ Run with the Hermes venv python (it imports Hermes' own modules):
 
   ~/.hermes/hermes-agent/venv/bin/python scripts/hermes-native-check.py --config FILE
 
-Prints JSON: the orchestrator and delegation fallback chains exactly as
-Hermes normalizes them (``hermes_cli.fallback_config.get_fallback_chain``),
-each auxiliary task's resolved (provider, model, base_url) from
+Prints JSON: the main (orchestrator) route, the orchestrator and delegation
+fallback chains exactly as Hermes normalizes them
+(``hermes_cli.fallback_config.get_fallback_chain``), each auxiliary task's resolved (provider, model, base_url) from
 ``agent.auxiliary_client._resolve_task_provider_model`` plus its
 ``fallback_chain``, ``auxiliary.allow_cloud_fallback``, ``plugins.enabled``
 and the model-router routing settings (``private_terms``/``private_paths``
@@ -62,7 +62,10 @@ def main(argv=None) -> int:
         hconfig.load_config_readonly = lambda: cfg  # type: ignore[assignment]
         from agent import auxiliary_client as aux
 
+        main = cfg.get("model") or {}
         out = {
+            "main": {"provider": main.get("provider"), "model": main.get("default") or main.get("model"),
+                     "base_url": main.get("base_url") or ""},
             "fallback_providers": [_route(e) for e in get_fallback_chain(cfg)],
             "delegation_fallback_providers": [
                 _route(e) for e in get_fallback_chain(

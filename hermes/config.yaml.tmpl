@@ -5,6 +5,10 @@
 # Re-render after editing .env:  make hermes-install
 # Full reference: https://hermes-agent.nousresearch.com/docs/user-guide/configuration
 
+# Hermes config schema version this template targets (hermes_cli DEFAULT_CONFIG).
+# Without it `hermes doctor` reports v0 and offers a migration.
+_config_version: 44
+
 # ---------------------------------------------------------------- Models ---
 # Orchestrator model: ChatGPT subscription through CLIProxyAPI (OpenAI-compatible).
 model:
@@ -140,6 +144,7 @@ group_sessions_per_user: true
 # Shared board for multi-profile teams (docs/profiles-and-teams.md).
 kanban:
   dispatch_in_gateway: true
+  auto_decompose: true
   dispatch_interval_seconds: 60
   max_in_progress: 2
 
@@ -187,7 +192,7 @@ auxiliary:
     provider: __AUX_PROVIDER__
     model: __AUX_MODEL__
     base_url: __AUX_BASE_URL__
-    reasoning_effort: high
+    reasoning_effort: low
     fallback_chain: __AUX_FALLBACK_CHAIN__
   # Compression (AUX_COMPRESSION_ROUTE). Default cliproxy: CLIProxyAPI
   # gpt-5.6-terra, then gpt-5.6-luna on the same proxy, effort low, Hermes'

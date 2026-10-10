@@ -611,6 +611,55 @@ def _config_get():
     return config_get
 
 
+def _local_route():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("local_route", REPO / "scripts" / "local-route.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+CLIPROXY = "http://127.0.0.1:8317/v1"
+
+
+def _nat(title, main=None):
+    """Minimal hermes-native-check output: main route + one auxiliary task."""
+    return {"main": main if main is not None else {"provider": "custom", "model": "gpt-5.6-luna",
+                                                   "base_url": CLIPROXY},
+            "fallback_providers": [], "delegation_fallback_providers": [],
+            "auxiliary": {"title_generation": dict(title, fallback_chain=[])},
+            "plugins_enabled": ["model-router"], "model_router": {}}
+
+
+class ReadbackInvariantTest(unittest.TestCase):
+    """Title generation intentionally follows the main CLIProxyAPI route."""
+
+    def setUp(self):
+        self.lr = _local_route()
+
+    def bad(self, nat):
+        return self.lr._invariants(nat, lb, CLIPROXY)
+
+    def test_auto_title_following_main_cliproxy_route_is_accepted(self):
+        # Hermes resolves an empty YAML model to the string "None".
+        for model in (None, "", "None"):
+            self.assertEqual(self.bad(_nat({"provider": "auto", "model": model, "base_url": ""})), [], model)
+        main = {"provider": "custom", "model": "gpt-5.6-luna", "base_url": CLIPROXY + "/"}
+        self.assertEqual(self.bad(_nat({"provider": "auto", "model": "None", "base_url": ""}, main)), [])
+
+    def test_auto_title_fails_when_main_is_not_the_configured_cliproxy(self):
+        for main in ({"provider": "custom", "model": "opus", "base_url": "http://127.0.0.1:3456/v1"},
+                     {"provider": "openrouter", "model": "x", "base_url": ""}, {}):
+            bad = self.bad(_nat({"provider": "auto", "model": "None", "base_url": ""}, main))
+            self.assertEqual(len(bad), 1, (main, bad))
+            self.assertIn("not the configured CLIProxyAPI", bad[0])
+
+    def test_auto_with_explicit_model_still_fails(self):
+        bad = self.bad(_nat({"provider": "auto", "model": "qwen3.5:27b", "base_url": ""}))
+        self.assertEqual(len(bad), 1, bad)
+        self.assertIn("resolves to the MAIN (cloud) provider", bad[0])
+
+
 class _InstallerFixture(unittest.TestCase):
     """Temp HERMES_HOME, fixture .env and a stub `hermes` that logs its calls."""
 
@@ -688,6 +737,16 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_classifier"), "none")
         self.assertIn("is not a boolean", r.stderr)
         self.assertIn("is not 0-6", r.stderr)
+
+    def test_render_pins_schema_version_kanban_and_title_effort(self):
+        r = self.install("", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = self.home / "config.yaml"
+        self.assertEqual(self.get(cfg, "_config_version"), "44")
+        self.assertEqual(self.get(cfg, "kanban.auto_decompose"), "true")
+        self.assertEqual(self.get(cfg, "auxiliary.title_generation.reasoning_effort"), "low")
+        self.assertEqual(self.get(cfg, "auxiliary.title_generation.provider"), "auto")
+        self.assertEqual(self.get(cfg, "agent.reasoning_effort"), "high")
 
     def test_local_roles_fallback_chains_and_aux_provider(self):
         r = self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\nAUX_PROVIDER=auto\n"
@@ -1001,6 +1060,21 @@ class HermesNativeTest(_InstallerFixture):
                        "    base_url: http://100.65.5.47:11434/v1\n")
         aux = self.native(out)["auxiliary"]["compression"]
         self.assertEqual((aux["provider"], aux["base_url"]), ("auto", ""))
+
+    def test_readback_accepts_title_route_on_main_cliproxy(self):
+        cfg = self.home / "config.yaml"
+        self.install("", "--render-only", str(cfg))
+        nat = self.native(cfg)
+        self.assertEqual(nat["main"], {"provider": "custom", "model": "gpt-5.6-luna",
+                                       "base_url": "http://127.0.0.1:8317/v1"})
+        self.assertEqual((nat["auxiliary"]["title_generation"]["provider"],
+                          nat["auxiliary"]["title_generation"]["base_url"]), ("auto", ""))
+        env = dict(os.environ, HERMES_HOME=str(self.home), HERMES_AGENT_DIR=str(AGENT_DIR),
+                   ENV_FILE=str(self.tmp / "fixture.env"))
+        ok = subprocess.run([sys.executable, "scripts/local-route.py", "readback"], cwd=REPO, env=env,
+                            capture_output=True, text=True, timeout=300)
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        self.assertIn("auxiliary.title_generation follows main gpt-5.6-luna @ 127.0.0.1:8317", ok.stdout)
 
     def test_readback_matches_render_and_flags_drift(self):
         cfg = self.home / "config.yaml"

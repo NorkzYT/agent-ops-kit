@@ -16,7 +16,9 @@ local (Ollama) model roles of the model-router plugin.
   readback  Renders what the installer would write now (hermes-install.sh
             --render-only, temp file) and compares it with the live config as
             Hermes resolves both (hermes-native-check.py in the Hermes venv),
-            then checks the local-only invariants. Exit 1 on any difference.
+            then checks the local-only invariants (an auxiliary task left on
+            provider auto must follow the main CLIProxyAPI route). Exit 1 on
+            any difference.
 
 Never reads secrets, never prints private_terms/private_paths, never restarts
 anything. Metadata calls (/v1/models, /api/tags, /api/ps, /api/show) go only to
@@ -43,11 +45,12 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 REPO = Path(__file__).resolve().parents[1]
 SETTINGS = "plugins.entries.model-router.settings"
 ROLES = ("routine", "fallback", "agent")
-COMPARE = ("fallback_providers", "delegation_fallback_providers", "auxiliary",
+COMPARE = ("main", "fallback_providers", "delegation_fallback_providers", "auxiliary",
            "auxiliary_allow_cloud_fallback", "plugins_enabled", "model_router")
 
 
@@ -155,7 +158,6 @@ def role_models(cfg) -> Dict[str, str]:
 # Commands
 # --------------------------------------------------------------------------- #
 def _route_line(entries: List[Dict[str, Any]]) -> str:
-    from urllib.parse import urlsplit
     return " -> ".join(f"{e.get('model')}@{urlsplit(e.get('base_url') or '').netloc or e.get('provider')}"
                        for e in entries) or "(none)"
 
@@ -289,7 +291,16 @@ def probe(args) -> int:
     return 0
 
 
-def _invariants(nat: Dict[str, Any], lb) -> List[str]:
+def _follows_main(r: Dict[str, Any]) -> bool:
+    """provider auto with no model/base_url: Hermes uses the main provider and
+    model (an empty YAML model comes back as the string "None")."""
+    return r["provider"] == "auto" and r["model"] in (None, "", "None") and not r["base_url"]
+
+
+def _invariants(nat: Dict[str, Any], lb, cliproxy_url: str) -> List[str]:
+    """Local-only invariants. ``cliproxy_url`` is the configured CLIProxyAPI base
+    URL (the main route the installer renders): an auxiliary task that follows
+    the main provider is intentional only when the main route is that proxy."""
     bad = []
     mr = nat.get("model_router") or {}
     url = str(mr.get("ollama_base_url") or "")
@@ -298,8 +309,14 @@ def _invariants(nat: Dict[str, Any], lb) -> List[str]:
     for r in nat["fallback_providers"][1:] + nat["delegation_fallback_providers"]:
         if r["base_url"] and ":3456" not in r["base_url"] and not lb.is_local_endpoint(r["base_url"]):
             bad.append(f"fallback hop {r['model']}@{r['base_url']} is not local")
+    main = nat.get("main") or {}
     for task, r in nat["auxiliary"].items():
-        if r["provider"] == "auto" and r["model"]:
+        if _follows_main(r):
+            if main.get("provider") != "custom" or not cliproxy_url or \
+                    (main.get("base_url") or "").rstrip("/") != cliproxy_url.rstrip("/"):
+                bad.append(f"auxiliary.{task}: follows the main provider {main.get('provider')} "
+                           f"@ {main.get('base_url') or '(none)'}, not the configured CLIProxyAPI {cliproxy_url}")
+        elif r["provider"] == "auto" and r["model"]:
             bad.append(f"auxiliary.{task}: provider auto with model {r['model']} resolves to the MAIN "
                        "(cloud) provider, not the local endpoint")
         for f in r["fallback_chain"]:
@@ -334,7 +351,12 @@ def readback(args) -> int:
         if not same:
             out(f"       live    : {json.dumps(live.get(key), sort_keys=True)}")
             out(f"       expected: {json.dumps(expected.get(key), sort_keys=True)}")
-    bad = _invariants(live, lb)
+    bad = _invariants(live, lb, (expected.get("main") or {}).get("base_url") or "")
+    main = live.get("main") or {}
+    for task, r in live["auxiliary"].items():
+        if _follows_main(r) and not any(b.startswith(f"auxiliary.{task}:") for b in bad):
+            out(f"  ok   auxiliary.{task} follows main {main.get('model')} @ "
+                f"{urlsplit(main.get('base_url') or '').netloc} (CLIProxyAPI, cloud by design)")
     for b in bad:
         out(f"  FAIL invariant: {b}")
     mr = live.get("model_router") or {}
