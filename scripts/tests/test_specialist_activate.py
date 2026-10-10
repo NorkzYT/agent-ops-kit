@@ -237,6 +237,11 @@ class ActivateTest(unittest.TestCase):
         s = self.settings()
         self.assertEqual((s["specialist_max_profiles"], s["specialist_profiles"],
                           s["specialist_classifier"]), (5, [], "local"))
+        r = self.run_cmd("install", "--classifier", "cliproxy")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.settings()["specialist_classifier"], "cliproxy")
+        self.assertIn("CLIPROXY_API_KEY", r.stdout + r.stderr)
+        self.assertIn("never runs for #privacy turns", r.stdout + r.stderr)
 
     def test_install_rejects_bad_input_before_writing(self):
         for args in (("--max", "7"), ("--profiles", "strategy,bogus"), ("--classifier", "cloud")):

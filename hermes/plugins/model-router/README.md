@@ -68,12 +68,15 @@ Two Hermes middleware behaviors in one bundled plugin:
   current genuine user task and appends a `<specialist-routing>` note to the
   orchestrator's turn (privacy first, high-risk profiles advisory with the
   `skills` toolset only, readiness from the installed profile's `/learn`
-  skill). With `specialist_classifier: local` a public task with no or only
-  weak keyword matches asks the routine local model (then the fallback model,
-  one total budget) for at most two non-high-risk additions. `/route-specialists
-  <task>` and `make specialist-route` are offline dry-runs; `make
-  specialist-classify-probe` exercises the live local classifier. See
-  `docs/specialist-routing.md`.
+  skill). With `specialist_classifier: cliproxy` a public task with no or
+  only weak keyword matches, or with verified attachments, asks CLIProxyAPI
+  (`gpt-5.6-terra`, `medium` reasoning) for at most two non-high-risk
+  additions, from the typed task plus the verified attached documents (PDF
+  and DOCX text extracted locally, bounded; wire text, `#privacy` and routing
+  notes withheld). `local` asks the routine local model instead. A
+  `#privacy` turn never reaches either. `/route-specialists <task>` and `make
+  specialist-route` are offline dry-runs; `make specialist-classify-probe`
+  exercises the live classifier. See `docs/specialist-routing.md`.
 
 ## Configuration
 
@@ -102,7 +105,7 @@ plugins:
         specialist_routing: false        # pilot; docs/specialist-routing.md
         specialist_max_profiles: 4
         specialist_require_ready: false
-        specialist_classifier: none      # none | local
+        specialist_classifier: none      # none | local | cliproxy (gpt-5.6-terra, medium effort)
         specialist_classifier_timeout: 10  # seconds, both models, max 25
         specialist_profiles: []
 ```

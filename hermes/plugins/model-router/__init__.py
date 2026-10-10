@@ -61,8 +61,10 @@ def register(ctx) -> None:
         settings.local_model("routine") or "-",
         settings.local_model("fallback") or "-",
         settings.local_model("agent") or "-",
-        settings.specialist_classifier if specialists.classifier_ready or
-        settings.specialist_classifier == "none" else "local-unavailable",
+        (f"cliproxy:{settings.specialist_classifier_model}/{settings.specialist_classifier_effort}"
+         if settings.specialist_classifier == "cliproxy" else settings.specialist_classifier)
+        if specialists.classifier_ready or settings.specialist_classifier == "none"
+        else f"{settings.specialist_classifier}-unavailable",
     )
 
 

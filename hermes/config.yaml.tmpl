@@ -240,8 +240,12 @@ compression:
 # specialist_routing (pilot, MODEL_ROUTER_SPECIALISTS) adds a deterministic
 # note naming the 0-4 book-backed profiles a task needs; it only runs in the
 # default (orchestrator) profile and never dispatches by itself. With
-# specialist_classifier: local, public tasks with no or only weak keyword
-# matches ask the routine local model for at most two non-high-risk profiles.
+# specialist_classifier: cliproxy (or local), public tasks with no or only weak
+# keyword matches, or with verified attachments, ask CLIProxyAPI
+# (specialist_classifier_model gpt-5.6-terra, specialist_classifier_effort
+# medium by default; or the routine local model) for at most two non-high-risk
+# profiles, from the typed task plus the verified attached documents (PDF text
+# extracted locally). #privacy turns never reach any classifier.
 # The specialist_* values and private_terms/private_paths keep what is already
 # in config.yaml when their MODEL_ROUTER_* key is absent from .env.
 # private_terms/private_paths no longer affect request routing (#privacy only).

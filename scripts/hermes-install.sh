@@ -162,7 +162,7 @@ MODEL_ROUTER_TASK_TTL="$(getenv MODEL_ROUTER_TASK_TTL 1800)"; export MODEL_ROUTE
 #   MODEL_ROUTER_SPECIALISTS                   true|false        (default false)
 #   MODEL_ROUTER_SPECIALIST_MAX                0-6               (default 4)
 #   MODEL_ROUTER_SPECIALIST_REQUIRE_READY      true|false        (default false)
-#   MODEL_ROUTER_SPECIALIST_CLASSIFIER         none|local        (default none)
+#   MODEL_ROUTER_SPECIALIST_CLASSIFIER         none|local|cliproxy (default none)
 #   MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT seconds, total    (default 10, max 25)
 #   MODEL_ROUTER_SPECIALIST_PROFILES           a,b allowlist     (default all)
 SETTINGS_KEY="plugins.entries.model-router.settings"
@@ -197,7 +197,7 @@ router_knob() {
     int) [[ "$raw" =~ ^[0-9]+$ ]] && (( 10#$raw <= 6 )) && val="$((10#$raw))" || { warn "$var=$raw ($src) is not 0-6; using $def"; val="$def"; src="default"; } ;;
     seconds) [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]] && val="$raw" || { warn "$var=$raw ($src) is not a number; using $def"; val="$def"; src="default"; } ;;
     classifier) raw="${raw,,}"; [[ -z "$raw" || "$raw" == "null" ]] && raw=none
-                [[ "$raw" == none || "$raw" == local ]] && val="$raw" || { warn "$var=$raw ($src) is not none|local; using $def"; val="$def"; src="default"; } ;;
+                [[ "$raw" == none || "$raw" == local || "$raw" == cliproxy ]] && val="$raw" || { warn "$var=$raw ($src) is not none|local|cliproxy; using $def"; val="$def"; src="default"; } ;;
     list) [[ "${raw// /}" == all ]] && raw=""; val="$(yaml_list "$raw")" ;;
   esac
   printf -v "$var" '%s' "$val"; export "${var?}"

@@ -124,7 +124,7 @@ specialist-logs-follow: ## Recent specialist-routing decisions, then follow live
 specialist-status: ## Read-only: plugin vs repo, specialist_* settings, gateway, restart pending, knowledge readiness
 	@PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py status
 
-specialist-install: ## Install the router plugin + set specialist_routing on (hermes config set, read back); NO restart [MAX=4 REQUIRE_READY=0|1 CLASSIFIER=none|local PROFILES=a,b|all DRY_RUN=1]
+specialist-install: ## Install the router plugin + set specialist_routing on (hermes config set, read back); NO restart [MAX=4 REQUIRE_READY=0|1 CLASSIFIER=none|local|cliproxy PROFILES=a,b|all DRY_RUN=1]
 	@args=(install); \
 	 [[ -n "$${MAX:-}" ]] && args+=(--max "$$MAX"); \
 	 [[ "$${REQUIRE_READY:-}" == "1" ]] && args+=(--require-ready); \
@@ -166,8 +166,9 @@ local-models: ## Read-only: models on the local Ollama endpoint (capabilities, s
 local-route-readback: ## Read-only: live config vs what hermes-install.sh --force renders now (Hermes' own resolver) + local-only invariants; exit 1 on drift
 	@python3 scripts/local-route.py readback
 
-specialist-classify-probe: ## Dry-run the hybrid specialist router with the LIVE local classifier for TASK="..." (content-free trace; nothing dispatched) [NO_CALL=1 MODEL= FALLBACK_MODEL= TIMEOUT=]
+specialist-classify-probe: ## Dry-run the hybrid specialist router with the LIVE classifier for TASK="..." (content-free trace; nothing dispatched) [CLASSIFIER=local|cliproxy NO_CALL=1 MODEL= FALLBACK_MODEL= TIMEOUT=]
 	@args=(probe); \
+	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
 	 [[ "$${NO_CALL:-0}" == "1" ]] && args+=(--no-call); \
 	 [[ -n "$${MODEL:-}" ]] && args+=(--model "$$MODEL"); \
 	 [[ -n "$${FALLBACK_MODEL+x}" ]] && args+=(--fallback-model "$$FALLBACK_MODEL"); \

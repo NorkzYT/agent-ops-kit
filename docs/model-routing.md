@@ -460,7 +460,9 @@ behavior — public traffic still follows the main provider + fallback policy.
 The same plugin can suggest book-backed specialist profiles per task through a
 `pre_llm_call` hook. It is off by default (`specialist_routing`), uses the same
 current-task extraction and `#privacy` marker check, and only runs in the `default`
-profile. See [specialist-routing.md](specialist-routing.md).
+profile. Its optional classifier is `cliproxy` (CLIProxyAPI, `gpt-5.6-terra` at
+`medium` effort, typed task plus verified attachments, public turns only) or
+`local` (the routine role below). See [specialist-routing.md](specialist-routing.md).
 
 ## Configuration
 

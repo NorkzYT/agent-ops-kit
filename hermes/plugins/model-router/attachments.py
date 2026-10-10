@@ -24,13 +24,25 @@ Only the bounded file bytes are read, never echoed: the result carries the
 sender's prose, stable labels and (``attached``, never in ``repr``) the text of
 the verified relays exactly as they appear in the turn, so a caller can route
 an attachment-only turn on the file the sender uploaded as the prompt.
+
+:func:`read_documents` is the one path that reads a document the gateway did
+NOT inline (large text, PDF, DOCX), for the specialist classifier only. It
+accepts exactly the gateway notes in the runtime head that name a regular,
+non-symlink file directly in the active cache, reads at most a bounded prefix
+(text) or extracts bounded text locally (``pdftotext`` for PDF, ``zipfile``
+for DOCX, inside a time budget) and returns the text with content-free labels.
 """
 
 from __future__ import annotations
 
+import html
 import os
 import re
+import shutil
 import stat
+import subprocess
+import time
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -43,6 +55,14 @@ from . import task_intent as ti
 MAX_FILE_BYTES = 1024 * 1024
 MAX_TOTAL_BYTES = 4 * 1024 * 1024
 MAX_NOTES = 32
+# Non-inlined documents (read_documents): bounded reads and local extraction.
+MAX_DOCUMENTS = 4
+MAX_DOCUMENT_BYTES = 32 * 1024 * 1024     # stat bound for PDF/DOCX
+DOC_TEXT_READ_BYTES = 256 * 1024          # prefix of a large text file
+DOC_MAX_CHARS = 8000                      # text kept per document
+PDF_MAX_PAGES = 30
+PDF_TIMEOUT = 6.0                         # seconds per PDF, inside the caller's deadline
+DOCX_MAX_XML_BYTES = 8 * 1024 * 1024
 
 # Container/remote spellings of the cache dir in a note
 # (tools.credential_files.to_agent_visible_cache_path); the file is always read
@@ -75,13 +95,15 @@ class Separation:
     sender's prose was separated exactly (always True without an attachment).
     ``prose``: sender-typed text ('' when attachment-only or unproven).
     ``attached``: the verified relay bodies, blank-line joined ('' unless
-    proven; a non-inlined document is never read for its text)."""
+    proven; a non-inlined document is never read for its text).
+    ``attached_parts``: the same bodies, one per relay."""
 
     attachment: bool
     proven: bool
     prose: str = field(repr=False)
     reason: str = "none"
     attached: str = field(default="", repr=False)
+    attached_parts: Tuple[str, ...] = field(default=(), repr=False)
 
 
 @dataclass
@@ -109,12 +131,20 @@ def separate_sender_prose(raw_text: str, *, cache_dir: Optional[Path] = None) ->
         return Separation(False, True, seg)
     try:
         docs = _load_docs(head, len(raw_text), headers, cache_dir or active_cache_dir())
-        prose, attached = _strip_relays(seg, headers, docs)
+        prose, bodies = _strip_relays(seg, headers, docs)
     except _Unproven as exc:
         return Separation(True, False, "", f"unproven:{exc}")
     except OSError:
         return Separation(True, False, "", "unproven:io")
-    return Separation(True, True, prose, "separated" if prose else "attachment-only", attached)
+    return Separation(True, True, prose, "separated" if prose else "attachment-only",
+                      _BLANK.join(bodies), tuple(bodies))
+
+
+def has_document_note(raw_text: str) -> bool:
+    """A gateway note for a NON-inlined document (large text, PDF, DOCX) sits
+    in the runtime head. Text only; nothing is read."""
+    head, _seg = ti.split_sender_segment(raw_text or "")
+    return any(rx.search(head) for rx in _NOTE_RES[1:])
 
 
 def wire_text_marker(text: str) -> str:
@@ -176,37 +206,52 @@ def _cache_basename(path: str, cache_dir: Path) -> Optional[str]:
     return base
 
 
-def _read_cached(cache_dir: Path, base: str, raw_len: int, need_content: bool) -> Optional[bytes]:
-    """Bounded bytes of a regular, non-symlink file directly in the cache dir
-    (``base`` has no separator; lstat + O_NOFOLLOW + same-inode fstat); None
-    when not needed or too large to have been relayed in ``raw_len`` chars."""
-    path = os.path.join(str(cache_dir), base)
+def _lstat_regular(cache_dir: Path, base: str) -> os.stat_result:
     try:
-        st = os.lstat(path)
+        st = os.lstat(os.path.join(str(cache_dir), base))
     except OSError:
         raise _Unproven("missing")
     if not stat.S_ISREG(st.st_mode):  # symlink, fifo, dir, device
         raise _Unproven("not-regular")
+    return st
+
+
+def _open_regular(cache_dir: Path, base: str, st: os.stat_result) -> int:
+    """fd of the lstat-checked file (O_NOFOLLOW + same-inode fstat)."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(os.path.join(str(cache_dir), base), flags)
+    fst = os.fstat(fd)
+    if not stat.S_ISREG(fst.st_mode) or (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
+        os.close(fd)
+        raise _Unproven("changed")
+    return fd
+
+
+def _read_fd(fd: int, limit: int) -> bytes:
+    chunks, left = [], limit
+    while left > 0:
+        chunk = os.read(fd, min(left, 65536))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        left -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_cached(cache_dir: Path, base: str, raw_len: int, need_content: bool) -> Optional[bytes]:
+    """Bounded bytes of a regular, non-symlink file directly in the cache dir
+    (``base`` has no separator; lstat + O_NOFOLLOW + same-inode fstat); None
+    when not needed or too large to have been relayed in ``raw_len`` chars."""
+    st = _lstat_regular(cache_dir, base)
     if not need_content or st.st_size > 4 * raw_len:
         return None
     if st.st_size > MAX_FILE_BYTES:
         raise _Unproven("oversize")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
-    fd = os.open(path, flags)
+    fd = _open_regular(cache_dir, base, st)
     try:
-        fst = os.fstat(fd)
-        if not stat.S_ISREG(fst.st_mode) or (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
-            raise _Unproven("changed")
-        chunks, left = [], MAX_FILE_BYTES + 1
-        while left > 0:
-            chunk = os.read(fd, min(left, 65536))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            left -= len(chunk)
+        data = _read_fd(fd, MAX_FILE_BYTES + 1)
     finally:
         os.close(fd)
-    data = b"".join(chunks)
     if len(data) > MAX_FILE_BYTES:
         raise _Unproven("oversize")
     return data
@@ -250,8 +295,8 @@ def _relay_end(seg: str, at: int, name: str, docs: List[_Doc]) -> int:
     return ends.pop()
 
 
-def _strip_relays(seg: str, headers: list, docs: List[_Doc]) -> Tuple[str, str]:
-    """``(prose, attached)``: the sender's paragraphs and the verified relay bodies."""
+def _strip_relays(seg: str, headers: list, docs: List[_Doc]) -> Tuple[str, List[str]]:
+    """``(prose, bodies)``: the sender's paragraphs and the verified relay bodies."""
     parts: List[str] = []
     bodies: List[str] = []
     pos = 0
@@ -270,4 +315,145 @@ def _strip_relays(seg: str, headers: list, docs: List[_Doc]) -> Tuple[str, str]:
     prose = _BLANK.join(p.strip() for p in parts if p.strip())
     if _HEADER_ANYWHERE_RE.search(prose) or _NOTE_LOOSE_RE.search(prose):
         raise _Unproven("residual-relay")
-    return prose, _BLANK.join(b for b in bodies if b)
+    return prose, [b for b in bodies if b]
+
+
+# --------------------------------------------------------------------------- #
+# Non-inlined documents (specialist classifier context only)
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Document:
+    """Bounded text of one verified, non-inlined document. ``kind`` is
+    ``text`` | ``pdf`` | ``docx``; the text is never in ``repr``."""
+
+    kind: str
+    text: str = field(repr=False)
+
+
+def read_documents(raw_text: str, *, cache_dir: Optional[Path] = None,
+                   deadline: Optional[float] = None) -> Tuple[List[Document], List[str]]:
+    """``(documents, labels)`` for the documents the gateway did NOT inline.
+
+    Only notes in the runtime head (``split_sender_segment``) count, in the
+    gateway's exact wording, naming a regular non-symlink file directly in the
+    active document cache whose display name matches. Inline-relay notes are
+    skipped (their verified text is ``Separation.attached_parts``). Large text
+    files give a bounded prefix; PDF goes through local ``pdftotext`` (first
+    :data:`PDF_MAX_PAGES` pages, :data:`PDF_TIMEOUT` seconds, never past
+    ``deadline``); DOCX through ``zipfile`` (bounded XML). Nothing leaves the
+    host here. ``labels`` are content-free (``pdf:ok``, ``pdf:timeout``,
+    ``unsupported``, ``unproven:note-path``, ...); a failure skips that
+    document and never raises.
+    """
+    head, _seg = ti.split_sender_segment(raw_text or "")
+    cache_dir = cache_dir or active_cache_dir()
+    if not cache_dir.is_absolute():
+        return [], ["unproven:cache-dir"]
+    notes = []
+    for kind, rx in (("text", _NOTE_RES[1]), ("binary", _NOTE_RES[2])):
+        notes += [(m.start(), kind, m) for m in rx.finditer(head)]
+    docs: List[Document] = []
+    labels: List[str] = []
+    seen = set()
+    for _pos, kind, note in sorted(notes, key=lambda n: n[0])[:MAX_DOCUMENTS]:
+        base = _cache_basename(note.group("path"), cache_dir)
+        if base is None:
+            labels.append("unproven:note-path")
+            continue
+        shown = base.split("_", 2)[2] if len(base.split("_", 2)) >= 3 else base
+        if note.group("name") != _UNSAFE_NAME_RE.sub("_", shown):
+            labels.append("unproven:note-name")
+            continue
+        if base in seen:
+            continue
+        seen.add(base)
+        try:
+            doc = _extract(cache_dir, base, kind, shown, deadline)
+        except _Unproven as exc:
+            labels.append(f"unproven:{exc}")
+            continue
+        except _Skip as exc:
+            labels.append(str(exc))
+            continue
+        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError):
+            labels.append("error")
+            continue
+        labels.append(f"{doc.kind}:ok" if doc.text else f"{doc.kind}:empty")
+        if doc.text:
+            docs.append(doc)
+    return docs, labels
+
+
+class _Skip(Exception):
+    pass
+
+
+def _extract(cache_dir: Path, base: str, kind: str, shown: str, deadline: Optional[float]) -> Document:
+    st = _lstat_regular(cache_dir, base)
+    suffix = os.path.splitext(shown)[1].lower()
+    if kind == "text":
+        fd = _open_regular(cache_dir, base, st)
+        try:
+            data = _read_fd(fd, DOC_TEXT_READ_BYTES)
+        finally:
+            os.close(fd)
+        return Document("text", _bound(_universal_newlines(data.decode("utf-8", errors="replace"))))
+    if suffix not in (".pdf", ".docx"):
+        raise _Skip("unsupported")
+    if st.st_size > MAX_DOCUMENT_BYTES:
+        raise _Skip(f"{suffix[1:]}:oversize")
+    fd = _open_regular(cache_dir, base, st)
+    try:
+        if suffix == ".pdf":
+            return Document("pdf", _bound(_pdf_text(fd, deadline)))
+        return Document("docx", _bound(_docx_text(fd)))
+    finally:
+        os.close(fd)
+
+
+def _bound(text: str) -> str:
+    text = "\n".join(line.rstrip() for line in text.replace("\x00", "").splitlines())
+    return re.sub(r"\n{3,}", "\n\n", text).strip()[:DOC_MAX_CHARS]
+
+
+def _pdf_text(fd: int, deadline: Optional[float]) -> str:
+    """Local text-layer extraction of the open PDF (no OCR, no network)."""
+    if os.pread(fd, 5, 0) != b"%PDF-":
+        raise _Skip("pdf:not-pdf")
+    tool = shutil.which("pdftotext")
+    if not tool:
+        raise _Skip("pdf:no-extractor")
+    timeout = PDF_TIMEOUT
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.monotonic())
+    if timeout < 0.5:
+        raise _Skip("pdf:budget")
+    # /dev/fd/N re-opens the already verified inode in the child.
+    cmd = [tool, "-q", "-enc", "UTF-8", "-nopgbrk", "-f", "1", "-l", str(PDF_MAX_PAGES),
+           f"/dev/fd/{fd}", "-"]
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8"}
+    try:
+        proc = subprocess.run(cmd, pass_fds=(fd,), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, timeout=timeout, env=env, check=False)
+    except subprocess.TimeoutExpired:
+        raise _Skip("pdf:timeout")
+    if proc.returncode != 0:
+        raise _Skip("pdf:extract-failed")
+    return proc.stdout[: DOC_MAX_CHARS * 4].decode("utf-8", errors="replace")
+
+
+_DOCX_BREAK_RE = re.compile(r"</w:p>|<w:br\s*/>|<w:tab\s*/>")
+_XML_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _docx_text(fd: int) -> str:
+    with os.fdopen(os.dup(fd), "rb") as fh, zipfile.ZipFile(fh) as zf:
+        try:
+            info = zf.getinfo("word/document.xml")
+        except KeyError:
+            raise _Skip("docx:no-body")
+        if info.file_size > DOCX_MAX_XML_BYTES:
+            raise _Skip("docx:oversize")
+        with zf.open(info) as body:
+            xml = body.read(DOCX_MAX_XML_BYTES + 1)[:DOCX_MAX_XML_BYTES].decode("utf-8", errors="replace")
+    return html.unescape(_XML_TAG_RE.sub("", _DOCX_BREAK_RE.sub("\n", xml)))
