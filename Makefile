@@ -4,6 +4,7 @@
 #   make up                   start the Docker half (Honcho, Ollama, CLIProxyAPI)
 #   make claude-proxy-install claude-max-proxy on this host (systemd user service)
 #   make hermes-install       install/configure Hermes on this host (Discord, Honcho, Browser Use)
+#   make hermes-config-apply  re-apply .env to ~/.hermes (forced render, no gateway restart)
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
@@ -19,16 +20,26 @@ define envval
 $(shell bash scripts/envval.sh $(1) $(ENV_FILE))
 endef
 
+# $(call tail_lines,<default>) sets shell var $$n to LINES (env or `make LINES=n`)
+# validated as a positive integer, falling back to <default>.
+define tail_lines
+n="$${LINES:-$(1)}"; [[ "$$n" =~ ^[1-9][0-9]*$$ ]] || { echo "LINES must be a positive integer (got '$$n')" >&2; exit 2; }
+endef
+
 .PHONY: help init up down restart pull update ps status logs \
 	    cliproxyapi-logs cliproxyapi-logs-follow router-logs router-logs-follow \
 	    auth-codex auth-claude-proxy claude-proxy-install claude-proxy-update claude-proxy-restart claude-proxy-logs claude-cli-update \
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
+	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
 
+# `##@ Title` lines start a help section; `target: ## text` lines are listed under it.
 help: ## Show this help
-	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  \033[36m%-25s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
+	@echo "Usage: make <target> [VAR=value]"
+	@awk 'BEGIN{FS=":.*##"} /^##@ /{printf "\n\033[1m%s\033[0m\n",substr($$0,5); next} /^[a-zA-Z_-]+( [a-zA-Z_-]+)*:.*##/{printf "  \033[36m%-25s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
+
+##@ Setup and Docker stack
 
 init: ## Create .env with generated secrets and render the CLIProxyAPI config
 	@bash scripts/stack-init.sh
@@ -57,23 +68,11 @@ ps status: ## Container status
 logs: ## Tail container logs (all, or S=<service>)
 	@$(COMPOSE) logs -f --tail=200 $(S)
 
-# $(call tail_lines,<default>) sets shell var $$n to LINES (env or `make LINES=n`)
-# validated as a positive integer, falling back to <default>.
-define tail_lines
-n="$${LINES:-$(1)}"; [[ "$$n" =~ ^[1-9][0-9]*$$ ]] || { echo "LINES must be a positive integer (got '$$n')" >&2; exit 2; }
-endef
+clean: ## Stop the Docker half AND delete its volumes: Honcho memory, Ollama models (asks first)
+	@read -r -p "This deletes Honcho memory and the Ollama model. Type 'yes' to continue: " a; \
+	[[ "$$a" == "yes" ]] && $(COMPOSE) down -v || echo "aborted"
 
-router-logs: ## Last 20 model_router lines from the Hermes agent log (LINES=<n> to override)
-	@bash scripts/router-logs.sh snapshot
-
-router-logs-follow: ## Recent model_router lines, then follow live (survives log rotation)
-	@bash scripts/router-logs.sh follow
-
-cliproxyapi-logs: ## Last 200 CLIProxyAPI container log lines (LINES=<n> to override)
-	@$(call tail_lines,200); $(COMPOSE) logs --tail="$$n" cliproxyapi
-
-cliproxyapi-logs-follow: ## Follow CLIProxyAPI container logs from the last 200 lines (LINES=<n> to override)
-	@$(call tail_lines,200); $(COMPOSE) logs -f --tail="$$n" cliproxyapi
+##@ Proxies and auth
 
 auth-codex: ## Log the ChatGPT/Codex subscription into CLIProxyAPI (device code flow)
 	@echo "Follow the URL shown, sign in with your ChatGPT account, then come back."
@@ -105,8 +104,84 @@ claude-cli-update: ## Update the Claude Code CLI itself (`claude update`); the p
 models: ## List models exposed by both proxies (distinguishes down from empty)
 	@bash scripts/models.sh
 
-test-router: ## Run the model-router unit + zero-egress privacy canary suite (offline)
-	@python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+cliproxyapi-logs: ## Last 200 CLIProxyAPI container log lines (LINES=<n> to override)
+	@$(call tail_lines,200); $(COMPOSE) logs --tail="$$n" cliproxyapi
+
+cliproxyapi-logs-follow: ## Follow CLIProxyAPI container logs from the last 200 lines (LINES=<n> to override)
+	@$(call tail_lines,200); $(COMPOSE) logs -f --tail="$$n" cliproxyapi
+
+##@ Hermes
+
+hermes-install: ## Install Hermes on this host and wire it to Discord, Honcho, both proxies, Browser Use
+	@bash scripts/hermes-install.sh
+
+# Re-apply .env to ~/.hermes: config.yaml, SOUL.md and honcho.json are re-rendered
+# (.bak copies kept), skills and plugins refreshed. The running gateway keeps the
+# old config until make hermes-restart.
+hermes-config-apply: ## Apply .env changes: HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force; no gateway restart (then make hermes-restart)
+	@HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
+
+hermes-restart: ## Restart the Hermes gateway (Discord bot)
+	@hermes gateway restart
+
+hermes-logs: ## Tail Hermes gateway logs
+	@tail -n 200 -f "$${HERMES_HOME:-$$HOME/.hermes}/logs/gateway.log"
+
+hermes-profile: ## Create/refresh a Hermes profile and sync its books from data/knowledge/<NAME> (NAME=marketing [KNOWLEDGE_ROOT=/mnt/books/knowledge])
+	@test -n "$(NAME)" || { echo "usage: make hermes-profile NAME=<profile> [KNOWLEDGE_ROOT=<dir>]"; exit 2; }
+	@bash scripts/hermes-profile.sh "$(NAME)"
+
+hermes-ui: ## Start the Hermes dashboard (config/keys web UI) on 127.0.0.1 (HERMES_UI_PORT, default 9119)
+	@bash scripts/hermes-ui.sh start
+
+hermes-ui-status: ## Show whether the Hermes dashboard is running
+	@bash scripts/hermes-ui.sh status
+
+hermes-ui-stop: ## Stop the Hermes dashboard
+	@bash scripts/hermes-ui.sh stop
+
+##@ Health and routing
+
+doctor: ## Check the whole stack (containers, both proxies, Honcho, Hermes)
+	@bash scripts/doctor.sh
+
+honcho-health: ## Check the Honcho API
+	@curl -fsS http://127.0.0.1:$(or $(call envval,HONCHO_PORT),8000)/health && echo
+
+route-smoke: ## Read-only routing smoke test: probe /v1/models, degrade-check tiers, run the canary
+	@bash scripts/route-smoke.sh
+
+router-logs: ## Last 20 model_router lines from the Hermes agent log (LINES=<n> to override)
+	@bash scripts/router-logs.sh snapshot
+
+router-logs-follow: ## Recent model_router lines, then follow live (survives log rotation)
+	@bash scripts/router-logs.sh follow
+
+# Local model roles (routine qwen3.5 / fallback qwen3.6 / agent qwen3.8 by
+# default; docs/model-routing.md, Local model roles). All read-only: metadata
+# calls go only to the configured local endpoint; nothing is restarted.
+local-route-status: ## Read-only: local roles vs endpoint, native fallback chains + aux routes as Hermes resolves them, privacy, specialist knobs
+	@PATH="$$HOME/.local/bin:$$PATH" python3 scripts/local-route.py status
+
+local-models: ## Read-only: models on the local Ollama endpoint (capabilities, size, loaded, role) [JSON=1 BASE_URL=...]
+	@args=(catalog); \
+	 [[ "$${JSON:-0}" == "1" ]] && args+=(--json); \
+	 [[ -n "$${BASE_URL:-}" ]] && args+=(--base-url "$$BASE_URL"); \
+	 python3 scripts/local-route.py "$${args[@]}"
+
+local-route-readback: ## Read-only: live config vs what hermes-install.sh --force renders now (Hermes' own resolver) + local-only invariants; exit 1 on drift
+	@python3 scripts/local-route.py readback
+
+specialist-classify-probe: ## Dry-run the hybrid specialist router with the LIVE classifier for TASK="..." (content-free trace; nothing dispatched) [CLASSIFIER=local|cliproxy NO_CALL=1 MODEL= FALLBACK_MODEL= TIMEOUT=]
+	@args=(probe); \
+	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
+	 [[ "$${NO_CALL:-0}" == "1" ]] && args+=(--no-call); \
+	 [[ -n "$${MODEL:-}" ]] && args+=(--model "$$MODEL"); \
+	 [[ -n "$${FALLBACK_MODEL+x}" ]] && args+=(--fallback-model "$$FALLBACK_MODEL"); \
+	 [[ -n "$${TIMEOUT:-}" ]] && args+=(--timeout "$$TIMEOUT"); \
+	 python3 scripts/local-route.py "$${args[@]}"
+
+##@ Specialist routing
 
 specialist-route: ## Dry-run the specialist router for TASK="..." or TASK=- < prompt.txt (offline; PLAN=1 shows the note; no TASK prints usage)
 	@python3 scripts/specialist-route.py $(if $(PLAN),--plan) $(if $(REQUIRE_READY),--require-ready)
@@ -151,66 +226,7 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
-# Local model roles (routine qwen3.5 / fallback qwen3.6 / agent qwen3.8 by
-# default; docs/model-routing.md, Local model roles). All read-only: metadata
-# calls go only to the configured local endpoint; nothing is restarted.
-local-route-status: ## Read-only: local roles vs endpoint, native fallback chains + aux routes as Hermes resolves them, privacy, specialist knobs
-	@PATH="$$HOME/.local/bin:$$PATH" python3 scripts/local-route.py status
-
-local-models: ## Read-only: models on the local Ollama endpoint (capabilities, size, loaded, role) [JSON=1 BASE_URL=...]
-	@args=(catalog); \
-	 [[ "$${JSON:-0}" == "1" ]] && args+=(--json); \
-	 [[ -n "$${BASE_URL:-}" ]] && args+=(--base-url "$$BASE_URL"); \
-	 python3 scripts/local-route.py "$${args[@]}"
-
-local-route-readback: ## Read-only: live config vs what hermes-install.sh --force renders now (Hermes' own resolver) + local-only invariants; exit 1 on drift
-	@python3 scripts/local-route.py readback
-
-specialist-classify-probe: ## Dry-run the hybrid specialist router with the LIVE classifier for TASK="..." (content-free trace; nothing dispatched) [CLASSIFIER=local|cliproxy NO_CALL=1 MODEL= FALLBACK_MODEL= TIMEOUT=]
-	@args=(probe); \
-	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
-	 [[ "$${NO_CALL:-0}" == "1" ]] && args+=(--no-call); \
-	 [[ -n "$${MODEL:-}" ]] && args+=(--model "$$MODEL"); \
-	 [[ -n "$${FALLBACK_MODEL+x}" ]] && args+=(--fallback-model "$$FALLBACK_MODEL"); \
-	 [[ -n "$${TIMEOUT:-}" ]] && args+=(--timeout "$$TIMEOUT"); \
-	 python3 scripts/local-route.py "$${args[@]}"
-
-test-private-honcho: ## Run the #private marker / private Honcho validator tests (offline, explicit env; no live Honcho)
-	@python3 -m unittest discover -s scripts/tests -p 'test_private_honcho.py'
-
-test-local-route: ## Run the local-role / hybrid classifier / config-render tests (temp HERMES_HOME, stub endpoint; offline)
-	@python3 -m unittest discover -s scripts/tests -p 'test_local_route.py'
-
-test-specialists: ## Run only the specialist-router tests (offline, temp fixtures)
-	@python3 -m unittest discover -s scripts/tests -p 'test_specialist*.py'
-
-test-specialist-activate: ## Run only the specialist activation tests (stub hermes/systemctl, temp HERMES_HOME; offline)
-	@python3 -m unittest discover -s scripts/tests -p 'test_specialist_activate.py'
-
-route-smoke: ## Read-only routing smoke test: probe /v1/models, degrade-check tiers, run the canary
-	@bash scripts/route-smoke.sh
-
-honcho-health: ## Check the Honcho API
-	@curl -fsS http://127.0.0.1:$(or $(call envval,HONCHO_PORT),8000)/health && echo
-
-doctor: ## Check the whole stack (containers, both proxies, Honcho, Hermes)
-	@bash scripts/doctor.sh
-
-windows-vm-network: ## Publish CLIProxyAPI (:8317) + Honcho (:8000) to the Windows VM over Tailscale Serve (Docker stays on 127.0.0.1)
-	@bash scripts/windows-vm-network.sh apply
-
-windows-vm-network-status: ## Verify the loopback services and the two Tailscale Serve forwarders for the Windows VM
-	@bash scripts/windows-vm-network.sh status
-
-windows-vm-network-off: ## Remove only the two Tailscale Serve forwarders (unrelated Serve/Funnel config is left intact)
-	@bash scripts/windows-vm-network.sh off
-
-hermes-install: ## Install Hermes on this host and wire it to Discord, Honcho, both proxies, Browser Use
-	@bash scripts/hermes-install.sh
-
-hermes-profile: ## Create/refresh a Hermes profile and sync its books from data/knowledge/<NAME> (NAME=marketing [KNOWLEDGE_ROOT=/mnt/books/knowledge])
-	@test -n "$(NAME)" || { echo "usage: make hermes-profile NAME=<profile> [KNOWLEDGE_ROOT=<dir>]"; exit 2; }
-	@bash scripts/hermes-profile.sh "$(NAME)"
+##@ Knowledge
 
 knowledge-convert: ## Copy-convert EPUB/PDF books to Markdown (SRC=/mnt/books/edu DEST=data/knowledge/<profile> [ARGS="--dry-run 'Book folder'"])
 	@test -n "$(SRC)" -a -n "$(DEST)" || { echo "usage: make knowledge-convert SRC=<book dir> DEST=<output dir> [ARGS=...]"; exit 2; }
@@ -272,6 +288,34 @@ knowledge-learn-status: ## Read-only: raw synced knowledge vs. learned <profile>
 	 [[ "$${JSON:-0}" == "1" ]] && args+=(--json); \
 	 python3 scripts/knowledge-learn.py "$${args[@]}"
 
+##@ Windows VM
+
+windows-vm-network: ## Publish CLIProxyAPI (:8317) + Honcho (:8000) to the Windows VM over Tailscale Serve (Docker stays on 127.0.0.1)
+	@bash scripts/windows-vm-network.sh apply
+
+windows-vm-network-status: ## Verify the loopback services and the two Tailscale Serve forwarders for the Windows VM
+	@bash scripts/windows-vm-network.sh status
+
+windows-vm-network-off: ## Remove only the two Tailscale Serve forwarders (unrelated Serve/Funnel config is left intact)
+	@bash scripts/windows-vm-network.sh off
+
+##@ Tests (offline)
+
+test-router: ## Run the model-router unit + zero-egress privacy canary suite (offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+
+test-local-route: ## Run the local-role / hybrid classifier / config-render tests (temp HERMES_HOME, stub endpoint; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_local_route.py'
+
+test-private-honcho: ## Run the #private marker / private Honcho validator tests (offline, explicit env; no live Honcho)
+	@python3 -m unittest discover -s scripts/tests -p 'test_private_honcho.py'
+
+test-specialists: ## Run only the specialist-router tests (offline, temp fixtures)
+	@python3 -m unittest discover -s scripts/tests -p 'test_specialist*.py'
+
+test-specialist-activate: ## Run only the specialist activation tests (stub hermes/systemctl, temp HERMES_HOME; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_specialist_activate.py'
+
 test-knowledge-learn: ## Run the knowledge-learn tests (temp HERMES_HOME, stub hermes and /learn prompt; offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_knowledge_learn.py'
 
@@ -286,22 +330,3 @@ test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub conve
 
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'
-
-hermes-restart: ## Restart the Hermes gateway (Discord bot)
-	@hermes gateway restart
-
-hermes-logs: ## Tail Hermes gateway logs
-	@tail -n 200 -f "$${HERMES_HOME:-$$HOME/.hermes}/logs/gateway.log"
-
-hermes-ui: ## Start the Hermes dashboard (config/keys web UI) on 127.0.0.1 (HERMES_UI_PORT, default 9119)
-	@bash scripts/hermes-ui.sh start
-
-hermes-ui-status: ## Show whether the Hermes dashboard is running
-	@bash scripts/hermes-ui.sh status
-
-hermes-ui-stop: ## Stop the Hermes dashboard
-	@bash scripts/hermes-ui.sh stop
-
-clean: ## Stop the Docker half AND delete its volumes: Honcho memory, Ollama models (asks first)
-	@read -r -p "This deletes Honcho memory and the Ollama model. Type 'yes' to continue: " a; \
-	[[ "$$a" == "yes" ]] && $(COMPOSE) down -v || echo "aborted"

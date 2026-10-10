@@ -38,6 +38,53 @@ make doctor
 ```
 
 Then @mention the bot in Discord. Full walkthrough: [docs/install.md](docs/install.md).
+`make help` lists every target, grouped by area.
+
+## Change a setting
+
+`.env` in the checkout is the source of truth; `~/.hermes` is rendered from it.
+Run these from your own terminal, not from a Hermes or Discord turn:
+
+```bash
+$EDITOR .env
+bash scripts/hermes-install.sh --render-only /tmp/hermes-next.yaml   # preview; nothing written
+diff ~/.hermes/config.yaml /tmp/hermes-next.yaml
+make hermes-config-apply      # HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force; no restart
+make local-route-readback     # live config matches the render
+make hermes-restart           # the gateway picks up the new config
+make router-logs LINES=5      # "model_router registered (privacy=... specialists=on) ..."
+```
+
+`hermes-config-apply` rewrites `config.yaml`, `SOUL.md` and `honcho.json`
+(keeping `.bak` copies), refreshes the skills and plugins, and leaves the
+gateway running on the old config until `make hermes-restart`. Details:
+[docs/install.md](docs/install.md#change-a-setting).
+
+## Model routing
+
+All of this lives in the `model-router` plugin and `.env`; see
+[docs/model-routing.md](docs/model-routing.md).
+
+- **Orchestrator** (CLIProxyAPI, ChatGPT): per task, status→`gpt-5.6-luna`
+  low effort, ordinary work→luna, planning→`gpt-5.6-terra`, hard→`gpt-5.6-sol`;
+  `gpt-6-astra` only with a leading `#max`/`#astra` line.
+- **Coding subagents** (claude-max-proxy, Claude Max): `opus`, `fable` for hard
+  engineering; a leading `#opus`/`#fable` line forces one.
+- **Specialists**: the router names up to six book-backed profiles per task
+  (`MODEL_ROUTER_SPECIALIST_MAX=6`, the hard cap). Keywords and verified
+  attachment text (PDF/DOCX extracted locally) add deterministic signals; for
+  weak matches or attachments the classifier on CLIProxyAPI `gpt-5.6-terra`
+  (medium effort) may add up to two more, within the same cap.
+- **Compression**: CLIProxyAPI `gpt-5.6-terra`, falling back to `gpt-5.6-luna`.
+- **Session titles**: the main route (CLIProxyAPI, luna); no title variables
+  are set in `.env.example`.
+- **Privacy**: `#privacy` or `#private` typed in the current turn keeps that
+  request on local Ollama or refuses it (per request, not sticky; `#local`
+  does nothing). This needs `MODEL_ROUTER_PRIVACY=true`. `.env.example`
+  currently ships `MODEL_ROUTER_PRIVACY=false`, the opt-out: the main-loop
+  guard is off, so marked turns follow the normal cloud route. Even then,
+  compression refuses a payload carrying `#privacy`/`#private`, and marked
+  turns never reach the specialist classifier.
 
 ## What is in the box
 
@@ -95,7 +142,7 @@ make knowledge-refresh       # stage + sync every profile (NAME=<profile> for on
 
 ```
 docker-compose.yml        Honcho, Ollama, CLIProxyAPI
-Makefile                  init, up, auth-*, claude-proxy-*, models, doctor, hermes-install, hermes-profile, knowledge-refresh, knowledge-classify, knowledge-reconcile
+Makefile                  every operator command, grouped in `make help` (stack, proxies, Hermes, routing, specialists, knowledge, tests)
 .env.example              every setting, commented
 scripts/                  stack-init, hermes-install, hermes-profile, doctor, claude-max-proxy/ (host install), windows-vm/
 vendor/claude-max-api-proxy  vendored proxy sources (UPSTREAM pins the commit; make claude-proxy-update)
@@ -109,6 +156,7 @@ docs/                     install, hermes, honcho, proxies, browser-use, profile
 
 - [docs/install.md](docs/install.md), [docs/troubleshooting.md](docs/troubleshooting.md)
 - [docs/hermes.md](docs/hermes.md), [docs/honcho.md](docs/honcho.md), [docs/proxies.md](docs/proxies.md)
+- [docs/model-routing.md](docs/model-routing.md), [docs/specialist-routing.md](docs/specialist-routing.md)
 - [docs/browser-use.md](docs/browser-use.md), [docs/profiles-and-teams.md](docs/profiles-and-teams.md), [docs/windows-vm-worker.md](docs/windows-vm-worker.md)
 - Upstream: [Hermes](https://hermes-agent.nousresearch.com/docs), [Honcho](https://honcho.dev/docs), [Browser Use](https://docs.browser-use.com), [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [claude-max-api-proxy](https://github.com/mattschwen/claude-max-api-proxy)
 

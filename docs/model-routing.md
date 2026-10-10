@@ -273,6 +273,21 @@ Privacy routing is **enabled by default** (`MODEL_ROUTER_PRIVACY` defaults to
 deliberate, **risky opt-out** that disables the guard entirely; when enabled it
 stays fail-closed as described here.
 
+**Current `.env.example`: opt-out.** The shipped `.env.example` sets
+`MODEL_ROUTER_PRIVACY=false`, and an explicit `false` renders verbatim. With it:
+
+- a `#privacy`/`#private` turn follows the normal cloud route, and earlier
+  marked turns are not withheld from later requests;
+- the installer warns (`MODEL_ROUTER_PRIVACY=false: private data is NOT kept
+  local`), and `make local-route-status` / `local-route-readback` flag it;
+- still enforced, because they do not read this setting: the
+  [auxiliary guard](#auxiliary-pre-egress-guard--fail-closed) refuses a
+  compression payload carrying `#privacy`/`#private`, and the specialist router
+  never sends a marked turn to its classifier or to a cloud-backed profile.
+
+Set `MODEL_ROUTER_PRIVACY=true` and [apply it](install.md#change-a-setting)
+for the per-request local-or-refuse behavior below.
+
 Classification and local-routing errors remain fail-closed. Exceptions from a
 permitted downstream provider call propagate unchanged to normal provider error
 handling; they are not evidence of private content or an unavailable local model.
@@ -366,10 +381,18 @@ chain and response checks.
 ## Auxiliary work (title generation, compression)
 
 Cheap, high-volume helper calls (`auxiliary.title_generation` /
-`auxiliary.compression`). Title generation is rendered from `AUX_BASE_URL` /
-`AUX_MODEL` / `AUX_FALLBACK_MODEL` / `AUX_PROVIDER`; compression has its own
-route ([below](#compression-on-cliproxyapi-default)). Behavior on **Hermes
-0.21.2** (`agent/auxiliary_client.py:_resolve_task_provider_model`):
+`auxiliary.compression`). Current defaults:
+
+- **Title generation** uses the main route: CLIProxyAPI with the orchestrator
+  model (`HERMES_MODEL`, `gpt-5.6-luna`). `.env.example` sets no `AUX_*` title
+  variables, so the installer renders `provider: auto`.
+- **Compression** uses CLIProxyAPI `gpt-5.6-terra`, then `gpt-5.6-luna`
+  ([below](#compression-on-cliproxyapi-default)).
+
+The installer still reads `AUX_BASE_URL` / `AUX_MODEL` / `AUX_FALLBACK_MODEL` /
+`AUX_PROVIDER` as an optional override that moves title generation to a local
+endpoint. Behavior on **Hermes 0.21.2**
+(`agent/auxiliary_client.py:_resolve_task_provider_model`):
 
 | `.env` | Rendered | Hermes resolves |
 |--------|----------|-----------------|
@@ -381,7 +404,7 @@ route ([below](#compression-on-cliproxyapi-default)). Behavior on **Hermes
 the local model name. Ollama needs no key, so that layout silently leaves the
 aux calls on the cloud. The installer therefore renders `custom` whenever
 `AUX_BASE_URL` is set. `make local-route-readback` fails on the old layout. To keep
-title generation off the cloud:
+title generation off the cloud (optional; not the shipped default):
 
 ```
 AUX_BASE_URL=http://127.0.0.1:11434/v1
@@ -540,11 +563,17 @@ reason on record: without the extension a `#privacy` payload reaches the proxy.
 ## Specialist routing (pilot)
 
 The same plugin can suggest book-backed specialist profiles per task through a
-`pre_llm_call` hook. It is off by default (`specialist_routing`), uses the same
-current-task extraction and `#privacy` marker check, and only runs in the `default`
-profile. Its optional classifier is `cliproxy` (CLIProxyAPI, `gpt-5.6-terra` at
-`medium` effort, typed task plus verified attachments, public turns only) or
-`local` (the routine role below). See [specialist-routing.md](specialist-routing.md).
+`pre_llm_call` hook. The plugin default is off (`specialist_routing`); the shipped
+`.env.example` turns it on with `MODEL_ROUTER_SPECIALIST_MAX=6` (the hard cap)
+and `MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy`. It uses the same
+current-task extraction and `#privacy`/`#private` marker check, and only runs in
+the `default` profile. Typed keywords and verified attachment text (PDF/DOCX
+extracted locally) add deterministic signals. For a public task with weak or no
+keyword matches, or with verified attachments, the classifier (CLIProxyAPI
+`gpt-5.6-terra` at `medium` effort, or `local`, the routine role below) may add
+at most two non-high-risk profiles. The cap applies once, to the combined list.
+Marked turns never reach either classifier. See
+[specialist-routing.md](specialist-routing.md).
 
 ## Configuration
 
@@ -626,7 +655,7 @@ Discord turn. Nothing below restarts the gateway except step 6.
    it replaces:
 
    ```bash
-   HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
+   make hermes-config-apply     # = HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
    make local-route-readback    # "live config matches the render; local-only invariants hold"
    ```
 

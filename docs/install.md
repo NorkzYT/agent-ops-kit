@@ -80,16 +80,65 @@ answer. The token lasts about a year.
 missing, then writes `~/.hermes/config.yaml`, `~/.hermes/.env`,
 `~/.hermes/honcho.json`, the orchestrator `SOUL.md`, and the kit skills. If a
 Discord token is set it installs the gateway as a systemd user service
-(`hermes-gateway.service`) and runs `hermes doctor`. Re-run it after changing
-`.env`; an existing `config.yaml` is left alone and the new render is written
-next to it as `config.yaml.agent-ops-kit` (use `--force` to overwrite, a `.bak`
-is kept).
+(`hermes-gateway.service`) and runs `hermes doctor`. On a re-run an existing
+`config.yaml` is left alone and the new render is written next to it as
+`config.yaml.agent-ops-kit`. To apply `.env` changes to a running install, use
+[Change a setting](#change-a-setting) instead.
 
 **`make doctor`** checks files, containers, the host proxy service, all three
 HTTP endpoints, the Ollama model, and the Hermes configuration and gateway.
 
 Both host services are systemd *user* units. So they start at boot without a
 login, run once: `sudo loginctl enable-linger $USER`.
+
+## Change a setting
+
+`.env` in the checkout is the source of truth. `make hermes-install` renders it
+into `~/.hermes`; the gateway reads `~/.hermes` only when it starts. Applying a
+change is three separate steps: preview, apply, restart. Run them from your own
+terminal in the checkout, not from a Hermes or Discord turn (a restart from
+inside Hermes kills that turn).
+
+1. Edit `.env`, then preview the render. Nothing under `~/.hermes` is written
+   and `hermes` is not needed:
+
+   ```bash
+   bash scripts/hermes-install.sh --render-only /tmp/hermes-next.yaml
+   diff ~/.hermes/config.yaml /tmp/hermes-next.yaml
+   ```
+
+2. Apply without restarting:
+
+   ```bash
+   make hermes-config-apply      # runs: HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
+   make local-route-readback     # "live config matches the render; local-only invariants hold"
+   ```
+
+   `--force` re-renders `config.yaml`, `SOUL.md` and `honcho.json` (each old
+   file is kept as `.bak.<timestamp>`), updates the keys the kit owns in
+   `~/.hermes/.env`, refreshes the kit skills and plugins, and runs
+   `hermes doctor`. `HERMES_SKIP_GATEWAY=1` skips the gateway install and
+   restart, so the running bot keeps the old config. Only the
+   `MODEL_ROUTER_SPECIALIST*` and `MODEL_ROUTER_PRIVATE_TERMS`/`_PATHS` keys
+   are presence-aware: left out of `.env`, they keep the value already in
+   `config.yaml`. Every other key is rendered from `.env` or its default, so a
+   `hermes config set` change to it is overwritten.
+
+3. Restart and read back:
+
+   ```bash
+   make hermes-restart
+   make router-logs LINES=5      # model_router registered (privacy=... specialists=on) ... classifier=cliproxy:gpt-5.6-terra/medium
+   make local-route-status       # aux routes, fallback chains, privacy, specialist knobs as Hermes resolves them
+   make specialist-status        # plugin vs repo, specialist_* settings, restart pending
+   ```
+
+Rollback: copy the newest `~/.hermes/config.yaml.bak.<timestamp>` back over
+`config.yaml`, revert the `.env` lines, then `make hermes-restart`.
+
+Plain `make hermes-install` does not pass `--force` (an existing `config.yaml`
+is left alone) and installs and restarts the gateway; for a settings change use
+`make hermes-config-apply`.
 
 ## Ports
 
@@ -115,7 +164,7 @@ so only ever share it over the tailnet, and only when you accept that (see
 ```bash
 git pull
 make update          # pull images, restart containers, pull + rebuild + restart the Claude proxy
-make hermes-install  # re-render Hermes config if templates changed
+make hermes-config-apply && make hermes-restart   # re-render Hermes config if templates changed
 hermes update        # Hermes itself
 ```
 
