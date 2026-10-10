@@ -121,11 +121,41 @@ aux_fallback_chain() {
   printf '[{provider: custom, model: "%s", base_url: "%s"}]' "$AUX_FALLBACK_MODEL" "$AUX_BASE_URL"
 }
 AUX_FALLBACK_CHAIN="$(aux_fallback_chain)"; export AUX_FALLBACK_CHAIN
+# Compression route. AUX_COMPRESSION_ROUTE=cliproxy (default): CLIProxyAPI,
+# AUX_COMPRESSION_MODEL (gpt-5.6-terra) then AUX_COMPRESSION_FALLBACK_MODEL
+# (gpt-5.6-luna, `none` = no fallback) on the same proxy. The key stays in .env
+# (${CLIPROXY_API_KEY} / key_env). The model-router plugin's aux guard refuses
+# #privacy/#private payloads on this route. AUX_COMPRESSION_ROUTE=aux: the
+# title-generation route above (AUX_BASE_URL or the main provider).
+AUX_COMPRESSION_ROUTE="$(getenv AUX_COMPRESSION_ROUTE cliproxy)"
+case "$AUX_COMPRESSION_ROUTE" in
+  cliproxy|aux) ;;
+  *) warn "AUX_COMPRESSION_ROUTE=$AUX_COMPRESSION_ROUTE is not cliproxy or aux; using cliproxy"
+     AUX_COMPRESSION_ROUTE=cliproxy ;;
+esac
+if [[ "$AUX_COMPRESSION_ROUTE" == "cliproxy" ]]; then
+  AUX_COMPRESSION_PROVIDER=custom; AUX_COMPRESSION_BASE_URL="$CLIPROXY_BASE_URL"
+  AUX_COMPRESSION_API_KEY='${CLIPROXY_API_KEY}'
+  AUX_COMPRESSION_MODEL="$(getenv AUX_COMPRESSION_MODEL gpt-5.6-terra)"
+  aux_comp_fb="$(getenv AUX_COMPRESSION_FALLBACK_MODEL gpt-5.6-luna)"
+  if [[ "$aux_comp_fb" != "none" && "$aux_comp_fb" != "$AUX_COMPRESSION_MODEL" ]]; then
+    AUX_COMPRESSION_FALLBACK_CHAIN="$(printf '[{provider: custom, model: "%s", base_url: "%s", key_env: CLIPROXY_API_KEY}]' \
+      "$aux_comp_fb" "$CLIPROXY_BASE_URL")"
+  else
+    AUX_COMPRESSION_FALLBACK_CHAIN="[]"
+  fi
+else
+  AUX_COMPRESSION_PROVIDER="$AUX_PROVIDER"; AUX_COMPRESSION_MODEL="$AUX_MODEL"
+  AUX_COMPRESSION_BASE_URL="$AUX_BASE_URL"; AUX_COMPRESSION_API_KEY=""
+  AUX_COMPRESSION_FALLBACK_CHAIN="$AUX_FALLBACK_CHAIN"
+fi
+export AUX_COMPRESSION_ROUTE AUX_COMPRESSION_PROVIDER AUX_COMPRESSION_MODEL AUX_COMPRESSION_BASE_URL \
+  AUX_COMPRESSION_API_KEY AUX_COMPRESSION_FALLBACK_CHAIN
 # Compression: never high effort. A local route turns thinking off with a
 # top-level reasoning_effort none in extra_body (Ollama ignores the `reasoning`
 # object the reasoning_effort key renders, and that object would override it)
 # and gets wait budgets sized for local prefill (config.yaml.tmpl, compression).
-if [[ -n "$AUX_BASE_URL" ]]; then
+if [[ "$AUX_COMPRESSION_ROUTE" == "aux" && -n "$AUX_BASE_URL" ]]; then
   AUX_COMPRESSION_EFFORT='""'; AUX_COMPRESSION_EXTRA_BODY='{reasoning_effort: none}'
   AUX_COMPRESSION_TIMEOUT=600; COMPRESSION_IDLE_SECONDS=420; COMPRESSION_CEILING_SECONDS=900
 else

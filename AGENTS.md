@@ -99,13 +99,16 @@ the job id. If scheduling fails, say so and ask to be pinged.
   `#local` inert, not sticky);
   earlier marked turns are withheld from later public requests.
 - Local Ollama roles (one endpoint, `OLLAMA_*_MODEL`): routine `qwen3.5:27b`
-  (ordinary private turns, aux, specialist classifier), agent `qwen3.8:27b`
+  (ordinary private turns, title generation, specialist classifier), agent `qwen3.8:27b`
   (difficult private turns, private coding, fallback agent), fallback
   `qwen3.6:27b` (one retry, then refuse). Private routing never falls back to
   cloud. `make local-route-status` / `local-route-readback` show the result.
 - Native fallback chains (non-private only): orchestrator CLIProxyAPI →
   claude-max-proxy → Ollama agent → Ollama fallback; delegation
   claude-max-proxy → Ollama agent → Ollama fallback.
+- Compression: CLIProxyAPI `gpt-5.6-terra`, fallback `gpt-5.6-luna`
+  (`AUX_COMPRESSION_*`; `AUX_COMPRESSION_ROUTE=aux` pins it to the title route).
+  The plugin's aux guard refuses `#privacy`/`#private` payloads to it.
 - Honcho reasoning: CLIProxyAPI. Embeddings: local Ollama.
 - No vendor API keys anywhere in the stack.
 - Full reference: `docs/model-routing.md`. Verify: `make route-smoke`,

@@ -190,7 +190,7 @@ into the plugin settings and the native chains. No role relies on
 
 | Role | Default | `.env` | Plugin setting | Used by |
 |------|---------|--------|----------------|---------|
-| routine | `qwen3.5:27b` | `OLLAMA_ROUTINE_MODEL` | `ollama_routine_model` | ordinary private turns, title/compression (`AUX_MODEL` default), specialist classifier |
+| routine | `qwen3.5:27b` | `OLLAMA_ROUTINE_MODEL` | `ollama_routine_model` | ordinary private turns, title generation (`AUX_MODEL` default; compression too with `AUX_COMPRESSION_ROUTE=aux`), specialist classifier |
 | fallback | `qwen3.6:27b` | `OLLAMA_FALLBACK_MODEL` | `ollama_fallback_model` | one retry after a role-model failure; last hop of both native chains; aux `fallback_chain` |
 | agent | `qwen3.8:27b` | `OLLAMA_AGENT_MODEL` | `ollama_agent_model` | difficult private turns (high/max tier), private delegated coding, `#opus`/`#fable` when private, the native fallback agent |
 
@@ -330,11 +330,11 @@ Limits (see [Honcho and private sessions](#honcho-and-private-sessions--known-li
 - Only the main-loop LLM call is guarded. Memory providers (Honcho) persist
   and reason over the transcript on their own route, so derived memories of a
   marked turn can come back in recalled context.
-- The auxiliary guard in Hermes core (title/compression) still uses its own
-  scanner (`#private`/`#local`, secrets) and does not recognize `#privacy`
-  (prefer `#private`, which both guards recognize).
-  Keep `AUX_BASE_URL` local so compression of a session that held a marked
-  turn stays on Ollama.
+- Title generation and compression are guarded by Hermes core's auxiliary
+  guard, which this plugin extends: CLIProxyAPI counts as cloud and a
+  `#privacy`/`#private` anywhere in the payload is refused (see
+  [Auxiliary pre-egress guard](#auxiliary-pre-egress-guard--fail-closed)). A
+  session that held a marked turn is therefore not compressed on CLIProxyAPI.
 - A `#privacy` sent as a mid-turn steer inside a tool result does not move an
   already-public turn local.
 
@@ -366,9 +366,10 @@ chain and response checks.
 ## Auxiliary work (title generation, compression)
 
 Cheap, high-volume helper calls (`auxiliary.title_generation` /
-`auxiliary.compression`), rendered from `AUX_BASE_URL` / `AUX_MODEL` /
-`AUX_FALLBACK_MODEL` / `AUX_PROVIDER`. Behavior on **Hermes 0.21.2**
-(`agent/auxiliary_client.py:_resolve_task_provider_model`):
+`auxiliary.compression`). Title generation is rendered from `AUX_BASE_URL` /
+`AUX_MODEL` / `AUX_FALLBACK_MODEL` / `AUX_PROVIDER`; compression has its own
+route ([below](#compression-on-cliproxyapi-default)). Behavior on **Hermes
+0.21.2** (`agent/auxiliary_client.py:_resolve_task_provider_model`):
 
 | `.env` | Rendered | Hermes resolves |
 |--------|----------|-----------------|
@@ -380,7 +381,7 @@ Cheap, high-volume helper calls (`auxiliary.title_generation` /
 the local model name. Ollama needs no key, so that layout silently leaves the
 aux calls on the cloud. The installer therefore renders `custom` whenever
 `AUX_BASE_URL` is set. `make local-route-readback` fails on the old layout. To keep
-title/compression off the cloud:
+title generation off the cloud:
 
 ```
 AUX_BASE_URL=http://127.0.0.1:11434/v1
@@ -388,14 +389,53 @@ AUX_BASE_URL=http://127.0.0.1:11434/v1
 # AUX_FALLBACK_MODEL=qwen3.6:27b default: OLLAMA_FALLBACK_MODEL
 ```
 
-**Compression on a local route** renders thinking off and prefill-sized
+### Compression on CLIProxyAPI (default)
+
+`AUX_COMPRESSION_ROUTE=cliproxy` (the default) renders compression on
+CLIProxyAPI, whatever `AUX_BASE_URL` says:
+
+```yaml
+compression:
+  provider: custom
+  model: gpt-5.6-terra                    # AUX_COMPRESSION_MODEL
+  base_url: http://127.0.0.1:8317/v1      # CLIPROXY_PORT
+  api_key: ${CLIPROXY_API_KEY}
+  reasoning_effort: low
+  extra_body: {}
+  timeout: 120
+  fallback_chain: [{provider: custom, model: "gpt-5.6-luna", base_url: "http://127.0.0.1:8317/v1", key_env: CLIPROXY_API_KEY}]
+```
+
+Terra is the routing policy's model for work that needs judgment (a summary
+must keep decisions, errors and file paths); luna, the everyday model, is the
+fallback. Hermes moves to luna when terra hits a usage/rate limit (429,
+verified) or returns an invalid response, and the compression stall retry
+pins it too. A 404 is not a fallback reason, and Hermes scopes a payment error
+to the whole proxy endpoint, so neither reaches luna. Wait budgets are the
+cloud ones (120 s / 600 s). `AUX_COMPRESSION_FALLBACK_MODEL=none` drops the
+fallback.
+
+| `.env` | Default | Effect |
+|--------|---------|--------|
+| `AUX_COMPRESSION_ROUTE` | `cliproxy` | `aux` follows the title-generation route (`AUX_BASE_URL` local Ollama, else the main provider) |
+| `AUX_COMPRESSION_MODEL` | `gpt-5.6-terra` | primary model on CLIProxyAPI |
+| `AUX_COMPRESSION_FALLBACK_MODEL` | `gpt-5.6-luna` | same-proxy fallback; `none` = no fallback |
+
+Private payloads never take this route: the model-router plugin's guard
+extension (below) refuses a payload carrying `#privacy`/`#private` before
+anything is sent. Verified by `test_cliproxy_compression_wire_and_private_refusal`
+and `test_cliproxy_compression_falls_back_to_luna` (Hermes' own `call_llm`
+against a stub proxy).
+
+**Compression on a local route** (`AUX_COMPRESSION_ROUTE=aux` with
+`AUX_BASE_URL` set) renders thinking off and prefill-sized
 budgets. Measured on the Tailscale Ollama (qwen3.5:27b, 64k context): prefill
 ~200 tok/s, decode ~12 tok/s, so the ~52.6k-token summary prompt Hermes builds
 (its input is capped at 160k chars; there is no aux-side chunking) streams
 nothing for 4+ minutes and the default 120 s no-progress window always fires.
 
-| Key | Local (`AUX_BASE_URL` set) | Inherited (cloud) |
-|-----|----------------------------|-------------------|
+| Key | Local (`aux` + `AUX_BASE_URL`) | Cloud (CLIProxyAPI or inherited) |
+|-----|--------------------------------|----------------------------------|
 | `auxiliary.compression.reasoning_effort` | `""` | `low` |
 | `auxiliary.compression.extra_body` | `{reasoning_effort: none}` | `{}` |
 | `auxiliary.compression.timeout` | `600` | `120` |
@@ -436,12 +476,54 @@ a failed auxiliary request may reach a **cloud** provider:
    **never** sent to a cloud provider — on the primary call or on fallback —
    regardless of `allow_cloud_fallback`. This guard is always on for the
    auxiliary path and does not depend on `MODEL_ROUTER_PRIVACY`. It lives in
-   Hermes core and has not adopted the plugin's `#privacy` policy: it does not
-   recognize `#privacy`, and it still matches content.
+   Hermes core and still matches content; `#privacy` comes from the plugin
+   extension below.
 
 Both checks fail closed: an unreadable config or a scanner error denies cloud
 egress. `AUX_PROVIDER=auto` with **no** local `AUX_BASE_URL` keeps its documented
 behavior — public traffic still follows the main provider + fallback policy.
+
+**Plugin extension (`aux_guard.py`).** Core's guard has two gaps for this
+stack: it treats every loopback URL as local, and a local endpoint skips the
+privacy scan — but CLIProxyAPI (`:8317`) and claude-max-proxy (`:3456`) listen
+on loopback and answer from cloud models; and its scanner does not know
+`#privacy`. When the model-router plugin loads, it wraps both checks in the
+loaded core module:
+
+- a CLIProxyAPI / claude-max-proxy URL (by port, proxy host name, or the
+  configured `CLIPROXY_BASE_URL` / `CLAUDE_MAX_PROXY_BASE_URL`) is never local,
+  so its payloads are scanned;
+- a standalone `#privacy` / `#private` token **anywhere** in the payload is
+  private (`privacy-marker`). Compression input is a serialized transcript, so
+  the sender provenance the request guard relies on is gone; any occurrence
+  counts, including a quoted or discussed marker.
+
+Errors fail closed (a locality error reads "not local", a scan error reads
+private). The refusal is core's `AuxCloudEgressRefused`; it covers the primary
+call, the main-model retry and the stall retry, which all go through
+`call_llm`. Log line at load: `model_router: aux privacy guard installed`.
+If core's guard module is missing the plugin logs `aux privacy guard
+unavailable` at ERROR; pin compression locally (`AUX_COMPRESSION_ROUTE=aux`)
+until it is back. `test_core_guard_alone_leaks_loopback_cloud_proxy` keeps the
+reason on record: without the extension a `#privacy` payload reaches the proxy.
+
+**Limitations.**
+
+- A refused compression is a summary failure to Hermes: no request is sent,
+  the summary cooldown is armed, and Hermes compacts with its deterministic
+  fallback summary instead of an LLM one. There is no local retry for that
+  call; set `AUX_COMPRESSION_ROUTE=aux` with a local `AUX_BASE_URL` if private
+  sessions must get LLM summaries.
+- The deterministic fallback summary quotes excerpts of the compacted turns,
+  including a marked turn's text (verified with a real `ContextCompressor`).
+  The request guard withholds only earlier *marked user turns*, not a
+  compaction summary, so a later public turn in that session can carry those
+  excerpts to the cloud. Summaries from the `aux` route (Ollama) have the same
+  gap in paraphrased form. Until the request guard also withholds marked
+  summaries, start a fresh session (`/new`) after private work in a long one.
+- The extension depends on the plugin being loaded in the process that
+  compresses (`make local-route-readback` fails when `model-router` is not in
+  `plugins.enabled`).
 
 > **`MODEL_ROUTER_PRIVACY=false` is unsafe.** It disables the main-loop privacy
 > guard entirely, so a `#privacy` turn (and its later history) can reach the
@@ -515,6 +597,7 @@ Discord turn. Nothing below restarts the gateway except step 6.
    OLLAMA_AGENT_MODEL=qwen3.8:27b
    AUX_BASE_URL=http://100.65.5.47:11434/v1
    AUX_MODEL=qwen3.5:27b
+   # compression stays on CLIProxyAPI gpt-5.6-terra unless AUX_COMPRESSION_ROUTE=aux
    MODEL_ROUTER_PRIVACY=true
    MODEL_ROUTER_SPECIALISTS=true
    MODEL_ROUTER_SPECIALIST_MAX=4

@@ -20,6 +20,11 @@ hook adds a deterministic specialist-routing note to the orchestrator's
 current turn, and ``/route-specialists <task>`` prints a dry-run trace. See
 ``docs/specialist-routing.md``.
 
+At load it also extends Hermes' auxiliary pre-egress guard (``aux_guard``):
+CLIProxyAPI / claude-max-proxy count as cloud even on loopback, and a
+``#privacy`` / ``#private`` payload is never sent to them (compression,
+title generation).
+
 See ``docs/model-routing.md`` in the kit for configuration and readiness.
 """
 
@@ -27,6 +32,7 @@ from __future__ import annotations
 
 import logging
 
+from . import aux_guard
 from .router import Router
 from .router_config import load_settings
 from .specialist_hook import SpecialistHook
@@ -39,6 +45,7 @@ def register(ctx) -> None:
     router = Router(settings)
     ctx.register_middleware("llm_request", router.on_llm_request)
     ctx.register_middleware("llm_execution", router.on_llm_execution)
+    aux_guard.install(aux_guard.proxy_urls(settings))
     profile = str(getattr(ctx, "profile_name", "") or "default")
     specialists = SpecialistHook(settings, profile_name=profile)
     if specialists.active:

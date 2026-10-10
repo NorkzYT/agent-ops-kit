@@ -162,7 +162,8 @@ display:
 
 # ---------------------------------------------------------- Auxiliary work ---
 # Cheap, high-volume helper calls (title generation, compression). Rendered from
-# AUX_PROVIDER/AUX_MODEL/AUX_BASE_URL in .env. Semantics on Hermes 0.21.2:
+# AUX_PROVIDER/AUX_MODEL/AUX_BASE_URL in .env (compression: AUX_COMPRESSION_*,
+# below). Semantics on Hermes 0.21.2:
 #   - empty base_url + provider auto => use the MAIN provider and model,
 #     following the top-level fallback policy (install never breaks without Ollama).
 #   - AUX_BASE_URL set => rendered as provider custom + that endpoint. Hermes
@@ -178,8 +179,9 @@ auxiliary:
   # spilled to the main cloud provider. Set true to opt back into cloud fallback
   # for a pinned local endpoint. This NEVER overrides the private-payload guard:
   # a payload flagged private by the core scanner (#private/#local tags,
-  # secrets/credentials) is never sent to a cloud provider regardless. That core
-  # scanner does not recognize the plugin's #privacy marker: keep aux local. See docs/model-routing.md (§ Auxiliary work).
+  # secrets/credentials) is never sent to a cloud provider regardless. The
+  # model-router plugin adds #privacy to that scan and treats CLIProxyAPI /
+  # claude-max-proxy as cloud even on loopback. See docs/model-routing.md (§ Auxiliary work).
   allow_cloud_fallback: false
   title_generation:
     provider: __AUX_PROVIDER__
@@ -187,27 +189,32 @@ auxiliary:
     base_url: __AUX_BASE_URL__
     reasoning_effort: high
     fallback_chain: __AUX_FALLBACK_CHAIN__
-  # Compression never runs at high effort. Local route (AUX_BASE_URL set):
-  # thinking off via extra_body reasoning_effort none — the only control
-  # Ollama's /v1 honors (it ignores the `reasoning` object Hermes emits for the
+  # Compression (AUX_COMPRESSION_ROUTE). Default cliproxy: CLIProxyAPI
+  # gpt-5.6-terra, then gpt-5.6-luna on the same proxy, effort low, Hermes'
+  # default 120 s timeout. The model-router plugin extends the guard above:
+  # CLIProxyAPI counts as cloud even on loopback, and a #privacy/#private
+  # payload is refused rather than sent. AUX_COMPRESSION_ROUTE=aux follows the
+  # title-generation route; on a local one (AUX_BASE_URL set) thinking is off
+  # via extra_body reasoning_effort none — the only control Ollama's /v1
+  # honors (it ignores the `reasoning` object Hermes emits for the
   # reasoning_effort key, and that object overrides the top-level field, so the
   # key renders "" there) — and a 600 s per-read timeout so the summary
-  # prompt's prefill is not cut off. Inherited (cloud) route: effort low,
-  # Hermes' default 120 s timeout.
+  # prompt's prefill is not cut off.
   compression:
-    provider: __AUX_PROVIDER__
-    model: __AUX_MODEL__
-    base_url: __AUX_BASE_URL__
+    provider: __AUX_COMPRESSION_PROVIDER__
+    model: __AUX_COMPRESSION_MODEL__
+    base_url: __AUX_COMPRESSION_BASE_URL__
+    api_key: "__AUX_COMPRESSION_API_KEY__"
     reasoning_effort: __AUX_COMPRESSION_EFFORT__
     extra_body: __AUX_COMPRESSION_EXTRA_BODY__
     timeout: __AUX_COMPRESSION_TIMEOUT__
-    fallback_chain: __AUX_FALLBACK_CHAIN__
+    fallback_chain: __AUX_COMPRESSION_FALLBACK_CHAIN__
 
 # Compression wait budgets. context_timeout_seconds is a NO-PROGRESS window: a
 # local 27B model emits nothing while it prefills a ~50k-token summary prompt
 # (measured ~200 tok/s, i.e. 4+ min), so the Hermes default (120 s) abandons
-# every large local compaction. Local route: 420 s idle / 900 s total; inherited
-# (cloud) route: Hermes defaults 120 / 600. See docs/model-routing.md.
+# every large local compaction. Local route: 420 s idle / 900 s total; cloud
+# route (CLIProxyAPI or inherited): Hermes defaults 120 / 600. See docs/model-routing.md.
 compression:
   context_timeout_seconds: __COMPRESSION_IDLE_SECONDS__
   context_total_ceiling_seconds: __COMPRESSION_CEILING_SECONDS__

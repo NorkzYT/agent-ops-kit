@@ -1,6 +1,10 @@
 # model-router plugin
 
-Two Hermes middleware behaviors in one bundled plugin:
+Two Hermes middleware behaviors in one bundled plugin, plus a load-time
+extension of Hermes' auxiliary egress guard (`aux_guard.py`: CLIProxyAPI and
+claude-max-proxy count as cloud even on loopback, and a `#privacy`/`#private`
+payload is never sent to them by compression or title generation; see
+`docs/model-routing.md`, Auxiliary pre-egress guard):
 
 - **Task-scoped routing** (`llm_request`) — deterministically classifies the
   CURRENT user task (never history, system prompts, or tool output) and
