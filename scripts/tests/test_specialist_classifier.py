@@ -386,6 +386,131 @@ class PrivacyAndEnvelopeTest(_Cache):
 
 
 # --------------------------------------------------------------------------- #
+# Deterministic attachment signals: verified documents add profiles before the cap
+# --------------------------------------------------------------------------- #
+NEGOTIATE_ASK = "How should I negotiate this retainer update with them before I reply?"
+AGREEMENT_LINES = (
+    "Engineering Services Retainer Agreement",
+    "Scope: architecture reviews, code review and reliability work on the client platform.",
+    "The provider keeps technical debt visible in a monthly maintainability report.",
+    "Fees are billed monthly; unused hours do not roll over.",
+)
+TRANSCRIPT_JSON = (
+    '[{"speaker": "Sales lead", "text": "After the move our strategic focus is to keep a '
+    'competitive advantage with the retainer clients."},\n'
+    ' {"speaker": "Founder", "text": "Agreed, the renewal call is next week."}]\n'
+)
+
+
+@unittest.skipUnless(HAVE_PDFTOTEXT, "poppler-utils (pdftotext) not installed")
+class AttachmentSignalsTest(_Cache):
+    """Velvet retainer shape: a typed negotiation question, an agreement PDF the
+    gateway did not inline and a JSON call transcript. Verified attachment text
+    adds the profiles its strong signals name; the classifier adds at most
+    MAX_CLASSIFIER_ADDITIONS more; the cap applies to the combined list."""
+
+    def retainer(self, kind="text-not-inlined"):
+        return self.wire([("Velvet Retainer Agreement V1.pdf", make_pdf(AGREEMENT_LINES), "binary"),
+                          ("velvet-retainer-update-sales-team.json", TRANSCRIPT_JSON, kind)], NEGOTIATE_ASK)
+
+    def test_verified_attachments_add_profiles_before_cap(self):
+        for kind in ("text-not-inlined", "inline"):
+            with self.subTest(kind=kind):
+                seen, fake = self.spy(["business"])
+                t = sp.route_text(self.retainer(kind), settings(max_profiles=6), readiness=ready,
+                                  classifier=fake)
+                self.assertEqual(names(t), ["negotiation-communication", "software-engineering",
+                                            "strategy", "business"])
+                by = {r["profile"]: r["reasons"] for r in t["routes"]}
+                self.assertEqual(by["negotiation-communication"], ["kw:negotiate"])
+                self.assertTrue(by["software-engineering"])
+                self.assertTrue(all(r.startswith("att:") for r in by["software-engineering"]))
+                self.assertTrue(all(r.startswith("att:") for r in by["strategy"]))
+                self.assertEqual(by["business"], ["classifier"])
+                self.assertEqual(t["attachment_signals"], ["software-engineering", "strategy"])
+                # The classifier is not offered what the attachments already picked.
+                self.assertEqual(len(seen), 1)
+                blob = json.dumps(t) + sp.render_plan(t)
+                for secret in ("Velvet", "maintainability report", "renewal call", "Sales lead"):
+                    self.assertNotIn(secret, blob)
+
+    def test_deterministic_without_classifier(self):
+        t = sp.route_text(self.retainer(), settings(classifier="none", max_profiles=6), readiness=ready)
+        self.assertEqual(names(t), ["negotiation-communication", "software-engineering", "strategy"])
+        self.assertEqual(t["classifier"], "off")
+
+    def test_cap_applies_after_combining_keywords_attachments_and_classifier(self):
+        seen, fake = self.spy(["business", "marketing", "philosophy"])
+        t = sp.route_text(self.retainer(), settings(max_profiles=6), readiness=ready, classifier=fake)
+        self.assertEqual(names(t), ["negotiation-communication", "software-engineering", "strategy",
+                                    "business", "marketing"])
+        self.assertIn({"profile": "philosophy", "reason": "classifier:cap"}, t["dropped"])
+        seen, fake = self.spy(["business"])
+        t = sp.route_text(self.retainer(), settings(max_profiles=3), readiness=ready, classifier=fake)
+        self.assertEqual(names(t), ["negotiation-communication", "software-engineering", "strategy"])
+        self.assertIn({"profile": "business", "reason": "cap"}, t["dropped"])
+        # Typed evidence outranks attachment evidence under a tight cap.
+        t = sp.route_text(self.retainer(), settings(classifier="none", max_profiles=1), readiness=ready)
+        self.assertEqual(names(t), ["negotiation-communication"])
+
+    def test_attachments_never_add_high_risk_local_or_weak_only_profiles(self):
+        body = ("Security audit found vulnerabilities; implement the patch and fix the build error.\n"
+                "Our business team keeps the code in one repo.\n")
+        wire = self.wire([("audit.txt", body, "inline")], NEGOTIATE_ASK)
+        t = sp.route_text(wire, settings(classifier="none", max_profiles=6), readiness=ready)
+        self.assertEqual(names(t), ["negotiation-communication"])
+        self.assertEqual(t["dropped"], [])
+
+    def test_withheld_unverified_and_private_attachments_add_nothing(self):
+        arch = "Architecture review and code review of the platform.\n"
+        # A document carrying a privacy marker or wire text is withheld from signals too.
+        for body in ("#privacy " + arch, tsr.async_envelope(tsr.AsyncDelegationEnvelopeTest.HEADERS[0],
+                                                             sender="") + arch):
+            with self.subTest(body=body[:16]):
+                wire = self.wire([("notes.txt", body, "text-not-inlined")], NEGOTIATE_ASK)
+                t = sp.route_text(wire, settings(classifier="none"), readiness=ready)
+                self.assertEqual(names(t), ["negotiation-communication"])
+        # The sender's #privacy: nothing is read and no cloud profile is suggested.
+        wire = self.wire([("notes.txt", arch, "inline"), ("a.pdf", make_pdf(AGREEMENT_LINES), "binary")],
+                         "#privacy " + NEGOTIATE_ASK)
+        with mock.patch.object(attachments, "read_documents", side_effect=AssertionError("read")):
+            t = sp.route_text(wire, settings(classifier="none"), readiness=ready)
+        self.assertEqual(t["privacy"], "local-only")
+        self.assertEqual(t["routes"], [])
+        self.assertEqual(t["dropped"], [{"profile": "negotiation-communication", "reason": "privacy:local-only"}])
+        self.assertNotIn("attachment_signals", t)
+        # An unverifiable relay routes nothing at all.
+        bad = self.wire([("notes.txt", arch, "inline")], NEGOTIATE_ASK).replace(
+            "Architecture review", "Architecture  review")
+        self.assertEqual(sp.route_text(bad, settings(classifier="none"), readiness=ready)["reason"],
+                         "attachment-unverified")
+
+    def test_attachment_text_is_bounded(self):
+        late = "filler line\n" * (sp.CLASSIFIER_DOC_CHARS // 12 + 10) + "Architecture review of the platform.\n"
+        wire = self.wire([("notes.txt", late, "inline")], NEGOTIATE_ASK)
+        t = sp.route_text(wire, settings(classifier="none"), readiness=ready)
+        self.assertEqual(names(t), ["negotiation-communication"])
+
+    def test_router_diagnostics_in_an_attachment_do_not_score(self):
+        wire = self.wire([("log.txt", tsr.TERMINAL_TRANSCRIPT, "inline")], NEGOTIATE_ASK)
+        t = sp.route_text(wire, settings(classifier="none", max_profiles=6), readiness=ready)
+        self.assertEqual(names(t), ["negotiation-communication"])
+
+    def test_hook_log_names_attachment_profiles_without_content(self):
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True,
+                                                              specialist_max_profiles=6))
+        with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)), \
+                self.assertLogs("hermes.plugin.model_router", level="INFO") as logs:
+            out = h.on_pre_llm_call(session_id="s", user_message=self.retainer())
+        self.assertIn("- software-engineering:", out["context"])
+        self.assertIn("- strategy:", out["context"])
+        text = "\n".join(logs.output)
+        self.assertIn("attach=software-engineering,strategy", text)
+        for secret in ("Velvet", "maintainability", "renewal", str(self.cache)):
+            self.assertNotIn(secret, text + out["context"])
+
+
+# --------------------------------------------------------------------------- #
 # CLIProxyAPI client: model, effort, auth, timeout, errors, privacy refusal
 # --------------------------------------------------------------------------- #
 class _CliProxy(http.server.BaseHTTPRequestHandler):
