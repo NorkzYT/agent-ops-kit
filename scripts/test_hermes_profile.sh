@@ -54,18 +54,42 @@ grep -qi 'no knowledge source' <<<"$out2" && ok "missing corpus warns clearly" |
 # No SSH env: the terminal backend is left alone.
 ! grep -q 'config set terminal' "$home/.hermes/hermes-calls.log" && ok "no SSH env, no terminal change" || bad "terminal changed without PROFILE_SSH_HOST"
 
-# Worker lane: PROFILE_SSH_* switches the profile's terminal to SSH.
-HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_SSH_HOST=mac.tailnet PROFILE_SSH_USER=hermes \
-  PROFILE_SSH_KEY=/k/id_ed25519 bash "$ROOT/scripts/hermes-profile.sh" mac-worker >/dev/null 2>&1 \
-  && ok "mac-worker lane profile created" || bad "mac-worker lane failed"
 calls="$home/.hermes/hermes-calls.log"
-grep -qx -- '-p mac-worker config set terminal.backend ssh' "$calls"       && ok "lane backend set to ssh"   || bad "lane backend not set"
-grep -qx -- '-p mac-worker config set terminal.ssh_host mac.tailnet' "$calls" && ok "lane ssh_host set"      || bad "lane ssh_host not set"
-grep -qx -- '-p mac-worker config set terminal.cwd ~' "$calls"             && ok "lane cwd defaults to ~"    || bad "lane cwd not set"
-grep -qx -- '-p mac-worker config set terminal.ssh_key /k/id_ed25519' "$calls" && ok "lane ssh_key set"      || bad "lane ssh_key not set"
-! grep -q -- 'terminal.ssh_port' "$calls"                                   && ok "unset port left default"  || bad "port set without PROFILE_SSH_PORT"
-HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_SSH_HOST=mac.tailnet \
-  bash "$ROOT/scripts/hermes-profile.sh" mac-worker >/dev/null 2>&1 && bad "SSH host without user accepted" || ok "SSH host without user refused"
+! grep -q 'peer add' "$calls" && ok "no peer env, no peer registered" || bad "peer registered without PROFILE_PEER_URL"
+
+# Worker lane relay: PROFILE_PEER_* registers the worker's own Hermes as the peer.
+peer_key="peer-key-$RANDOM-do-not-log"
+HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_PEER_URL=http://mac.tailnet:8642 \
+  PROFILE_PEER_KEY="$peer_key" bash "$ROOT/scripts/hermes-profile.sh" mac-worker >"$tmp/peer.out" 2>&1 \
+  && ok "mac-worker relay profile created" || bad "mac-worker relay failed"
+menv="$home/.hermes/profiles/mac-worker/.env"
+grep -qx -- '-p mac-worker peer add mac --url http://mac.tailnet:8642 --note kanban-workflow lane mac-worker' "$calls" \
+  && ok "peer 'mac' registered on the lane profile" || bad "peer not registered"
+grep -qx "HERMES_PEER_MAC_KEY=$peer_key" "$menv"                         && ok "peer key in the profile .env" || bad "peer key missing from .env"
+[[ "$(stat -c %a "$menv")" == 600 ]]                                    && ok "profile .env is 0600"          || bad "profile .env mode"
+! grep -q -- "$peer_key" "$calls" "$tmp/peer.out"                       && ok "peer key never in argv or output" || bad "peer key leaked"
+grep -qx -- '-p mac-worker config set terminal.backend local' "$calls"  && ok "relay terminal is local"       || bad "relay backend not local"
+HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_PEER_URL=http://win.tailnet:8642 PROFILE_PEER_KEY=k2 \
+  bash "$ROOT/scripts/hermes-profile.sh" windows-worker >/dev/null 2>&1
+grep -q -- '-p windows-worker peer add windows ' "$calls" && grep -qx 'HERMES_PEER_WINDOWS_KEY=k2' "$home/.hermes/profiles/windows-worker/.env" \
+  && ok "windows-worker gets peer 'windows'" || bad "windows peer default wrong"
+HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_PEER_URL=http://mac.tailnet:8642 \
+  bash "$ROOT/scripts/hermes-profile.sh" mac-worker >/dev/null 2>&1 && bad "peer URL without key accepted" || ok "peer URL without key refused"
+HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_PEER_URL=http://m:8642 PROFILE_PEER_KEY=k \
+  PROFILE_SSH_HOST=mac.tailnet PROFILE_SSH_USER=hermes bash "$ROOT/scripts/hermes-profile.sh" mac-worker >/dev/null 2>&1 \
+  && bad "peer and SSH together accepted" || ok "peer and SSH together refused"
+
+# Optional SSH administration: PROFILE_SSH_* switches a profile's terminal to SSH.
+HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_SSH_HOST=box.tailnet PROFILE_SSH_USER=hermes \
+  PROFILE_SSH_KEY=/k/id_ed25519 bash "$ROOT/scripts/hermes-profile.sh" coder >/dev/null 2>&1 \
+  && ok "SSH profile created" || bad "SSH profile failed"
+grep -qx -- '-p coder config set terminal.backend ssh' "$calls"          && ok "backend set to ssh"   || bad "backend not set"
+grep -qx -- '-p coder config set terminal.ssh_host box.tailnet' "$calls" && ok "ssh_host set"         || bad "ssh_host not set"
+grep -qx -- '-p coder config set terminal.cwd ~' "$calls"                && ok "cwd defaults to ~"    || bad "cwd not set"
+grep -qx -- '-p coder config set terminal.ssh_key /k/id_ed25519' "$calls" && ok "ssh_key set"         || bad "ssh_key not set"
+! grep -q -- 'terminal.ssh_port' "$calls"                                && ok "unset port left default" || bad "port set without PROFILE_SSH_PORT"
+HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_SSH_HOST=box.tailnet \
+  bash "$ROOT/scripts/hermes-profile.sh" coder >/dev/null 2>&1 && bad "SSH host without user accepted" || ok "SSH host without user refused"
 
 echo
 [[ "$fail" -eq 0 ]] && echo "PASS: hermes-profile" || echo "FAIL: hermes-profile"

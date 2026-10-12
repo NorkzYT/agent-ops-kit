@@ -8,8 +8,13 @@
 #
 # Env: PROFILE_DISCORD_BOT_TOKEN  give this profile its own Discord bot (optional)
 #      PROFILE_DISCORD_ALLOWED_USERS  defaults to the kit's DISCORD_ALLOWED_USERS
+#      PROFILE_PEER_URL, PROFILE_PEER_KEY  worker lane relay (mac-worker, windows-worker):
+#                      register the worker machine's own Hermes gateway (its api_server
+#                      URL and API_SERVER_KEY) as this profile's peer; the key goes to the
+#                      profile .env, never to argv. Optional PROFILE_PEER_NAME (default:
+#                      <name> without "-worker", e.g. mac)
 #      PROFILE_SSH_HOST, PROFILE_SSH_USER  run this profile's terminal on another
-#                      machine over SSH (worker lanes: mac-worker, windows-worker);
+#                      machine over SSH (optional administration; worker lanes use the peer);
 #                      optional PROFILE_SSH_PORT, PROFILE_SSH_KEY, PROFILE_SSH_CWD (default ~)
 #      KNOWLEDGE_ROOT  where the profile knowledge corpora live (default data/knowledge)
 #      ENV_FILE        dotenv to read keys from (default .env; overridable for tests)
@@ -58,8 +63,21 @@ if [[ -n "${PROFILE_DISCORD_BOT_TOKEN:-}" ]]; then
   log "profile has its own Discord bot; start it with:  $name gateway install"
 fi
 
-# Worker lane: the agent and its Kanban tools stay on this host; terminal and
-# file tools run on the worker over SSH (docs/discord-kanban-workflow.md).
+# Worker lane relay: the profile stays on this host (local terminal) and hands
+# each card to the worker's own Hermes over its authenticated peer API
+# (docs/discord-kanban-workflow.md).
+if [[ -n "${PROFILE_PEER_URL:-}" ]]; then
+  [[ -z "${PROFILE_SSH_HOST:-}" ]] || die "set PROFILE_PEER_URL or PROFILE_SSH_HOST, not both; worker lanes use the peer"
+  [[ -n "${PROFILE_PEER_KEY:-}" ]] || die "PROFILE_PEER_URL needs PROFILE_PEER_KEY (the worker gateway's API_SERVER_KEY)"
+  peer="${PROFILE_PEER_NAME:-${name%-worker}}"
+  hermes -p "$name" peer add "$peer" --url "$PROFILE_PEER_URL" --note "kanban-workflow lane $name" >/dev/null
+  peer_key_var="HERMES_PEER_$(tr '[:lower:]-' '[:upper:]_' <<<"$peer")_KEY"
+  env_file_set "$peer_key_var" "$PROFILE_PEER_KEY" "$penv"
+  hermes -p "$name" config set terminal.backend local >/dev/null
+  log "peer '$peer' registered for $name (key in $penv as $peer_key_var); check: hermes -p $name peer list"
+fi
+
+# Optional: run this profile's terminal and file tools on another machine over SSH.
 if [[ -n "${PROFILE_SSH_HOST:-}" ]]; then
   [[ -n "${PROFILE_SSH_USER:-}" ]] || die "PROFILE_SSH_HOST needs PROFILE_SSH_USER"
   hermes -p "$name" config set terminal.backend ssh >/dev/null

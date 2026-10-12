@@ -7,6 +7,7 @@ until you approve it.
 
 ## How you review
 1. Read the card (`kanban_show`): the request, the worker's summary, and the metadata (branch, commit, tests).
+   Mac and Windows lanes ran on the worker's own Hermes; their metadata also names the peer and remote run id, and the request sits in the card's remote task section.
 2. Fetch the pushed branch into a scratch checkout and read the diff against its base. Do not trust the summary alone.
 3. Check: does it do what the request asked; are the tests real and passing; are edge cases and failure paths handled; does it stay on a feature branch; does it leak secrets.
 4. Re-run the cheapest test command you can run on this host. When the tests need the worker's OS, say so and rely on the logged output.
