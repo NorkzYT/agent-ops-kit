@@ -55,10 +55,17 @@ def names(trace):
 
 
 class RegistryTest(unittest.TestCase):
-    def test_registry_covers_every_book_backed_profile_plus_local_engineer(self):
-        self.assertEqual(set(sp.BY_NAME), set(BOOK_BACKED) | {"local-engineer"})
+    def test_registry_is_exactly_the_book_backed_profiles(self):
+        self.assertEqual(set(sp.BY_NAME), set(BOOK_BACKED))
         for name in sp.BY_NAME:
             self.assertTrue((REPO / "hermes" / "profiles" / name / "SOUL.md").is_file(), name)
+
+    def test_no_local_or_implementer_specialist(self):
+        # local-engineer was removed: every specialist is advisory and cloud-backed;
+        # a #privacy turn stays on the local Ollama route without specialists.
+        self.assertNotIn("local-engineer", sp.BY_NAME)
+        self.assertFalse((REPO / "hermes" / "profiles" / "local-engineer").exists())
+        self.assertEqual([s.name for s in sp.REGISTRY if s.local or s.implementer], [])
 
     def test_high_risk_set(self):
         self.assertEqual(set(sp.HIGH_RISK),
@@ -80,7 +87,6 @@ class RegistryTest(unittest.TestCase):
             "survival": "Prepare an emergency kit and a water purification plan.",
             "martial-arts": "Drill guard passing and armbars for my bjj class.",
             "philosophy": "What do the stoics say about anger? Compare with Nietzsche.",
-            "local-engineer": "Implement the parser and add a regression test.",
         }
         self.assertEqual(set(samples), set(sp.BY_NAME))
         for profile, text in samples.items():
@@ -131,9 +137,11 @@ class MatchTest(unittest.TestCase):
                      "prioritise the roadmap, and propose a business model.")["routes"]
         self.assertEqual(deep[0]["profile"], "strategy")
         self.assertEqual(deep[0]["execution"], "kanban")
-        impl = route("Implement the parser and add a regression test.")["routes"][0]
-        self.assertEqual((impl["profile"], impl["execution"], impl["advisory_only"]),
-                         ("local-engineer", "kanban", False))
+        # Implementation is not routed to a specialist (coding goes through the
+        # coordinator's own coding path); pure implementation phrasing routes nothing.
+        impl = route("Implement the parser and add a regression test.")
+        self.assertEqual(impl["routes"], [])
+        self.assertEqual(impl["reason"], "no-match")
 
 
 class UnderSelectionRegressionTest(unittest.TestCase):
@@ -169,16 +177,15 @@ class UnderSelectionRegressionTest(unittest.TestCase):
         self.assertEqual(route("Rewrite this commit message to follow conventional commits.")["routes"], [])
         self.assertEqual(route("Reword the error message shown on a failed upload.")["routes"], [])
 
-    def test_auth_design_review_with_fixes_routes_security_engineering_and_local(self):
+    def test_auth_design_review_with_fixes_routes_security_and_engineering(self):
         t = route("Review the authentication design and implement fixes with tests")
-        self.assertEqual(set(names(t)), {"security-reviewer", "software-engineering", "local-engineer"})
+        self.assertEqual(set(names(t)), {"security-reviewer", "software-engineering"})
         sec = next(r for r in t["routes"] if r["profile"] == "security-reviewer")
         # High-risk controls are untouched: advisory, short, skills-only, constrained.
         self.assertTrue(sec["high_risk"])
         self.assertEqual((sec["execution"], sec["toolsets"]), ("short", sp.ADVISORY_TOOLSETS))
         self.assertEqual(sec["constraint"], sp.ADVISORY_CONSTRAINT)
-        impl = next(r for r in t["routes"] if r["profile"] == "local-engineer")
-        self.assertEqual(impl["execution"], "kanban")
+        self.assertTrue(all(r["advisory_only"] for r in t["routes"]))
 
     def test_authentication_word_counts_as_security_evidence(self):
         t = route("Harden the authentication flow of the API.")
@@ -190,7 +197,8 @@ class UnderSelectionRegressionTest(unittest.TestCase):
     def test_private_auth_task_still_local_only(self):
         t = route("#privacy review the authentication design and implement fixes with tests")
         self.assertEqual(t["privacy"], "local-only")
-        self.assertEqual(names(t), ["local-engineer"])
+        self.assertEqual(names(t), [])
+        self.assertEqual(t["reason"], "all-dropped")
         dropped = {d["profile"] for d in t["dropped"] if d["reason"] == "privacy:local-only"}
         self.assertEqual(dropped, {"security-reviewer", "software-engineering"})
 
@@ -215,7 +223,7 @@ class HighRiskTest(unittest.TestCase):
 
         def fake(visible, pool):
             seen["pool"] = list(pool)
-            return ["red-team", "health-fitness", "local-engineer", "philosophy", "bogus"]
+            return ["red-team", "health-fitness", "philosophy", "bogus"]
 
         t = sp.route_text(
             "I keep going back and forth on what to do next with my life and the people "
@@ -223,7 +231,7 @@ class HighRiskTest(unittest.TestCase):
             settings(classifier="local"), readiness=ready, classifier=fake)
         self.assertEqual(t["classifier"], "used")
         self.assertEqual(names(t), ["philosophy"])
-        self.assertTrue(set(seen["pool"]).isdisjoint(set(sp.HIGH_RISK) | {"local-engineer"}))
+        self.assertTrue(set(seen["pool"]).isdisjoint(set(sp.HIGH_RISK) | sp.CLASSIFIER_FORBIDDEN))
         self.assertTrue(all(d["reason"] == "classifier:not-eligible" for d in t["dropped"]))
 
     def test_classifier_skipped_for_clear_or_short_tasks_and_errors_are_contained(self):
@@ -251,12 +259,14 @@ class PrivacyTest(unittest.TestCase):
         self.assertEqual(t["routes"], [])
         self.assertIn({"profile": "health-fitness", "reason": "privacy:local-only"}, t["dropped"])
 
-    def test_private_task_keeps_only_local_engineer(self):
+    def test_private_task_routes_local_only_with_no_cloud_specialist(self):
         t = route("#privacy negotiate my rent and implement a budget script with tests")
-        self.assertEqual(names(t), ["local-engineer"])
-        self.assertTrue(t["routes"][0]["local_only"])
+        self.assertEqual(t["privacy"], "local-only")
+        self.assertEqual(t["routes"], [])
+        self.assertEqual(t["reason"], "all-dropped")
         self.assertIn("negotiation-communication",
                       [d["profile"] for d in t["dropped"] if d["reason"] == "privacy:local-only"])
+        self.assertEqual(sp.render_plan(t), "")
 
     def test_content_is_never_classified_private(self):
         # Only #privacy/#private route local: credentials, #local and the old

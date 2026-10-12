@@ -28,7 +28,10 @@ classifier, and never puts book or skill content into the orchestrator prompt.
 | `survival` | preparedness, emergency kits, first aid | |
 | `martial-arts` | grappling technique, conditioning | |
 | `philosophy` | stoicism, ethics, mental models | |
-| `local-engineer` | implementation: implement, fix a bug, add tests | |
+
+Every specialist is advisory. Implementation is not routed to a specialist:
+coding goes through the coordinator's own coding path (Claude Opus/Fable,
+`coder`, the Kanban workflow).
 
 The keyword rules live in `hermes/plugins/model-router/specialists.py`
 (`REGISTRY`). A strong signal scores 2 and a weak one scores 1. A profile is
@@ -91,8 +94,8 @@ list, and drops the lowest-ranked.
   Its reasons are `att:<label>` and the trace lists the added profiles in
   `attachment_signals` (the log says `attach=`). Never from a `#privacy`
   turn (no file is read), an unverified relay, history, tool output or a
-  runtime envelope. Never `security-reviewer`, `red-team`, `health-fitness`,
-  `herbalism` or `local-engineer`: those need the sender's own words. A
+  runtime envelope. Never `security-reviewer`, `red-team`, `health-fitness`
+  or `herbalism`: those need the sender's own words. A
   document holding router diagnostics (a dry-run, trace or log line with
   `kw:` labels or `model_router: specialists`) scores nothing, so a pasted
   router transcript does not fan out again. This runs with or without a
@@ -125,8 +128,9 @@ list, and drops the lowest-ranked.
   private task routes `local-only`. Every cloud-backed profile is dropped and
   the optional classifier (local or cliproxy) is never called, and no
   attachment is read or extracted for it. The cliproxy client also refuses,
-  unsent, any input that carries a `#privacy`/`#private` marker. Only
-  `local-engineer`, which runs on private Ollama, stays eligible.
+  unsent, any input that carries a `#privacy`/`#private` marker. No
+  specialist runs on the local model, so a private task routes no
+  specialist; the turn itself stays on the private Ollama route.
 - **High-risk is advisory.** `health-fitness`, `herbalism`,
   `security-reviewer` and `red-team` always run `short` with only the
   `skills` toolset. That means no terminal, files, web, browser, messages or
@@ -137,8 +141,7 @@ list, and drops the lowest-ranked.
   SOUL, memory and skills. `short` means one bounded answer from
   `hermes -p <profile> -z '<brief>' -t skills`. `delegate_task` is never used
   for specialists because it cannot carry a profile.
-- **Execution mode.** Deep tasks (elevated/high tier) and implementation use
-  `kanban`. Short questions use `short`. High-risk always uses `short`.
+- **Execution mode.** Deep tasks (elevated/high tier) use `kanban`. Short questions use `short`. High-risk always uses `short`.
 - **Knowledge readiness** is checked in the installed profile, never assumed
   from the repo templates. The check only lists files and reads `SKILL.md`
   frontmatter. It never opens a book.
@@ -176,8 +179,8 @@ list, and drops the lowest-ranked.
   document the task must also be substantive and at least 60 characters.
   It may add at most **two** profiles, never one already matched by typed
   keywords or attachment signals, never
-  `security-reviewer`, `red-team`, `health-fitness`, `herbalism` or
-  `local-engineer` (those need keyword evidence). Its answer is only parsed
+  `security-reviewer`, `red-team`, `health-fitness` or `herbalism` (those
+  need keyword evidence). Its answer is only parsed
   for profile names in the eligible pool; tags or other text in it do
   nothing. The whole call stays inside `specialist_classifier_timeout`
   seconds (default 10, max 25; Hermes caps `pre_llm_call` at 30) and the

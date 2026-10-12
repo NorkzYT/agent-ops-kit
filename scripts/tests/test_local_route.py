@@ -480,7 +480,7 @@ class ClassifierGateTest(unittest.TestCase):
 
     def test_at_most_two_additions_and_never_high_risk(self):
         def greedy(visible, pool):
-            return ["security-reviewer", "red-team", "health-fitness", "herbalism", "local-engineer",
+            return ["security-reviewer", "red-team", "health-fitness", "herbalism",
                     "philosophy", "marketing", "business", "survival"]
 
         t = sp.route_text(NO_MATCH, settings(max_profiles=6), readiness=ready, classifier=greedy)
@@ -488,7 +488,7 @@ class ClassifierGateTest(unittest.TestCase):
         self.assertEqual(added, ["philosophy", "marketing"])
         self.assertTrue(set(added).isdisjoint(sp.CLASSIFIER_FORBIDDEN))
         reasons = {d["profile"]: d["reason"] for d in t["dropped"]}
-        for name in ("security-reviewer", "red-team", "health-fitness", "herbalism", "local-engineer"):
+        for name in ("security-reviewer", "red-team", "health-fitness", "herbalism"):
             self.assertEqual(reasons[name], "classifier:not-eligible")
         self.assertEqual(reasons["business"], "classifier:cap")
         self.assertEqual(sp.MAX_CLASSIFIER_ADDITIONS, 2)

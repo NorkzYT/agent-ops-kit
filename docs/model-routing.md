@@ -777,10 +777,10 @@ build:
 3. **Private specialists.** Today a private turn is answer-only (the local
    model gets no tools), so it cannot create a Kanban task or delegate. A
    private specialist needs: a tool-capable local path; profile variants whose
-   main, auxiliary and memory routes are all local (as `local-engineer` is
-   for the model); Kanban cards and delegation briefs that never reach a cloud
-   model or the shared board in clear text; and the gate in (1) for the
-   specialist's own memory.
+   main, auxiliary and memory routes are all local (no specialist profile is
+   local today, so a private turn routes none); Kanban cards and delegation
+   briefs that never reach a cloud model or the shared board in clear text;
+   and the gate in (1) for the specialist's own memory.
 4. **Aux guard.** The core auxiliary guard must recognize `#privacy`
    (it matches `#private`/`#local` and content today).
 

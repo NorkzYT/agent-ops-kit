@@ -16,7 +16,7 @@ Usage:
 Options:
   --profiles-root DIR   profiles dir (default $HERMES_HOME/profiles or ~/.hermes/profiles)
   --max N               route cap (default 4, max 6)
-  --allow a,b           allowlist of profiles (default: all book-backed + local-engineer)
+  --allow a,b           allowlist of profiles (default: all book-backed)
   --require-ready       drop profiles whose /learn knowledge skill is missing
   --plan                also print the note the orchestrator would receive
 """

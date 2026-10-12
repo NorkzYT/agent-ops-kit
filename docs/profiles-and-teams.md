@@ -71,8 +71,10 @@ hermes kanban create "Review pricing and positioning"      --assignee strategy  
 hermes kanban watch
 ```
 
-Work for the Mac or Windows worker follows one standard graph (lane cards,
-review gate, report card, Discord report); see
+Engineering work for the Mac or Windows worker follows one standard graph: the
+coordinator writes and pushes an exact SHA, the workers test it and return
+evidence, failures loop back as fix rounds, then review, report card and Discord
+report; see
 [discord-kanban-workflow.md](discord-kanban-workflow.md).
 
 Recipes with role prompts kept from the earlier CrewAI crews are in

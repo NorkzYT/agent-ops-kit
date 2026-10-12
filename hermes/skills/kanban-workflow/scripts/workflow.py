@@ -1,32 +1,40 @@
 #!/usr/bin/env python3
-"""Standard Hermes workflow: Discord request -> Kanban cards -> isolated workers
--> review gate -> final Discord report.
+"""Standard Hermes engineering workflow: one central code writer, evidence-only
+platform peers, automatic fix/retest rounds, independent review, Discord report.
 
-    workflow.py intake   --title T --body B --lane mac --lane windows  # build the card graph
-    workflow.py dispatch <lane_id>                                    # peer lane: start the remote run
-    workflow.py wait     <lane_id> [--timeout S]                      # peer lane: poll the remote run
-    workflow.py gate     <request_id>                                 # exit 0 iff every lane passed review
-    workflow.py status   <request_id>                                 # one line per card
+    workflow.py intake     --title T --body B --repo URL --lane mac --lane windows   # round 1 + report card
+    workflow.py record-sha <code_id> --repo-dir DIR [--notes N]   # code card: record the pushed exact SHA
+    workflow.py dispatch   <validate_id>                          # validation card: start/resume the peer run
+    workflow.py wait       <validate_id> [--timeout S]            # validation card: poll, record evidence
+    workflow.py advance    <round_id>                             # round card: review, or the next fix round
+    workflow.py verdict    <review_id> approve|changes [--reason R]
+    workflow.py gate       <report_id>                            # exit 0 iff the final SHA passed and was approved
+    workflow.py status     <any card id> [--json]                 # one row and state per card
 
 Card graph (Hermes `--parent` means "waits for"):
 
-    [mac] T  ─┐  lane cards: end with kanban_request_review to an independent reviewer
-    [win] T  ─┴─> Report: T  request card: waits for the lanes, runs `gate`, writes the
-                             report; its completion wakes the orchestrator in the
-                             originating Discord thread (notify+wake subscription)
+    [code 1] T   coordinator (Claude Opus/Fable): edit, commit, push, record the exact SHA
+      ├─> [mac 1] T   relay -> Mac's own Hermes: checkout SHA, build, test, install, launch -> evidence
+      └─> [win 1] T   relay -> Windows' own Hermes: same -> evidence
+            └─> [round 1] T   coordinator runs `advance`:
+                  every lane passed -> Review: T (independent reviewer: exact diff + evidence)
+                  any lane failed   -> [code 2] (the failure evidence) -> [mac 2] [win 2] -> [round 2] ...
+    Report: T   waits for every round and review card; runs `gate`; its completion wakes the
+                orchestrator in the originating Discord thread.
 
-Mac and Windows lanes are peer lanes: the host's `mac-worker`/`windows-worker`
-profile is a thin relay. It runs `dispatch`, which hands the card's remote task
-to the worker machine's own Hermes over `hermes peer run` (authenticated API,
-idempotent per card and attempt) and records peer + run id on the card, then
-`wait`, which polls `hermes peer status` and turns the remote JSON report into
-the review hand-off. The peer key stays in the lane profile's .env; this script
-never reads or prints it.
+Only the coordinator writes code. Peers check out the exact commit, never edit,
+commit or push, and return a structured evidence block that this script parses,
+validates against the SHA and stores on the card (not the model's prose).
 
-Everything goes through the `hermes kanban` / `hermes peer` CLIs (no direct
-SQLite access), so the dispatcher, review dispatch and gateway notifier stay the
-source of truth. Idempotent: every card carries an idempotency key derived from
-the Discord message, so a retried intake returns the same cards. Stdlib only.
+Every record (peer run, evidence, pushed SHA, round outcome, review verdict) is
+written first to a local append-only ledger under the shared Kanban root and then
+mirrored to the card as a comment; a failed comment is re-synced by the next
+command, thus a started remote run is never lost. Mutating commands refuse to run
+inside a delegate_task child, where Hermes forbids Kanban writes.
+
+Everything goes through the `hermes kanban` / `hermes peer` CLIs and `git` (no
+direct SQLite access). Idempotent: every card carries an idempotency key derived
+from the Discord message and the round. Stdlib only.
 """
 
 from __future__ import annotations
@@ -45,17 +53,37 @@ SCRIPT = Path(__file__).resolve()
 LANES = {"mac": "mac-worker", "windows": "windows-worker"}
 LANE_LABELS = {"mac-worker": "mac", "windows-worker": "win"}
 LANE_WHERE = {"mac-worker": "the Mac worker", "windows-worker": "the Windows worker"}
+LANE_PLATFORM = {
+    "mac-worker": "macOS: Xcode builds and tests, iOS/iPadOS simulators or a connected device, macOS packaging",
+    "windows-worker": "Windows: Android Studio/Gradle builds and tests, emulators or a connected device, "
+                      "MSBuild/.NET, PowerShell, Windows packaging",
+}
 # Lanes that run on another machine's own Hermes, and their default peer target
 # (`hermes -p <lane> peer add <target> ...`; `--peer lane=target` overrides).
 PEER_LANES = {"mac-worker": "mac", "windows-worker": "windows"}
 PEER_TRANSPORT = "hermes-peer"
 RELAY_BACKEND = "local"  # the relay runs this script, thus on this host
 PEER_TARGET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}(/[A-Za-z0-9][A-Za-z0-9_-]{0,63})?$")
-RECORD_PREFIX = "peer-run "
-REMOTE_MARKER = "===== Remote task (sent to the peer as is) ====="
+BRANCH_RE = re.compile(r"^(?!/)(?!.*(?:\.\.|//|@\{|\.lock$))[A-Za-z0-9._/-]{1,120}(?<![/.])$")
+REPO_URL_RE = re.compile(r"^(?:(?:https?|ssh|git|file)://\S+|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:\S+)$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+RUNTIME_RE = re.compile(r"^(?:[0-9]+[smhd]?)?$")
+PROTECTED_BRANCHES = {"main", "master", "develop", "release", "production"}
+KINDS = ("code", "validate", "round", "review", "report")
+REQUEST_MARKER = "===== Request (verbatim) ====="
 TASK_TOKEN = "$HERMES_KANBAN_TASK"
+RECORD_TYPES = ("peer-run", "evidence", "code-sha", "round", "verdict")
+MAX_ATTEMPTS = 3  # automatic peer attempts per validation card; an operator unblock adds one
 RUNNING = {"queued", "started", "running", "stopping"}
 FAILED = {"failed", "cancelled", "interrupted"}
+STATUS_ALIASES = {
+    "pass": "pass", "passed": "pass", "ok": "pass", "success": "pass", "succeeded": "pass", "green": "pass",
+    "fail": "fail", "failed": "fail", "failure": "fail", "error": "fail", "red": "fail",
+    "blocked": "blocked", "block": "blocked",
+}
+EVIDENCE_RE = re.compile(r"BEGIN[-_ ]EVIDENCE\s*\n(.*?)\n\s*END[-_ ]EVIDENCE", re.S | re.I)
+FENCE_RE = re.compile(r"(?:```|~~~)[ \t]*(?:json|JSON)?[ \t]*\n(.*?)(?:```|~~~)", re.S)
 SECRET_PATTERNS = [
     (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [REDACTED]"),
     (re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{16,}"), "[REDACTED]"),
@@ -66,6 +94,7 @@ SECRET_PATTERNS = [
 ]
 
 Runner = Callable[[list], subprocess.CompletedProcess]
+GitRunner = Callable[[list, str], subprocess.CompletedProcess]
 
 
 class WorkflowError(RuntimeError):
@@ -77,6 +106,11 @@ def default_runner(argv: list) -> subprocess.CompletedProcess:
     return subprocess.run([hermes, *argv], capture_output=True, text=True, timeout=120)
 
 
+def default_git(argv: list, cwd: str) -> subprocess.CompletedProcess:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    return subprocess.run(["git", *argv], cwd=cwd, capture_output=True, text=True, timeout=120, env=env)
+
+
 def hermes_json(run: Runner, argv: list):
     r = run(argv)
     if r.returncode != 0:
@@ -85,6 +119,230 @@ def hermes_json(run: Runner, argv: list):
         return json.loads(r.stdout)
     except json.JSONDecodeError as exc:
         raise WorkflowError(f"hermes {' '.join(argv[:3])} returned non-JSON output") from exc
+
+
+def card(run: Runner, task_id: str) -> dict:
+    return hermes_json(run, ["kanban", "show", task_id, "--json"])
+
+
+def require_worker_context(action: str) -> None:
+    """Kanban refuses writes from delegate_task children; refuse before any side
+    effect (a remote run started there could never be recorded on the card)."""
+    if os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"):
+        raise WorkflowError(f"{action} must run in the card's own worker terminal, not inside delegate_task "
+                            "(Hermes refuses Kanban writes from delegate_task children)")
+
+
+def redact(value):
+    """Mask credential-looking strings before anything reaches stdout or the board."""
+    if isinstance(value, dict):
+        return {k: redact(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [redact(v) for v in value]
+    if not isinstance(value, str):
+        return value
+    for pattern, repl in SECRET_PATTERNS:
+        value = pattern.sub(repl, value)
+    return value
+
+
+def clip(value, limit: int) -> str:
+    text = "" if value is None else str(value)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def defang(text: str) -> str:
+    """Peer text placed in a card body must not forge our section markers."""
+    return text.replace("=====", "==")
+
+
+# ---------------------------------------------------------------- headers ---
+
+def header_block(fields: list) -> str:
+    return "\n".join(f"{k}: {v}" for k, v in fields if v not in (None, ""))
+
+
+def card_header(body: str) -> dict:
+    """`Key: value` lines before the first blank line of a body that opens with
+    `Workflow:`. Only this script writes such bodies; the request always comes
+    after the header, thus a request cannot spoof it."""
+    fields = {}
+    if not (body or "").startswith("Workflow:"):
+        return fields
+    for line in body.split("\n\n", 1)[0].splitlines():
+        name, sep, value = line.partition(":")
+        if sep:
+            fields[name.strip().lower()] = value.strip()
+    return fields
+
+
+def header_of(show: dict) -> dict:
+    return card_header((show.get("task") or {}).get("body") or "")
+
+
+def request_of(show: dict) -> str:
+    return ((show.get("task") or {}).get("body") or "").partition(REQUEST_MARKER)[2].strip("\n")
+
+
+class Ctx:
+    """The request-wide settings every card header repeats, thus any card can
+    open the next round without a side table."""
+    FIELDS = (("key", "Key"), ("title", "Title"), ("repo", "Repo"), ("base", "Base"), ("branch", "Branch"),
+              ("lanes", "Lanes"), ("coder", "Coder"), ("reviewer", "Reviewer"), ("orchestrator", "Orchestrator"),
+              ("max_rounds", "Max-rounds"), ("max_runtime", "Max-runtime"), ("code_max_runtime", "Code-max-runtime"))
+
+    def __init__(self, **kw):
+        for name, _ in self.FIELDS:
+            setattr(self, name, kw.get(name, ""))
+        self.lanes = dict(self.lanes or {})
+        self.max_rounds = int(self.max_rounds or 5)
+
+    def header(self) -> list:
+        out = []
+        for name, label in self.FIELDS:
+            value = getattr(self, name)
+            if name == "lanes":
+                value = ", ".join(f"{lane}={target}" for lane, target in value.items())
+            out.append((label, value))
+        return out
+
+    @classmethod
+    def from_header(cls, h: dict) -> "Ctx":
+        lanes = {}
+        for item in (h.get("lanes") or "").split(","):
+            lane, sep, target = item.strip().partition("=")
+            if sep:
+                lanes[lane] = target
+        kw = {name: h.get(label.lower(), "") for name, label in cls.FIELDS if name != "lanes"}
+        ctx = cls(**kw, lanes=lanes)
+        if not (ctx.key and ctx.repo and ctx.branch and ctx.lanes and ctx.coder and ctx.reviewer):
+            raise WorkflowError("card header is missing workflow settings (not a card from this workflow)")
+        return ctx
+
+
+def kind_of(show: dict, want: str) -> dict:
+    h = header_of(show)
+    if h.get("workflow") != want:
+        tid = (show.get("task") or {}).get("id")
+        raise WorkflowError(f"{tid} is not a {want} card (no 'Workflow: {want}' header)")
+    return h
+
+
+# ------------------------------------------------------- durable records ---
+
+def state_dir() -> Path:
+    """Run ledger under the shared Kanban root, thus every profile on this host
+    (relay, coordinator, reviewer) reads the same files."""
+    override = os.environ.get("HERMES_WORKFLOW_STATE", "").strip()
+    if override:
+        return Path(override).expanduser()
+    db = os.environ.get("HERMES_KANBAN_DB", "").strip()
+    if db:
+        return Path(db).expanduser().parent / "kanban" / "workflow-runs"
+    root = os.environ.get("HERMES_KANBAN_HOME", "").strip() or os.environ.get("HERMES_HOME", "").strip()
+    root_path = Path(root).expanduser() if root else Path.home() / ".hermes"
+    if root_path.parent.name == "profiles":
+        root_path = root_path.parent.parent
+    return root_path / "kanban" / "workflow-runs"
+
+
+def ledger_path(task_id: str) -> Path:
+    return state_dir() / (re.sub(r"[^A-Za-z0-9_-]", "_", task_id) + ".jsonl")
+
+
+def append_ledger(task_id: str, rec: dict) -> None:
+    path = ledger_path(task_id)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def read_ledger(task_id: str) -> list:
+    try:
+        lines = ledger_path(task_id).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict) and rec.get("type") in RECORD_TYPES:
+            out.append(rec)
+    return out
+
+
+def card_records(show: dict) -> list:
+    out = []
+    for c in show.get("comments") or []:
+        body = c.get("body") or ""
+        rtype, sep, payload = body.partition(" ")
+        if not sep or rtype not in RECORD_TYPES or c.get("author") != "kanban-workflow":
+            continue
+        try:
+            rec = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(rec, dict):
+            rec.setdefault("type", rtype)
+            rec.setdefault("rid", rec.get("idempotency_key") or rec.get("run_id") or payload)
+            out.append(rec)
+    return out
+
+
+def records(show: dict, rtype: str) -> list:
+    """Ledger + card records of one type, merged by `rid` (later writes win), oldest first."""
+    task_id = (show.get("task") or {}).get("id") or ""
+    merged, order = {}, []
+    for rec in [*card_records(show), *read_ledger(task_id)]:
+        if rec.get("type") != rtype:
+            continue
+        rid = rec.get("rid")
+        if rid not in merged:
+            order.append(rid)
+            merged[rid] = dict(rec)
+        elif float(rec.get("ts") or 0) >= float(merged[rid].get("ts") or 0):
+            merged[rid].update(rec)
+    out = [merged[rid] for rid in order]
+    out.sort(key=lambda r: float(r.get("ts") or 0))
+    return out
+
+
+def comment_record(run: Runner, task_id: str, rec: dict) -> bool:
+    r = run(["kanban", "comment", task_id, f"{rec['type']} " + json.dumps(rec, sort_keys=True),
+             "--author", "kanban-workflow"])
+    return r.returncode == 0
+
+
+def put_record(run: Runner, task_id: str, rtype: str, rec: dict) -> bool:
+    """Ledger first (durable before anything else can fail), then the card.
+    Returns whether the card copy landed; `sync_records` retries it later."""
+    rec = {**rec, "type": rtype, "ts": rec.get("ts") or time.time()}
+    rec.setdefault("rid", f"{rtype}:{rec['ts']}")
+    append_ledger(task_id, rec)
+    return comment_record(run, task_id, rec)
+
+
+def sync_records(run: Runner, show: dict) -> None:
+    """Mirror ledger records the card does not show yet (a comment that failed)."""
+    task_id = (show.get("task") or {}).get("id") or ""
+    on_card = {(r.get("type"), r.get("rid"), bool(r.get("run_id"))) for r in card_records(show)}
+    for rec in read_ledger(task_id):
+        if rec.get("type") == "peer-run" and not rec.get("run_id"):
+            continue  # a pending marker; the card gets the started run
+        if (rec.get("type"), rec.get("rid"), bool(rec.get("run_id"))) not in on_card:
+            if comment_record(run, task_id, rec):
+                on_card.add((rec.get("type"), rec.get("rid"), bool(rec.get("run_id"))))
+
+
+def latest(show: dict, rtype: str, **match) -> Optional[dict]:
+    for rec in reversed(records(show, rtype)):
+        if all(rec.get(k) == v for k, v in match.items()):
+            return rec
+    return None
 
 
 # ------------------------------------------------------------------ intake ---
@@ -121,8 +379,8 @@ def lane_profile(lane: str) -> str:
 
 
 def peer_targets(lanes: list, overrides: list) -> dict:
-    """{lane profile: peer target} for every peer lane. Mac/Windows lanes are always
-    peer lanes; `--peer lane=target` renames their target or adds another lane."""
+    """{lane profile: peer target} for every lane. Mac/Windows lanes default to the
+    `mac`/`windows` peers; `--peer lane=target` renames a target or adds a lane."""
     peers = {lane: PEER_LANES[lane] for lane in lanes if lane in PEER_LANES}
     for item in overrides:
         lane, sep, target = item.partition("=")
@@ -133,7 +391,49 @@ def peer_targets(lanes: list, overrides: list) -> dict:
     for lane, target in peers.items():
         if not PEER_TARGET_RE.match(target):
             raise WorkflowError(f"lane '{lane}': invalid peer target '{target}' (<peer>[/<profile>])")
+    missing = [lane for lane in lanes if lane not in peers]
+    if missing:
+        raise WorkflowError(f"lane(s) {', '.join(missing)} have no peer: validation lanes run on a worker's own "
+                            "Hermes (mac, windows, or --peer <lane>=<peer>); host-side tests run on the code card")
     return peers
+
+
+def check_repo(repo: str) -> str:
+    """Peers check out by URL; a coordinator path (/opt/repos/...) does not exist on them."""
+    repo = (repo or "").strip()
+    if not repo:
+        raise WorkflowError("--repo is required: the clone URL every lane checks out (https://..., git@host:org/repo)")
+    if not REPO_URL_RE.match(repo):
+        raise WorkflowError(f"--repo '{repo}' is not a clone URL; peers cannot reach a path on this host. "
+                            "Pass the remote URL (git -C <path> remote get-url origin)")
+    return repo
+
+
+def default_branch(title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48].strip("-") or "work"
+    return f"feat/{slug}"
+
+
+def check_branch(branch: str, base: str) -> str:
+    if not BRANCH_RE.match(branch or ""):
+        raise WorkflowError(f"invalid branch name '{branch}'")
+    if branch == base or branch in PROTECTED_BRANCHES:
+        raise WorkflowError(f"branch '{branch}' is protected; the coordinator writes to a feature branch")
+    return branch
+
+
+def check_settings(args) -> None:
+    """Every value that lands in a card header is one plain token."""
+    if not BRANCH_RE.match(args.base or ""):
+        raise WorkflowError(f"invalid base branch '{args.base}'")
+    for what in ("coder", "reviewer", "orchestrator"):
+        if not PROFILE_RE.match(getattr(args, what) or ""):
+            raise WorkflowError(f"invalid --{what} profile name '{getattr(args, what)}'")
+    for what in ("max_runtime", "code_max_runtime"):
+        if not RUNTIME_RE.match(getattr(args, what) or ""):
+            raise WorkflowError(f"invalid --{what.replace('_', '-')} '{getattr(args, what)}' (e.g. 90m, 2h)")
+    if args.max_rounds < 1:
+        raise WorkflowError("--max-rounds must be at least 1")
 
 
 def peer_setup_hint(lane: str, target: str) -> str:
@@ -158,26 +458,28 @@ def peer_problem(run: Runner, lane: str, target: str) -> Optional[str]:
     return f"lane '{lane}': no Hermes peer '{peer}' is configured; {peer_setup_hint(lane, target)}"
 
 
-def check_lanes(run: Runner, lanes: list, peers: dict, reviewer: str) -> None:
+def check_profiles(run: Runner, ctx: Ctx) -> None:
     """Refuse to build a graph the dispatcher cannot finish: every assignee must
-    exist, every peer lane needs its peer registered with a key and a relay that
-    runs here, and the reviewer must not be one of the implementers."""
+    exist, every lane needs its peer registered with a key and a relay that runs
+    here, and the reviewer must be neither the coder nor a lane."""
     problems = []
-    if reviewer in lanes:
-        problems.append(f"reviewer '{reviewer}' is also a lane; review must be independent")
-    for name in [*lanes, reviewer]:
+    if ctx.reviewer in ctx.lanes or ctx.reviewer in (ctx.coder, ctx.orchestrator):
+        problems.append(f"reviewer '{ctx.reviewer}' also codes, relays or reports; review must be independent")
+    if ctx.coder in ctx.lanes:
+        problems.append(f"coder '{ctx.coder}' is also a lane; peers only validate")
+    for name in dict.fromkeys([*ctx.lanes, ctx.coder, ctx.reviewer, ctx.orchestrator]):
         r = run(["-p", name, "config", "get", "terminal.backend"])
         if r.returncode != 0:
             problems.append(f"profile '{name}' does not exist (see docs/discord-kanban-workflow.md)")
             continue
-        if name not in peers:
+        if name not in ctx.lanes:
             continue
         backend = ((r.stdout or "").strip().splitlines()[-1:] or [""])[0]
         if backend != RELAY_BACKEND:
             problems.append(f"lane '{name}' terminal.backend is '{backend}', not '{RELAY_BACKEND}'; the relay "
                             f"runs on this host: hermes -p {name} config set terminal.backend local")
             continue
-        problem = peer_problem(run, name, peers[name])
+        problem = peer_problem(run, name, ctx.lanes[name])
         if problem:
             problems.append(problem)
     if problems:
@@ -186,132 +488,166 @@ def check_lanes(run: Runner, lanes: list, peers: dict, reviewer: str) -> None:
 
 HUMAN_GATES = """\
 Human gates (mandatory):
-- Never merge, deploy, release, publish, or change production. Those need the operator's explicit approval.
-- Never type or request passwords, tokens, MFA codes or keys. At any login, MFA,
+- Never merge, deploy, release, publish, sign, or submit to the App Store or Play Store, and never
+  change production. Those need the operator's explicit approval.
+- Never type or request passwords, tokens, MFA codes or keys. At any login, MFA, signing,
   payment, admin/UAC or credential prompt, stop and call
   kanban_block(reason="human-approval: <what you hit>"). The operator finishes it and unblocks.
+- Never run destructive commands (git reset --hard, clean -fdx, force push, deleting data)
+  outside this card's own checkout without the operator's approval.
 - Never send Discord messages yourself; the board notifies the requester."""
 
-REPORT_NOTE = """\
-The "Report:" card that waits on this one is the final report, not a review phase;
-it does not replace review."""
+
+def label(lane: str) -> str:
+    return LANE_LABELS.get(lane, lane)
 
 
-def lane_body(request: str, lane: str, reviewer: str, repo: str, key: str) -> str:
-    """Local profile lane (coder, ...): the assignee does the work on this host."""
-    where = LANE_WHERE.get(lane, f"the '{lane}' lane")
-    repo_line = f"Repository: {repo}\n" if repo else ""
+def code_body(ctx: Ctx, n: int, request: str, feedback: str) -> str:
+    fix = ""
+    if feedback:
+        fix = (f"\nFix this round (from round {n - 1}; fix the cause, never weaken, skip or delete a test):\n"
+               f"{defang(feedback)}\n")
+    work = f"~/hermes-work/{TASK_TOKEN}"
     return f"""\
-Request (from Discord, verbatim):
-{request}
+{header_block([("Workflow", "code"), *ctx.header(), ("Round", n)])}
 
-{repo_line}Lane: {lane} — your terminal runs on {where}.
-Workflow key: {key}
+You are the coordinator and the only code writer for this request (round {n}). The Mac and
+Windows workers never edit code: they test the exact commit you push and send evidence back.
+Failures come back to you as the next round, without the operator.
 
-Contract:
-1. Work in a fresh per-task directory: ~/hermes-work/{TASK_TOKEN}.
-   Clone or fetch the repository there. Never reuse another task's checkout.
-2. Use a feature branch (feat/... or fix/...). Never commit to main.
-3. Build and test; keep the exact commands and their output.
-4. Push the feature branch so the reviewer can read it. Opening a draft PR is fine; merging is not.
-5. Finish with kanban_request_review(reviewer="{reviewer}", summary=<what changed and how
-   it was verified>, metadata={{"branch": ..., "commit": ..., "tests": ...}}).
-   Do not call kanban_complete yourself: the reviewer approves. {REPORT_NOTE}
+Steps:
+1. Work in a fresh checkout on this host: {work}.
+   git clone {ctx.repo} there. Check out {ctx.branch} when the remote has it, else create it
+   from {ctx.base}. Never commit to {ctx.base} or main; never reuse another card's checkout.
+2. Write the code with a Claude coding subagent: delegate_task(goal=<the request or the
+   failures below, the checkout path, the acceptance criteria>). It runs Claude Opus. For hard
+   debugging or broad architecture work, start the goal with a line holding only #fable to
+   run Claude Fable. Do not hand coding to the Mac or Windows workers or to a local model.
+3. Read the full diff yourself. Run the host-side checks the repo has (lint, unit tests that run here).
+4. Commit on {ctx.branch} (Conventional Commits, no Co-Authored-By trailer), then
+   git push origin {ctx.branch}. Never force push and never merge.
+5. With your own terminal tool (never inside delegate_task) run:
+   python3 {SCRIPT} record-sha {TASK_TOKEN} --repo-dir {work} --notes "<what changed; what each platform should check>"
+   It checks the tree is clean and the remote branch is at HEAD, and records the exact SHA
+   the validators test. Exit 0: kanban_complete(summary=<the "summary" it printed>,
+   metadata=<the "metadata" object it printed>). Exit 2: fix what it names (commit, push), run it again.
 6. If you cannot finish, call kanban_block with the exact blocker.
 
 {HUMAN_GATES}
-"""
-
-
-def remote_task(request: str, lane: str, repo: str, key: str) -> str:
-    """What the worker machine's own Hermes receives (TASK_TOKEN is filled in by dispatch)."""
-    where = LANE_WHERE.get(lane, f"the '{lane}' worker")
-    repo_line = f"Repository: {repo}\n" if repo else ""
-    return f"""\
-You are {where}'s own Hermes agent. Kanban card {TASK_TOKEN} on the coordinator sent you
-this task over the authenticated peer API. You cannot reach the coordinator's board;
-an independent reviewer there reads your branch before anything counts as done.
-
-Request (from Discord, verbatim):
+{fix}
+{REQUEST_MARKER}
 {request}
-
-{repo_line}Workflow key: {key}
-
-Contract:
-1. Work in a fresh directory: ~/hermes-work/{TASK_TOKEN}. Clone or fetch the repository there.
-   Never reuse another task's checkout and never touch files outside it.
-2. Use a feature branch (feat/... or fix/...). Never commit to main. Conventional Commits.
-3. Build and test here; keep the exact commands and their output.
-4. Push the feature branch so the reviewer can read it. A draft PR is fine; merging is not.
-5. Never merge, deploy, release or publish. Never type or ask for passwords, tokens,
-   MFA codes or keys: at a login, MFA, payment, admin/UAC or credential prompt, stop and
-   report "status": "blocked" with "blocker": "human-approval: <what you hit>".
-6. Never send Discord messages. Never put secrets in your reply.
-7. End your final reply with one fenced json block and nothing after it:
-```json
-{{"task": "{TASK_TOKEN}", "status": "ready_for_review", "branch": "...", "commit": "...", "tests": "<commands and result>", "summary": "<what changed>", "blocker": ""}}
-```
-   When you cannot finish, use "status": "blocked" and a one-line "blocker".
 """
 
 
-def peer_lane_body(request: str, lane: str, target: str, reviewer: str, repo: str, key: str) -> str:
-    """Peer lane (mac/windows): the assignee relays to the worker's own Hermes.
-    The header lines come first; dispatch reads them and nothing below."""
+def validate_body(ctx: Ctx, n: int, lane: str, code_id: str, request: str) -> str:
     where = LANE_WHERE.get(lane, f"the '{lane}' worker")
     return f"""\
-Transport: {PEER_TRANSPORT}
-Peer: {target}
-Lane: {lane}
+{header_block([("Workflow", "validate"), ("Key", ctx.key), ("Round", n), ("Transport", PEER_TRANSPORT),
+               ("Peer", ctx.lanes[lane]), ("Lane", lane), ("Code", code_id), ("Repo", ctx.repo),
+               ("Branch", ctx.branch)])}
 
-You relay this card to {where}'s own Hermes agent; you do not implement it here.
-Workflow key: {key}
+You relay this card to {where}'s own Hermes agent. The worker only tests: it checks out the
+exact commit that code card {code_id} pushed, builds, tests, installs and launches it, and
+returns structured evidence. Neither you nor the worker edits code; the coordinator fixes
+failures in the next round.
 
-Relay steps:
+Relay steps (run each one with your own terminal tool, never inside delegate_task):
 1. Run: python3 {SCRIPT} dispatch {TASK_TOKEN}
-   It sends the remote task below with `hermes peer run` (idempotent per card and attempt)
-   and records the peer and run id on this card. Exit 2 is a setup error:
-   call kanban_block(reason="peer-setup: <its output>") and stop.
+   It sends the test-only task for the exact SHA with `hermes peer run` (idempotent per card
+   and attempt) and records the run id in the run ledger and on this card.
+   Exit 2 is a setup error: call kanban_block(reason="peer-setup: <its output>") and stop.
 2. Run: python3 {SCRIPT} wait {TASK_TOKEN} --timeout 540
-   Repeat while it exits 3 (the remote run is still working).
+   Repeat while it exits 3. It asks the worker again for a missing evidence block and
+   restarts a failed or interrupted run on its own (up to {MAX_ATTEMPTS} attempts).
 3. Act on its exit code:
-   0  ready for review: kanban_request_review(reviewer="{reviewer}", summary=<"summary" it
-      printed>, metadata=<the "metadata" object it printed>).
-   4  blocked on the worker: kanban_block(reason=<the "blocker" it printed>).
-   1  the remote run failed or sent no report: kanban_block(reason="peer-run: <its "error">").
-   Copy only what the script printed; it redacts secrets. Never call kanban_complete:
-   the reviewer approves. {REPORT_NOTE}
-   Never do the work on this host and never switch to another transport (SSH included).
+   0  evidence recorded, pass or fail: kanban_complete(summary=<the "summary" it printed>,
+      metadata=<the "metadata" object it printed>). A failing build or test is a valid
+      result; the round card sends it to the coordinator.
+   4  blocked on the worker (login, MFA, signing, device, command approval):
+      kanban_block(reason=<the "blocker" it printed>).
+   1  no usable run after the retries: kanban_block(reason="peer-run: <its "error">").
+   Copy only what the script printed; it redacts secrets. Never call kanban_request_review:
+   review runs once, after every lane passed the same SHA.
+   Never build, test or fix on this host, and never switch to another transport (SSH included).
 
 {HUMAN_GATES}
 
-{REMOTE_MARKER}
-{remote_task(request, lane, repo, key)}"""
-
-
-def request_body(request: str, lanes: list, key: str) -> str:
-    return f"""\
-Request (from Discord, verbatim):
+{REQUEST_MARKER}
 {request}
+"""
 
-Workflow key: {key}
-Lane cards: {', '.join(lanes)} (this card's parents).
+
+def round_body(ctx: Ctx, n: int, code_id: str, request: str) -> str:
+    return f"""\
+{header_block([("Workflow", "round"), *ctx.header(), ("Round", n), ("Code", code_id)])}
+
+You close validation round {n} of this request. Do not edit code, test or review here.
+
+1. With your own terminal tool (never inside delegate_task) run:
+   python3 {SCRIPT} advance {TASK_TOKEN}
+   It reads every lane's evidence for the SHA that code card {code_id} pushed.
+   - Every lane passed: it opens the independent review card.
+   - Any lane failed: it opens the next round on its own: a fix card for the coordinator with
+     the failure evidence, then fresh validation cards for the new SHA.
+2. Exit 0: kanban_complete(summary=<the "summary" it printed>, metadata=<the "metadata" it printed>).
+   Exit 4: kanban_block(reason=<the "blocker" it printed>). The operator unblocks to allow one more round.
+   Exit 2: kanban_block(reason="round: <its output>").
+
+{REQUEST_MARKER}
+{request}
+"""
+
+
+def review_body(ctx: Ctx, n: int, code_id: str, round_id: str, sha: str, request: str) -> str:
+    return f"""\
+{header_block([("Workflow", "review"), *ctx.header(), ("Round", n), ("Code", code_id),
+               ("Round-card", round_id), ("Commit", sha)])}
+
+You are the independent review gate. Every lane passed commit {sha} on {ctx.branch}.
+Nothing reaches the operator as done until you approve this exact commit.
+
+1. Run: python3 {SCRIPT} status {TASK_TOKEN} --json
+   It lists every round, the pushed SHAs and each lane's evidence (SHA tested, commands, exit
+   codes, test counts, devices, artifacts, dirty-tree check) and peer run ids.
+2. Fetch {ctx.repo} into a scratch directory and read `git diff {ctx.base}...{sha}` in full.
+3. Check: the diff does what the request asks and nothing else; every lane tested exactly
+   {sha}; the tests are real and cover the change; no unapproved or unrelated files; no
+   secrets; no production side effects (production config, data, release or store settings).
+4. Verdict, with your own terminal tool:
+   approve: python3 {SCRIPT} verdict {TASK_TOKEN} approve
+   changes: python3 {SCRIPT} verdict {TASK_TOKEN} changes --reason "<numbered, actionable list>"
+            (this opens the next fix round for the coordinator on its own)
+   Exit 0: kanban_complete(summary=<the "summary" it printed>, metadata=<the "metadata" it printed>).
+   Exit 4: kanban_block(reason=<the "blocker" it printed>).
+   Only for an external blocker (missing access, a human decision): kanban_block.
+Review only: never push to, merge, deploy or release the branch, and never edit it.
+
+{REQUEST_MARKER}
+{request}
+"""
+
+
+def report_body(ctx: Ctx, request: str) -> str:
+    return f"""\
+{header_block([("Workflow", "report"), ("Key", ctx.key), ("Title", ctx.title)])}
 
 You write the final report. Steps:
-1. Run: python3 {SCRIPT} gate $HERMES_KANBAN_TASK
-   Exit 0 means every lane card was approved by an independent reviewer.
+1. Run: python3 {SCRIPT} gate {TASK_TOKEN}
+   Exit 0 means the final SHA passed every lane and the independent reviewer approved that SHA.
    Any other exit: call kanban_block(reason="review-gate: <its output>") and stop.
-2. Run: python3 {SCRIPT} status $HERMES_KANBAN_TASK --json
-   It lists each lane's transport, peer and remote run id. Read each lane card
-   (kanban_show) for branch, commit, tests and the review verdict.
-3. Call kanban_complete(summary=<one-line outcome>, result=<report>). The report lists, per lane:
-   status, transport (peer and run id for Mac/Windows lanes), branch and commit, tests run
-   and their result, reviewer verdict; then "Needs your approval:" with every merge,
-   deploy, release or login still open.
-   The gateway posts the outcome to the Discord thread and wakes the orchestrator there
-   to deliver the report.
+2. Run: python3 {SCRIPT} status {TASK_TOKEN} --json
+3. Call kanban_complete(summary=<one-line outcome>, result=<report>). The report lists: the
+   final branch and SHA; per round the SHA, each lane's verdict (tests, failures, device) and
+   peer run id, and what the coordinator fixed; the review verdict; then "Needs your
+   approval:" with every merge, release, signing, store submission, production change or
+   login still open. The gateway posts the outcome to the Discord thread and wakes the
+   orchestrator there to deliver the report.
 
 {HUMAN_GATES}
+
+{REQUEST_MARKER}
+{request}
 """
 
 
@@ -326,8 +662,14 @@ def create_card(run: Runner, title: str, assignee: str, body: str, key: str,
     return hermes_json(run, argv)
 
 
+def link(run: Runner, parent: str, child: str) -> None:
+    r = run(["kanban", "link", parent, child])
+    if r.returncode != 0:
+        raise WorkflowError(f"kanban link {parent} {child} failed: {(r.stderr or r.stdout).strip()[:300]}")
+
+
 def subscribe(run: Runner, task_id: str, origin: dict, mode: str) -> None:
-    argv = ["kanban", "notify-subscribe", task_id, "--platform", "discord",
+    argv = ["kanban", "notify-subscribe", task_id, "--platform", origin.get("platform") or "discord",
             "--chat-id", origin["chat_id"], "--delivery-mode", mode]
     for flag, field in (("--thread-id", "thread_id"), ("--user-id", "user_id"), ("--chat-type", "chat_type")):
         if origin.get(field):
@@ -337,299 +679,756 @@ def subscribe(run: Runner, task_id: str, origin: dict, mode: str) -> None:
         raise WorkflowError(f"notify-subscribe {task_id} failed: {(r.stderr or r.stdout).strip()[:300]}")
 
 
+def copy_subscriptions(run: Runner, source: str, targets: list) -> None:
+    """New round cards inherit the thread of the card that opened them (status lines only)."""
+    r = run(["kanban", "notify-list", source, "--json"])
+    if r.returncode != 0:
+        return
+    try:
+        subs = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError:
+        return
+    for sub in subs if isinstance(subs, list) else []:
+        if sub.get("chat_id"):
+            for tid in targets:
+                subscribe(run, tid, sub, "notify")
+
+
 def short_title(title: str, limit: int = 80) -> str:
     title = re.sub(r"\s+", " ", title).strip()
     return title if len(title) <= limit else title[: limit - 1] + "…"
 
 
+def create_round(run: Runner, ctx: Ctx, n: int, request: str, parent: Optional[str], feedback: str) -> dict:
+    """Code card -> one validation card per lane -> round card, idempotent per round."""
+    code = create_card(run, f"[code {n}] {ctx.title}", ctx.coder, code_body(ctx, n, request, feedback),
+                       f"{ctx.key}:code:{n}", parents=[parent] if parent else [], max_runtime=ctx.code_max_runtime)
+    lanes = {}
+    for lane in ctx.lanes:
+        v = create_card(run, f"[{label(lane)} {n}] {ctx.title}", lane, validate_body(ctx, n, lane, code["id"], request),
+                        f"{ctx.key}:{lane}:{n}", parents=[code["id"]], max_runtime=ctx.max_runtime)
+        lanes[lane] = v["id"]
+    rnd = create_card(run, f"[round {n}] {ctx.title}", ctx.orchestrator, round_body(ctx, n, code["id"], request),
+                      f"{ctx.key}:round:{n}", parents=list(lanes.values()))
+    return {"round": n, "code": code["id"], "lanes": lanes, "round_card": rnd["id"]}
+
+
+def read_request(args) -> str:
+    if args.body_file:
+        try:
+            return Path(args.body_file).expanduser().read_text(encoding="utf-8").strip("\n")
+        except OSError as exc:
+            raise WorkflowError(f"--body-file: {exc}") from exc
+    return args.body or args.title
+
+
 def intake(args, run: Runner = default_runner) -> dict:
     lanes = list(dict.fromkeys(lane_profile(lane) for lane in args.lane))
     if not lanes:
-        raise WorkflowError("at least one --lane is required (mac, windows or a profile name)")
+        raise WorkflowError("at least one --lane is required (mac, windows, or a lane with --peer)")
     peers = peer_targets(lanes, args.peer)
+    check_settings(args)
+    repo = check_repo(args.repo)
     origin = discord_origin(args)
-    base = idempotency_base(args.key, origin)
-    request = args.body or args.title
-    title = short_title(args.title)
+    base_key = idempotency_base(args.key, origin)
+    request = read_request(args)
+    title = defang(short_title(args.title))
+    branch = check_branch(args.branch or default_branch(title), args.base)
+    ctx = Ctx(key=base_key, title=title, repo=repo, base=args.base, branch=branch, lanes=peers,
+              coder=args.coder, reviewer=args.reviewer, orchestrator=args.orchestrator,
+              max_rounds=args.max_rounds, max_runtime=args.max_runtime, code_max_runtime=args.code_max_runtime)
 
     plan = {
-        "key": base,
-        "lanes": [{"assignee": lane, "title": f"[{LANE_LABELS.get(lane, lane)}] {title}",
-                   "idempotency_key": f"{base}:{lane}",
-                   "transport": PEER_TRANSPORT if lane in peers else "local",
-                   **({"peer": peers[lane]} if lane in peers else {})} for lane in lanes],
-        "request": {"assignee": args.orchestrator, "title": f"Report: {title}",
-                    "idempotency_key": f"{base}:request"},
-        "reviewer": args.reviewer,
+        "key": base_key, "repo": repo, "base": args.base, "branch": branch, "max_rounds": ctx.max_rounds,
+        "code": {"assignee": ctx.coder, "title": f"[code 1] {title}", "idempotency_key": f"{base_key}:code:1"},
+        "lanes": [{"assignee": lane, "title": f"[{label(lane)} 1] {title}", "transport": PEER_TRANSPORT,
+                   "peer": peers[lane], "idempotency_key": f"{base_key}:{lane}:1"} for lane in lanes],
+        "round": {"assignee": ctx.orchestrator, "title": f"[round 1] {title}",
+                  "idempotency_key": f"{base_key}:round:1"},
+        "request": {"assignee": ctx.orchestrator, "title": f"Report: {title}",
+                    "idempotency_key": f"{base_key}:request"},
+        "reviewer": ctx.reviewer,
         "discord": origin,
     }
     if args.dry_run:
         plan["dry_run"] = True
         return plan
 
-    check_lanes(run, lanes, peers, args.reviewer)
-    work_ids = []
+    check_profiles(run, ctx)
+    first = create_round(run, ctx, 1, request, None, "")
+    plan["code"]["id"] = first["code"]
     for spec in plan["lanes"]:
-        lane = spec["assignee"]
-        body = (peer_lane_body(request, lane, peers[lane], args.reviewer, args.repo, base) if lane in peers
-                else lane_body(request, lane, args.reviewer, args.repo, base))
-        card = create_card(run, spec["title"], lane, body, spec["idempotency_key"], max_runtime=args.max_runtime)
-        spec["id"] = card["id"]
-        work_ids.append(card["id"])
-    req = create_card(run, plan["request"]["title"], args.orchestrator, request_body(request, lanes, base),
-                      plan["request"]["idempotency_key"], parents=work_ids)
-    plan["request"]["id"] = req["id"]
+        spec["id"] = first["lanes"][spec["assignee"]]
+    plan["round"]["id"] = first["round_card"]
+    report = create_card(run, plan["request"]["title"], ctx.orchestrator, report_body(ctx, request),
+                         plan["request"]["idempotency_key"], parents=[first["round_card"]])
+    plan["request"]["id"] = report["id"]
 
     plan["subscribed"] = False
     if origin:
-        # Lane cards: passive status lines (review requested, blocked for a human).
-        # Request card: notify + wake the orchestrator so it delivers the report.
-        for wid in work_ids:
-            subscribe(run, wid, origin, "notify")
-        subscribe(run, req["id"], origin, "notify+wake")
+        # Work cards: passive status lines (SHA pushed, lane passed/failed, blocked).
+        # Report card: notify + wake the orchestrator so it delivers the report.
+        for tid in [first["code"], *first["lanes"].values(), first["round_card"]]:
+            subscribe(run, tid, origin, "notify")
+        subscribe(run, report["id"], origin, "notify+wake")
         plan["subscribed"] = True
     return plan
 
 
-# ------------------------------------------------------------ peer lanes ---
+# -------------------------------------------------------------- code card ---
 
-def redact(value):
-    """Mask credential-looking strings before anything reaches stdout or the board."""
-    if isinstance(value, dict):
-        return {k: redact(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [redact(v) for v in value]
-    if not isinstance(value, str):
-        return value
-    for pattern, repl in SECRET_PATTERNS:
-        value = pattern.sub(repl, value)
-    return value
+def git_out(git: GitRunner, argv: list, cwd: str) -> str:
+    r = git(argv, cwd)
+    if r.returncode != 0:
+        raise WorkflowError(f"git {' '.join(argv[:2])} failed: {redact((r.stderr or r.stdout).strip())[:300]}")
+    return (r.stdout or "").strip()
 
 
-def card_header(body: str) -> dict:
-    """`Key: value` lines before the first blank line of a body that opens with
-    `Transport:`. Only peer lane bodies do; every other body opens with the
-    verbatim request, thus a request cannot spoof the header."""
-    fields = {}
-    if not (body or "").startswith("Transport:"):
-        return fields
-    for line in body.split("\n\n", 1)[0].splitlines():
-        name, sep, value = line.partition(":")
-        if sep:
-            fields[name.strip().lower()] = value.strip()
-    return fields
+def code_sha(run: Runner, code_id: str) -> dict:
+    rec = latest(card(run, code_id), "code-sha")
+    if not rec or not SHA_RE.match(str(rec.get("sha") or "")):
+        raise WorkflowError(f"code card {code_id} has no recorded SHA yet (the coordinator runs record-sha)")
+    return rec
 
 
-def peer_records(show: dict) -> list:
-    records = []
-    for c in show.get("comments") or []:
-        body = c.get("body") or ""
-        if body.startswith(RECORD_PREFIX):
-            try:
-                rec = json.loads(body[len(RECORD_PREFIX):])
-            except json.JSONDecodeError:
-                continue
-            if isinstance(rec, dict) and rec.get("run_id"):
-                records.append(rec)
-    return records
+def record_sha(task_id: str, repo_dir: str, notes: str, run: Runner = default_runner,
+               git: GitRunner = default_git) -> dict:
+    """Verify the checkout is committed and pushed, then record the exact SHA."""
+    require_worker_context("record-sha")
+    show = card(run, task_id)
+    h = kind_of(show, "code")
+    branch, repo, n = h.get("branch", ""), h.get("repo", ""), int(h.get("round") or 1)
+    cwd = str(Path(repo_dir).expanduser())
+    head = git_out(git, ["rev-parse", "HEAD"], cwd)
+    current = git_out(git, ["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    if current != branch:
+        raise WorkflowError(f"checkout is on '{current}', the card's branch is '{branch}'")
+    dirty = git_out(git, ["status", "--porcelain", "--untracked-files=no"], cwd)
+    if dirty:
+        raise WorkflowError(f"uncommitted tracked changes; commit them first: {clip(dirty, 300)}")
+    remote = git_out(git, ["ls-remote", repo, f"refs/heads/{branch}"], cwd).split()
+    remote_sha = remote[0] if remote else ""
+    if remote_sha != head:
+        raise WorkflowError(f"push first: {branch} on {repo} is at {remote_sha[:12] or 'nothing'}, HEAD is {head[:12]}")
+    rec = {"rid": f"code-sha:{head}", "sha": head, "branch": branch, "repo": repo, "base": h.get("base", ""),
+           "round": n, "notes": clip(redact(notes or ""), 4000)}
+    on_card = put_record(run, task_id, "code-sha", rec)
+    return {"task": task_id, "summary": f"SHA_PUSHED {head[:12]} on {branch} (round {n})",
+            "metadata": {"state": "SHA_PUSHED", "commit": head, "branch": branch, "round": n},
+            "recorded_on_card": on_card}
 
 
-def peer_lane(show: dict) -> tuple:
-    """(lane, target) of a peer lane card, or raise."""
+# -------------------------------------------------------- validation lanes ---
+
+def validate_lane(show: dict) -> tuple:
+    """(lane, target, header) of a validation card, or raise."""
     task = show.get("task") or {}
-    header = card_header(task.get("body") or "")
-    if header.get("transport") != PEER_TRANSPORT:
-        raise WorkflowError(f"{task.get('id')} is not a peer lane card (no 'Transport: {PEER_TRANSPORT}' header)")
-    target, lane = header.get("peer", ""), task.get("assignee") or ""
-    if not PEER_TARGET_RE.match(target) or not lane:
-        raise WorkflowError(f"{task.get('id')}: peer lane card without a valid peer or assignee")
-    return lane, target
+    h = card_header(task.get("body") or "")
+    if h.get("workflow") != "validate" or h.get("transport") != PEER_TRANSPORT:
+        raise WorkflowError(f"{task.get('id')} is not a validation card (no 'Workflow: validate' header)")
+    target, lane = h.get("peer", ""), task.get("assignee") or ""
+    if not PEER_TARGET_RE.match(target) or not lane or not h.get("code"):
+        raise WorkflowError(f"{task.get('id')}: validation card without a valid peer, assignee or code card")
+    return lane, target, h
+
+
+def validation_task(task_id: str, lane: str, h: dict, sha_rec: dict, request: str, attempt: int, note: str) -> str:
+    """What the worker machine's own Hermes receives: test-only, exact SHA."""
+    where = LANE_WHERE.get(lane, f"the '{lane}' worker")
+    platform = LANE_PLATFORM.get(lane, "this worker's platform")
+    sha, branch, repo = sha_rec["sha"], sha_rec.get("branch") or h.get("branch"), sha_rec.get("repo") or h.get("repo")
+    work = f"~/hermes-work/{task_id}"
+    lead = f"Attempt {attempt}. {note}\n\n" if note else ""
+    notes = sha_rec.get("notes") or "(none)"
+    example = json.dumps({
+        "task": task_id, "status": "pass|fail|blocked", "sha_tested": sha, "platform": "...", "os": "...",
+        "tools": "...", "commands": [{"cmd": "...", "exit_code": 0}],
+        "tests": {"passed": 0, "failed": 0, "skipped": 0}, "failures": [], "artifacts": [],
+        "device": "...", "dirty_tree": False, "blocker": "", "summary": "..."})
+    return f"""\
+{lead}You are {where}'s own Hermes agent. Kanban card {task_id} on the coordinator asks you to
+validate one exact commit. You are a test-only worker: you never change source code. The
+coordinator writes all code; it fixes what you report and sends you a new commit.
+
+Repository: {repo}
+Branch: {branch}
+Commit: {sha}
+Platform: {platform}
+Round: {h.get("round")}
+
+What changed, from the coordinator:
+{defang(notes)}
+
+Allowed: clone or fetch, check out the exact commit, install dependencies, build, run tests,
+install and launch on a simulator, emulator or connected device, read logs, take screenshots.
+Forbidden: editing or adding tracked files, committing, pushing, creating branches, merging,
+deploying, releasing, store submission, signing with credentials, typing secrets, sending
+Discord messages, and destructive commands outside {work}.
+
+Steps:
+1. Work in {work} (create it fresh; never reuse another card's directory).
+   git clone {repo} there (or fetch), then git checkout --detach {sha}.
+   Confirm `git rev-parse HEAD` prints {sha}. Paths in the request below are on the
+   coordinator, not on this machine; use only this repository URL.
+2. Build and test what this platform can check for the change. Keep each exact command, its
+   exit code, the test counts and the failure messages.
+3. Install and launch the app where it applies; name the simulator, emulator or device.
+4. Run `git status --porcelain --untracked-files=no` at the end; report changed tracked files.
+5. A failing build or test is a valid result: report "fail" with the failures. Do not fix them.
+6. At a login, MFA, signing, payment, admin/UAC or credential prompt, or with no usable device,
+   stop and report "blocked" with "blocker": "human-approval: <what>" or "device: <what>".
+7. End your final reply with the evidence block, exactly these marker lines around one JSON object:
+BEGIN-EVIDENCE
+{example}
+END-EVIDENCE
+   "status" is pass, fail or blocked; "sha_tested" is the full SHA you checked out. Never put
+   secrets in the reply.
+
+Request context (from Discord, verbatim):
+{request}
+"""
+
+
+def report_only_message(task_id: str, sha: str) -> str:
+    return f"""\
+Kanban card {task_id}: your last run for commit {sha} ended without the evidence block.
+Do not start the build or tests again. Reply now with only the evidence for the work you
+already did, between these marker lines, with "task": "{task_id}" and "sha_tested":
+BEGIN-EVIDENCE
+{{"task": "{task_id}", "status": "pass|fail|blocked", "sha_tested": "{sha}", "commands": [], "tests": {{}}, "failures": [], "dirty_tree": false, "blocker": "", "summary": ""}}
+END-EVIDENCE
+When you did not finish, report "fail" with what ran, or "blocked" with the blocker."""
+
+
+def peer_runs(show: dict) -> list:
+    return records(show, "peer-run")
 
 
 def peer_status(run: Runner, lane: str, target: str, run_id: str) -> dict:
     return hermes_json(run, ["-p", lane, "peer", "status", target, run_id, "--json"])
 
 
-def followup(show: dict, rec: dict) -> Optional[tuple]:
-    """(kind, note for the remote agent) for board events since `rec` was dispatched
-    that call for a new attempt: a reviewer change request, or an operator unblock."""
-    events = (show.get("events") or [])[int(rec.get("events_seen") or 0):]
-    changes = [e for e in events if e.get("kind") == "changes_requested"]
-    if changes:
-        reason = (changes[-1].get("payload") or {}).get("reason") or "(no reason given)"
-        return "changes_requested", f"The independent reviewer asked for changes:\n{reason}"
-    if any(e.get("kind") == "unblocked" for e in events):
-        return "unblocked", "The operator cleared the earlier block. Continue from where you stopped."
-    return None
-
-
-def dispatch(task_id: str, run: Runner = default_runner) -> dict:
-    """Start (or resume) the remote run for a peer lane card and record it on the card.
-    A new attempt starts only for a first dispatch, a reviewer change request, or an
-    unblock after the previous run ended; anything else resumes the recorded run."""
-    show = hermes_json(run, ["kanban", "show", task_id, "--json"])
-    lane, target = peer_lane(show)
-    problem = peer_problem(run, lane, target)
-    if problem:
-        raise WorkflowError(problem)
-    records = peer_records(show)
-    kind, note = None, None
-    if records:
-        latest = records[-1]
-        kind, note = followup(show, latest) or (None, None)
-        if kind is None:
-            return {**latest, "resumed": True}
-        if kind == "unblocked":  # the operator may have cleared a gate on a live run
-            remote = peer_status(run, lane, target, latest["run_id"])
-            if remote.get("status") in RUNNING | {"waiting_for_approval"}:
-                return {**latest, "resumed": True}
-
-    attempt = len(records) + 1
-    remote = (show["task"].get("body") or "").partition(REMOTE_MARKER)[2].strip()
-    if not remote:
-        raise WorkflowError(f"{task_id}: card has no remote task section")
-    message = remote.replace(TASK_TOKEN, task_id)
-    if note:
-        message = (f"Attempt {attempt} for Kanban card {task_id}. Continue in ~/hermes-work/{task_id} "
-                   f"on the same branch.\n{redact(note)}\n\n{message}")
-    idem = f"kanban:{task_id}:{attempt}"
+def start_run(run: Runner, show: dict, lane: str, target: str, h: dict, sha_rec: dict,
+              attempt: int, kind: str = "run", note: str = "", idem: str = "") -> dict:
+    """Ledger a pending marker, send the peer run, record its id (ledger, then card).
+    A crash between the two leaves the pending marker; the next dispatch re-sends the
+    same idempotency key and the peer replays the same run."""
+    task_id = show["task"]["id"]
+    idem = idem or f"kanban:{task_id}:{attempt}" + (":report" if kind == "report" else "")
+    if kind == "report":
+        message = report_only_message(task_id, sha_rec["sha"])
+    else:
+        message = validation_task(task_id, lane, h, sha_rec, request_of(show), attempt, redact(note))
+    pending = {"rid": idem, "idempotency_key": idem, "attempt": attempt, "kind": kind, "lane": lane,
+               "peer": target, "sha": sha_rec["sha"], "transport": PEER_TRANSPORT, "run_id": "",
+               "events_seen": len(show.get("events") or [])}
+    append_ledger(task_id, {**pending, "type": "peer-run", "ts": time.time()})
     started = hermes_json(run, ["-p", lane, "peer", "run", target, message, "--idempotency-key", idem, "--json"])
     if not started.get("run_id"):
         raise WorkflowError(f"peer '{target}' returned no run id")
-    rec = {"transport": PEER_TRANSPORT, "lane": lane, "peer": target, "run_id": str(started["run_id"]),
-           "session_id": str(started.get("session_id") or ""), "attempt": attempt,
-           "idempotency_key": idem, "events_seen": len(show.get("events") or [])}
-    r = run(["kanban", "comment", task_id, RECORD_PREFIX + json.dumps(rec, sort_keys=True),
-             "--author", "kanban-workflow"])
-    if r.returncode != 0:
-        raise WorkflowError(f"run {rec['run_id']} started; recording it on {task_id} failed "
-                            f"(rerun dispatch, the peer replays the same run): {(r.stderr or r.stdout).strip()[:200]}")
-    return {**rec, "resumed": bool(started.get("replayed"))}
+    rec = {**pending, "run_id": str(started["run_id"]), "session_id": str(started.get("session_id") or "")}
+    on_card = put_record(run, task_id, "peer-run", rec)
+    return {**rec, "resumed": bool(started.get("replayed")), "recorded_on_card": on_card}
 
 
-def remote_report(output: str) -> Optional[dict]:
-    """The last fenced json block of the remote agent's final reply."""
-    blocks = re.findall(r"```json\s*\n(.*?)```", output or "", re.S)
-    for block in reversed(blocks):
+def unblocked_since(show: dict, rec: dict) -> bool:
+    events = (show.get("events") or [])[int(rec.get("events_seen") or 0):]
+    return any(e.get("kind") == "unblocked" for e in events)
+
+
+def dispatch(task_id: str, run: Runner = default_runner) -> dict:
+    """Start (or resume) the peer run for a validation card. A new attempt starts
+    only for a first dispatch, or an operator unblock after the previous run ended;
+    a pending (unrecorded) run is re-sent with its own idempotency key."""
+    require_worker_context("dispatch")
+    show = card(run, task_id)
+    lane, target, h = validate_lane(show)
+    problem = peer_problem(run, lane, target)
+    if problem:
+        raise WorkflowError(problem)
+    sha_rec = code_sha(run, h["code"])
+    sync_records(run, show)
+    runs = peer_runs(show)
+    if not runs:
+        return start_run(run, show, lane, target, h, sha_rec, 1)
+    last = runs[-1]
+    if not last.get("run_id"):
+        return start_run(run, show, lane, target, h, sha_rec, int(last.get("attempt") or 1),
+                         kind=last.get("kind") or "run", idem=last["idempotency_key"])
+    if not unblocked_since(show, last):
+        return {**last, "resumed": True}
+    remote = peer_status(run, lane, target, last["run_id"])
+    if remote.get("status") in RUNNING | {"waiting_for_approval"}:
+        return {**last, "resumed": True}  # the operator cleared a gate on a live run
+    return start_run(run, show, lane, target, h, sha_rec, int(last.get("attempt") or 1) + 1,
+                     note="The operator cleared the earlier block. Validate the same commit again from a clean checkout.")
+
+
+def extract_report(output: str) -> Optional[dict]:
+    """The evidence object from a remote reply, tolerant of formatting: the last
+    BEGIN/END-EVIDENCE block, else the last fenced JSON block with a "status",
+    else the last bare JSON object with a "status"."""
+    text = output or ""
+
+    def parse(chunk: str) -> Optional[dict]:
+        chunk = chunk.strip()
+        fenced = FENCE_RE.search(chunk)
+        if fenced:
+            chunk = fenced.group(1).strip()
         try:
-            report = json.loads(block)
+            obj = json.loads(chunk)
         except json.JSONDecodeError:
+            return None
+        return obj if isinstance(obj, dict) else None
+
+    for chunk in reversed(EVIDENCE_RE.findall(text)):
+        obj = parse(chunk)
+        if obj is not None:
+            return obj
+    for chunk in reversed(FENCE_RE.findall(text)):
+        obj = parse(chunk)
+        if obj is not None and "status" in obj:
+            return obj
+    decoder, found, i = json.JSONDecoder(), None, text.find("{")
+    while i != -1:
+        try:
+            obj, end = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            i = text.find("{", i + 1)
             continue
-        if isinstance(report, dict):
-            return report
-    return None
+        if isinstance(obj, dict) and "status" in obj:
+            found = obj
+        i = text.find("{", end)
+    return found
 
 
-def settle(task_id: str, rec: dict, remote: dict) -> Optional[tuple]:
-    """(exit code, result) for a remote run that needs the relay to act, else None."""
+class EvidenceError(ValueError):
+    pass
+
+
+def _int(value) -> int:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _truthy(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() not in ("", "false", "no", "none", "clean", "0")
+    return bool(value)
+
+
+def normalize_evidence(raw: dict, task_id: str, sha: str, lane: str) -> dict:
+    """Validate the worker's evidence against the card and the exact SHA, and
+    bound every field. A dirty tree or failed tests turn a "pass" into "fail"."""
+    task = str(raw.get("task") or task_id)
+    if task != task_id:
+        raise EvidenceError(f"evidence is for task {task}, not {task_id}")
+    status = STATUS_ALIASES.get(str(raw.get("status") or "").strip().lower())
+    if status is None:
+        raise EvidenceError(f"evidence status {raw.get('status')!r} is not pass, fail or blocked")
+    tested = str(raw.get("sha_tested") or raw.get("commit") or raw.get("sha") or "").strip().lower()
+    if status != "blocked":
+        if not tested:
+            raise EvidenceError("evidence has no sha_tested")
+        if len(tested) < 7 or not sha.startswith(tested):
+            raise EvidenceError(f"the worker tested {tested[:12]}, not {sha[:12]}")
+    tests = raw.get("tests") if isinstance(raw.get("tests"), dict) else {}
+    tests = {k: _int(tests.get(k)) for k in ("passed", "failed", "skipped")}
+    failures = raw.get("failures") or []
+    failures = [clip(f, 500) for f in (failures if isinstance(failures, list) else [failures]) if f][:30]
+    commands = []
+    for c in (raw.get("commands") or [])[:40] if isinstance(raw.get("commands"), list) else []:
+        if isinstance(c, dict):
+            code = c.get("exit_code")
+            commands.append({"cmd": clip(c.get("cmd"), 300), "exit_code": code if isinstance(code, int) else None})
+        elif c:
+            commands.append({"cmd": clip(c, 300), "exit_code": None})
+    dirty = raw.get("dirty_tree")
+    if status != "blocked" and _truthy(dirty):
+        detail = f": {clip(dirty, 300)}" if isinstance(dirty, (str, list)) else ""
+        failures.append(f"tracked files changed on the worker during validation{detail}")
+        status = "fail"
+    if status == "pass" and tests["failed"]:
+        failures.append(f"{tests['failed']} test(s) failed")
+        status = "fail"
+    if status == "fail" and not failures:
+        failures.append("the worker reported fail without details")
+    blocker = clip(raw.get("blocker"), 500) if status == "blocked" else ""
+    if status == "blocked" and not blocker:
+        blocker = "the worker blocked without a reason"
+    return redact({
+        "task": task_id, "lane": lane, "sha": sha, "sha_tested": tested, "status": status,
+        "platform": clip(raw.get("platform"), 200), "os": clip(raw.get("os"), 200),
+        "tools": clip(json.dumps(raw["tools"]) if isinstance(raw.get("tools"), (dict, list)) else raw.get("tools"), 500),
+        "commands": commands, "tests": tests, "failures": failures,
+        "artifacts": [clip(a, 300) for a in raw.get("artifacts") or [] if a][:30]
+        if isinstance(raw.get("artifacts"), list) else [],
+        "device": clip(raw.get("device"), 300), "dirty_tree": _truthy(dirty) if status != "blocked" else False,
+        "blocker": blocker, "summary": clip(raw.get("summary"), 1000),
+    })
+
+
+def lane_state(lane: str, verdict: str) -> str:
+    return f"{label(lane).upper()}_{'PASSED' if verdict == 'pass' else 'FAILED'}"
+
+
+def settle(task_id: str, lane: str, rec: dict, remote: dict, sha: str) -> Optional[tuple]:
+    """(exit code, result) for a remote run that needs the relay to act, else None.
+    Code 1 results carry "retry": "report" when the worker only forgot the block."""
     state = remote.get("status")
-    base = {"task": task_id, "peer": rec["peer"], "run_id": rec["run_id"], "remote_status": state}
+    base = {"task": task_id, "peer": rec["peer"], "run_id": rec["run_id"], "attempt": rec.get("attempt"),
+            "remote_status": state}
     if state == "waiting_for_approval":
         what = ((remote.get("approval") or {}).get("description") or "a command")[:200]
         return 4, {**base, "blocker": f"human-approval: the {rec['peer']} worker waits for approval of {what} "
-                                      f"(run {rec['run_id']}); approve or deny it there, then unblock"}
+                                      f"(card {task_id}, run {rec['run_id']}); approve or deny it there, then unblock"}
     if state in FAILED:
         return 1, {**base, "error": f"remote run {state}: {(remote.get('error') or '')[:300]}"}
     if state != "completed":
         return None
-    report = remote_report(remote.get("output") or "")
-    if report is None:
-        return 1, {**base, "error": "remote run completed without the JSON report"}
-    if str(report.get("task") or task_id) != task_id:
-        return 1, {**base, "error": f"remote report is for task {report.get('task')}, not {task_id}"}
-    if report.get("status") == "blocked":
-        return 4, {**base, "blocker": str(report.get("blocker") or "remote worker blocked without a reason")[:500]}
-    if report.get("status") != "ready_for_review":
-        return 1, {**base, "error": f"remote report status is {report.get('status')!r}"}
-    meta = {k: report.get(k) for k in ("branch", "commit", "tests") if report.get(k)}
-    meta.update({"transport": PEER_TRANSPORT, "peer": rec["peer"], "run_id": rec["run_id"]})
-    return 0, {**base, "summary": str(report.get("summary") or "")[:2000], "metadata": meta}
+    raw = extract_report(remote.get("output") or "")
+    if raw is None:
+        return 1, {**base, "error": "remote run completed without the evidence block", "retry": "report"}
+    try:
+        ev = normalize_evidence(raw, task_id, sha, lane)
+    except EvidenceError as exc:
+        return 1, {**base, "error": f"unusable evidence: {exc}"}
+    if ev["status"] == "blocked":
+        return 4, {**base, "blocker": ev["blocker"], "evidence": ev}
+    st = lane_state(lane, ev["status"])
+    t = ev["tests"]
+    detail = (f"{t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped" if ev["status"] == "pass"
+              else clip("; ".join(ev["failures"]), 300))
+    meta = {"state": st, "verdict": ev["status"], "commit": sha, "lane": lane, "transport": PEER_TRANSPORT,
+            "peer": rec["peer"], "run_id": rec["run_id"], "tests": t}
+    return 0, {**base, "verdict": ev["status"], "summary": f"{st} at {sha[:12]}: {detail}",
+               "metadata": meta, "evidence": ev}
 
 
 def wait(task_id: str, timeout: float, interval: float, run: Runner = default_runner,
          sleep: Callable[[float], None] = time.sleep) -> tuple:
-    """Poll the recorded remote run. Exit codes: 0 ready for review, 4 blocked
-    (human gate), 1 failed or no report, 3 still running after `timeout` seconds."""
-    show = hermes_json(run, ["kanban", "show", task_id, "--json"])
-    lane, target = peer_lane(show)
-    records = peer_records(show)
-    if not records:
+    """Poll the recorded peer run. Exit codes: 0 evidence recorded (pass or fail),
+    4 blocked (human gate or device), 1 no usable run after the automatic retries,
+    3 still running after `timeout` seconds."""
+    require_worker_context("wait")
+    show = card(run, task_id)
+    lane, target, h = validate_lane(show)
+    sha_rec = code_sha(run, h["code"])
+    sha = sha_rec["sha"]
+    sync_records(run, show)
+    started = [r for r in peer_runs(show) if r.get("run_id")]
+    if not started:
         raise WorkflowError(f"{task_id}: no peer run recorded; run `dispatch {task_id}` first")
-    rec = records[-1]
+    rec = started[-1]
+    attempts = max(int(r.get("attempt") or 1) for r in started)
+    limit = MAX_ATTEMPTS + sum(1 for e in show.get("events") or [] if e.get("kind") == "unblocked")
     deadline = time.monotonic() + max(timeout, 0)
     while True:
         remote = peer_status(run, lane, target, rec["run_id"])
-        settled = settle(task_id, rec, remote)
+        settled = settle(task_id, lane, rec, remote, sha)
         if settled:
             code, result = settled
-            return code, redact(result)
+            if code == 0:
+                ev = {**result["evidence"], "rid": f"evidence:{rec['run_id']}", "run_id": rec["run_id"],
+                      "attempt": rec.get("attempt"), "peer": rec["peer"]}
+                if not latest(show, "evidence", rid=ev["rid"]):
+                    result["recorded_on_card"] = put_record(run, task_id, "evidence", ev)
+                return 0, redact({k: v for k, v in result.items() if k != "evidence"})
+            if code == 4:
+                return 4, redact({k: v for k, v in result.items() if k != "evidence"})
+            if result.get("retry") == "report" and rec.get("kind") != "report":
+                rec = start_run(run, show, lane, target, h, sha_rec, int(rec.get("attempt") or 1), kind="report")
+            elif attempts < limit:
+                attempts += 1
+                rec = start_run(run, show, lane, target, h, sha_rec, attempts,
+                                note=f"The previous attempt ended without usable evidence ({result['error']}). "
+                                     "Validate the same commit again from a clean checkout.")
+            else:
+                return 1, redact({k: v for k, v in result.items() if k != "retry"})
+            show = card(run, task_id)
+            continue
         left = deadline - time.monotonic()
         if left <= 0:
             return 3, {"task": task_id, "peer": rec["peer"], "run_id": rec["run_id"],
-                       "remote_status": remote.get("status")}
+                       "attempt": rec.get("attempt"), "remote_status": remote.get("status")}
         sleep(min(interval, left))
+
+
+# --------------------------------------------------------- rounds, review ---
+
+def children_of_kind(run: Runner, show: dict, kind: str) -> list:
+    out = []
+    for cid in show.get("children") or []:
+        child = card(run, cid)
+        if header_of(child).get("workflow") == kind:
+            out.append(cid)
+    return out
+
+
+def report_card_for(run: Runner, show: dict) -> str:
+    found = children_of_kind(run, show, "report")
+    if not found:
+        raise WorkflowError(f"{show['task']['id']}: no report card waits on this card")
+    return found[0]
+
+
+def round_evidence(run: Runner, round_show: dict, sha: str) -> list:
+    """One row per validation card of a round: its latest evidence for `sha`."""
+    rows = []
+    for vid in round_show.get("parents") or []:
+        v = card(run, vid)
+        vh = header_of(v)
+        if vh.get("workflow") != "validate":
+            continue
+        lane = v["task"].get("assignee") or vh.get("lane")
+        ev = latest(v, "evidence", sha=sha)
+        row = {"id": vid, "lane": lane, "status": v["task"].get("status"),
+               "verdict": ev.get("status") if ev else None, "evidence": ev,
+               "run_id": (ev or {}).get("run_id")}
+        if row["status"] != "done":
+            row["problem"] = f"{vid} ({lane}) is {row['status']}"
+        elif not ev:
+            row["problem"] = f"{vid} ({lane}) is done without evidence for {sha[:12]}"
+        rows.append(row)
+    return rows
+
+
+def feedback_from(rows: list, sha: str) -> str:
+    lines = [f"Commit {sha} failed validation:"]
+    for row in rows:
+        ev = row["evidence"] or {}
+        if row["verdict"] == "pass":
+            lines.append(f"- {row['lane']}: passed")
+            continue
+        lines.append(f"- {row['lane']} ({ev.get('platform') or 'platform n/a'}; {ev.get('device') or 'no device named'}):")
+        for f in ev.get("failures") or []:
+            lines.append(f"    * {f}")
+        for c in ev.get("commands") or []:
+            if c.get("exit_code") not in (0, None):
+                lines.append(f"    $ {c['cmd']}  (exit {c['exit_code']})")
+    return clip("\n".join(lines), 6000)
+
+
+def open_next_round(run: Runner, show: dict, ctx: Ctx, n: int, feedback: str) -> dict:
+    """Round n+1 after `show` (a round or review card), linked into the report card
+    before `show` completes, thus the report never runs between rounds."""
+    report = report_card_for(run, show)
+    nxt = create_round(run, ctx, n + 1, request_of(show), show["task"]["id"], feedback)
+    link(run, nxt["round_card"], report)
+    copy_subscriptions(run, show["task"]["id"], [nxt["code"], *nxt["lanes"].values(), nxt["round_card"]])
+    return nxt
+
+
+def round_limit(ctx: Ctx, show: dict) -> int:
+    """Max rounds, plus one per operator unblock of this card."""
+    return ctx.max_rounds + sum(1 for e in show.get("events") or [] if e.get("kind") == "unblocked")
+
+
+def advance(task_id: str, run: Runner = default_runner) -> tuple:
+    """Close a round. Exit 0 with the next step opened (review or next fix round),
+    4 when a lane has no evidence or the fix-loop limit is reached."""
+    require_worker_context("advance")
+    show = card(run, task_id)
+    h = kind_of(show, "round")
+    ctx, n = Ctx.from_header(h), int(h.get("round") or 1)
+    sync_records(run, show)
+    sha = code_sha(run, h["code"])["sha"]
+    rows = round_evidence(run, show, sha)
+    problems = [r["problem"] for r in rows if r.get("problem")]
+    if not rows:
+        problems.append("round card has no validation cards")
+    if problems:
+        return 4, {"task": task_id, "blocker": f"round {n}: " + "; ".join(problems)}
+    lanes = {r["lane"]: {"id": r["id"], "verdict": r["verdict"], "run_id": r["run_id"]} for r in rows}
+    if all(r["verdict"] == "pass" for r in rows):
+        report = report_card_for(run, show)
+        review = create_card(run, f"Review: {ctx.title} (round {n})", ctx.reviewer,
+                             review_body(ctx, n, h["code"], task_id, sha, request_of(show)),
+                             f"{ctx.key}:review:{n}", parents=[task_id])
+        link(run, review["id"], report)
+        copy_subscriptions(run, task_id, [review["id"]])
+        state, nxt = "VALIDATED", {"review": review["id"]}
+        summary = f"VALIDATED {sha[:12]}: every lane passed; review {review['id']}"
+    else:
+        limit = round_limit(ctx, show)
+        failing = ", ".join(f"{r['lane']} ({r['id']})" for r in rows if r["verdict"] != "pass")
+        if n >= limit:
+            return 4, {"task": task_id, "blocker": f"fix-loop: round {n} of {limit} failed at {sha[:12]} on {failing}; "
+                                                   "unblock this card to allow one more round"}
+        opened = open_next_round(run, show, ctx, n, feedback_from(rows, sha))
+        state, nxt = "FIX_REQUIRED", opened
+        summary = f"FIX_REQUIRED at {sha[:12]}: {failing} failed; round {n + 1} code card {opened['code']}"
+    rec = {"rid": f"round:{n}:{sha}", "state": state, "round": n, "commit": sha, "lanes": lanes, "next": nxt}
+    on_card = put_record(run, task_id, "round", rec)
+    return 0, {"task": task_id, "state": state, "summary": summary, "recorded_on_card": on_card,
+               "metadata": {"state": state, "round": n, "commit": sha, "lanes": lanes, "next": nxt}}
+
+
+def verdict(task_id: str, decision: str, reason: str, run: Runner = default_runner) -> tuple:
+    """The reviewer's verdict on a review card: approve, or changes (opens the next round)."""
+    require_worker_context("verdict")
+    show = card(run, task_id)
+    h = kind_of(show, "review")
+    ctx, n, sha = Ctx.from_header(h), int(h.get("round") or 1), h.get("commit", "")
+    profile = os.environ.get("HERMES_PROFILE", "")
+    if profile and profile in (ctx.coder, *ctx.lanes):
+        raise WorkflowError(f"profile '{profile}' wrote or relayed this work; it cannot review it")
+    if decision == "approve":
+        rec = {"rid": f"verdict:{n}:{sha}", "verdict": "approve", "round": n, "commit": sha, "reviewer": profile}
+        on_card = put_record(run, task_id, "verdict", rec)
+        return 0, {"task": task_id, "summary": f"REVIEW_APPROVED {sha[:12]} on {ctx.branch}",
+                   "recorded_on_card": on_card,
+                   "metadata": {"state": "REVIEW_APPROVED", "verdict": "approve", "commit": sha, "round": n}}
+    reason = (reason or "").strip()
+    if not reason:
+        raise WorkflowError("verdict changes needs --reason with a numbered, actionable list")
+    limit = round_limit(ctx, show)
+    if n >= limit:
+        return 4, {"task": task_id, "blocker": f"fix-loop: review asked for changes after round {n} of {limit}; "
+                                               f"unblock this card to allow one more round. Reason: {clip(reason, 300)}"}
+    opened = open_next_round(run, show, ctx, n, f"The independent reviewer asked for changes to {sha}:\n{reason}")
+    rec = {"rid": f"verdict:{n}:{sha}", "verdict": "changes", "round": n, "commit": sha, "reviewer": profile,
+           "reason": clip(redact(reason), 2000), "next": opened}
+    on_card = put_record(run, task_id, "verdict", rec)
+    return 0, {"task": task_id, "summary": f"CHANGES_REQUESTED on {sha[:12]}: round {n + 1} code card {opened['code']}",
+               "recorded_on_card": on_card,
+               "metadata": {"state": "CHANGES_REQUESTED", "verdict": "changes", "commit": sha, "round": n,
+                            "next": opened}}
 
 
 # -------------------------------------------------------------------- gate ---
 
-def review_verdict(show: dict) -> tuple:
-    """(ok, reason) for one lane card from `hermes kanban show --json`.
-
-    Passes only when the card is done, its last review request was followed by a
-    completion, and that completion came from someone other than the implementer."""
+def review_verdict(show: dict, sha: str, ctx: Ctx) -> tuple:
+    """(ok, reason) for the final review card from `hermes kanban show --json`."""
     task = show.get("task") or {}
-    status = task.get("status")
-    if status != "done":
-        return False, f"status is {status}"
-    if card_header(task.get("body") or "").get("transport") == PEER_TRANSPORT and not peer_records(show):
-        return False, "peer lane has no recorded peer run (the work did not run on the worker)"
-    events = show.get("events") or []
-    asked = [i for i, e in enumerate(events) if e.get("kind") == "review_requested"]
-    if not asked:
-        return False, "completed without a review request"
-    last = asked[-1]
-    implementer = (events[last].get("payload") or {}).get("implementer") or ""
-    after = [e.get("kind") for e in events[last + 1:]]
-    if "completed" not in after:
-        return False, "no completion after the last review request"
-    if "changes_requested" in after[: after.index("completed")]:
-        return False, "changes were requested and not re-reviewed"
+    if task.get("status") != "done":
+        return False, f"review is {task.get('status')}"
+    if header_of(show).get("commit") != sha:
+        return False, f"review covers {header_of(show).get('commit', '')[:12]}, not the final {sha[:12]}"
+    rec = latest(show, "verdict")
+    if not rec or rec.get("verdict") != "approve" or rec.get("commit") != sha:
+        return False, f"no approve verdict for {sha[:12]} (verdict: {(rec or {}).get('verdict') or 'none'})"
     approvals = [r for r in show.get("runs") or [] if r.get("outcome") == "completed"]
     if not approvals:
         return False, "no completing run recorded"
     approver = approvals[-1].get("profile") or ""
-    if approver == implementer:
-        return False, f"self-approved by {implementer}"
-    return True, f"approved by {approver} (implementer {implementer})"
+    if approver in (ctx.coder, *ctx.lanes):
+        return False, f"approved by {approver}, who wrote or relayed the work"
+    return True, f"approved by {approver} at {sha[:12]}"
 
 
 def gate(task_id: str, run: Runner = default_runner) -> tuple:
-    request = hermes_json(run, ["kanban", "show", task_id, "--json"])
-    parents = request.get("parents") or []
+    """Exit 0 iff every card the report waits on is done, the last round's SHA
+    passed every lane with recorded evidence, and an independent reviewer
+    approved exactly that SHA."""
+    report = card(run, task_id)
+    parents = report.get("parents") or []
     if not parents:
-        return False, [{"id": task_id, "ok": False, "reason": "request card has no lane cards"}]
-    rows = []
-    for pid in parents:
-        ok, reason = review_verdict(hermes_json(run, ["kanban", "show", pid, "--json"]))
-        rows.append({"id": pid, "ok": ok, "reason": reason})
+        return False, [{"id": task_id, "ok": False, "reason": "report card has no round cards"}]
+    shows = {pid: card(run, pid) for pid in parents}
+    rows = [{"id": pid, "ok": False, "reason": f"status is {s['task'].get('status')}"}
+            for pid, s in shows.items() if s["task"].get("status") != "done"]
+    rounds = {int(header_of(s).get("round") or 0): (pid, s) for pid, s in shows.items()
+              if header_of(s).get("workflow") == "round"}
+    reviews = {int(header_of(s).get("round") or 0): (pid, s) for pid, s in shows.items()
+               if header_of(s).get("workflow") == "review"}
+    if not rounds:
+        return False, rows + [{"id": task_id, "ok": False, "reason": "no round cards"}]
+    n = max(rounds)
+    rid, rshow = rounds[n]
+    ctx = Ctx.from_header(header_of(rshow))
+    try:
+        sha = code_sha(run, header_of(rshow)["code"])["sha"]
+    except WorkflowError as exc:
+        return False, rows + [{"id": rid, "ok": False, "reason": str(exc)}]
+    lanes = round_evidence(run, rshow, sha)
+    if not lanes:
+        rows.append({"id": rid, "ok": False, "reason": "final round has no validation cards"})
+    for row in lanes:
+        ok = not row.get("problem") and row["verdict"] == "pass"
+        reason = row.get("problem") or (f"{row['lane']} passed {sha[:12]} (run {row['run_id']})" if ok
+                                        else f"{row['lane']} {row['verdict']} at {sha[:12]}")
+        rows.append({"id": row["id"], "ok": ok, "reason": reason})
+    if n not in reviews or max(reviews) != n:
+        rows.append({"id": rid, "ok": False, "reason": f"round {n} has no review card"})
+    else:
+        vid, vshow = reviews[n]
+        ok, reason = review_verdict(vshow, sha, ctx)
+        rows.append({"id": vid, "ok": ok, "reason": reason})
     return all(r["ok"] for r in rows), rows
 
 
+# ------------------------------------------------------------------ status ---
+
+def card_state(show: dict) -> str:
+    t, h = show.get("task") or {}, header_of(show)
+    kind, status = h.get("workflow"), t.get("status")
+    if kind == "code":
+        if status == "done" and latest(show, "code-sha"):
+            return "SHA_PUSHED"
+        return {"running": "CODING", "blocked": "CODING_BLOCKED"}.get(status, "CODING_QUEUED")
+    if kind == "validate":
+        lab = label(t.get("assignee") or h.get("lane", "")).upper()
+        ev = latest(show, "evidence")
+        if ev and status == "done":
+            return lane_state(t.get("assignee") or h.get("lane", ""), ev.get("status"))
+        return {"running": f"{lab}_VALIDATING", "blocked": f"{lab}_BLOCKED", "todo": f"{lab}_WAITING_FOR_SHA",
+                "done": f"{lab}_DONE_WITHOUT_EVIDENCE"}.get(status, f"{lab}_QUEUED")
+    if kind == "round":
+        rec = latest(show, "round")
+        if status == "done" and rec:
+            return rec.get("state") or "ROUND_DONE"
+        return "FIX_LOOP_BLOCKED" if status == "blocked" else "WAITING_FOR_EVIDENCE"
+    if kind == "review":
+        rec = latest(show, "verdict")
+        if rec:
+            return "REVIEW_APPROVED" if rec.get("verdict") == "approve" else "CHANGES_REQUESTED"
+        return {"running": "IN_REVIEW", "blocked": "REVIEW_BLOCKED"}.get(status, "WAITING_FOR_REVIEW")
+    if kind == "report":
+        return {"done": "COMPLETE", "blocked": "GATE_BLOCKED", "running": "REPORTING"}.get(status, "WAITING")
+    return str(status or "").upper()
+
+
 def status(task_id: str, run: Runner = default_runner) -> list:
-    """One row per card; peer lanes add transport, peer and the latest remote run id
-    (read from the card, no network call)."""
-    request = hermes_json(run, ["kanban", "show", task_id, "--json"])
+    """Every card of the request that `task_id` belongs to, ordered by round, with
+    its state; read from the cards and the ledger (no network call)."""
+    start = card(run, task_id)
+    key = header_of(start).get("key")
+    seen, queue, shows = set(), [task_id], {}
+    while queue:
+        tid = queue.pop()
+        if tid in seen:
+            continue
+        seen.add(tid)
+        show = start if tid == task_id else card(run, tid)
+        if key and header_of(show).get("key") != key:
+            continue
+        shows[tid] = show
+        queue += [*(show.get("parents") or []), *(show.get("children") or [])]
+    order = {k: i for i, k in enumerate(KINDS)}
     rows = []
-    for tid in [*(request.get("parents") or []), task_id]:
-        show = request if tid == task_id else hermes_json(run, ["kanban", "show", tid, "--json"])
-        t = show["task"]
-        row = {"id": tid, "status": t.get("status"), "assignee": t.get("assignee"), "title": t.get("title")}
-        header = card_header(t.get("body") or "")
-        if header.get("transport") == PEER_TRANSPORT:
-            records = peer_records(show)
-            row.update({"transport": PEER_TRANSPORT, "peer": header.get("peer"),
-                        "run_id": records[-1]["run_id"] if records else None, "attempts": len(records)})
+    for tid, show in shows.items():
+        t, h = show["task"], header_of(show)
+        row = {"id": tid, "kind": h.get("workflow") or "", "round": int(h.get("round") or 0) or None,
+               "status": t.get("status"), "state": card_state(show), "assignee": t.get("assignee"),
+               "title": t.get("title")}
+        if row["kind"] == "code":
+            rec = latest(show, "code-sha")
+            row.update({"commit": (rec or {}).get("sha"), "branch": h.get("branch")})
+        elif row["kind"] == "validate":
+            runs = [r for r in peer_runs(show) if r.get("run_id")]
+            ev = latest(show, "evidence")
+            row.update({"transport": PEER_TRANSPORT, "peer": h.get("peer"),
+                        "run_id": runs[-1]["run_id"] if runs else None, "attempts": len(runs),
+                        "evidence": ev})
+        elif row["kind"] in ("round", "review"):
+            rec = latest(show, "round" if row["kind"] == "round" else "verdict")
+            row.update({"commit": h.get("commit") or (rec or {}).get("commit"), "record": rec})
         rows.append(row)
+    rows.sort(key=lambda r: (10**6 if r["kind"] == "report" else (r["round"] or 0),
+                             order.get(r["kind"], 99), r["id"]))
     return rows
 
 
@@ -639,54 +1438,86 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    i = sub.add_parser("intake", help="create the lane cards, the request card and the Discord subscriptions")
+    i = sub.add_parser("intake", help="create round 1 (code, validation, round cards), the report card and the "
+                                      "Discord subscriptions")
     i.add_argument("--title", required=True)
     i.add_argument("--body", default="", help="the operator's request, verbatim (default: the title)")
+    i.add_argument("--body-file", default="", help="read the request from a file (a long CSV-derived task set)")
     i.add_argument("--lane", action="append", default=[],
-                   help="mac, windows, or any profile name (repeatable)")
+                   help="validation lane: mac, windows, or a lane profile with --peer (repeatable)")
+    i.add_argument("--repo", default="", help="clone URL every card checks out (never a local path)")
+    i.add_argument("--base", default="main", help="base branch the feature branch starts from")
+    i.add_argument("--branch", default="", help="feature branch the coordinator writes (default: feat/<title>)")
+    i.add_argument("--coder", default=os.environ.get("HERMES_WORKFLOW_CODER", "default"),
+                   help="coordinator profile that writes all code (Claude Opus/Fable through delegate_task)")
     i.add_argument("--reviewer", default=os.environ.get("HERMES_WORKFLOW_REVIEWER", "reviewer"))
     i.add_argument("--orchestrator", default=os.environ.get("HERMES_WORKFLOW_ORCHESTRATOR", "default"))
-    i.add_argument("--repo", default="", help="repository URL or path the lanes work on")
+    i.add_argument("--max-rounds", type=int, default=5, help="fix/retest rounds before the loop blocks for you")
     i.add_argument("--key", default="", help="idempotency key (default: discord:<chat>:<message>)")
-    i.add_argument("--max-runtime", default="2h", help="per-run cap for lane cards ('' for none)")
+    i.add_argument("--max-runtime", default="2h", help="per-run cap for validation cards ('' for none)")
+    i.add_argument("--code-max-runtime", default="6h", help="per-run cap for code cards ('' for none)")
     i.add_argument("--peer", action="append", default=[], metavar="LANE=PEER[/PROFILE]",
                    help="peer target for a lane (default: mac-worker=mac, windows-worker=windows)")
     i.add_argument("--dry-run", action="store_true", help="print the plan, create nothing")
     for name in ("chat-id", "thread-id", "message-id", "user-id", "chat-type"):
         i.add_argument(f"--discord-{name}", default="")
 
-    for name, text in (("gate", "exit 0 iff every lane card passed independent review"),
-                       ("status", "show the request card and its lane cards")):
-        s = sub.add_parser(name, help=text)
-        s.add_argument("task_id")
-        s.add_argument("--json", action="store_true")
+    r = sub.add_parser("record-sha", help="code card: verify the push and record the exact SHA")
+    r.add_argument("task_id")
+    r.add_argument("--repo-dir", default=".", help="the card's checkout")
+    r.add_argument("--notes", default="", help="what changed and what each platform should check")
 
-    d = sub.add_parser("dispatch", help="peer lane: start or resume the remote run and record it on the card")
+    d = sub.add_parser("dispatch", help="validation card: start or resume the peer run for the exact SHA")
     d.add_argument("task_id")
-    w = sub.add_parser("wait", help="peer lane: poll the remote run; exit 0 review, 4 blocked, 1 failed, 3 running")
+    w = sub.add_parser("wait", help="validation card: poll; exit 0 evidence, 4 blocked, 1 failed, 3 running")
     w.add_argument("task_id")
     w.add_argument("--timeout", type=float, default=540, help="seconds to keep polling (0: poll once)")
     w.add_argument("--interval", type=float, default=30, help="seconds between polls")
+
+    a = sub.add_parser("advance", help="round card: open the review, or the next fix round")
+    a.add_argument("task_id")
+    v = sub.add_parser("verdict", help="review card: approve, or request changes (opens the next round)")
+    v.add_argument("task_id")
+    v.add_argument("decision", choices=["approve", "changes"])
+    v.add_argument("--reason", default="")
+
+    for name, text in (("gate", "exit 0 iff the final SHA passed every lane and an independent review"),
+                       ("status", "show every card of the request and its state")):
+        s = sub.add_parser(name, help=text)
+        s.add_argument("task_id")
+        s.add_argument("--json", action="store_true")
     return p
 
 
-def main(argv=None, run: Runner = default_runner) -> int:
+def emit(result) -> None:
+    print(json.dumps(result, indent=2))
+
+
+def main(argv=None, run: Runner = default_runner, git: GitRunner = default_git) -> int:
     args = parser().parse_args(argv)
     try:
         if args.cmd == "intake":
-            print(json.dumps(intake(args, run), indent=2))
+            emit(intake(args, run))
+            return 0
+        if args.cmd == "record-sha":
+            emit(record_sha(args.task_id, args.repo_dir, args.notes, run, git))
             return 0
         if args.cmd == "dispatch":
-            print(json.dumps(dispatch(args.task_id, run), indent=2))
+            emit(dispatch(args.task_id, run))
             return 0
-        if args.cmd == "wait":
-            code, result = wait(args.task_id, args.timeout, args.interval, run)
-            print(json.dumps(result, indent=2))
+        if args.cmd in ("wait", "advance", "verdict"):
+            if args.cmd == "wait":
+                code, result = wait(args.task_id, args.timeout, args.interval, run)
+            elif args.cmd == "advance":
+                code, result = advance(args.task_id, run)
+            else:
+                code, result = verdict(args.task_id, args.decision, args.reason, run)
+            emit(result)
             return code
         if args.cmd == "gate":
             ok, rows = gate(args.task_id, run)
             if args.json:
-                print(json.dumps({"ok": ok, "lanes": rows}, indent=2))
+                emit({"ok": ok, "checks": rows})
             else:
                 for r in rows:
                     print(f"{'OK  ' if r['ok'] else 'FAIL'} {r['id']}  {r['reason']}")
@@ -694,11 +1525,13 @@ def main(argv=None, run: Runner = default_runner) -> int:
             return 0 if ok else 1
         rows = status(args.task_id, run)
         if args.json:
-            print(json.dumps(rows, indent=2))
+            emit(rows)
         else:
             for r in rows:
-                peer = f"  [peer {r['peer']} run {r['run_id'] or '-'}]" if r.get("transport") else ""
-                print(f"{r['id']}  {r['status']:<8} {r['assignee'] or '-':<16} {r['title']}{peer}")
+                extra = f"  {r['commit'][:12]}" if r.get("commit") else ""
+                if r.get("transport"):
+                    extra += f"  [peer {r['peer']} run {r['run_id'] or '-'}]"
+                print(f"{r['id']}  {r['status']:<8} {r['state']:<22} {r['assignee'] or '-':<16} {r['title']}{extra}")
         return 0
     except WorkflowError as exc:
         print(f"kanban-workflow: {redact(str(exc))}", file=sys.stderr)

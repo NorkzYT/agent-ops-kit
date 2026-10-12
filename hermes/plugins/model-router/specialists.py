@@ -16,7 +16,9 @@ Rules:
     session stickiness. A private task routes ``local-only``: every
     cloud-backed specialist is dropped and the optional model classifier is
     never called (no attachment is read for it either). Only profiles
-    declared ``local`` (``local-engineer``) stay eligible.
+    declared ``local`` stay eligible, and none currently is, so a private
+    task routes no specialist: the turn itself stays on the private local
+    (Ollama) route that the privacy guard and model router enforce.
   * **Current task only.** Signals come from ``CurrentTask.visible`` — fenced
     code and ``>``-quoted lines are inert, as are control tags. An inline
     attachment relay (``[Content of NAME]:``) is not task text: only the
@@ -44,8 +46,11 @@ Rules:
     can never add one; they need deterministic keyword evidence.
   * **Isolated execution.** Each route names how it runs: ``kanban`` (a board
     task assigned to the profile — the dispatcher runs it under that
-    profile's own HERMES_HOME) for deep work and implementation, or ``short``
+    profile's own HERMES_HOME) for deep work, or ``short``
     (``hermes -p <profile> -z <brief> -t skills``) for one bounded answer.
+    Every registered specialist is advisory: implementation is not routed to
+    a specialist; coding goes through the coordinator's own coding path
+    (Claude Opus/Fable, ``coder``, the kanban workflow).
     The specialist loads its own ``/learn`` knowledge skill on demand; no book
     or skill content is ever put into the orchestrator prompt.
   * **Bounded.** At most ``max_profiles`` routes (default 4, max 6), ordered by
@@ -127,8 +132,8 @@ class Specialist:
     purpose: str
     signals: Tuple[Signal, ...]
     high_risk: bool = False      # advisory/review only, never acts
-    local: bool = False          # runs on the private local model; eligible when private
-    implementer: bool = False    # writes code (the rest are advisory by design)
+    local: bool = False          # runs on the private local model; eligible when private (none today)
+    implementer: bool = False    # writes code (none today: every specialist is advisory)
 
 
 REGISTRY: Tuple[Specialist, ...] = (
@@ -220,10 +225,6 @@ REGISTRY: Tuple[Specialist, ...] = (
         _s("models", r"mental models?|first principles|meaning of life|virtue ethics|marcus aurelius|seneca|epictetus|nietzsche|kant|aristotle|plato|socrates|confucius|lao tzu|tao te ching"),
         _w("reflect", r"wisdom|virtue|moral|meaning|reflect(?:ion)?"),
     )),
-    Specialist("local-engineer", "private local-model implementation, tests and fixes", (
-        _s("implement", r"implement(?:ation)?|write (?:the |a |an |some )?(?:\w+ )?(?:code|function|script|tests?|patch)|add (?:a |an |some )?(?:\w+ )?tests?|fix(?:es|ing)? (?:the |this |a |that )?(?:\w+ ){0,2}(?:bug|tests?|build|error|crash|regression)"),
-        _s("change", r"patch (?:the|this)|refactor (?:the|this)|open a (?:pr|pull request)|make the tests pass"),
-    ), local=True, implementer=True),
 )
 
 BY_NAME: Dict[str, Specialist] = {s.name: s for s in REGISTRY}
@@ -604,7 +605,7 @@ def _privacy(raw_text: str) -> pv.PrivacyDecision:
 
 
 def _execution(tier: str, spec: Specialist) -> str:
-    """``kanban`` (durable board task) for deep work and implementation;
+    """``kanban`` (durable board task) for deep work (or an implementer);
     ``short`` (one bounded answer, read-only toolsets) for a small review.
     High-risk profiles are always ``short``: their tool surface is cut to
     :data:`ADVISORY_TOOLSETS`, which is what makes "advisory only" enforceable."""

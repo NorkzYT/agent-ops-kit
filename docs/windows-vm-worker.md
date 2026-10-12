@@ -371,9 +371,9 @@ problem. What is safe to ignore and what must be fixed:
   Velvet iPad build, capture the floor overview and the checkout screen."
 - The host's Kanban board does not reach the VM: it is single-host, and a card
   assigned to `windows-operator` there runs the host's profile of that name.
-  Shell work on Windows (builds, tests, PowerShell) goes through the
-  `windows-worker` lane, which relays to the Windows machine's own Hermes over
-  the peer API; see
+  Builds and tests on Windows go through the `windows-worker` lane, which
+  relays the coordinator's exact commit to the Windows machine's own Hermes over
+  the peer API for test-only validation (the worker never edits code); see
   [discord-kanban-workflow.md](discord-kanban-workflow.md).
 
 The worker screenshots before and after each action and attaches evidence. It

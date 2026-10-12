@@ -131,12 +131,12 @@ hermes-profile: ## Create/refresh a Hermes profile and sync its books from data/
 	@test -n "$(NAME)" || { echo "usage: make hermes-profile NAME=<profile> [KNOWLEDGE_ROOT=<dir>]"; exit 2; }
 	@bash scripts/hermes-profile.sh "$(NAME)"
 
-workflow-status: ## Show a Discord->Kanban workflow request card and its lane cards (ID=t_xxxx)
-	@test -n "$(ID)" || { echo "usage: make workflow-status ID=<request card id>"; exit 2; }
+workflow-status: ## Show every card of a Discord->Kanban workflow and its state: rounds, SHAs, lane evidence, review (ID=t_xxxx)
+	@test -n "$(ID)" || { echo "usage: make workflow-status ID=<any card id of the request>"; exit 2; }
 	@python3 hermes/skills/kanban-workflow/scripts/workflow.py status "$(ID)"
 
-workflow-gate: ## Check the workflow review gate: exit 0 iff every lane card passed independent review (ID=t_xxxx)
-	@test -n "$(ID)" || { echo "usage: make workflow-gate ID=<request card id>"; exit 2; }
+workflow-gate: ## Check the workflow gate: exit 0 iff the final SHA passed every lane and an independent review (ID=t_xxxx)
+	@test -n "$(ID)" || { echo "usage: make workflow-gate ID=<report card id>"; exit 2; }
 	@python3 hermes/skills/kanban-workflow/scripts/workflow.py gate "$(ID)"
 
 hermes-ui: ## Start the Hermes dashboard (config/keys web UI) on 127.0.0.1 (HERMES_UI_PORT, default 9119)
@@ -339,5 +339,5 @@ test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub conve
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'
 
-test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner; real hermes CLI on a temp board when installed)
+test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed)
 	@python3 -m unittest discover -s scripts/tests -p 'test_kanban_workflow.py'
