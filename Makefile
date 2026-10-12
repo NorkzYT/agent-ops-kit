@@ -32,7 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop clean
+	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
 
 # `##@ Title` lines start a help section; `target: ## text` lines are listed under it.
 help: ## Show this help
@@ -130,6 +130,14 @@ hermes-logs: ## Tail Hermes gateway logs
 hermes-profile: ## Create/refresh a Hermes profile and sync its books from data/knowledge/<NAME> (NAME=marketing [KNOWLEDGE_ROOT=/mnt/books/knowledge])
 	@test -n "$(NAME)" || { echo "usage: make hermes-profile NAME=<profile> [KNOWLEDGE_ROOT=<dir>]"; exit 2; }
 	@bash scripts/hermes-profile.sh "$(NAME)"
+
+workflow-status: ## Show a Discord->Kanban workflow request card and its lane cards (ID=t_xxxx)
+	@test -n "$(ID)" || { echo "usage: make workflow-status ID=<request card id>"; exit 2; }
+	@python3 hermes/skills/kanban-workflow/scripts/workflow.py status "$(ID)"
+
+workflow-gate: ## Check the workflow review gate: exit 0 iff every lane card passed independent review (ID=t_xxxx)
+	@test -n "$(ID)" || { echo "usage: make workflow-gate ID=<request card id>"; exit 2; }
+	@python3 hermes/skills/kanban-workflow/scripts/workflow.py gate "$(ID)"
 
 hermes-ui: ## Start the Hermes dashboard (config/keys web UI) on 127.0.0.1 (HERMES_UI_PORT, default 9119)
 	@bash scripts/hermes-ui.sh start
@@ -330,3 +338,6 @@ test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub conve
 
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'
+
+test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner; real hermes CLI on a temp board when installed)
+	@python3 -m unittest discover -s scripts/tests -p 'test_kanban_workflow.py'

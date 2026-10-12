@@ -8,6 +8,9 @@
 #
 # Env: PROFILE_DISCORD_BOT_TOKEN  give this profile its own Discord bot (optional)
 #      PROFILE_DISCORD_ALLOWED_USERS  defaults to the kit's DISCORD_ALLOWED_USERS
+#      PROFILE_SSH_HOST, PROFILE_SSH_USER  run this profile's terminal on another
+#                      machine over SSH (worker lanes: mac-worker, windows-worker);
+#                      optional PROFILE_SSH_PORT, PROFILE_SSH_KEY, PROFILE_SSH_CWD (default ~)
 #      KNOWLEDGE_ROOT  where the profile knowledge corpora live (default data/knowledge)
 #      ENV_FILE        dotenv to read keys from (default .env; overridable for tests)
 set -euo pipefail
@@ -53,6 +56,19 @@ if [[ -n "${PROFILE_DISCORD_BOT_TOKEN:-}" ]]; then
   env_file_set DISCORD_ALLOWED_USERS "${PROFILE_DISCORD_ALLOWED_USERS:-$(env_file_get DISCORD_ALLOWED_USERS "$env_file" 2>/dev/null || true)}" "$penv"
   env_file_set DISCORD_REQUIRE_MENTION true "$penv"
   log "profile has its own Discord bot; start it with:  $name gateway install"
+fi
+
+# Worker lane: the agent and its Kanban tools stay on this host; terminal and
+# file tools run on the worker over SSH (docs/discord-kanban-workflow.md).
+if [[ -n "${PROFILE_SSH_HOST:-}" ]]; then
+  [[ -n "${PROFILE_SSH_USER:-}" ]] || die "PROFILE_SSH_HOST needs PROFILE_SSH_USER"
+  hermes -p "$name" config set terminal.backend ssh >/dev/null
+  hermes -p "$name" config set terminal.ssh_host "$PROFILE_SSH_HOST" >/dev/null
+  hermes -p "$name" config set terminal.ssh_user "$PROFILE_SSH_USER" >/dev/null
+  hermes -p "$name" config set terminal.cwd "${PROFILE_SSH_CWD:-~}" >/dev/null
+  if [[ -n "${PROFILE_SSH_PORT:-}" ]]; then hermes -p "$name" config set terminal.ssh_port "$PROFILE_SSH_PORT" >/dev/null; fi
+  if [[ -n "${PROFILE_SSH_KEY:-}" ]]; then hermes -p "$name" config set terminal.ssh_key "$PROFILE_SSH_KEY" >/dev/null; fi
+  log "terminal runs on $PROFILE_SSH_USER@$PROFILE_SSH_HOST over SSH; check: hermes -p $name config get terminal.backend"
 fi
 
 # Profile-specific extras (optional files next to SOUL.md)

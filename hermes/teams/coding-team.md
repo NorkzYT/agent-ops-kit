@@ -32,8 +32,7 @@ and mapped onto Hermes profiles and the Kanban board.
 ## Wiring
 
 ```bash
-hermes profile create reviewer --clone          # a second coder for reviews
-cp hermes/profiles/coder/SOUL.md ~/.hermes/profiles/reviewer/SOUL.md
+make hermes-profile NAME=reviewer               # the review gate (hermes/profiles/reviewer)
 
 hermes kanban create "Plan: add JWT auth to api/" --assignee hermes
 hermes kanban create "Implement: JWT auth per plan t_plan" --assignee coder --parent t_plan

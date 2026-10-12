@@ -16,6 +16,7 @@ home="$tmp/home"; mkdir -p "$home/.local/bin"
 cat > "$home/.local/bin/hermes" <<'STUB'
 #!/usr/bin/env bash
 if [[ "${1:-} ${2:-}" == "profile create" ]]; then mkdir -p "$HERMES_HOME/profiles/${3:?}"; fi
+echo "$*" >> "$HERMES_HOME/hermes-calls.log"
 exit 0
 STUB
 chmod +x "$home/.local/bin/hermes"
@@ -49,6 +50,22 @@ HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" \
 out2="$(HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$tmp/empty" \
   bash "$ROOT/scripts/hermes-profile.sh" strategy 2>&1)" && ok "missing corpus is non-fatal" || bad "missing corpus failed the run"
 grep -qi 'no knowledge source' <<<"$out2" && ok "missing corpus warns clearly" || bad "no clear warning for missing corpus"
+
+# No SSH env: the terminal backend is left alone.
+! grep -q 'config set terminal' "$home/.hermes/hermes-calls.log" && ok "no SSH env, no terminal change" || bad "terminal changed without PROFILE_SSH_HOST"
+
+# Worker lane: PROFILE_SSH_* switches the profile's terminal to SSH.
+HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_SSH_HOST=mac.tailnet PROFILE_SSH_USER=hermes \
+  PROFILE_SSH_KEY=/k/id_ed25519 bash "$ROOT/scripts/hermes-profile.sh" mac-worker >/dev/null 2>&1 \
+  && ok "mac-worker lane profile created" || bad "mac-worker lane failed"
+calls="$home/.hermes/hermes-calls.log"
+grep -qx -- '-p mac-worker config set terminal.backend ssh' "$calls"       && ok "lane backend set to ssh"   || bad "lane backend not set"
+grep -qx -- '-p mac-worker config set terminal.ssh_host mac.tailnet' "$calls" && ok "lane ssh_host set"      || bad "lane ssh_host not set"
+grep -qx -- '-p mac-worker config set terminal.cwd ~' "$calls"             && ok "lane cwd defaults to ~"    || bad "lane cwd not set"
+grep -qx -- '-p mac-worker config set terminal.ssh_key /k/id_ed25519' "$calls" && ok "lane ssh_key set"      || bad "lane ssh_key not set"
+! grep -q -- 'terminal.ssh_port' "$calls"                                   && ok "unset port left default"  || bad "port set without PROFILE_SSH_PORT"
+HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" PROFILE_SSH_HOST=mac.tailnet \
+  bash "$ROOT/scripts/hermes-profile.sh" mac-worker >/dev/null 2>&1 && bad "SSH host without user accepted" || ok "SSH host without user refused"
 
 echo
 [[ "$fail" -eq 0 ]] && echo "PASS: hermes-profile" || echo "FAIL: hermes-profile"

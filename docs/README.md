@@ -12,6 +12,7 @@ The root `README.md` is the fast path. These pages hold the detail.
 | [proxies.md](proxies.md) | ChatGPT and Claude Max subscriptions as OpenAI-compatible APIs |
 | [browser-use.md](browser-use.md) | Browser automation: local Chromium vs Browser Use Cloud, rules |
 | [profiles-and-teams.md](profiles-and-teams.md) | Specialist agents with their own knowledge, and Kanban teams |
+| [discord-kanban-workflow.md](discord-kanban-workflow.md) | The standard path for worker jobs: Discord request → Kanban cards → Mac/Windows lanes over SSH → review gate → report in the same thread; setup and runbook |
 | [specialist-routing.md](specialist-routing.md) | Pilot: deterministic per-task routing to the book-backed profiles, privacy precedence, high-risk advisory mode, readiness, `make specialist-route` dry-run, `make specialist-status`/`-install`/`-enable` activation |
 | [knowledge-refresh.md](knowledge-refresh.md) | After adding books: `make knowledge-refresh`, the report, `/learn`, Discord prompt |
 | [knowledge-learn.md](knowledge-learn.md) | Headless, resumable `/learn` into `<profile>-knowledge`, one book per run: `make knowledge-learn`, `make knowledge-learn-status`, timeouts, logs, raw vs. learned |
