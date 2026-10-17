@@ -79,7 +79,9 @@ Precedence when that line is exactly one tag: coding force (`#opus`/`#fable`)
 **Forced coding (`#opus` / `#fable`).** A leading standalone `#opus`/`#fable`
 line forces that exact coding model regardless of task shape, for **that request
 only** (no task state or authorization is stored, so it never bleeds into the
-next task). Reasoning effort is left untouched — the coding proxy owns it. The
+next task). The control names the model only: reasoning effort still follows
+the task body ([Reasoning effort](#reasoning-effort)) and never reaches `max`
+(that needs `#max`/`#astra`, which cannot share the control line). The
 control is resolved through the provenance-safe extractor, so a tag in memory,
 backfill, a reply quote, an attachment, a quote/fence, tool output or an older
 turn grants nothing; only a genuine leading tag in the current turn counts.
@@ -140,9 +142,29 @@ shapes are kept consistent (Chat Completions `reasoning_effort` /
 conflicting `high` rides along. Fields the request does not carry are never
 invented, and explicitly disabled reasoning is never re-enabled.
 
-**Coding requests are exempt:** claude-max-proxy reads `reasoning_effort` and
-owns the Claude CLI effort mapping; the plugin only ever selects `opus` vs
-`fable` there. **Auxiliary** title/compression calls keep their per-entry
+**Coding requests** (claude-max-proxy) get a task-based Claude effort with
+`coding_effort_routing` on (default), from the same current-task
+classification and independent of the model choice (`opus`/`fable`):
+
+| Current coding task | Effort | Proxy thinking budget |
+|---------------------|--------|-----------------------|
+| routine / ordinary code (status, small fixes, single-keyword or planning work) | `medium` | 10k |
+| complex code (Sol-tier: two hard categories, or one plus strong signals) | `high` | 32k |
+| unusually hard debugging/architecture: hard tier with strong signals, naming `debug`/`arch`/`concurrency` **and** a second hard category or an explicit `#deep`/`#hard` | `xhigh` | 48k |
+| leading standalone `#max`/`#astra` line (authorized, same TTL rules as Astra) | `max` | 64k |
+
+The coding effort is capped by `coding_effort_ceiling` (default `max`), not
+by `agent.reasoning_effort` — that orchestrator ceiling (`high`) would rule
+out `xhigh`. Every effort field the request carries is rewritten (Hermes'
+custom provider sends top-level `reasoning_effort`, which the proxy reads);
+a coding request with no reasoning field gets a top-level `reasoning_effort`
+so the proxy's `DEFAULT_THINKING_BUDGET` is not silently used instead;
+explicitly disabled reasoning (`none`, `enabled: false`) is never re-enabled.
+Only managed coding aliases (`opus`/`fable`) are touched: GPT/orchestrator
+effort, the private path (local answers always send `reasoning_effort:
+"none"`), and Ollama fallback hops (a non-managed model id) are unchanged.
+`MODEL_ROUTER_CODING_EFFORT=false` restores the previous behavior (configured
+effort passes through untouched). **Auxiliary** title/compression calls keep their per-entry
 `reasoning_effort` from native config (compression never runs at `high`; see
 [Auxiliary work](#auxiliary-work-title-generation-compression)).
 
@@ -155,7 +177,9 @@ Every managed routing decision is logged — including unchanged ones — as a
 single `model_router: route …` line carrying only opaque correlation ids
 (hashes of the session id and current-task text, plus the core
 `api_request_id`), the family, tier, authorization bit, `model old->new`,
-`effort old->new`, stable reason labels and an outcome
+`effort old->new` (coding requests too, e.g. `family=coding … effort=high->xhigh`;
+`unset->medium` when the request carried no field, `off` when reasoning was
+disabled), stable reason labels and an outcome
 (`rewritten` / `unchanged` / `no-candidate` / `refuse-scheduled` /
 `forced-coding` / `forced-coding-unroutable`). A forced-coding request carries
 the `force:opus` / `force:fable` reason label and is identified on both seams.
@@ -180,7 +204,9 @@ provider *attempt* (native fallback hops re-enter it with their own
 `call_role` to middleware, so fallback attempts are linked only via
 `turn_id`/`api_call_count`; and for streaming responses no served-model or
 usage evidence exists at this seam, so none is logged. View with
-`make router-logs`.
+`make router-logs`. The coding proxy confirms what it applied in its own
+`request.start` line (`reasoningSource`, `reasoningEffort`,
+`reasoningBudget`): `make claude-proxy-logs`.
 
 ## Local model roles
 
@@ -589,6 +615,8 @@ and their `.env` fallbacks:
 | `complexity_routing` | `MODEL_ROUTER_COMPLEXITY` | enable the task-scoped model rewrite (default **true**) |
 | `privacy_routing` | `MODEL_ROUTER_PRIVACY` | the fail-closed `#privacy` guard, **enabled by default**; `MODEL_ROUTER_PRIVACY=false` is a deliberate, risky opt-out that disables it (and `#privacy`) entirely |
 | `effort_routing` | `MODEL_ROUTER_EFFORT` | per-task reasoning-effort rewrite for managed GPT requests (default **true**; never above the config ceiling) |
+| `coding_effort_routing` | `MODEL_ROUTER_CODING_EFFORT` | per-task Claude effort for managed coding requests (default **true**; see [Reasoning effort](#reasoning-effort)) |
+| `coding_effort_ceiling` | `MODEL_ROUTER_CODING_EFFORT_CEILING` | cap for the coding effort: `low`/`medium`/`high`/`xhigh`/`max` (default `max`; anything else loads as `max`) |
 | `astra_policy` | `MODEL_ROUTER_ASTRA` | `task` (default: leading standalone `#max`/`#astra` line authorizes), `always` (legacy allow), `never` |
 | `task_ttl_seconds` | `MODEL_ROUTER_TASK_TTL` | sliding TTL for per-session task state / authorization (default 1800) |
 | `ollama_base_url` | `OLLAMA_BASE_URL` | host-reachable **local** endpoint (a non-local URL is refused) |

@@ -45,6 +45,11 @@ def _seconds(raw: Any, default: float, cap: float = 25.0) -> float:
     return min(cap, value) if value > 0 else default
 
 
+def _coding_ceiling(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in ("low", "medium", "high", "xhigh", "max") else "max"
+
+
 def _astra_policy(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     return value if value in ("task", "always", "never") else "task"
@@ -59,6 +64,11 @@ class RouterSettings:
     # Rewrite the reasoning-effort fields already present on managed GPT
     # requests (never invented, never raised above what the request carried).
     effort_routing: bool = True
+    # Per-task reasoning effort for managed coding (claude-max-proxy) requests:
+    # medium routine, high complex, xhigh unusually hard debugging/architecture,
+    # max only with #max/#astra authorization; clamped to coding_effort_ceiling.
+    coding_effort_routing: bool = True
+    coding_effort_ceiling: str = "max"
     # Astra (max tier) policy: "task" = only a leading standalone #max/#astra
     # control line in the CURRENT user task authorizes it; "always" = legacy
     # behavior (any managed max-tier request allowed); "never" = hard off.
@@ -159,6 +169,8 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         complexity_routing=_truthy(val("complexity_routing", "MODEL_ROUTER_COMPLEXITY", None), True),
         privacy_routing=_truthy(val("privacy_routing", "MODEL_ROUTER_PRIVACY", None), True),
         effort_routing=_truthy(val("effort_routing", "MODEL_ROUTER_EFFORT", None), True),
+        coding_effort_routing=_truthy(val("coding_effort_routing", "MODEL_ROUTER_CODING_EFFORT", None), True),
+        coding_effort_ceiling=_coding_ceiling(val("coding_effort_ceiling", "MODEL_ROUTER_CODING_EFFORT_CEILING", "max")),
         astra_policy=_astra_policy(val("astra_policy", "MODEL_ROUTER_ASTRA", "task")),
         task_ttl=float(val("task_ttl_seconds", "MODEL_ROUTER_TASK_TTL", 1800.0) or 1800.0),
         ollama_base_url=str(val("ollama_base_url", "OLLAMA_BASE_URL", "") or "").rstrip("/"),

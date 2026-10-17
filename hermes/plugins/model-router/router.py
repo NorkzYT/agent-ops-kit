@@ -18,6 +18,7 @@ transport outcomes; never prompt content, secrets, or raw provider errors.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import inspect
 import logging
@@ -126,6 +127,33 @@ def _apply_effort(new_request: Dict[str, Any], request: Dict[str, Any], effort: 
                 new_request["extra_body"] = neb
                 changed = True
     return changed
+
+
+# Request keys that carry (or explicitly disable) reasoning in any shape the
+# coding proxy reads. When none is present the coding request has no effort
+# field at all and the proxy would fall back to its DEFAULT_THINKING_BUDGET.
+_REASONING_KEYS = ("reasoning_effort", "reasoning", "thinking", "output_config")
+
+
+def _route_coding_effort(new_request: Dict[str, Any], request: Dict[str, Any], target: str) -> tuple:
+    """Set the coding effort to ``target``; returns ``(changed, log_note)``.
+
+    Present enabled fields are rewritten in every shape (``_apply_effort``).
+    A request carrying no reasoning field gets a top-level ``reasoning_effort``
+    (the field claude-max-proxy reads; the Hermes custom provider emits the
+    same one). Explicitly disabled or unrecognized reasoning shapes are left
+    alone — thinking is never re-enabled.
+    """
+    present = _present_efforts(request)
+    if present:
+        changed = _apply_effort(new_request, request, target)
+        return changed, f"{'/'.join(sorted(set(present.values())))}->{target}"
+    eb = request.get("extra_body")
+    if any(k in request for k in _REASONING_KEYS) or (
+            isinstance(eb, dict) and any(k in eb for k in _REASONING_KEYS)):
+        return False, "off"
+    new_request["reasoning_effort"] = target
+    return True, f"unset->{target}"
 
 
 def _looks_like_stream(response: Any) -> bool:
@@ -428,7 +456,8 @@ class Router:
         model_alias: str, current: str, task: Any,
     ) -> Optional[Dict[str, Any]]:
         """Honor a leading #opus/#fable control. On a coding-family seam force the
-        exact coding model (effort untouched — the coding proxy owns it); on the
+        exact coding model and pick its effort from the task body (the control
+        names the model, not the effort; it never authorizes max effort); on the
         GPT seam the provider cannot be switched here, so record the forced
         request for the execution seam to refuse and leave the body unchanged."""
         sid8 = _hash8(session_id)
@@ -462,14 +491,22 @@ class Router:
         model_changed = chosen.strip().lower() != current.strip().lower()
         if model_changed:
             new_request["model"] = chosen
+        effort_note, effort_changed = "-", False
+        if self.settings.coding_effort_routing:
+            body = ti.classify(dataclasses.replace(task, forced_coding=""), self._tasks.get(session_id))
+            tier = "high" if body.tier == "max" else body.tier
+            target = cx.coding_effort(tier, body.effort, body.reasons,
+                                      ceiling=self.settings.coding_effort_ceiling)
+            effort_changed, effort_note = _route_coding_effort(new_request, request, target)
         self._record_decision(rid, {"forced_coding": model_alias, "selected": chosen, "task8": task8})
         logger.info(
             "model_router: route rid=%s sid=%s task=%s family=coding tier=force auth=0 "
-            "model=%s->%s effort=- reasons=force:%s outcome=%s",
-            rid or "-", sid8, task8, current, chosen if model_changed else current,
-            model_alias, "forced-coding" if model_changed else "unchanged",
+            "model=%s->%s effort=%s reasons=force:%s outcome=%s",
+            rid or "-", sid8, task8, current, chosen if model_changed else current, effort_note,
+            model_alias, "forced-coding" if model_changed else (
+                "rewritten" if effort_changed else "unchanged"),
         )
-        if not model_changed:
+        if not (model_changed or effort_changed):
             return None
         return {"request": new_request, "source": "model-router", "reason": f"force:{model_alias}"}
 
@@ -489,7 +526,7 @@ class Router:
         return ti.extract_current_user_task(request).forced_coding or ""
 
     def on_llm_request(self, **kwargs: Any) -> Optional[Dict[str, Any]]:
-        """Rewrite model and (gpt family) reasoning effort for the current task."""
+        """Rewrite model and reasoning effort for the current task."""
         if not self.settings.complexity_routing:
             return None
         try:
@@ -573,13 +610,19 @@ class Router:
             if model_changed:
                 new_request["model"] = chosen
 
-            # Effort is selected independently of the model, only for the gpt
-            # family (claude-max-proxy owns coding-effort semantics), and only
-            # by rewriting fields the request already carries — clamped so the
-            # router never raises effort above what was configured.
+            # Effort is selected independently of the model. GPT family: only
+            # by rewriting fields the request already carries, clamped so the
+            # router never raises effort above what was configured. Coding
+            # family: the task-based Claude effort (medium/high/xhigh, max only
+            # when authorized), clamped to coding_effort_ceiling; claude-max-
+            # proxy maps the label to the CLI thinking budget.
             effort_note = "-"
             effort_changed = False
-            if family == "gpt" and self.settings.effort_routing:
+            if family == "coding" and self.settings.coding_effort_routing:
+                target = cx.coding_effort(tier, decision.effort, decision.reasons,
+                                          ceiling=self.settings.coding_effort_ceiling)
+                effort_changed, effort_note = _route_coding_effort(new_request, request, target)
+            elif family == "gpt" and self.settings.effort_routing:
                 present = _present_efforts(request)
                 if present:
                     ceiling = max((r for r in map(_effort_rank, present.values()) if r is not None),

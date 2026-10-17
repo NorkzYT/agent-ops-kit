@@ -32,7 +32,8 @@ from urllib.parse import urlsplit
 
 AUX_TASKS = ("title_generation", "compression")
 ROUTER_KEYS = (
-    "complexity_routing", "privacy_routing", "effort_routing", "astra_policy",
+    "complexity_routing", "privacy_routing", "effort_routing", "coding_effort_routing",
+    "coding_effort_ceiling", "astra_policy",
     "ollama_base_url", "ollama_model", "ollama_routine_model", "ollama_fallback_model",
     "ollama_agent_model", "specialist_routing", "specialist_max_profiles",
     "specialist_require_ready", "specialist_classifier", "specialist_classifier_timeout",

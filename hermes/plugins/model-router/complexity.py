@@ -9,12 +9,17 @@ Pure and side-effect-free. Classification of the current user task lives in
     explicit per-task authorization (``allow_max=True``): the automatic budget
     ceiling is Sol regardless of what the provider advertises.
   * ``coding`` (delegation, claude-max-proxy): opus by default, fable only for
-    genuinely difficult engineering. Reasoning-effort fields are never touched
-    for this family — claude-max-proxy owns that mapping.
+    genuinely difficult engineering. Reasoning effort comes from
+    ``coding_effort``: medium for routine/ordinary code, high for complex code,
+    xhigh only for unusually hard debugging/architecture, max only for an
+    explicitly authorized (``#max``/``#astra``) task. claude-max-proxy maps the
+    label to the Claude CLI thinking budget.
 
 Model selection (which model) and reasoning effort (how hard it thinks) are
-decided independently; ``TIER_EFFORT`` is the default effort per tier and the
-router clamps it to whatever the request already carried.
+decided independently; ``TIER_EFFORT`` is the default GPT effort per tier and
+the router clamps it to whatever the request already carried. Coding effort is
+clamped to its own ceiling (``coding_effort_ceiling``) instead, because the
+orchestrator ceiling (``agent.reasoning_effort: high``) would rule out xhigh.
 """
 
 from __future__ import annotations
@@ -55,6 +60,23 @@ TIER_EFFORT = {
     "max": "high",
 }
 
+# Coding-family effort per tier (claude-max-proxy: medium 10k, high 32k,
+# xhigh 48k, max 64k thinking tokens). ``max`` is reachable only through an
+# authorized max tier; xhigh is the automatic top, see ``coding_effort``.
+CODING_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+CODING_TIER_EFFORT = {
+    "routine": "medium",
+    "medium": "medium",
+    "elevated": "medium",
+    "high": "high",
+    "max": "max",
+}
+# "Unusually hard debugging/architecture" gets xhigh: a hard-tier task with
+# strong signals (classifier effort ``high``) that names one of these
+# categories AND either a second hard category or an explicit #deep/#hard hint.
+# One keyword plus length/code alone stays at high.
+CODING_XHIGH_LABELS = frozenset({"kw:debug", "kw:arch", "kw:concurrency"})
+
 _ALIAS_TO_TIER = {
     # gpt aliases
     "luna": "routine", "gpt-5.6-luna": "routine",
@@ -85,6 +107,23 @@ def score_request(request: object) -> ComplexityResult:
     task = ti.task_from_text(request) if isinstance(request, str) else ti.extract_current_user_task(request)
     decision = ti.classify(task)
     return ComplexityResult(decision.tier, decision.score, decision.label, decision.effort)
+
+
+def coding_effort(tier: str, effort: str, reasons: Iterable[str], *, ceiling: str = "max") -> str:
+    """Reasoning effort for a coding-family request, clamped to ``ceiling``.
+
+    ``tier`` is the effective (post-authorization) tier, ``effort`` and
+    ``reasons`` the classifier's GPT effort and labels for the same task.
+    """
+    reasons = tuple(reasons)
+    target = CODING_TIER_EFFORT.get(tier, "medium")
+    categories = {r for r in reasons if r.startswith("kw:")}
+    if (tier == "high" and effort == "high" and categories & CODING_XHIGH_LABELS
+            and (len(categories) >= 2 or "tag:hard" in reasons)):
+        target = "xhigh"
+    if ceiling in CODING_EFFORTS and CODING_EFFORTS.index(target) > CODING_EFFORTS.index(ceiling):
+        target = ceiling
+    return target
 
 
 def alias_to_tier(name: str) -> Optional[str]:

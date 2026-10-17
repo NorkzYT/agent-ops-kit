@@ -155,8 +155,9 @@ kanban:
 # per-request CEILING, not a blanket level: the plugin rewrites the effort of
 # managed orchestrator (GPT) requests per task (status questions run low,
 # ordinary work medium, genuinely hard work high) and never raises it above
-# this setting. Coding requests through claude-max-proxy keep this value
-# untouched — the proxy owns the Claude effort mapping.
+# this setting. Coding requests through claude-max-proxy are not bound by this
+# ceiling: the plugin sets their Claude effort per task (coding_effort_routing,
+# capped by coding_effort_ceiling) and the proxy maps it to the CLI budget.
 agent:
   verify_on_stop: true
   verify_guidance: true
@@ -238,7 +239,10 @@ compression:
 # false here — a deliberate opt-out that disables the guard (and #privacy)
 # entirely. When enabled it remains fail-closed. effort_routing rewrites the reasoning-effort fields
 # already present on managed orchestrator requests per task (never above the
-# configured ceiling below). astra_policy: task = a leading standalone
+# configured ceiling below). coding_effort_routing sets the Claude effort of
+# managed coding requests per task: medium routine code, high complex code,
+# xhigh only for unusually hard debugging/architecture, max only with a leading
+# #max/#astra line; capped by coding_effort_ceiling. astra_policy: task = a leading standalone
 # #max/#astra line in the current user task authorizes gpt-6-astra; always =
 # legacy allow; never = hard off. A leading standalone #opus/#fable line forces
 # that coding model for the request (coding-family seam only; refused on the
@@ -271,6 +275,8 @@ plugins:
         complexity_routing: __MODEL_ROUTER_COMPLEXITY__
         privacy_routing: __MODEL_ROUTER_PRIVACY__
         effort_routing: __MODEL_ROUTER_EFFORT__
+        coding_effort_routing: __MODEL_ROUTER_CODING_EFFORT__
+        coding_effort_ceiling: __MODEL_ROUTER_CODING_EFFORT_CEILING__
         astra_policy: __MODEL_ROUTER_ASTRA__
         task_ttl_seconds: __MODEL_ROUTER_TASK_TTL__
         ollama_base_url: __OLLAMA_BASE_URL__

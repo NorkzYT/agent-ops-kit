@@ -15,9 +15,13 @@ payload is never sent to them by compression or title generation; see
     starts with a standalone `#max`/`#astra` control line (per-task, TTL-bound,
     never bleeding to the next task or session). The automatic ceiling is Sol.
   - delegated coding (claude-max-proxy): `opus` by default, `fable` only for
-    genuinely difficult engineering; effort fields are never touched here.
+    genuinely difficult engineering; Claude effort per task — `medium`
+    routine/ordinary, `high` complex, `xhigh` only for unusually hard
+    debugging/architecture, `max` only with a leading `#max`/`#astra` — capped
+    by `coding_effort_ceiling`, not the orchestrator ceiling.
   A **leading standalone `#opus`/`#fable`** line forces that coding model for the
-  request, overriding complexity (effort untouched, no state stored). Because the
+  request, overriding complexity (effort still follows the task body, never
+  `max`; no state stored). Because the
   middleware can rewrite the request body but not switch the bound
   provider/`base_url`, the force is honored only on a coding-family seam; on the
   orchestrator/GPT seam it is refused with a typed response at the execution seam
@@ -95,6 +99,8 @@ plugins:
         complexity_routing: true
         privacy_routing: true
         effort_routing: true           # per-task effort rewrite (gpt family)
+        coding_effort_routing: true    # per-task Claude effort (coding family)
+        coding_effort_ceiling: max     # low | medium | high | xhigh | max
         astra_policy: task             # task | always | never
         task_ttl_seconds: 1800         # per-session task-state TTL
         ollama_base_url: "http://127.0.0.1:11434/v1"   # host-reachable, local-only Ollama
@@ -117,7 +123,8 @@ plugins:
 Environment fallbacks (used when a setting is unset): `OLLAMA_BASE_URL`,
 `OLLAMA_CHAT_MODEL`, `OLLAMA_ROUTINE_MODEL`, `OLLAMA_FALLBACK_MODEL`,
 `OLLAMA_AGENT_MODEL`, `MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT`, `MODEL_ROUTER_COMPLEXITY`, `MODEL_ROUTER_PRIVACY`,
-`MODEL_ROUTER_EFFORT`, `MODEL_ROUTER_ASTRA`, `MODEL_ROUTER_TASK_TTL`,
+`MODEL_ROUTER_EFFORT`, `MODEL_ROUTER_CODING_EFFORT`,
+`MODEL_ROUTER_CODING_EFFORT_CEILING`, `MODEL_ROUTER_ASTRA`, `MODEL_ROUTER_TASK_TTL`,
 `MODEL_ROUTER_PRIVATE_TERMS`, `MODEL_ROUTER_PRIVATE_PATHS`.
 
 `complexity_routing` and `privacy_routing` both default to **true**. The kit's

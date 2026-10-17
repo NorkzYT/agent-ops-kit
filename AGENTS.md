@@ -89,8 +89,11 @@ the job id. If scheduling fails, say so and ask to be pinged.
   effort is rewritten per task up to the `agent.reasoning_effort` ceiling
   (`high`); auxiliary entries keep their own `reasoning_effort`.
 - Coding subagents: Claude Max through claude-max-proxy (`HERMES_CODING_MODEL`,
-  Opus by default; Fable only for genuinely difficult engineering; effort
-  fields untouched — the proxy owns the Claude effort mapping). A leading
+  Opus by default; Fable only for genuinely difficult engineering). Claude
+  effort is set per task: routine→medium, complex→high, unusually hard
+  debugging/architecture→xhigh, `max` only with a leading `#max`/`#astra`
+  line; capped by `coding_effort_ceiling` (default `max`), not the orchestrator
+  ceiling; the proxy maps the label to the CLI thinking budget. A leading
   standalone `#opus`/`#fable` line forces that coding model for the request
   (coding-family seam only; refused on the orchestrator seam, never faked with a
   GPT alias; privacy takes precedence).

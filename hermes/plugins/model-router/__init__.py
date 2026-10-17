@@ -5,7 +5,8 @@ Registers two middleware callbacks with Hermes:
   * ``llm_request``   — deterministic rewrite of model and reasoning effort
     from the CURRENT user task only (luna/terra/sol for the orchestrator,
     gpt-6-astra only with explicit per-task authorization; opus/fable for
-    delegated coding, effort untouched there).
+    delegated coding with task-based Claude effort medium/high/xhigh, max
+    only when authorized).
   * ``llm_execution`` — fail-closed privacy guard plus the Astra budget seam.
     A request whose current user turn carries a sender-authored ``#privacy``
     marker never reaches a cloud provider: it is answered by a local Ollama
@@ -60,7 +61,7 @@ def register(ctx) -> None:
                        "only a #privacy marker in the current turn keeps a request local")
     logger.info(
         "model_router registered (privacy=%s complexity=%s local=%s specialists=%s) "
-        "local_models=routine:%s,fallback:%s,agent:%s classifier=%s",
+        "local_models=routine:%s,fallback:%s,agent:%s classifier=%s coding_effort=%s",
         settings.privacy_routing,
         settings.complexity_routing,
         "configured" if (settings.ollama_base_url and settings.local_chain("routine")) else "unset",
@@ -72,6 +73,7 @@ def register(ctx) -> None:
          if settings.specialist_classifier == "cliproxy" else settings.specialist_classifier)
         if specialists.classifier_ready or settings.specialist_classifier == "none"
         else f"{settings.specialist_classifier}-unavailable",
+        f"auto/{settings.coding_effort_ceiling}" if settings.coding_effort_routing else "off",
     )
 
 
