@@ -13,6 +13,8 @@ writes all code and pushes the commit; the worker checks it out, builds, tests,
 installs, launches and returns evidence. Neither you nor the worker edits code,
 commits, pushes or merges.
 
+A card with `Mobile: ios` is the iOS/iPad lane (docs/mobile-validation.md). The worker uses its own clone under `/Users/norkz/Documents`, never a coordinator path such as `/opt/repos`. It never moves that clone's checkout: it adds a detached worktree at the exact SHA under `/Users/norkz/Documents/.hermes-validate/<card>`, confirms `git rev-parse HEAD` and a clean tree, then builds, tests, installs and launches on an iPhone and an iPad simulator. The script counts a pass only with evidence for both. BrowserStack and Windows are not part of this lane.
+
 ## How you work
 1. Read the card (`kanban_show`). It opens with `Workflow: validate`, `Transport: hermes-peer`, its peer and the code card whose pushed SHA the worker tests.
 2. Run every step with your own terminal tool. Never run them inside `delegate_task`: Hermes refuses Kanban writes there, and the script refuses to start.
@@ -24,7 +26,7 @@ commits, pushes or merges.
 
 ## Human gates (mandatory)
 - Never merge, deploy, release, publish, sign or submit to a store. The operator approves those.
-- Never type or ask for passwords, tokens, MFA codes or keys. A `human-approval:` or `device:` blocker from the worker goes to `kanban_block` as is. The operator completes it on the worker and unblocks the card; `dispatch` then resumes the same run or starts the next attempt.
+- Never type or ask for passwords, tokens, MFA codes or keys. A `human-approval:`, `device:` or `workspace:` blocker from the worker goes to `kanban_block` as is. The operator completes it on the worker and unblocks the card; `dispatch` then resumes the same run or starts the next attempt.
 - Never send Discord messages. The board notifies the operator.
 - No secrets in comments, summaries or metadata; run rows are durable. Never read, print or pass the peer key; `hermes peer` reads it from this profile's `.env`.
 

@@ -1,7 +1,7 @@
 ---
 name: kanban-workflow
 description: Standard engineering path for Discord work the Mac/Windows workers must build or test — the coordinator writes and pushes an exact SHA (Claude Opus/Fable), peers test it and return evidence, automatic fix/retest rounds, independent review, final Discord report
-version: 2.0.0
+version: 2.1.0
 metadata:
   hermes:
     tags: [kanban, discord, workers, review, workflow]
@@ -34,6 +34,7 @@ Script: `~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/workflow.py`
 
 - Engineering work that must be built or tested on macOS or Windows (iOS/Android apps, Xcode, Gradle, MSBuild, installers).
 - A task set from a CSV or tracker export that the workers must validate (`!work`, "on the Mac and Windows").
+- iOS/iPadOS app work: the staged mobile run (`--mobile ios`, Mac only).
 
 Keep the old paths for everything else: a coding task that only needs this host
 goes to `delegate_task`; GUI-only Windows work (computer use, BrowserStack) goes
@@ -55,6 +56,7 @@ terminal(command="python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts
 - `--repo`: the clone URL (`git -C <path> remote get-url origin`). Never a local path: the workers cannot reach it.
 - `--branch`: the feature branch the coordinator writes (default `feat/<title>`); reuse the existing branch to continue earlier work.
 - `--lane`: `mac`, `windows`, or a lane profile with `--peer <lane>=<peer>`. Repeat per lane.
+- `--mobile ios`: iOS/iPad apps (`!work ios`). Use with `--lane mac` only. The Mac validates the exact SHA in a detached worktree of its clone under `/Users/norkz/Documents` on an iPhone and an iPad simulator; BrowserStack is disabled (`skipped: disabled`) and the Windows lane is deferred, thus the script refuses `--lane windows` here. Runbook: `docs/mobile-validation.md`.
 - `--max-rounds`: fix/retest rounds before the loop stops for the operator (default 5).
 - `--coder`: default `default` (this coordinator). `--reviewer`: default `reviewer`; it must differ from the coder and every lane.
 - Add `--dry-run` first when the lanes are unclear; it prints the plan and creates nothing.
@@ -82,4 +84,5 @@ when review passes." The board does the rest:
 - Never merge, deploy, release, sign, submit to a store or sign in on the operator's behalf. The report lists what needs the operator's approval.
 - Never unblock a `human-approval:` card yourself; the operator does it after finishing the step.
 - Status at any time: `python3 <script> status <any card id>` (every round, SHA, lane state, peer run id); gate: `python3 <script> gate <report id>`; one remote poll: `python3 <script> wait <validation id> --timeout 0`.
+- Never report a skipped stage (BrowserStack `skipped: disabled`) or the deferred Windows lane as tested.
 - Never read, print or ask for a peer key. `hermes peer` reads it from the lane profile's `.env`.

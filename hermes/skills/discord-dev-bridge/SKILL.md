@@ -17,7 +17,7 @@ as the task.
 | Command | What to do |
 |---------|------------|
 | `!ship <task>` | Delegate the full engineering loop (`autonomous-engineering`) to a coding subagent in the current repo; report branch, tests, commits. |
-| `!work <mac\|windows\|both> <task>` | Run the `kanban-workflow` skill: the coordinator writes the code, the named workers test the exact SHA, fix/retest rounds, review gate, report in this thread. Reply with the card ids. |
+| `!work <mac\|windows\|both\|ios> <task>` | Run the `kanban-workflow` skill: the coordinator writes the code, the named workers test the exact SHA, fix/retest rounds, review gate, report in this thread. `ios` is `--lane mac --mobile ios` (iPhone + iPad simulators; BrowserStack disabled, Windows deferred). Reply with the card ids. |
 | `!test` | Run the repo's test suite (`npm test`, `pytest`, `go test ./...`, whatever `TOOLS.md`/`Makefile` says); report pass/fail counts and failing names. |
 | `!review <PR#>` | `gh pr diff <PR#>`, review for correctness and risk; report summary, issues, recommendation. |
 | `!status` | `git status`, current branch, ahead/behind, open tasks in `.claude/context/`, Kanban tasks assigned to you. |

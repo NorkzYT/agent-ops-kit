@@ -3,7 +3,8 @@
 Central writer, evidence-only peers: the coordinator's code card pushes an exact
 SHA, the Mac/Windows relays have their peers test that SHA and return evidence,
 round cards open the next fix round or the review, and the report card gates on
-the final SHA and an independent approval.
+the final SHA and an independent approval. `--mobile ios` stages it: Mac iPhone +
+iPad simulators, then an optional BrowserStack stage (disabled); Windows deferred.
 
 Unit tests drive the script with a fake `hermes` runner and real `git` on temp
 repositories. The integration tests run the real `hermes kanban` and `hermes
@@ -857,6 +858,173 @@ class ReviewAndGateTest(StateDirMixin, unittest.TestCase):
         run = lambda argv: done(0, json.dumps({"task": {"id": "t_x", "status": "todo"}, "parents": []}))  # noqa: E731
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(wf.main(["gate", "t_x"], run), 1)
+
+
+def mobile_output(status="pass", task="t_2", sha=SHA, sims=("iphone", "ipad"), sim_over=None, **extra):
+    """An iOS/iPad lane evidence block; `sim_over` patches one simulator entry by kind."""
+    names = {"iphone": ("iPhone 17", "iOS 26.0"), "ipad": ("iPad Pro 13-inch (M5)", "iPadOS 26.0")}
+    entries = []
+    for kind in sims:
+        entry = {"kind": kind, "name": names[kind][0], "os": names[kind][1], "udid": f"{kind.upper()}-UDID-1",
+                 "destination": f"platform=iOS Simulator,id={kind.upper()}-UDID-1", "build_exit": 0,
+                 "test_exit": 0, "install_exit": 0, "launch_exit": 0, "bundle_id": "com.acme.app",
+                 "result_bundle": f"~/hermes-work/{task}/{kind}.xcresult",
+                 "tests": {"passed": 20, "failed": 0, "skipped": 0},
+                 "screenshots": [f"~/hermes-work/{task}/{kind}.png"], "log_excerpt": "App launched"}
+        entry.update((sim_over or {}).get(kind, {}))
+        entries.append(entry)
+    fields = {"task": task, "status": status, "sha_tested": sha, "repo_dir": "/Users/norkz/Documents/app",
+              "platform": "iOS simulator", "os": "macOS 16.1", "tools": "Xcode 27.0",
+              "commands": [{"cmd": "xcodebuild test-without-building -scheme App", "exit_code": 0}],
+              "tests": {"passed": 40, "failed": 0, "skipped": 0}, "failures": [], "artifacts": [],
+              "simulators": entries, "dirty_tree": False, "blocker": "", "summary": "both simulators", **extra}
+    return f"BEGIN-EVIDENCE\n{json.dumps(fields)}\nEND-EVIDENCE\n"
+
+
+def mobile_raw(**kw):
+    return json.loads(mobile_output(**kw).split("\n")[1])
+
+
+class MobileTest(StateDirMixin, unittest.TestCase):
+    """iOS/iPad-first staged validation: writer -> Mac iPhone + iPad simulators ->
+    BrowserStack (optional, disabled) ; Windows deferred."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake = FakeHermes()
+        # t_1 code, t_2 mac, t_3 round, t_4 report
+        wf.intake(intake_args("--lane", "mac", "--mobile", "ios", "--key", "m", "--body", "iPad checkout"), self.fake)
+        os.environ.pop(wf.BROWSERSTACK_FLAG, None)
+
+    def test_windows_is_deferred_and_the_mac_lane_is_required(self):
+        for lanes, text in ((["--lane", "mac", "--lane", "windows"], "Windows lane is deferred"),
+                            (["--lane", "windows"], "Windows lane is deferred"),
+                            (["--lane", "qa", "--peer", "qa=mac"], "Mac lane only")):
+            fake = FakeHermes()
+            with self.assertRaisesRegex(wf.WorkflowError, text):
+                wf.intake(intake_args(*lanes, "--mobile", "ios", "--key", "x"), fake)
+            self.assertEqual(fake.calls, [])
+        self.assertEqual(wf.intake(intake_args("--lane", "windows", "--key", "w", "--dry-run"), FakeHermes())
+                         ["lanes"][0]["assignee"], "windows-worker")  # non-mobile Windows lanes still work
+
+    def test_dry_run_shows_the_staged_order(self):
+        fake = FakeHermes()
+        plan = wf.intake(intake_args("--lane", "mac", "--mobile", "ios", "--key", "d", "--dry-run"), fake)
+        self.assertEqual(fake.calls, [])
+        self.assertEqual([s["stage"] for s in plan["stages"]], [*wf.MOBILE_STAGES, "windows"])
+        self.assertEqual(wf.MOBILE_STAGES, ("writer", "mac-iphone", "mac-ipad", "browserstack"))
+        self.assertEqual((plan["stages"][3]["status"], plan["stages"][3]["reason"]), ("skipped", "disabled"))
+        self.assertEqual(plan["stages"][4]["status"], "deferred")
+
+    def test_cards_carry_the_mobile_header(self):
+        self.assertEqual([wf.card_header(self.fake.body(t)).get("mobile") for t in ("t_1", "t_2", "t_3")],
+                         ["ios"] * 3)
+        self.assertIn("bundle id and the screens to check on iPhone and iPad", self.fake.body("t_1"))
+        self.assertIn('"skipped: disabled"', self.fake.body("t_4"))
+        fake = FakeHermes()
+        graph(fake)
+        self.assertNotIn("mobile", wf.card_header(fake.body("t_2")))
+
+    def test_the_mac_gets_an_iphone_and_ipad_task_for_the_exact_sha(self):
+        push(self.fake)
+        wf.dispatch("t_2", self.fake)
+        msg = self.fake.runs[-1]["message"]
+        for text in (f"under {wf.MAC_REPO_ROOT}", "/opt/repos/...", "never use them",
+                     "Never change that clone's own checkout",
+                     f"git -C <clone> worktree add --detach /Users/norkz/Documents/.hermes-validate/t_2 {SHA}",
+                     "git status --porcelain --untracked-files=no", f"checkout --detach {SHA}",
+                     '"repo_dir": "/Users/norkz/Documents/.hermes-validate/t_2"',
+                     f"git rev-parse HEAD       (must print {SHA} exactly", '"workspace: <dir> has uncommitted',
+                     "xcrun simctl list devices available --json", "xcrun simctl boot <udid>",
+                     "xcodebuild build-for-testing -scheme <scheme> -destination 'platform=iOS Simulator,id=<iphone-udid>' "
+                     "-destination 'platform=iOS Simulator,id=<ipad-udid>'",
+                     "xcodebuild test-without-building -scheme <scheme> -destination 'platform=iOS Simulator,id=<ipad-udid>'",
+                     "-resultBundlePath ~/hermes-work/t_2/ipad.xcresult", "xcrun simctl install <udid> <app>",
+                     "xcrun simctl launch <udid> <bundle-id>", "xcrun simctl io <udid> screenshot",
+                     "BrowserStack or any paid service", '"kind": "iphone"', '"kind": "ipad"'):
+            self.assertIn(text, msg)
+        self.assertNotIn("git clone", msg)
+
+    def test_a_pass_fails_closed_without_both_simulators_the_full_sha_or_the_mac_clone(self):
+        bad = (({"sims": ("iphone",)}, "no ipad simulator evidence"),
+               ({"sha": SHA[:12]}, "full SHA"),
+               ({"repo_dir": "/opt/repos/app"}, "not a clone under /Users/norkz/Documents"),
+               ({"repo_dir": "/Users/norkz/Documents/../tmp/app"}, "not a clone under"),
+               ({"repo_dir": "~/hermes-work/t_2"}, "not a clone under"),
+               ({"sim_over": {"ipad": {"screenshots": []}}}, "ipad simulator evidence lacks screenshot"),
+               ({"sim_over": {"iphone": {"launch_exit": None, "udid": ""}}}, "lacks launch exit code, udid"))
+        for kw, text in bad:
+            with self.assertRaisesRegex(wf.EvidenceError, text):
+                wf.normalize_evidence(mobile_raw(**kw), "t_2", SHA, "mac-worker", "ios")
+        ev = wf.normalize_evidence(mobile_raw(), "t_2", SHA, "mac-worker", "ios")
+        self.assertEqual((ev["status"], ev["repo_dir"], [s["kind"] for s in ev["simulators"]]),
+                         ("pass", "/Users/norkz/Documents/app", ["iphone", "ipad"]))
+        self.assertEqual(ev["device"], "iPhone 17 (iOS 26.0, IPHONE-UDID-1); "
+                                       "iPad Pro 13-inch (M5) (iPadOS 26.0, IPAD-UDID-1)")
+        self.assertEqual(ev["simulators"][1]["result_bundle"], "~/hermes-work/t_2/ipad.xcresult")
+
+    def test_a_failing_simulator_step_is_a_fail_and_a_dirty_clone_blocks(self):
+        ev = wf.normalize_evidence(mobile_raw(sim_over={"ipad": {"launch_exit": 1}}), "t_2", SHA, "mac-worker", "ios")
+        self.assertEqual(ev["status"], "fail")
+        self.assertIn("ipad (iPad Pro 13-inch (M5), iPadOS 26.0): launch exit 1", ev["failures"])
+        ev = wf.normalize_evidence(mobile_raw(status="fail", sims=("iphone",),
+                                              sim_over={"iphone": {"build_exit": 65}}), "t_2", SHA, "mac-worker", "ios")
+        self.assertEqual(ev["status"], "fail")  # a failed build may stop before the iPad
+        blocked = {"task": "t_2", "status": "blocked",
+                   "blocker": "workspace: /Users/norkz/Documents/app has uncommitted tracked changes"}
+        ev = wf.normalize_evidence(blocked, "t_2", SHA, "mac-worker", "ios")
+        self.assertEqual((ev["status"], ev["blocker"][:10]), ("blocked", "workspace:"))
+
+    def test_wait_retries_evidence_without_the_ipad(self):
+        push(self.fake)
+        wf.dispatch("t_2", self.fake)
+        self.fake.remote_by_run = {"run_t_2_1": {"status": "completed", "output": mobile_output(sims=("iphone",))},
+                                   "run_t_2_2": {"status": "completed", "output": mobile_output()}}
+        code, out = wf.wait("t_2", 0, 30, self.fake, sleep=lambda s: None)
+        self.assertEqual((code, out["run_id"], out["verdict"]), (0, "run_t_2_2", "pass"))
+        self.assertIn("no ipad simulator evidence", self.fake.runs[-1]["message"])
+        self.assertIn("iPhone 17 (iOS 26.0, IPHONE-UDID-1)", out["summary"])
+        self.assertEqual(len(wf.latest(card(self.fake, "t_2"), "evidence")["simulators"]), 2)
+
+    def test_round_records_the_stages_and_browserstack_stays_skipped(self):
+        push(self.fake)
+        self.assertEqual(validate(self.fake, "t_2", mobile_output())[0], 0)
+        for env, reason in (({}, "disabled"), ({wf.BROWSERSTACK_FLAG: "true"}, "no BrowserStack runner")):
+            with mock.patch.dict(os.environ, env, clear=False):
+                code, out = wf.advance("t_3", self.fake)
+            self.assertEqual((code, out["state"]), (0, "VALIDATED"))
+            stages = {s["stage"]: s for s in out["metadata"]["stages"]}
+            self.assertEqual([s["stage"] for s in out["metadata"]["stages"]], [*wf.MOBILE_STAGES, "windows"])
+            self.assertEqual((stages["writer"]["commit"], stages["mac-iphone"]["status"],
+                              stages["mac-ipad"]["status"], stages["windows"]["status"]),
+                             (SHA, "pass", "pass", "deferred"))
+            self.assertEqual(stages["browserstack"]["status"], "skipped")  # never "pass": nothing ran
+            self.assertIn(reason, stages["browserstack"]["reason"])
+        self.assertIn("browserstack skipped: disabled; windows deferred", wf.advance("t_3", self.fake)[1]["summary"])
+        (review,) = self.fake.by_title("Review: ")
+        self.assertIn("on an iPhone and an iPad simulator", self.fake.body(review))
+
+        self.fake.finish("t_3")
+        wf.verdict(review, "approve", "", self.fake)
+        self.fake.finish(review, profile="reviewer")
+        ok, rows = wf.gate("t_4", self.fake)
+        self.assertTrue(ok, rows)
+        self.assertIn("browserstack skipped: disabled (optional; not tested, never counted as passed); "
+                      "windows deferred", [r["reason"] for r in rows])
+
+    def test_a_failing_ipad_opens_a_fix_round_and_skips_browserstack(self):
+        push(self.fake)
+        validate(self.fake, "t_2", mobile_output(sim_over={"ipad": {"test_exit": 65,
+                                                                    "tests": {"passed": 18, "failed": 2}}}))
+        code, out = wf.advance("t_3", self.fake)
+        self.assertEqual((code, out["state"]), (0, "FIX_REQUIRED"))
+        stages = {s["stage"]: s for s in out["metadata"]["stages"]}
+        self.assertEqual((stages["mac-iphone"]["status"], stages["mac-ipad"]["status"]), ("pass", "fail"))
+        self.assertEqual(stages["browserstack"]["reason"], "the local simulators did not both pass")
+        body = self.fake.body(out["metadata"]["next"]["code"])
+        self.assertIn("ipad (iPad Pro 13-inch (M5), iPadOS 26.0): test exit 65, 2 test(s) failed", body)
+        self.assertIn("ipad: iPad Pro 13-inch (M5) iPadOS 26.0 IPAD-UDID-1; build exit 0, test exit 65", body)
+        self.assertEqual(wf.card_header(self.fake.body(out["metadata"]["next"]["code"]))["mobile"], "ios")
 
 
 class StateDirTest(unittest.TestCase):

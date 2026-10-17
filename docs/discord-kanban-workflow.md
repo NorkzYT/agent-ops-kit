@@ -21,6 +21,11 @@ Discord request (e.g. the existing Notion CSV task set)
               writes the report, completes → the orchestrator posts it in the same Discord thread
 ```
 
+iOS/iPad apps use the staged variant: `--lane mac --mobile ios` validates on an
+iPhone and an iPad simulator on the Mac, BrowserStack real devices stay disabled
+(`skipped: disabled`), and the Windows lane is deferred and not dispatched. See
+[mobile-validation.md](mobile-validation.md).
+
 Hermes `--parent` means "waits for". Each new round and review card is linked
 into the report card before the card that opened it completes, thus the report
 starts only after the last round passed and was reviewed.
@@ -31,7 +36,8 @@ starts only after the last round passed and was reviewed.
 | Orchestrator instructions | `hermes/skills/kanban-workflow/SKILL.md`, `hermes/SOUL.md` |
 | Relay and reviewer prompts | `hermes/profiles/{mac-worker,windows-worker,reviewer}/SOUL.md` |
 | Lane profile + peer setup | `scripts/hermes-profile.sh` (`PROFILE_PEER_URL`, `PROFILE_PEER_KEY`) |
-| Discord shortcut | `!work <mac\|windows\|both> <task>` in `discord-dev-bridge` |
+| Discord shortcut | `!work <mac\|windows\|both\|ios> <task>` in `discord-dev-bridge` |
+| iOS/iPad staged lane | [mobile-validation.md](mobile-validation.md) (`--mobile ios`) |
 
 ## Roles
 
@@ -293,6 +299,8 @@ These hold on every card, in the remote task and in the profile prompts:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `--repo … is not a clone URL` | a local path was passed | pass `git -C <path> remote get-url origin` |
+| `--mobile ios: the Windows lane is deferred …` | Windows is not part of the mobile activation | `--lane mac --mobile ios` ([mobile-validation.md](mobile-validation.md)) |
+| mac card `blocked: workspace: …` | no clone under `/Users/norkz/Documents`, a dirty reused worktree or wrong HEAD on the Mac | fix the clone on the Mac, then `hermes kanban unblock <id>` |
 | `lane(s) … have no peer` | a host profile was passed as a lane | lanes are `mac`, `windows` or `--peer <lane>=<peer>`; host checks run on the code card |
 | `profile 'mac-worker' does not exist` | lane profile missing | step 2 above |
 | `no Hermes peer 'mac' is configured` / `has no API key` | peer not registered on the lane profile | step 2 with `PROFILE_PEER_URL` and `PROFILE_PEER_KEY` |
