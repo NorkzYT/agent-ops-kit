@@ -4,7 +4,9 @@ Central writer, evidence-only peers: the coordinator's code card pushes an exact
 SHA, the Mac/Windows relays have their peers test that SHA and return evidence,
 round cards open the next fix round or the review, and the report card gates on
 the final SHA and an independent approval. `--mobile ios` stages it: Mac iPhone +
-iPad simulators, then an optional BrowserStack stage (disabled); Windows deferred.
+iPad simulators, then BrowserStack real devices (disabled and fail-closed until the
+operator's activation file exists; a pass needs a build re-read from the API, here a
+fake API); Windows deferred.
 
 Unit tests drive the script with a fake `hermes` runner and real `git` on temp
 repositories. The integration tests run the real `hermes kanban` and `hermes
@@ -170,7 +172,8 @@ def evidence(status="pass", task="t_2", sha=SHA, fenced=False, **extra):
               "tests": {"passed": 42, "failed": 0 if status == "pass" else 2, "skipped": 1},
               "failures": [] if status == "pass" else ["LoginTests.testRotation: expected 1, got 2"],
               "artifacts": ["~/hermes-work/t_2/build/App.app"], "device": "iPhone 17 simulator",
-              "dirty_tree": False, "blocker": "", "summary": "built and tested", **extra}
+              "dirty_tree": False, "blocker": "", "summary": "built and tested",
+              "repo_dir": f"/Users/norkz/Documents/.hermes-validate/{task}", **extra}
     if fenced:
         return f"Done.\n\n```json\n{json.dumps(fields)}\n```\nAnything else?\n"
     return f"Validation done.\nBEGIN-EVIDENCE\n{json.dumps(fields)}\nEND-EVIDENCE\n"
@@ -182,7 +185,9 @@ class StateDirMixin:
     def setUp(self):
         super().setUp()
         self._state = tempfile.mkdtemp(prefix="kanban-workflow-state-")
-        patcher = mock.patch.dict(os.environ, {"HERMES_WORKFLOW_STATE": self._state}, clear=False)
+        patcher = mock.patch.dict(os.environ, {"HERMES_WORKFLOW_STATE": self._state,
+                                               "KANBAN_BROWSERSTACK_CONFIG": os.path.join(self._state, "bs.env")},
+                                  clear=False)
         patcher.start()
         os.environ.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
         self.addCleanup(patcher.stop)
@@ -465,10 +470,14 @@ class DispatchTest(StateDirMixin, unittest.TestCase):
         self.assertEqual(flag(run, "--idempotency-key"), "kanban:t_2:1")
         message = run[5]
         self.assertTrue(message.startswith("You are the Mac worker's own Hermes agent. Kanban card t_2"), message[:80])
-        for text in (f"Commit: {SHA}", f"Repository: {REPO_URL}", f"git checkout --detach {SHA}",
+        for text in (f"Commit: {SHA}", f"Repository: {REPO_URL}",
+                     f"git -C <clone> worktree add --detach /Users/norkz/Documents/.hermes-validate/t_2 {SHA}",
+                     f"under {wf.MAC_REPO_ROOT}", "Never change that clone's own checkout",
+                     '"repo_dir": "/Users/norkz/Documents/.hermes-validate/t_2"',
                      "you never change source code", "Forbidden: editing or adding tracked files, committing, pushing",
                      "BEGIN-EVIDENCE", "END-EVIDENCE", "~/hermes-work/t_2", "changed the login screen",
-                     "Paths in the request below are on the\n   coordinator", "Fix /opt/repos/app per the Notion CSV"):
+                     "are on the coordinator, not on this machine; never use them",
+                     "Fix /opt/repos/app per the Notion CSV"):
             self.assertIn(text, message)
         self.assertNotIn("$HERMES_KANBAN_TASK", message)
         self.assertNotIn("Relay steps", message)
@@ -527,7 +536,7 @@ class DispatchTest(StateDirMixin, unittest.TestCase):
         rec = wf.dispatch("t_2", self.fake)
         self.assertEqual((rec["attempt"], rec["run_id"]), (2, "run_t_2_2"))
         self.assertIn("The operator cleared the earlier block", self.fake.runs[-1]["message"])
-        self.assertIn(f"git checkout --detach {SHA}", self.fake.runs[-1]["message"])
+        self.assertIn(f".hermes-validate/t_2 checkout --detach {SHA}", self.fake.runs[-1]["message"])
 
     def test_fails_closed_without_a_peer(self):
         push(self.fake)
@@ -578,7 +587,8 @@ class WaitTest(StateDirMixin, unittest.TestCase):
         self.assertIn("LoginTests.testRotation", out["summary"])
 
     def test_tolerant_parsing(self):
-        bare = json.dumps({"task": "t_2", "status": "passed", "sha_tested": SHA[:10]})
+        bare = json.dumps({"task": "t_2", "status": "passed", "sha_tested": SHA[:10],
+                           "repo_dir": "/Users/norkz/Documents/app"})
         for output in (evidence(fenced=True), f"Summary first.\n{bare}\nThanks.",
                        evidence().replace("BEGIN-EVIDENCE\n", "BEGIN-EVIDENCE\n```json\n").replace("\nEND", "\n```\nEND"),
                        evidence() + "\nSome trailing prose { not json"):
@@ -593,6 +603,16 @@ class WaitTest(StateDirMixin, unittest.TestCase):
             ev = wf.normalize_evidence({**raw, **extra}, "t_2", SHA, "mac-worker")
             self.assertEqual(ev["status"], "fail")
             self.assertIn(text, " ".join(ev["failures"]))
+
+    def test_the_mac_lane_validates_in_its_own_clone(self):
+        raw = json.loads(evidence().split("\n")[2])
+        for repo_dir in (None, "~/hermes-work/t_2", "/opt/repos/app"):
+            with self.assertRaisesRegex(wf.EvidenceError, "not a clone under /Users/norkz/Documents"):
+                wf.normalize_evidence({**raw, "repo_dir": repo_dir}, "t_2", SHA, "mac-worker")
+        self.assertEqual(wf.normalize_evidence(raw, "t_2", SHA, "mac-worker")["repo_dir"],
+                         "/Users/norkz/Documents/.hermes-validate/t_2")
+        self.assertEqual(wf.normalize_evidence({**raw, "repo_dir": None}, "t_2", SHA, "windows-worker")["status"],
+                         "pass")  # Windows keeps its fresh clone
 
     def test_missing_evidence_asks_the_worker_once_for_the_report(self):
         code, out = self.wait({"status": "completed", "output": "All done, it works."},
@@ -989,7 +1009,7 @@ class MobileTest(StateDirMixin, unittest.TestCase):
     def test_round_records_the_stages_and_browserstack_stays_skipped(self):
         push(self.fake)
         self.assertEqual(validate(self.fake, "t_2", mobile_output())[0], 0)
-        for env, reason in (({}, "disabled"), ({wf.BROWSERSTACK_FLAG: "true"}, "no BrowserStack runner")):
+        for env, reason in (({}, "disabled"), ({wf.BROWSERSTACK_FLAG: "true"}, "disabled")):  # env alone: off
             with mock.patch.dict(os.environ, env, clear=False):
                 code, out = wf.advance("t_3", self.fake)
             self.assertEqual((code, out["state"]), (0, "VALIDATED"))
@@ -1009,8 +1029,9 @@ class MobileTest(StateDirMixin, unittest.TestCase):
         self.fake.finish(review, profile="reviewer")
         ok, rows = wf.gate("t_4", self.fake)
         self.assertTrue(ok, rows)
-        self.assertIn("browserstack skipped: disabled (optional; not tested, never counted as passed); "
-                      "windows deferred", [r["reason"] for r in rows])
+        self.assertIn("browserstack skipped: disabled (not run: nothing was tested on real devices, never "
+                      "counted as passed); windows deferred", [r["reason"] for r in rows])
+        self.assertEqual(self.fake.by_title("[devices "), [])
 
     def test_a_failing_ipad_opens_a_fix_round_and_skips_browserstack(self):
         push(self.fake)
@@ -1025,6 +1046,268 @@ class MobileTest(StateDirMixin, unittest.TestCase):
         self.assertIn("ipad (iPad Pro 13-inch (M5), iPadOS 26.0): test exit 65, 2 test(s) failed", body)
         self.assertIn("ipad: iPad Pro 13-inch (M5) iPadOS 26.0 IPAD-UDID-1; build exit 0, test exit 65", body)
         self.assertEqual(wf.card_header(self.fake.body(out["metadata"]["next"]["code"]))["mobile"], "ios")
+
+
+BS_USER, BS_KEY = "acme-ci", "bsKEY0123456789abcdefSECRET"  # the key must never leave browserstack.py
+BUILD_ID = "a" * 40
+DEVICES = "iPhone 15-17|iPad Air 13 2025-18"
+
+
+def bs_activate(path, mode=0o600, **over):
+    """Write the operator's activation file (what a human does once, by hand)."""
+    values = {wf.bs.FLAG: "true", wf.bs.USER_VAR: BS_USER, wf.bs.KEY_VAR: BS_KEY, wf.bs.DEVICES_VAR: DEVICES, **over}
+    Path(path).write_text("".join(f"{k}={v}\n" for k, v in values.items() if v is not None), encoding="utf-8")
+    os.chmod(path, mode)
+
+
+def api_build(build_id=BUILD_ID, sha=SHA, iphone="passed", ipad="passed", status="done", tag=None, failed=0):
+    def device(name, osv, st, kind):
+        return {"device": name, "os": "ios", "os_version": osv, "sessions": [
+            {"id": f"{kind}session0123456789", "status": st, "duration": 61, "testcases": {
+                "count": 12, "status": {"passed": 12 - (failed if st != "passed" else 0),
+                                        "failed": failed if st != "passed" else 0, "skipped": 0,
+                                        "timedout": 0, "error": 0}}}]}
+    devices = [device("iPhone 15", "17", iphone, "iphone")] if iphone else []
+    devices += [device("iPad Air 13 2025", "18", ipad, "ipad")] if ipad else []
+    return {"id": build_id, "framework": "xcuitest", "status": status, "duration": 90,
+            "input_capabilities": {"devices": DEVICES.split("|"), "project": "hermes-kanban",
+                                   "buildTag": sha if tag is None else tag},
+            "app_details": {"bundle_id": "com.acme.app"}, "devices": devices}
+
+
+class FakeBrowserStack:
+    """The BrowserStack REST API: GET builds/<id> answers from `builds`."""
+
+    def __init__(self, builds=None):
+        self.builds = builds or {}
+        self.calls = []
+
+    def __call__(self, method, url, headers):
+        self.calls.append((method, url, headers))
+        build_id = url.rsplit("/", 1)[-1]
+        if headers.get("Authorization") != "Basic " + __import__("base64").b64encode(
+                f"{BS_USER}:{BS_KEY}".encode()).decode():
+            return 401, b'{"message": "Unauthorized"}'
+        if build_id not in self.builds:
+            return 404, b'{"message": "not found"}'
+        return 200, json.dumps(self.builds[build_id]).encode()
+
+
+def device_output(status="pass", task="t_5", sha=SHA, build_id=BUILD_ID, **extra):
+    fields = {"task": task, "status": status, "sha_tested": sha, "repo_dir": f"/Users/norkz/Documents/.hermes-validate/{task}",
+              "build_id": build_id, "app_url": "bs://app1", "test_suite_url": "bs://suite1",
+              "devices": DEVICES.split("|"), "commands": [{"cmd": "curl ... /build", "exit_code": 0}],
+              "failures": [], "dirty_tree": False, "blocker": "", "summary": "real devices", **extra}
+    return f"BEGIN-EVIDENCE\n{json.dumps(fields)}\nEND-EVIDENCE\n"
+
+
+class BrowserStackActivationTest(StateDirMixin, unittest.TestCase):
+    """browserstack.py: disabled by default, fail-closed activation, API-only verification."""
+
+    def setUp(self):
+        super().setUp()
+        self.path = os.environ["KANBAN_BROWSERSTACK_CONFIG"]
+
+    def test_disabled_without_the_file_or_the_flag(self):
+        self.assertEqual(wf.bs.activation()["state"], "disabled")
+        bs_activate(self.path, **{wf.bs.FLAG: "false"})
+        self.assertEqual(wf.bs.activation()["state"], "disabled")
+        with mock.patch.dict(os.environ, {wf.bs.FLAG: "true", wf.bs.USER_VAR: BS_USER, wf.bs.KEY_VAR: BS_KEY}):
+            self.assertEqual(wf.bs.activation()["state"], "disabled")  # the environment alone never activates
+
+    def test_partial_or_unsafe_activation_is_misconfigured(self):
+        cases = (({wf.bs.KEY_VAR: None}, {}, "BROWSERSTACK_ACCESS_KEY is not set"),
+                 ({wf.bs.DEVICES_VAR: "iPhone 15-17"}, {}, "at least one ipad"),
+                 ({wf.bs.DEVICES_VAR: "Pixel 8-14|iPad Air 13 2025-18"}, {}, "invalid entries"),
+                 ({}, {"mode": 0o644}, "mode 0600"))
+        for over, kw, text in cases:
+            bs_activate(self.path, **kw, **over)
+            act = wf.bs.activation()
+            self.assertEqual(act["state"], "misconfigured", over)
+            self.assertIn(text, act["reason"])
+            self.assertNotIn(BS_KEY, json.dumps(act))
+        bs_activate(self.path)
+        act = wf.bs.activation()
+        self.assertEqual((act["state"], act["devices"]), ("active", DEVICES.split("|")))
+        self.assertNotIn(BS_KEY, json.dumps(act))
+
+    def test_preflight_cli_exit_codes_and_no_secret_output(self):
+        for setup, want in ((None, 3), ({wf.bs.USER_VAR: None}, 2), ({}, 0)):
+            if setup is not None:
+                bs_activate(self.path, **setup)
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(wf.bs.main(["preflight"]), want)
+            self.assertNotIn(BS_KEY, out.getvalue())
+
+    def test_verify_reads_the_build_from_the_api(self):
+        bs_activate(self.path)
+        api = FakeBrowserStack({BUILD_ID: api_build()})
+        out = wf.bs.verify(BUILD_ID, SHA, http=api)
+        self.assertEqual((out["status"], out["verified_by"], out["build_status"]), ("pass", "browserstack-api", "done"))
+        self.assertEqual([d["kind"] for d in out["devices"]], ["iphone", "ipad"])
+        self.assertEqual(out["dashboard_url"], wf.bs.DASHBOARD + BUILD_ID)
+        self.assertEqual(api.calls[0][:2], ("GET", f"{wf.bs.API}/builds/{BUILD_ID}"))
+        self.assertNotIn(BS_KEY, json.dumps(out))
+
+    def test_verify_fails_closed(self):
+        bs_activate(self.path)
+        raising = (({"tag": SHA2}, "not the exact SHA"), ({"tag": ""}, "tagged 'nothing'"),
+                   ({"status": "running"}, "has not finished"))
+        for kw, text in raising:
+            with self.assertRaisesRegex(wf.bs.VerifyError, text):
+                wf.bs.verify(BUILD_ID, SHA, http=FakeBrowserStack({BUILD_ID: api_build(**kw)}))
+        for build_id, text in (("b" * 40, "no build"), ("x;rm -rf", "not a BrowserStack build id")):
+            with self.assertRaisesRegex(wf.bs.VerifyError, text):
+                wf.bs.verify(build_id, SHA, http=FakeBrowserStack({BUILD_ID: api_build()}))
+        with mock.patch.object(wf.bs, "read_config", lambda p: {wf.bs.FLAG: "true", wf.bs.USER_VAR: "x",
+                                                                wf.bs.KEY_VAR: "wrong", wf.bs.DEVICES_VAR: DEVICES}):
+            with self.assertRaisesRegex(wf.bs.VerifyError, "401"):
+                wf.bs.verify(BUILD_ID, SHA, http=FakeBrowserStack({BUILD_ID: api_build()}))
+        failing = (({"ipad": "failed", "failed": 2}, "iPad Air 13 2025 (iOS 18) session ipadsession0123456789: "
+                                                     "status failed, 10 passed, 2 failed"),
+                   ({"ipad": None}, "no real ipad session"),
+                   ({"status": "failed"}, "ended with status failed"))
+        for kw, text in failing:
+            out = wf.bs.verify(BUILD_ID, SHA, http=FakeBrowserStack({BUILD_ID: api_build(**kw)}))
+            self.assertEqual(out["status"], "fail", kw)
+            self.assertIn(text, " | ".join(out["failures"]))
+
+    def test_verify_needs_an_active_stage(self):
+        with self.assertRaisesRegex(wf.bs.VerifyError, "disabled"):
+            wf.bs.verify(BUILD_ID, SHA, http=FakeBrowserStack({BUILD_ID: api_build()}))
+
+
+class BrowserStackStageTest(StateDirMixin, unittest.TestCase):
+    """Mac simulators pass -> [devices N] on BrowserStack -> [devices-round N] -> review or fix round."""
+
+    def setUp(self):
+        super().setUp()
+        self.path = os.environ["KANBAN_BROWSERSTACK_CONFIG"]
+        self.api = FakeBrowserStack({BUILD_ID: api_build()})
+        patcher = mock.patch.object(wf, "BROWSERSTACK_HTTP", self.api)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.fake = FakeHermes()
+        # t_1 code, t_2 mac, t_3 round, t_4 report
+        wf.intake(intake_args("--lane", "mac", "--mobile", "ios", "--key", "m", "--body", "iPad checkout"), self.fake)
+        push(self.fake)
+        self.assertEqual(validate(self.fake, "t_2", mobile_output())[0], 0)
+
+    def open_devices(self):
+        bs_activate(self.path)
+        code, out = wf.advance("t_3", self.fake)
+        self.assertEqual((code, out["state"]), (0, "SIMULATORS_PASSED"), out)
+        self.fake.finish("t_3")
+        return out
+
+    def test_a_partial_activation_blocks_instead_of_skipping(self):
+        bs_activate(self.path, **{wf.bs.KEY_VAR: None})
+        code, out = wf.advance("t_3", self.fake)
+        self.assertEqual(code, 4)
+        self.assertIn("browserstack:", out["blocker"])
+        self.assertIn("BROWSERSTACK_ACCESS_KEY is not set", out["blocker"])
+        self.assertEqual((self.fake.by_title("Review: "), self.fake.by_title("[devices ")), ([], []))
+
+    def test_active_stage_opens_the_device_cards_for_the_same_sha(self):
+        out = self.open_devices()
+        dev, drnd = out["metadata"]["next"]["devices"], out["metadata"]["next"]["devices_round"]
+        self.assertEqual((dev, drnd), ("t_5", "t_6"))
+        stages = {s["stage"]: s for s in out["metadata"]["stages"]}
+        self.assertEqual(stages["browserstack"]["status"], "queued")
+        h = wf.header_of(self.fake.shows[dev])
+        self.assertEqual((h["workflow"], h["stage"], h["devices"], h["code"], h["peer"]),
+                         ("validate", "devices", DEVICES, "t_1", "mac"))
+        self.assertEqual(self.fake.shows[dev]["task"]["assignee"], "mac-worker")
+        self.assertEqual(self.fake.shows[dev]["parents"], ["t_3"])
+        self.assertEqual(self.fake.shows[drnd]["parents"], [dev])
+        self.assertIn(drnd, self.fake.shows["t_4"]["parents"])
+        self.assertEqual(self.fake.by_title("Review: "), [])
+        wf.dispatch(dev, self.fake)
+        msg = self.fake.runs[-1]["message"]
+        for text in (f'"buildTag": "{SHA}"', f"worktree add --detach /Users/norkz/Documents/.hermes-validate/{dev} {SHA}",
+                     '. ~/.hermes/browserstack.env', 'curl -sS -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY"',
+                     f"{wf.bs.API}/build", "never `set -x`", "human-approval: signing",
+                     "browserstack: credentials not provisioned on the Mac", '"build_id"',
+                     "iPhone 15-17, iPad Air 13 2025-18"):
+            self.assertIn(text, msg)
+        self.assertNotIn(BS_KEY, msg)
+
+    def test_verified_pass_reaches_review_and_gate(self):
+        dev, drnd = self.open_devices()["metadata"]["next"].values()
+        code, out = validate(self.fake, dev, device_output(task=dev))
+        self.assertEqual((code, out["metadata"]["state"]), (0, "DEVICES_PASSED"), out)
+        self.assertEqual(out["metadata"]["verified_by"], "browserstack-api")
+        ev = wf.latest(card(self.fake, dev), "evidence")
+        self.assertEqual((ev["status"], ev["build_id"], ev["tests"]["passed"]), ("pass", BUILD_ID, 24))
+        code, out = wf.advance(drnd, self.fake)
+        self.assertEqual((code, out["state"]), (0, "VALIDATED"))
+        self.assertIn("browserstack pass: build " + BUILD_ID, out["summary"])
+        review = out["metadata"]["next"]["review"]
+        self.assertIn("BrowserStack real devices passed: build " + BUILD_ID, self.fake.body(review))
+        self.fake.finish(drnd)
+        wf.verdict(review, "approve", "", self.fake)
+        self.fake.finish(review, profile="reviewer")
+        ok, rows = wf.gate("t_4", self.fake)
+        self.assertTrue(ok, rows)
+        reason = " ".join(r["reason"] for r in rows)
+        self.assertIn(f"browserstack passed {SHA[:12]} on real devices: build {BUILD_ID} on iPhone 15 (iOS 17), "
+                      "iPad Air 13 2025 (iOS 18), verified via the BrowserStack API", reason)
+        states = [(r["kind"], r["round"], r.get("stage"), r["state"]) for r in wf.status("t_4", self.fake)]
+        self.assertEqual(states[-3:], [("validate", 1, "devices", "DEVICES_PASSED"), ("round", 1, "devices", "VALIDATED"),
+                                       ("report", None, None, "WAITING")])
+        board = json.dumps(self.fake.shows) + json.dumps(self.fake.calls)
+        board += "".join(Path(self._state, f).read_text() for f in os.listdir(self._state) if f.endswith(".jsonl"))
+        self.assertNotIn(BS_KEY, board)
+        self.assertNotIn(BS_USER, board)
+
+    def test_a_failing_real_device_opens_a_fix_round(self):
+        self.api.builds[BUILD_ID] = api_build(ipad="failed", failed=2, status="failed")
+        dev, drnd = self.open_devices()["metadata"]["next"].values()
+        code, out = validate(self.fake, dev, device_output(task=dev))  # the Mac says pass; the API decides
+        self.assertEqual((code, out["metadata"]["state"]), (0, "DEVICES_FAILED"))
+        code, out = wf.advance(drnd, self.fake)
+        self.assertEqual((code, out["state"]), (0, "FIX_REQUIRED"))
+        self.assertEqual({s["stage"]: s["status"] for s in out["metadata"]["stages"]}["browserstack"], "fail")
+        nxt = out["metadata"]["next"]
+        body = self.fake.body(nxt["code"])
+        self.assertIn("iPad Air 13 2025 (iOS 18) session ipadsession0123456789: status failed", body)
+        self.assertIn(wf.bs.DASHBOARD + BUILD_ID, body)
+        self.assertEqual(self.fake.shows[nxt["code"]]["parents"], [drnd])
+        self.assertEqual(list(nxt["lanes"]), ["mac-worker"])  # the fix goes back through the Mac simulators
+        self.fake.finish(drnd)
+        self.assertFalse(wf.gate("t_4", self.fake)[0])
+
+    def test_no_pass_without_a_real_verified_build(self):
+        dev, _ = self.open_devices()["metadata"]["next"].values()
+        for output, text in ((device_output(task=dev, build_id=""), "needs the BrowserStack build_id"),
+                             (device_output(task=dev, build_id="f" * 40), "no build"),
+                             (device_output(task=dev, sha=SHA[:12]), "full SHA"),
+                             (device_output(task=dev, repo_dir="/opt/repos/app"), "not a clone under")):
+            raw = wf.extract_report(output)
+            with self.assertRaisesRegex(wf.EvidenceError, text):
+                wf.normalize_evidence(raw, dev, SHA, "mac-worker", "ios", "devices", DEVICES.split("|"))
+        wf.dispatch(dev, self.fake)
+        for run_id in ("run_t_5_1", "run_t_5_2", "run_t_5_3"):
+            self.fake.remote_by_run[run_id] = {"status": "completed", "output": device_output(task=dev, build_id="f" * 40)}
+        code, out = wf.wait(dev, 0, 30, self.fake, sleep=lambda s: None)
+        self.assertEqual(code, 1)
+        self.assertIn("no build", out["error"])
+        self.assertIsNone(wf.latest(card(self.fake, dev), "evidence"))
+
+    def test_device_result_blocks_when_the_coordinator_cannot_verify(self):
+        dev, _ = self.open_devices()["metadata"]["next"].values()
+        os.unlink(self.path)  # the operator turned the stage off mid-run
+        code, out = validate(self.fake, dev, device_output(task=dev))
+        self.assertEqual(code, 4)
+        self.assertIn("cannot be verified, thus it is not a pass", out["blocker"])
+        self.assertEqual(self.api.calls, [])
+
+    def test_gate_refuses_a_queued_stage_without_its_result(self):
+        self.open_devices()
+        h = self.fake.shows["t_4"]
+        h["parents"] = [p for p in h["parents"] if p != "t_6"]  # a report that lost the device round
+        rows = wf.gate("t_4", self.fake)[1]
+        self.assertIn("did not finish", " ".join(r["reason"] for r in rows))
 
 
 class StateDirTest(unittest.TestCase):

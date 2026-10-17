@@ -56,7 +56,7 @@ terminal(command="python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts
 - `--repo`: the clone URL (`git -C <path> remote get-url origin`). Never a local path: the workers cannot reach it.
 - `--branch`: the feature branch the coordinator writes (default `feat/<title>`); reuse the existing branch to continue earlier work.
 - `--lane`: `mac`, `windows`, or a lane profile with `--peer <lane>=<peer>`. Repeat per lane.
-- `--mobile ios`: iOS/iPad apps (`!work ios`). Use with `--lane mac` only. The Mac validates the exact SHA in a detached worktree of its clone under `/Users/norkz/Documents` on an iPhone and an iPad simulator; BrowserStack is disabled (`skipped: disabled`) and the Windows lane is deferred, thus the script refuses `--lane windows` here. Runbook: `docs/mobile-validation.md`.
+- `--mobile ios`: iOS/iPad apps (`!work ios`). Use with `--lane mac` only. The Mac validates the exact SHA in a detached worktree of its clone under `/Users/norkz/Documents` on an iPhone and an iPad simulator. When both pass and the operator activated BrowserStack, `advance` opens `[devices N]` (the Mac runs the XCUITest suite on real devices on BrowserStack) and `[devices-round N]` (pass → review, fail → next fix round). BrowserStack is disabled until then (`skipped: disabled`); a partial activation blocks the round. The Windows lane is deferred until the Windows worker is repaired, thus the script refuses `--lane windows` here. Runbook: `docs/mobile-validation.md`.
 - `--max-rounds`: fix/retest rounds before the loop stops for the operator (default 5).
 - `--coder`: default `default` (this coordinator). `--reviewer`: default `reviewer`; it must differ from the coder and every lane.
 - Add `--dry-run` first when the lanes are unclear; it prints the plan and creates nothing.
@@ -84,5 +84,6 @@ when review passes." The board does the rest:
 - Never merge, deploy, release, sign, submit to a store or sign in on the operator's behalf. The report lists what needs the operator's approval.
 - Never unblock a `human-approval:` card yourself; the operator does it after finishing the step.
 - Status at any time: `python3 <script> status <any card id>` (every round, SHA, lane state, peer run id); gate: `python3 <script> gate <report id>`; one remote poll: `python3 <script> wait <validation id> --timeout 0`.
-- Never report a skipped stage (BrowserStack `skipped: disabled`) or the deferred Windows lane as tested.
+- Never report a skipped stage (BrowserStack `skipped: disabled`) or the deferred Windows lane as tested. BrowserStack "passed" exists only when the gate prints it with a build id verified via the BrowserStack API.
+- Never ask for, read or print BrowserStack credentials; only the operator writes `~/.hermes/browserstack.env`.
 - Never read, print or ask for a peer key. `hermes peer` reads it from the lane profile's `.env`.

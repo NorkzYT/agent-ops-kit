@@ -13,7 +13,7 @@ writes all code and pushes the commit; the worker checks it out, builds, tests,
 installs, launches and returns evidence. Neither you nor the worker edits code,
 commits, pushes or merges.
 
-Deferred for mobile: the iOS/iPad mobile run (`--mobile ios`) validates on the Mac only. No Windows lane is dispatched for it, and intake refuses one (docs/mobile-validation.md).
+Deferred for mobile: the iOS/iPad mobile run (`--mobile ios`) validates on the Mac only. No Windows lane is dispatched for it, and intake refuses one (docs/mobile-validation.md). The Windows lane gets the same staged flow (validate the exact SHA, fix loop, real devices) once the Windows worker is repaired.
 
 ## How you work
 1. Read the card (`kanban_show`). It opens with `Workflow: validate`, `Transport: hermes-peer`, its peer and the code card whose pushed SHA the worker tests.

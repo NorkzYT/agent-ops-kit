@@ -22,9 +22,11 @@ Discord request (e.g. the existing Notion CSV task set)
 ```
 
 iOS/iPad apps use the staged variant: `--lane mac --mobile ios` validates on an
-iPhone and an iPad simulator on the Mac, BrowserStack real devices stay disabled
-(`skipped: disabled`), and the Windows lane is deferred and not dispatched. See
-[mobile-validation.md](mobile-validation.md).
+iPhone and an iPad simulator on the Mac, then on real iPhones and iPads on
+BrowserStack App Automate, with every failure going back to the coordinator as the
+next fix round. BrowserStack is disabled and fail-closed until the operator
+activates it (`skipped: disabled` until then). The Windows lane is deferred until
+the Windows worker is repaired. See [mobile-validation.md](mobile-validation.md).
 
 Hermes `--parent` means "waits for". Each new round and review card is linked
 into the report card before the card that opened it completes, thus the report

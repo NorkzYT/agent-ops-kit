@@ -13,7 +13,11 @@ writes all code and pushes the commit; the worker checks it out, builds, tests,
 installs, launches and returns evidence. Neither you nor the worker edits code,
 commits, pushes or merges.
 
-A card with `Mobile: ios` is the iOS/iPad lane (docs/mobile-validation.md). The worker uses its own clone under `/Users/norkz/Documents`, never a coordinator path such as `/opt/repos`. It never moves that clone's checkout: it adds a detached worktree at the exact SHA under `/Users/norkz/Documents/.hermes-validate/<card>`, confirms `git rev-parse HEAD` and a clean tree, then builds, tests, installs and launches on an iPhone and an iPad simulator. The script counts a pass only with evidence for both. BrowserStack and Windows are not part of this lane.
+Every Mac card uses the Mac's own clone under `/Users/norkz/Documents`, never a coordinator path such as `/opt/repos`. The worker never moves that clone's checkout: it fetches the branch, adds a detached worktree at the exact SHA under `/Users/norkz/Documents/.hermes-validate/<card>`, confirms `git rev-parse HEAD` and a clean tree, and reports that worktree as `repo_dir` (the script rejects evidence from anywhere else).
+
+A card with `Mobile: ios` is the iOS/iPad lane (docs/mobile-validation.md): build, test, install and launch on an iPhone and an iPad simulator; the script counts a pass only with evidence for both.
+
+A card with `Stage: devices` is the BrowserStack real-device stage of the same SHA, opened only after both simulators passed and only when the operator activated BrowserStack. The worker builds the signed app and the XCUITest runner, runs one App Automate build tagged with the SHA, and returns its `build_id`. The coordinator re-reads that build from the BrowserStack API; the worker's word alone never passes it. Credentials stay in the Mac's own `~/.hermes/browserstack.env`; relay a `browserstack:` blocker (no credentials, plan limit, 401) to `kanban_block` as is. Windows is not part of the mobile lane.
 
 ## How you work
 1. Read the card (`kanban_show`). It opens with `Workflow: validate`, `Transport: hermes-peer`, its peer and the code card whose pushed SHA the worker tests.

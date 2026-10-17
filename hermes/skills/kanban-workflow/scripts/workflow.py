@@ -26,8 +26,19 @@ Card graph (Hermes `--parent` means "waits for"):
 iOS/iPad-first mobile validation (`--mobile ios`) is staged, one exact SHA throughout:
 
     writer (coordinator pushes the SHA) -> mac: iPhone simulator AND iPad simulator
-    (build, test, install, launch, screenshot) -> browserstack real devices (optional,
-    disabled by default: reported "skipped: disabled", never run or faked) ; windows: deferred
+    (build, test, install, launch, screenshot) -> browserstack: real iPhone AND iPad devices
+    ; windows: deferred (same flow once the Windows worker is repaired)
+
+    [round N] all simulators passed + BrowserStack active
+      └─> [devices N] relay -> Mac: signed build + XCUITest runner -> BrowserStack build -> build id
+            └─> [devices-round N] `advance`: passed -> Review ; failed -> [code N+1] ...
+
+The BrowserStack stage is disabled and fails closed (browserstack.py): it runs only
+after the operator writes the 0600 activation file with credentials and devices.
+Disabled, it is reported "skipped: disabled" (never run, never passed); a partial
+activation blocks the round. A device pass is never the Mac's word: this host
+re-reads the build from the BrowserStack API and needs the exact SHA as build tag
+and a passed session on a real iPhone and a real iPad.
 
 Only the coordinator writes code. Peers check out the exact commit, never edit,
 commit or push, and return a structured evidence block that this script parses,
@@ -57,6 +68,10 @@ from pathlib import Path
 from typing import Callable, Optional
 
 SCRIPT = Path(__file__).resolve()
+sys.dont_write_bytecode = True  # keep __pycache__ out of the installed skill dir
+sys.path.insert(0, str(SCRIPT.parent))
+import browserstack as bs  # noqa: E402
+
 LANES = {"mac": "mac-worker", "windows": "windows-worker"}
 LANE_LABELS = {"mac-worker": "mac", "windows-worker": "win"}
 LANE_WHERE = {"mac-worker": "the Mac worker", "windows-worker": "the Windows worker"}
@@ -76,12 +91,14 @@ MAC_WORKTREES = ".hermes-validate"  # detached per-card worktrees: MAC_REPO_ROOT
 SIMULATORS = ("iphone", "ipad")  # both must pass the same SHA
 SIM_STEPS = ("build", "test", "install", "launch")
 MOBILE_STAGES = ("writer", "mac-iphone", "mac-ipad", "browserstack")  # in order; windows is deferred
-DEFERRED_LANES = {"windows-worker": "the Windows lane is deferred and not part of the iOS/iPad mobile "
-                                    "activation (docs/mobile-validation.md); run --mobile ios with --lane mac only"}
-# Optional real-device stage after both local simulators pass. Off until the operator has a
-# BrowserStack subscription and credentials in the approved secret store (docs/mobile-validation.md).
-# This version has no BrowserStack runner: the stage is always reported as skipped, never as passed.
-BROWSERSTACK_FLAG = "KANBAN_BROWSERSTACK_ENABLED"
+DEFERRED_LANES = {"windows-worker": "the Windows lane is deferred until the Windows worker is repaired and "
+                                    "is not part of the iOS/iPad mobile activation (docs/mobile-validation.md); "
+                                    "run --mobile ios with --lane mac only"}
+# Real-device stage after both local simulators pass (browserstack.py, docs/mobile-validation.md).
+# Disabled until the operator writes the activation file; it never passes without API-verified evidence.
+BROWSERSTACK_FLAG = bs.FLAG
+DEVICE_STAGE = "devices"  # `Stage:` header of the BrowserStack device card and its round card
+BROWSERSTACK_HTTP: Optional[bs.Http] = None  # test hook: the API transport for device verification
 PEER_TRANSPORT = "hermes-peer"
 RELAY_BACKEND = "local"  # the relay runs this script, thus on this host
 PEER_TARGET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}(/[A-Za-z0-9][A-Za-z0-9_-]{0,63})?$")
@@ -474,14 +491,16 @@ def check_mobile(mobile: str, lanes: list) -> None:
 
 
 def browserstack_stage(env=None) -> dict:
-    """The optional real-device stage. Disabled by default; this version has no
-    BrowserStack runner, thus it is never run and never reported as passed."""
-    env = os.environ if env is None else env
-    if not _truthy(env.get(BROWSERSTACK_FLAG, "")):
-        return {"stage": "browserstack", "status": "skipped", "reason": "disabled"}
-    return {"stage": "browserstack", "status": "skipped",
-            "reason": f"{BROWSERSTACK_FLAG} is set, and this workflow version has no BrowserStack runner; "
-                      "nothing ran (docs/mobile-validation.md)"}
+    """The real-device stage as the activation file sets it: "skipped: disabled"
+    (nothing runs, never counted as passed), "blocked" for a partial or unsafe
+    activation (fail closed), or "queued" with the devices it will run on."""
+    act = bs.activation(env)
+    if act["state"] == "active":
+        return {"stage": "browserstack", "status": "queued", "devices": act["devices"],
+                "reason": "real devices: " + ", ".join(act["devices"])}
+    if act["state"] == "misconfigured":
+        return {"stage": "browserstack", "status": "blocked", "reason": act["reason"]}
+    return {"stage": "browserstack", "status": "skipped", "reason": "disabled"}
 
 
 def stage_text(stage: dict) -> str:
@@ -493,8 +512,10 @@ def mobile_plan() -> list:
     return [{"stage": "writer", "who": "coordinator", "does": "commit, push, record the exact SHA"},
             {"stage": "mac-iphone", "who": MOBILE_LANE, "does": "iPhone simulator: build, test, install, launch"},
             {"stage": "mac-ipad", "who": MOBILE_LANE, "does": "iPad simulator: build, test, install, launch"},
-            {**browserstack_stage(), "who": "none", "does": "real devices, only after both simulators pass"},
-            {"stage": "windows", "status": "deferred", "who": "none", "does": "not part of the mobile activation"}]
+            {**browserstack_stage(), "who": MOBILE_LANE,
+             "does": "BrowserStack real iPhone and iPad: XCUITest suite, only after both simulators pass"},
+            {"stage": "windows", "status": "deferred", "who": "none",
+             "does": "same flow once the Windows worker is repaired; not part of the mobile activation"}]
 
 
 def peer_setup_hint(lane: str, target: str) -> str:
@@ -569,7 +590,11 @@ def code_body(ctx: Ctx, n: int, request: str, feedback: str) -> str:
         fix = (f"\nFix this round (from round {n - 1}; fix the cause, never weaken, skip or delete a test):\n"
                f"{defang(feedback)}\n")
     work = f"~/hermes-work/{TASK_TOKEN}"
-    hint = "; the Xcode scheme, bundle id and the screens to check on iPhone and iPad" if ctx.mobile else ""
+    xcui = ("\n   Mobile: keep XCUITest UI tests that exercise the functions this request changes; the\n"
+            "   BrowserStack stage runs that UI test target on real iPhones and iPads when it is active."
+            if ctx.mobile else "")
+    hint = ("; the Xcode scheme, the UI test target, bundle id and the screens to check on iPhone and iPad"
+            if ctx.mobile else "")
     return f"""\
 {header_block([("Workflow", "code"), *ctx.header(), ("Round", n)])}
 
@@ -585,7 +610,7 @@ Steps:
    failures below, the checkout path, the acceptance criteria>). It runs Claude Opus. For hard
    debugging or broad architecture work, start the goal with a line holding only #fable to
    run Claude Fable. Do not hand coding to the Mac or Windows workers or to a local model.
-3. Read the full diff yourself. Run the host-side checks the repo has (lint, unit tests that run here).
+3. Read the full diff yourself. Run the host-side checks the repo has (lint, unit tests that run here).{xcui}
 4. Commit on {ctx.branch} (Conventional Commits, no Co-Authored-By trailer), then
    git push origin {ctx.branch}. Never force push and never merge.
 5. With your own terminal tool (never inside delegate_task) run:
@@ -602,17 +627,22 @@ Steps:
 """
 
 
-def validate_body(ctx: Ctx, n: int, lane: str, code_id: str, request: str) -> str:
+def validate_body(ctx: Ctx, n: int, lane: str, code_id: str, request: str, devices: list = ()) -> str:
+    """A validation card; with `devices` it is the BrowserStack real-device card of round n."""
     where = LANE_WHERE.get(lane, f"the '{lane}' worker")
+    what = ("builds, tests, installs and launches it, and\nreturns structured evidence" if not devices else
+            "builds the signed app and its XCUITest\nrunner, runs them on BrowserStack real devices "
+            f"({', '.join(devices)}) and returns the\nBrowserStack build id. This host re-reads that build "
+            "from the BrowserStack API; the\nworker's word alone never passes the stage")
     return f"""\
 {header_block([("Workflow", "validate"), ("Key", ctx.key), ("Round", n), ("Transport", PEER_TRANSPORT),
                ("Peer", ctx.lanes[lane]), ("Lane", lane), ("Code", code_id), ("Repo", ctx.repo),
-               ("Branch", ctx.branch), ("Mobile", ctx.mobile)])}
+               ("Branch", ctx.branch), ("Mobile", ctx.mobile), ("Stage", DEVICE_STAGE if devices else ""),
+               ("Devices", "|".join(devices))])}
 
 You relay this card to {where}'s own Hermes agent. The worker only tests: it checks out the
-exact commit that code card {code_id} pushed, builds, tests, installs and launches it, and
-returns structured evidence. Neither you nor the worker edits code; the coordinator fixes
-failures in the next round.
+exact commit that code card {code_id} pushed, {what}. Neither you nor the worker edits code; the
+coordinator fixes failures in the next round.
 
 Relay steps (run each one with your own terminal tool, never inside delegate_task):
 1. Run: python3 {SCRIPT} dispatch {TASK_TOKEN}
@@ -640,20 +670,26 @@ Relay steps (run each one with your own terminal tool, never inside delegate_tas
 """
 
 
-def round_body(ctx: Ctx, n: int, code_id: str, request: str) -> str:
+def round_body(ctx: Ctx, n: int, code_id: str, request: str, stage: str = "") -> str:
+    what = ("the BrowserStack real-device stage of validation round" if stage == DEVICE_STAGE
+            else "validation round")
+    nxt = ("the BrowserStack real-device card for the same SHA when\n     that stage is active "
+           "(else, or after it passed, the independent review card)" if ctx.mobile and stage != DEVICE_STAGE
+           else "the independent review card")
     return f"""\
-{header_block([("Workflow", "round"), *ctx.header(), ("Round", n), ("Code", code_id)])}
+{header_block([("Workflow", "round"), *ctx.header(), ("Round", n), ("Code", code_id), ("Stage", stage)])}
 
-You close validation round {n} of this request. Do not edit code, test or review here.
+You close {what} {n} of this request. Do not edit code, test or review here.
 
 1. With your own terminal tool (never inside delegate_task) run:
    python3 {SCRIPT} advance {TASK_TOKEN}
    It reads every lane's evidence for the SHA that code card {code_id} pushed.
-   - Every lane passed: it opens the independent review card.
+   - Every lane passed: it opens {nxt}.
    - Any lane failed: it opens the next round on its own: a fix card for the coordinator with
      the failure evidence, then fresh validation cards for the new SHA.
 2. Exit 0: kanban_complete(summary=<the "summary" it printed>, metadata=<the "metadata" it printed>).
-   Exit 4: kanban_block(reason=<the "blocker" it printed>). The operator unblocks to allow one more round.
+   Exit 4: kanban_block(reason=<the "blocker" it printed>). The operator fixes it (a BrowserStack
+   activation, a missing evidence) or unblocks to allow one more round.
    Exit 2: kanban_block(reason="round: <its output>").
 
 {REQUEST_MARKER}
@@ -662,11 +698,12 @@ You close validation round {n} of this request. Do not edit code, test or review
 
 
 MOBILE_REVIEW = (" on an iPhone and an iPad simulator (build, test, install, launch, screenshots);\n"
-                 "   BrowserStack is an optional stage that was skipped, not tested; Windows is deferred")
+                 "   {devices}; Windows is deferred")
+NO_DEVICES = "the BrowserStack real-device stage did not run (disabled): nothing was tested on real devices"
 
 
-def review_body(ctx: Ctx, n: int, code_id: str, round_id: str, sha: str, request: str) -> str:
-    mobile = MOBILE_REVIEW if ctx.mobile else ""
+def review_body(ctx: Ctx, n: int, code_id: str, round_id: str, sha: str, request: str, devices: str = "") -> str:
+    mobile = MOBILE_REVIEW.format(devices=devices or NO_DEVICES) if ctx.mobile else ""
     return f"""\
 {header_block([("Workflow", "review"), *ctx.header(), ("Round", n), ("Code", code_id),
                ("Round-card", round_id), ("Commit", sha)])}
@@ -697,9 +734,11 @@ Review only: never push to, merge, deploy or release the branch, and never edit 
 
 MOBILE_REPORT = """
    Mobile run: per simulator (iPhone, iPad) the name, OS, UDID, test result bundle, install
-   and launch exit codes, bundle id and screenshot paths. State the BrowserStack stage as
-   the gate prints it (e.g. "skipped: disabled") and Windows as deferred; never call a
-   skipped stage tested or passed."""
+   and launch exit codes, bundle id and screenshot paths. State the BrowserStack stage exactly
+   as the gate prints it: "passed" only with the BrowserStack build id, dashboard URL and the
+   real devices the gate lists as verified via the BrowserStack API; otherwise e.g.
+   "skipped: disabled" (not tested on real devices). Windows is deferred. Never call a
+   skipped, blocked or unverified stage tested or passed."""
 
 
 def report_body(ctx: Ctx, request: str) -> str:
@@ -912,6 +951,32 @@ def validate_lane(show: dict) -> tuple:
     return lane, target, h
 
 
+def mac_workspace(repo: str, branch: str, sha: str, wt: str) -> str:
+    """Steps 1-2 of every Mac task: a detached worktree of the Mac's own clone under
+    MAC_REPO_ROOT at the exact SHA; the clone's own checkout and files never move."""
+    return f"""\
+1. Find this machine's clone of the repository under {MAC_REPO_ROOT}: the git checkout whose
+   origin is {repo} (https and ssh forms of the same repo match). Paths in the request below
+   (/opt/repos/..., /home/...) are on the coordinator, not on this machine; never use them.
+   No clone: report "blocked" with "blocker": "workspace: no clone of {repo} under {MAC_REPO_ROOT}".
+2. Never change that clone's own checkout: validate in a detached worktree of it,
+   {wt}
+   git -C <clone> fetch origin {branch}
+   git -C <clone> worktree add --detach {wt} {sha}
+   When {wt} exists from an earlier attempt, reuse it instead:
+   git -C {wt} status --porcelain --untracked-files=no   (any output: report "blocked" with
+                         "blocker": "workspace: <dir> has uncommitted tracked changes")
+   git -C {wt} checkout --detach {sha}
+   Then: cd {wt}
+         git rev-parse HEAD       (must print {sha} exactly; else report "blocked" with
+                                   "blocker": "workspace: HEAD is <sha>, not {sha}")
+   Run every later step in {wt}; it is the "repo_dir" you report."""
+
+
+def mac_worktree(task_id: str) -> str:
+    return f"{MAC_REPO_ROOT}/{MAC_WORKTREES}/{task_id}"
+
+
 def validation_task(task_id: str, lane: str, h: dict, sha_rec: dict, request: str, attempt: int, note: str) -> str:
     """What the worker machine's own Hermes receives: test-only, exact SHA."""
     where = LANE_WHERE.get(lane, f"the '{lane}' worker")
@@ -920,13 +985,41 @@ def validation_task(task_id: str, lane: str, h: dict, sha_rec: dict, request: st
     work = f"~/hermes-work/{task_id}"
     lead = f"Attempt {attempt}. {note}\n\n" if note else ""
     notes = sha_rec.get("notes") or "(none)"
-    example = json.dumps({
+    if h.get("stage") == DEVICE_STAGE:
+        return lead + device_task(task_id, where, repo, branch, sha, h, notes, request)
+    if h.get("mobile"):
+        return lead + mobile_task(task_id, where, repo, branch, sha, h.get("round"), notes, request)
+    mac = lane == MOBILE_LANE
+    fields = {
         "task": task_id, "status": "pass|fail|blocked", "sha_tested": sha, "platform": "...", "os": "...",
         "tools": "...", "commands": [{"cmd": "...", "exit_code": 0}],
         "tests": {"passed": 0, "failed": 0, "skipped": 0}, "failures": [], "artifacts": [],
-        "device": "...", "dirty_tree": False, "blocker": "", "summary": "..."})
-    if h.get("mobile"):
-        return lead + mobile_task(task_id, where, repo, branch, sha, h.get("round"), notes, request)
+        "device": "...", "dirty_tree": False, "blocker": "", "summary": "..."}
+    if mac:
+        fields = {**fields, "repo_dir": mac_worktree(task_id)}
+    example = json.dumps(fields)
+    if mac:
+        checkout = mac_workspace(repo, branch, sha, mac_worktree(task_id)) + (
+            f"\n   Keep build output outside the clone, under {work}.")
+    else:
+        checkout = f"""\
+1. Work in {work} (create it fresh; never reuse another card's directory).
+   git clone {repo} there (or fetch), then git checkout --detach {sha}.
+   Confirm `git rev-parse HEAD` prints {sha}. Paths in the request below are on the
+   coordinator, not on this machine; use only this repository URL."""
+    steps = [
+        "Build and test what this platform can check for the change. Keep each exact command, its\n"
+        "   exit code, the test counts and the failure messages.",
+        "Install and launch the app where it applies; name the simulator, emulator or device.",
+        "Run `git status --porcelain --untracked-files=no` at the end; report changed tracked files.",
+        "A failing build or test is a valid result: report \"fail\" with the failures. Do not fix them.",
+        "At a login, MFA, signing, payment, admin/UAC or credential prompt, or with no usable device,\n"
+        "   stop and report \"blocked\" with \"blocker\": \"human-approval: <what>\" or \"device: <what>\".",
+        "End your final reply with the evidence block, exactly these marker lines around one JSON object:",
+    ]
+    first = 3 if mac else 2
+    numbered = "\n".join(f"{i}. {text}" for i, text in enumerate(steps, first))
+    repo_dir = '; "repo_dir" is the worktree you used' if mac else ""
     return f"""\
 {lead}You are {where}'s own Hermes agent. Kanban card {task_id} on the coordinator asks you to
 validate one exact commit. You are a test-only worker: you never change source code. The
@@ -948,23 +1041,13 @@ deploying, releasing, store submission, signing with credentials, typing secrets
 Discord messages, and destructive commands outside {work}.
 
 Steps:
-1. Work in {work} (create it fresh; never reuse another card's directory).
-   git clone {repo} there (or fetch), then git checkout --detach {sha}.
-   Confirm `git rev-parse HEAD` prints {sha}. Paths in the request below are on the
-   coordinator, not on this machine; use only this repository URL.
-2. Build and test what this platform can check for the change. Keep each exact command, its
-   exit code, the test counts and the failure messages.
-3. Install and launch the app where it applies; name the simulator, emulator or device.
-4. Run `git status --porcelain --untracked-files=no` at the end; report changed tracked files.
-5. A failing build or test is a valid result: report "fail" with the failures. Do not fix them.
-6. At a login, MFA, signing, payment, admin/UAC or credential prompt, or with no usable device,
-   stop and report "blocked" with "blocker": "human-approval: <what>" or "device: <what>".
-7. End your final reply with the evidence block, exactly these marker lines around one JSON object:
+{checkout}
+{numbered}
 BEGIN-EVIDENCE
 {example}
 END-EVIDENCE
-   "status" is pass, fail or blocked; "sha_tested" is the full SHA you checked out. Never put
-   secrets in the reply.
+   "status" is pass, fail or blocked; "sha_tested" is the full SHA you checked out{repo_dir}.
+   Never put secrets in the reply.
 
 Request context (from Discord, verbatim):
 {request}
@@ -976,7 +1059,7 @@ def mobile_task(task_id: str, where: str, repo: str, branch: str, sha: str, rnd,
     at the exact SHA (the clone's checkout is never moved), then an iPhone and an iPad
     simulator each build, test, install and launch."""
     work = f"~/hermes-work/{task_id}"
-    wt = f"{MAC_REPO_ROOT}/{MAC_WORKTREES}/{task_id}"
+    wt = mac_worktree(task_id)
     phone, pad = (f"-destination 'platform=iOS Simulator,id=<{kind}-udid>'" for kind in SIMULATORS)
     sim = {"kind": "iphone|ipad", "name": "...", "os": "iOS ...", "udid": "...",
            "destination": "platform=iOS Simulator,id=<udid>", "build_exit": 0, "test_exit": 0,
@@ -1012,22 +1095,7 @@ Discord messages, BrowserStack or any paid service, and destructive commands
 (git reset --hard, git clean, git stash) in any checkout.
 
 Steps (stop at the first blocker; keep each exact command and its exit code):
-1. Find this machine's clone of the repository under {MAC_REPO_ROOT}: the git checkout whose
-   origin is {repo} (https and ssh forms of the same repo match). Paths in the request below
-   (/opt/repos/..., /home/...) are on the coordinator, not on this machine; never use them.
-   No clone: report "blocked" with "blocker": "workspace: no clone of {repo} under {MAC_REPO_ROOT}".
-2. Never change that clone's own checkout: validate in a detached worktree of it,
-   {wt}
-   git -C <clone> fetch origin {branch}
-   git -C <clone> worktree add --detach {wt} {sha}
-   When {wt} exists from an earlier attempt, reuse it instead:
-   git -C {wt} status --porcelain --untracked-files=no   (any output: report "blocked" with
-                         "blocker": "workspace: <dir> has uncommitted tracked changes")
-   git -C {wt} checkout --detach {sha}
-   Then: cd {wt}
-         git rev-parse HEAD       (must print {sha} exactly; else report "blocked" with
-                                   "blocker": "workspace: HEAD is <sha>, not {sha}")
-   Run every later step in {wt}; it is the "repo_dir" you report.
+{mac_workspace(repo, branch, sha, wt)}
 3. Pick one available iPhone and one available iPad simulator; boot both:
    xcrun simctl list devices available --json
    xcrun simctl boot <udid>                 (once per simulator; "already booted" is fine)
@@ -1064,10 +1132,89 @@ Request context (from Discord, verbatim):
 """
 
 
-def report_only_message(task_id: str, sha: str, mobile: str = "") -> str:
+def device_task(task_id: str, where: str, repo: str, branch: str, sha: str, h: dict, notes: str,
+                request: str) -> str:
+    """The BrowserStack real-device stage on the Mac: the exact SHA in a worktree of the
+    Mac's clone, a signed device build plus the XCUITest runner, one App Automate build
+    tagged with the SHA on the card's devices. Credentials come from the Mac's own
+    0600 activation file and are never echoed; the coordinator verifies the build id."""
+    work = f"~/hermes-work/{task_id}"
+    wt = mac_worktree(task_id)
+    devices = bs.devices_of(h.get("devices", ""))
+    auth = f'( set -a; . ~/.hermes/{bs.CONFIG_NAME}; set +a; curl -sS -u "${bs.USER_VAR}:${bs.KEY_VAR}"'
+    build = json.dumps({"app": "<app_url>", "testSuite": "<test_suite_url>", "devices": devices,
+                        "project": "hermes-kanban", "buildTag": sha, "deviceLogs": True})
+    example = json.dumps({
+        "task": task_id, "status": "pass|fail|blocked", "sha_tested": sha, "repo_dir": wt,
+        "build_id": "<build_id from the /build response>", "app_url": "bs://...", "test_suite_url": "bs://...",
+        "devices": devices, "commands": [{"cmd": "...", "exit_code": 0}], "failures": [],
+        "dirty_tree": False, "blocker": "", "summary": "..."})
+    return f"""\
+You are {where}'s own Hermes agent. Kanban card {task_id} on the coordinator asks you to run
+the real-device stage for one exact commit of an iOS/iPadOS app on BrowserStack App Automate
+(XCUITest). The iPhone and iPad simulators already passed this commit. You are a test-only
+worker: you never change source code; the coordinator fixes what fails.
+
+Repository: {repo}
+Branch: {branch}
+Commit: {sha}
+Real devices: {', '.join(devices)}
+Round: {h.get("round")}
+
+What changed, from the coordinator (the UI tests cover these functions):
+{defang(notes)}
+
+Allowed: fetch, check out the exact commit detached, build for a generic iOS device with the
+signing team the operator already set up, package the app and the UI test runner, upload them
+to BrowserStack and start, poll and read one build, using only the commands below.
+Forbidden: editing or adding tracked files, committing, pushing, merging, releasing, store
+submission, changing signing settings, creating certificates or profiles, typing or printing
+secrets (never echo the credentials, never `set -x`, never paste the activation file), buying or
+changing the BrowserStack plan, and destructive commands in any checkout.
+
+Steps (stop at the first blocker; keep each exact command and its exit code, with the
+credentials left as the variable names):
+0. The BrowserStack credentials live only in ~/.hermes/{bs.CONFIG_NAME} on this Mac (mode 0600,
+   written by the operator). Check without printing them:
+   test "$(stat -f %Lp ~/.hermes/{bs.CONFIG_NAME})" = 600 && ( set -a; . ~/.hermes/{bs.CONFIG_NAME}; test -n "${bs.USER_VAR}" -a -n "${bs.KEY_VAR}" )
+   Non-zero: report "blocked" with "blocker": "browserstack: credentials not provisioned on the Mac".
+{mac_workspace(repo, branch, sha, wt)}
+3. Build for real devices with the operator's signing setup (a signing, keychain or account
+   prompt is a human gate: report "blocked" with "blocker": "human-approval: signing: <what>"):
+   xcodebuild build-for-testing -scheme <scheme> -destination 'generic/platform=iOS' -derivedDataPath {work}/DerivedData
+4. Package from {work}/DerivedData/Build/Products/<config>-iphoneos/:
+   mkdir -p {work}/ipa/Payload && cp -R <App>.app {work}/ipa/Payload/ && (cd {work}/ipa && zip -qry {work}/app.ipa Payload)
+   (cd <products dir> && zip -qry {work}/uitests.zip <App>UITests-Runner.app)
+5. Upload both and start one build tagged with the exact SHA:
+   {auth} -X POST "{bs.API}/app" -F "file=@{work}/app.ipa" )          -> "app_url"
+   {auth} -X POST "{bs.API}/test-suite" -F "file=@{work}/uitests.zip" ) -> "test_suite_url"
+   {auth} -X POST "{bs.API}/build" -H "Content-Type: application/json" -d '{build}' )   -> "build_id"
+6. Poll until "status" is no longer queued or running (every 60 s, at most 90 minutes):
+   {auth} "{bs.API}/builds/<build_id>" )
+7. Run `git status --porcelain --untracked-files=no` in {wt}; report changed tracked files as "dirty_tree".
+8. A failing build, packaging step, upload or real-device test is a valid result: report "fail"
+   with the failures and exit codes. Do not fix them. A plan limit, quota, an expired trial or an
+   HTTP 401/403 from BrowserStack is "blocked" with "blocker": "browserstack: <what>".
+9. End your final reply with the evidence block, exactly these marker lines around one JSON
+   object; "build_id" is the id BrowserStack returned (the coordinator re-reads that build from
+   the BrowserStack API; a made-up or mismatched id fails the stage):
+BEGIN-EVIDENCE
+{example}
+END-EVIDENCE
+   Never put secrets in the reply.
+
+Request context (from Discord, verbatim):
+{request}
+"""
+
+
+def report_only_message(task_id: str, sha: str, mobile: str = "", stage: str = "") -> str:
     extra = ('\nInclude "repo_dir" and one "simulators" entry with "kind": "iphone" and one with "kind": "ipad"\n'
              '(name, os, udid, destination, build/test/install/launch exit codes, bundle_id, result_bundle,\n'
              'tests, screenshots, log_excerpt).') if mobile else ""
+    if stage == DEVICE_STAGE:
+        extra = ('\nInclude "repo_dir" and the BrowserStack "build_id" that the /build call returned (the\n'
+                 'coordinator re-reads that build from the BrowserStack API). Never include credentials.')
     return f"""\
 Kanban card {task_id}: your last run for commit {sha} ended without the evidence block.
 Do not start the build or tests again. Reply now with only the evidence for the work you
@@ -1094,7 +1241,7 @@ def start_run(run: Runner, show: dict, lane: str, target: str, h: dict, sha_rec:
     task_id = show["task"]["id"]
     idem = idem or f"kanban:{task_id}:{attempt}" + (":report" if kind == "report" else "")
     if kind == "report":
-        message = report_only_message(task_id, sha_rec["sha"], h.get("mobile", ""))
+        message = report_only_message(task_id, sha_rec["sha"], h.get("mobile", ""), h.get("stage", ""))
     else:
         message = validation_task(task_id, lane, h, sha_rec, request_of(show), attempt, redact(note))
     pending = {"rid": idem, "idempotency_key": idem, "attempt": attempt, "kind": kind, "lane": lane,
@@ -1210,8 +1357,7 @@ def mobile_evidence(raw: dict, status: str, sha: str, tested: str) -> tuple:
     if status != "blocked":
         if tested != sha:
             raise EvidenceError(f"mobile evidence must name the full SHA {sha}, not {tested[:40] or 'nothing'}")
-        if not repo_dir.startswith(MAC_REPO_ROOT + "/") or ".." in repo_dir.split("/"):
-            raise EvidenceError(f"validated in '{clip(repo_dir, 120) or 'no repo_dir'}', not a clone under {MAC_REPO_ROOT}")
+        mac_repo_dir(raw)
     sims = {}
     for item in raw.get("simulators") or [] if isinstance(raw.get("simulators"), list) else []:
         kind = str((item or {}).get("kind") or "").strip().lower() if isinstance(item, dict) else ""
@@ -1249,7 +1395,73 @@ def mobile_evidence(raw: dict, status: str, sha: str, tested: str) -> tuple:
     return status, {"repo_dir": clip(repo_dir, 300), "simulators": list(sims.values()), "device": device}, failures
 
 
-def normalize_evidence(raw: dict, task_id: str, sha: str, lane: str, mobile: str = "") -> dict:
+def mac_repo_dir(raw: dict) -> str:
+    """The worktree the Mac reports; it must be under MAC_REPO_ROOT (its own clone)."""
+    repo_dir = str(raw.get("repo_dir") or "").strip()
+    if not repo_dir.startswith(MAC_REPO_ROOT + "/") or ".." in repo_dir.split("/"):
+        raise EvidenceError(f"validated in '{clip(repo_dir, 120) or 'no repo_dir'}', not a clone under {MAC_REPO_ROOT}")
+    return repo_dir
+
+
+def device_evidence(raw: dict, task_id: str, sha: str, lane: str, status: str, devices: list) -> dict:
+    """The BrowserStack stage. Fails closed: a "pass" exists only when this host read the
+    build from the BrowserStack API with its own credentials (bs.verify) and the build is
+    tagged with the exact SHA and passed on a real iPhone and a real iPad. The Mac's own
+    status can only make it worse (fail, blocked), never better."""
+    base = {"task": task_id, "lane": lane, "sha": sha, "stage": DEVICE_STAGE, "platform": "BrowserStack real devices",
+            "verified_by": "", "build_id": "", "build_status": "", "dashboard_url": "", "devices": [],
+            "requested_devices": list(devices)}
+    tested = str(raw.get("sha_tested") or "").strip().lower()
+    commands = []
+    for c in (raw.get("commands") or [])[:40] if isinstance(raw.get("commands"), list) else []:
+        if isinstance(c, dict):
+            code = c.get("exit_code")
+            commands.append({"cmd": clip(c.get("cmd"), 300), "exit_code": code if isinstance(code, int) else None})
+    failures = raw.get("failures") or []
+    failures = [clip(f, 500) for f in (failures if isinstance(failures, list) else [failures]) if f][:30]
+    out = {**base, "sha_tested": tested, "status": status, "commands": commands, "failures": failures,
+           "tests": {"passed": 0, "failed": 0, "skipped": 0}, "artifacts": [], "device": "",
+           "dirty_tree": False, "blocker": "", "summary": clip(raw.get("summary"), 1000), "repo_dir": ""}
+    if status == "blocked":
+        return {**out, "blocker": clip(raw.get("blocker"), 500) or "the worker blocked without a reason"}
+    act = bs.activation()
+    if act["state"] != "active":
+        return {**out, "status": "blocked",
+                "blocker": f"browserstack: the stage is {act['state']} on the coordinator ({act['reason']}); "
+                           "the device result cannot be verified, thus it is not a pass"}
+    if tested != sha:
+        raise EvidenceError(f"device evidence must name the full SHA {sha}, not {tested[:40] or 'nothing'}")
+    out["repo_dir"] = clip(mac_repo_dir(raw), 300)
+    if _truthy(raw.get("dirty_tree")):
+        out["dirty_tree"] = True
+        out["failures"].append("tracked files changed on the worker during the device stage")
+    build_id = str(raw.get("build_id") or "").strip()
+    if not build_id:
+        if status == "pass":
+            raise EvidenceError("a real-device pass needs the BrowserStack build_id")
+        out["status"] = "fail"
+        out["failures"] = out["failures"] or ["the device stage failed before a BrowserStack build started"]
+        return out
+    try:
+        api = bs.verify(build_id, sha, http=BROWSERSTACK_HTTP)
+    except bs.VerifyError as exc:
+        raise EvidenceError(f"BrowserStack build {clip(build_id, 64)}: {exc}") from None
+    sessions = [x for d in api["devices"] for x in d["sessions"]]
+    out.update({k: api[k] for k in ("build_id", "build_status", "dashboard_url", "verified_by", "devices")})
+    out["tests"] = {"passed": sum(x["passed"] for x in sessions),
+                    "failed": sum(x["failed"] + x["error"] + x["timedout"] for x in sessions),
+                    "skipped": sum(x["skipped"] for x in sessions)}
+    out["device"] = "; ".join(f"{d['device']} (iOS {d['os_version']})" for d in api["devices"])
+    out["artifacts"] = [api["dashboard_url"]]
+    out["failures"] += [f for f in api["failures"] if f not in out["failures"]]
+    out["status"] = "pass" if api["status"] == "pass" and status == "pass" and not out["failures"] else "fail"
+    if out["status"] == "fail" and not out["failures"]:
+        out["failures"].append("the worker reported fail without details")
+    return out
+
+
+def normalize_evidence(raw: dict, task_id: str, sha: str, lane: str, mobile: str = "", stage: str = "",
+                       devices: list = ()) -> dict:
     """Validate the worker's evidence against the card and the exact SHA, and
     bound every field. A dirty tree or failed tests turn a "pass" into "fail"."""
     task = str(raw.get("task") or task_id)
@@ -1258,6 +1470,8 @@ def normalize_evidence(raw: dict, task_id: str, sha: str, lane: str, mobile: str
     status = STATUS_ALIASES.get(str(raw.get("status") or "").strip().lower())
     if status is None:
         raise EvidenceError(f"evidence status {raw.get('status')!r} is not pass, fail or blocked")
+    if stage == DEVICE_STAGE:
+        return redact(device_evidence(raw, task_id, sha, lane, status, devices))
     tested = str(raw.get("sha_tested") or raw.get("commit") or raw.get("sha") or "").strip().lower()
     if status != "blocked":
         if not tested:
@@ -1279,6 +1493,8 @@ def normalize_evidence(raw: dict, task_id: str, sha: str, lane: str, mobile: str
     if mobile:
         status, extra, sim_failures = mobile_evidence(raw, status, sha, tested)
         failures += [f for f in sim_failures if f not in failures]
+    elif lane == MOBILE_LANE and status != "blocked":
+        extra = {"repo_dir": clip(mac_repo_dir(raw), 300)}  # the Mac validates in its own clone
     dirty = raw.get("dirty_tree")
     if status != "blocked" and _truthy(dirty):
         detail = f": {clip(dirty, 300)}" if isinstance(dirty, (str, list)) else ""
@@ -1304,14 +1520,18 @@ def normalize_evidence(raw: dict, task_id: str, sha: str, lane: str, mobile: str
     }
     if mobile:
         out.update({**extra, "mobile": mobile, "device": extra["device"] or out["device"]})
+    else:
+        out.update(extra)
     return redact(out)
 
 
-def lane_state(lane: str, verdict: str) -> str:
-    return f"{label(lane).upper()}_{'PASSED' if verdict == 'pass' else 'FAILED'}"
+def lane_state(lane: str, verdict: str, stage: str = "") -> str:
+    name = "DEVICES" if stage == DEVICE_STAGE else label(lane).upper()
+    return f"{name}_{'PASSED' if verdict == 'pass' else 'FAILED'}"
 
 
-def settle(task_id: str, lane: str, rec: dict, remote: dict, sha: str, mobile: str = "") -> Optional[tuple]:
+def settle(task_id: str, lane: str, rec: dict, remote: dict, sha: str, mobile: str = "",
+           stage: str = "", devices: list = ()) -> Optional[tuple]:
     """(exit code, result) for a remote run that needs the relay to act, else None.
     Code 1 results carry "retry": "report" when the worker only forgot the block."""
     state = remote.get("status")
@@ -1329,12 +1549,12 @@ def settle(task_id: str, lane: str, rec: dict, remote: dict, sha: str, mobile: s
     if raw is None:
         return 1, {**base, "error": "remote run completed without the evidence block", "retry": "report"}
     try:
-        ev = normalize_evidence(raw, task_id, sha, lane, mobile)
+        ev = normalize_evidence(raw, task_id, sha, lane, mobile, stage, devices)
     except EvidenceError as exc:
         return 1, {**base, "error": f"unusable evidence: {exc}"}
     if ev["status"] == "blocked":
         return 4, {**base, "blocker": ev["blocker"], "evidence": ev}
-    st = lane_state(lane, ev["status"])
+    st = lane_state(lane, ev["status"], stage)
     t = ev["tests"]
     detail = (f"{t['passed']} passed, {t['failed']} failed, {t['skipped']} skipped" if ev["status"] == "pass"
               else clip("; ".join(ev["failures"]), 300))
@@ -1342,6 +1562,11 @@ def settle(task_id: str, lane: str, rec: dict, remote: dict, sha: str, mobile: s
         detail += f" [{clip(ev['device'], 200)}]"
     meta = {"state": st, "verdict": ev["status"], "commit": sha, "lane": lane, "transport": PEER_TRANSPORT,
             "peer": rec["peer"], "run_id": rec["run_id"], "tests": t}
+    if stage == DEVICE_STAGE:
+        if ev["build_id"]:
+            detail += f" [BrowserStack build {ev['build_id']}: {clip(ev['device'], 200)}; {ev['dashboard_url']}]"
+        meta.update({"stage": DEVICE_STAGE, "build_id": ev["build_id"], "dashboard_url": ev["dashboard_url"],
+                     "verified_by": ev["verified_by"]})
     return 0, {**base, "verdict": ev["status"], "summary": f"{st} at {sha[:12]}: {detail}",
                "metadata": meta, "evidence": ev}
 
@@ -1366,7 +1591,8 @@ def wait(task_id: str, timeout: float, interval: float, run: Runner = default_ru
     deadline = time.monotonic() + max(timeout, 0)
     while True:
         remote = peer_status(run, lane, target, rec["run_id"])
-        settled = settle(task_id, lane, rec, remote, sha, h.get("mobile", ""))
+        settled = settle(task_id, lane, rec, remote, sha, h.get("mobile", ""), h.get("stage", ""),
+                         bs.devices_of(h.get("devices", "")))
         if settled:
             code, result = settled
             if code == 0:
@@ -1451,12 +1677,37 @@ def feedback_from(rows: list, sha: str) -> str:
             lines.append(f"    {sim['kind']}: {sim.get('name') or '?'} {sim.get('os') or ''} {sim.get('udid') or ''}; "
                          + ", ".join(f"{step} exit {sim.get(f'{step}_exit')}" for step in SIM_STEPS)
                          + (f"; log: {clip(sim['log_excerpt'], 300)}" if sim.get("log_excerpt") else ""))
+        if ev.get("build_id"):
+            lines.append(f"    BrowserStack build {ev['build_id']} ({ev.get('build_status') or '?'}): "
+                         f"{ev.get('dashboard_url')} (session videos, device logs)")
     return clip("\n".join(lines), 6000)
 
 
-def mobile_stages(rows: list, sha: str) -> list:
+def device_stage(rows: list) -> dict:
+    """The browserstack entry of a device round, from its verified evidence only."""
+    ev = (rows[0].get("evidence") if rows else None) or {}
+    verified = ev.get("verified_by") == bs.VERIFIED_BY and bool(ev.get("build_id"))
+    status = "pass" if verified and all(r["verdict"] == "pass" for r in rows) else (
+        "fail" if any(r["verdict"] == "fail" for r in rows) else "missing")
+    out = {"stage": "browserstack", "status": status, "build_id": ev.get("build_id") or "",
+           "dashboard_url": ev.get("dashboard_url") or "", "verified_by": ev.get("verified_by") or "",
+           "devices": [f"{d['device']} (iOS {d['os_version']})" for d in ev.get("devices") or []]}
+    if status == "pass":
+        out["reason"] = (f"build {out['build_id']} on {', '.join(out['devices'])}, verified via the "
+                         f"BrowserStack API: {out['dashboard_url']}")
+    elif status == "fail":
+        out["reason"] = clip("; ".join(ev.get("failures") or []), 300)
+    return out
+
+
+def mobile_stages(rows: list, sha: str, stage: str = "") -> list:
     """The staged outcome of a mobile round, in MOBILE_STAGES order, plus the
-    deferred Windows lane. BrowserStack runs only after both simulators passed."""
+    deferred Windows lane. BrowserStack runs only after both simulators passed;
+    a device round reports the simulators as passed (it opens only after they did)."""
+    if stage == DEVICE_STAGE:
+        return ([{"stage": "writer", "status": "pushed", "commit": sha}]
+                + [{"stage": f"mac-{kind}", "status": "pass"} for kind in SIMULATORS]
+                + [device_stage(rows), {"stage": "windows", "status": "deferred"}])
     sims = {}
     for row in rows:
         for sim in (row.get("evidence") or {}).get("simulators") or []:
@@ -1489,13 +1740,30 @@ def round_limit(ctx: Ctx, show: dict) -> int:
     return ctx.max_rounds + sum(1 for e in show.get("events") or [] if e.get("kind") == "unblocked")
 
 
+def open_device_stage(run: Runner, show: dict, ctx: Ctx, n: int, code_id: str, devices: list) -> dict:
+    """[devices n] (the Mac runs the BrowserStack build) -> [devices-round n], linked into
+    the report before the local round completes, thus the report never runs in between."""
+    task_id, request = show["task"]["id"], request_of(show)
+    report = report_card_for(run, show)
+    dev = create_card(run, f"[devices {n}] {ctx.title}", MOBILE_LANE,
+                      validate_body(ctx, n, MOBILE_LANE, code_id, request, devices),
+                      f"{ctx.key}:devices:{n}", parents=[task_id], max_runtime=ctx.max_runtime)
+    rnd = create_card(run, f"[devices-round {n}] {ctx.title}", ctx.orchestrator,
+                      round_body(ctx, n, code_id, request, DEVICE_STAGE),
+                      f"{ctx.key}:devices-round:{n}", parents=[dev["id"]])
+    link(run, rnd["id"], report)
+    copy_subscriptions(run, task_id, [dev["id"], rnd["id"]])
+    return {"devices": dev["id"], "devices_round": rnd["id"]}
+
+
 def advance(task_id: str, run: Runner = default_runner) -> tuple:
-    """Close a round. Exit 0 with the next step opened (review or next fix round),
-    4 when a lane has no evidence or the fix-loop limit is reached."""
+    """Close a round. Exit 0 with the next step opened (BrowserStack device stage,
+    review or next fix round), 4 when a lane has no evidence, the BrowserStack
+    activation is partial, or the fix-loop limit is reached."""
     require_worker_context("advance")
     show = card(run, task_id)
     h = kind_of(show, "round")
-    ctx, n = Ctx.from_header(h), int(h.get("round") or 1)
+    ctx, n, stage = Ctx.from_header(h), int(h.get("round") or 1), h.get("stage", "")
     sync_records(run, show)
     sha = code_sha(run, h["code"])["sha"]
     rows = round_evidence(run, show, sha)
@@ -1505,22 +1773,40 @@ def advance(task_id: str, run: Runner = default_runner) -> tuple:
     if problems:
         return 4, {"task": task_id, "blocker": f"round {n}: " + "; ".join(problems)}
     lanes = {r["lane"]: {"id": r["id"], "verdict": r["verdict"], "run_id": r["run_id"]} for r in rows}
-    if all(r["verdict"] == "pass" for r in rows):
+    stages = mobile_stages(rows, sha, stage) if ctx.mobile else None
+    if ctx.mobile and stage == DEVICE_STAGE and all(r["verdict"] == "pass" for r in rows) \
+            and stages[3]["status"] != "pass":
+        return 4, {"task": task_id, "blocker": f"browserstack: round {n} has no API-verified device result "
+                                               f"for {sha[:12]}"}
+    if all(r["verdict"] == "pass" for r in rows) and ctx.mobile and stage != DEVICE_STAGE \
+            and stages[3]["status"] in ("queued", "blocked"):
+        if stages[3]["status"] == "blocked":
+            return 4, {"task": task_id, "blocker": f"browserstack: {stages[3]['reason']}. Complete the activation "
+                                                   f"(docs/mobile-validation.md) or set {BROWSERSTACK_FLAG}=false "
+                                                   "in it, then unblock this card"}
+        nxt = open_device_stage(run, show, ctx, n, h["code"], stages[3]["devices"])
+        state = "SIMULATORS_PASSED"
+        summary = (f"SIMULATORS_PASSED {sha[:12]}: iPhone and iPad simulators passed; BrowserStack real devices "
+                   f"queued ({', '.join(stages[3]['devices'])}): device card {nxt['devices']}")
+    elif all(r["verdict"] == "pass" for r in rows):
         report = report_card_for(run, show)
+        devices = stages[3]["reason"] if ctx.mobile and stage == DEVICE_STAGE else ""
+        if devices:
+            devices = f"BrowserStack real devices passed: {devices}"
         review = create_card(run, f"Review: {ctx.title} (round {n})", ctx.reviewer,
-                             review_body(ctx, n, h["code"], task_id, sha, request_of(show)),
+                             review_body(ctx, n, h["code"], task_id, sha, request_of(show), devices),
                              f"{ctx.key}:review:{n}", parents=[task_id])
         link(run, review["id"], report)
         copy_subscriptions(run, task_id, [review["id"]])
         state, nxt = "VALIDATED", {"review": review["id"]}
         summary = f"VALIDATED {sha[:12]}: every lane passed; review {review['id']}"
         if ctx.mobile:
-            stages = mobile_stages(rows, sha)
             summary = (f"VALIDATED {sha[:12]}: iPhone and iPad simulators passed; "
                        f"browserstack {stage_text(stages[3])}; windows deferred; review {review['id']}")
     else:
         limit = round_limit(ctx, show)
-        failing = ", ".join(f"{r['lane']} ({r['id']})" for r in rows if r["verdict"] != "pass")
+        failing = ", ".join(f"{r['lane'] if stage != DEVICE_STAGE else 'browserstack'} ({r['id']})"
+                            for r in rows if r["verdict"] != "pass")
         if n >= limit:
             return 4, {"task": task_id, "blocker": f"fix-loop: round {n} of {limit} failed at {sha[:12]} on {failing}; "
                                                    "unblock this card to allow one more round"}
@@ -1530,7 +1816,9 @@ def advance(task_id: str, run: Runner = default_runner) -> tuple:
     rec = {"rid": f"round:{n}:{sha}", "state": state, "round": n, "commit": sha, "lanes": lanes, "next": nxt}
     meta = {"state": state, "round": n, "commit": sha, "lanes": lanes, "next": nxt}
     if ctx.mobile:
-        rec["stages"] = meta["stages"] = mobile_stages(rows, sha)
+        rec["stages"] = meta["stages"] = stages
+    if stage:
+        rec["stage"] = meta["stage"] = stage
     on_card = put_record(run, task_id, "round", rec)
     return 0, {"task": task_id, "state": state, "summary": summary, "recorded_on_card": on_card, "metadata": meta}
 
@@ -1588,6 +1876,29 @@ def review_verdict(show: dict, sha: str, ctx: Ctx) -> tuple:
     return True, f"approved by {approver} at {sha[:12]}"
 
 
+def gate_devices(run: Runner, rid: str, rshow: dict, device_round: Optional[tuple], lanes: list, sha: str) -> dict:
+    """The gate row of the BrowserStack stage. "passed" only from evidence this host
+    verified via the BrowserStack API for `sha`; a disabled stage is reported as not
+    run (never passed); a stage that was queued or blocked must finish first."""
+    if device_round:
+        did, dshow = device_round
+        rows = round_evidence(run, dshow, sha)
+        problems = [r["problem"] for r in rows if r.get("problem")] or ([] if rows else ["no device card"])
+        st = device_stage(rows) if not problems else {"status": "missing", "reason": "; ".join(problems)}
+        if st["status"] == "pass":
+            return {"id": did, "ok": True, "reason": f"browserstack passed {sha[:12]} on real devices: "
+                                                     f"{st['reason']}; windows deferred"}
+        return {"id": did, "ok": False, "reason": f"browserstack {st['status']} at {sha[:12]}: "
+                                                  f"{st.get('reason') or 'no verified BrowserStack build'}"}
+    stages = (latest(rshow, "round") or {}).get("stages") or mobile_stages(lanes, sha)
+    st = next((x for x in stages if x.get("stage") == "browserstack"), {"status": "missing"})
+    if st.get("status") == "skipped":
+        return {"id": rid, "ok": True, "reason": f"browserstack {stage_text(st)} (not run: nothing was tested on "
+                                                 "real devices, never counted as passed); windows deferred"}
+    return {"id": rid, "ok": False, "reason": f"browserstack {stage_text(st)}: the real-device stage of {sha[:12]} "
+                                              "did not finish"}
+
+
 def gate(task_id: str, run: Runner = default_runner) -> tuple:
     """Exit 0 iff every card the report waits on is done, the last round's SHA
     passed every lane with recorded evidence, and an independent reviewer
@@ -1600,7 +1911,9 @@ def gate(task_id: str, run: Runner = default_runner) -> tuple:
     rows = [{"id": pid, "ok": False, "reason": f"status is {s['task'].get('status')}"}
             for pid, s in shows.items() if s["task"].get("status") != "done"]
     rounds = {int(header_of(s).get("round") or 0): (pid, s) for pid, s in shows.items()
-              if header_of(s).get("workflow") == "round"}
+              if header_of(s).get("workflow") == "round" and not header_of(s).get("stage")}
+    device_rounds = {int(header_of(s).get("round") or 0): (pid, s) for pid, s in shows.items()
+                     if header_of(s).get("workflow") == "round" and header_of(s).get("stage") == DEVICE_STAGE}
     reviews = {int(header_of(s).get("round") or 0): (pid, s) for pid, s in shows.items()
                if header_of(s).get("workflow") == "review"}
     if not rounds:
@@ -1621,10 +1934,7 @@ def gate(task_id: str, run: Runner = default_runner) -> tuple:
                                         else f"{row['lane']} {row['verdict']} at {sha[:12]}")
         rows.append({"id": row["id"], "ok": ok, "reason": reason})
     if ctx.mobile:
-        stages = (latest(rshow, "round") or {}).get("stages") or mobile_stages(lanes, sha)
-        bs = next((x for x in stages if x.get("stage") == "browserstack"), browserstack_stage())
-        rows.append({"id": rid, "ok": True, "reason": f"browserstack {stage_text(bs)} (optional; not tested, "
-                                                      "never counted as passed); windows deferred"})
+        rows.append(gate_devices(run, rid, rshow, device_rounds.get(n), lanes, sha))
     if n not in reviews or max(reviews) != n:
         rows.append({"id": rid, "ok": False, "reason": f"round {n} has no review card"})
     else:
@@ -1644,10 +1954,10 @@ def card_state(show: dict) -> str:
             return "SHA_PUSHED"
         return {"running": "CODING", "blocked": "CODING_BLOCKED"}.get(status, "CODING_QUEUED")
     if kind == "validate":
-        lab = label(t.get("assignee") or h.get("lane", "")).upper()
+        lab = "DEVICES" if h.get("stage") == DEVICE_STAGE else label(t.get("assignee") or h.get("lane", "")).upper()
         ev = latest(show, "evidence")
         if ev and status == "done":
-            return lane_state(t.get("assignee") or h.get("lane", ""), ev.get("status"))
+            return lane_state(t.get("assignee") or h.get("lane", ""), ev.get("status"), h.get("stage", ""))
         return {"running": f"{lab}_VALIDATING", "blocked": f"{lab}_BLOCKED", "todo": f"{lab}_WAITING_FOR_SHA",
                 "done": f"{lab}_DONE_WITHOUT_EVIDENCE"}.get(status, f"{lab}_QUEUED")
     if kind == "round":
@@ -1688,6 +1998,8 @@ def status(task_id: str, run: Runner = default_runner) -> list:
         row = {"id": tid, "kind": h.get("workflow") or "", "round": int(h.get("round") or 0) or None,
                "status": t.get("status"), "state": card_state(show), "assignee": t.get("assignee"),
                "title": t.get("title")}
+        if h.get("stage"):
+            row["stage"] = h["stage"]
         if row["kind"] == "code":
             rec = latest(show, "code-sha")
             row.update({"commit": (rec or {}).get("sha"), "branch": h.get("branch")})
@@ -1701,7 +2013,7 @@ def status(task_id: str, run: Runner = default_runner) -> list:
             rec = latest(show, "round" if row["kind"] == "round" else "verdict")
             row.update({"commit": h.get("commit") or (rec or {}).get("commit"), "record": rec})
         rows.append(row)
-    rows.sort(key=lambda r: (10**6 if r["kind"] == "report" else (r["round"] or 0),
+    rows.sort(key=lambda r: (10**6 if r["kind"] == "report" else (r["round"] or 0), bool(r.get("stage")),
                              order.get(r["kind"], 99), r["id"]))
     return rows
 
@@ -1733,8 +2045,9 @@ def parser() -> argparse.ArgumentParser:
     i.add_argument("--peer", action="append", default=[], metavar="LANE=PEER[/PROFILE]",
                    help="peer target for a lane (default: mac-worker=mac, windows-worker=windows)")
     i.add_argument("--mobile", default="", choices=["", *MOBILE_TARGETS],
-                   help="iOS/iPad-first mobile validation on the Mac lane only: iPhone and iPad simulators; "
-                        "BrowserStack disabled, Windows deferred (docs/mobile-validation.md)")
+                   help="iOS/iPad-first mobile validation on the Mac lane only: iPhone and iPad simulators, "
+                        "then BrowserStack real devices when activated (disabled by default); Windows deferred "
+                        "(docs/mobile-validation.md)")
     i.add_argument("--dry-run", action="store_true", help="print the plan, create nothing")
     for name in ("chat-id", "thread-id", "message-id", "user-id", "chat-type"):
         i.add_argument(f"--discord-{name}", default="")
