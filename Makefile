@@ -35,9 +35,11 @@ endef
 	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
 
 # `##@ Title` lines start a help section; `target: ## text` lines are listed under it.
+# `##> text` lines print as-is under the section title; `##| text` lines just
+# above a target are printed, indented, under that target's entry.
 help: ## Show this help
 	@echo "Usage: make <target> [VAR=value]"
-	@awk 'BEGIN{FS=":.*##"} /^##@ /{printf "\n\033[1m%s\033[0m\n",substr($$0,5); next} /^[a-zA-Z_-]+( [a-zA-Z_-]+)*:.*##/{printf "  \033[36m%-25s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN{FS=":.*##"} /^##@ /{printf "\n\033[1m%s\033[0m\n",substr($$0,5); next} /^##> /{printf "  %s\n",substr($$0,5); next} /^##\| /{more=more sprintf("  %-25s  %s\n","",substr($$0,5)); next} /^[a-zA-Z_-]+( [a-zA-Z_-]+)*:.*##/{printf "  \033[36m%-25s\033[0m %s\n%s",$$1,$$2,more} {more=""}' $(MAKEFILE_LIST)
 
 ##@ Setup and Docker stack
 
@@ -126,10 +128,6 @@ hermes-restart: ## Restart the Hermes gateway (Discord bot)
 
 hermes-logs: ## Tail Hermes gateway logs
 	@tail -n 200 -f "$${HERMES_HOME:-$$HOME/.hermes}/logs/gateway.log"
-
-hermes-profile: ## Create/refresh a Hermes profile and sync its books from data/knowledge/<NAME> (NAME=marketing [KNOWLEDGE_ROOT=/mnt/books/knowledge])
-	@test -n "$(NAME)" || { echo "usage: make hermes-profile NAME=<profile> [KNOWLEDGE_ROOT=<dir>]"; exit 2; }
-	@bash scripts/hermes-profile.sh "$(NAME)"
 
 workflow-status: ## Show every card of a Discord->Kanban workflow and its state: rounds, SHAs, lane evidence, review (ID=t_xxxx)
 	@test -n "$(ID)" || { echo "usage: make workflow-status ID=<any card id of the request>"; exit 2; }
@@ -235,25 +233,47 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
 ##@ Knowledge
+##> Flow: inventory -> classify/reconcile (book lists) -> refresh, or stage + hermes-profile
+##> (Markdown into the profile) -> learn (skill) -> learn-status. Nothing writes under /mnt/books.
 
-knowledge-convert: ## Copy-convert EPUB/PDF books to Markdown (SRC=/mnt/books/edu DEST=data/knowledge/<profile> [ARGS="--dry-run 'Book folder'"])
+##| Read-only. Compares the library (/mnt/books) with every profile book list
+##| (hermes/profiles/<p>/knowledge-sources.txt) and reports, by text content:
+##| books no list includes, books already imported under another path, and
+##| book-list lines missing from the library. Writes and converts nothing.
+knowledge-inventory: ## Read-only: library vs. book lists by content: uncategorized, already imported (source not linked), missing sources
+	@bash scripts/knowledge-refresh.sh --inventory $(NAME)
+
+##| Manual converter. SRC and DEST are both required (usage error otherwise).
+##| Converts the eligible EPUB/PDF files under SRC only (or the named paths in
+##| ARGS) into Markdown under DEST. It does NOT find and convert every book under
+##| /mnt/books; for profile books use knowledge-stage or knowledge-refresh, which
+##| convert automatically. Copy-only; unchanged books are skipped as up-to-date.
+knowledge-convert: ## Convert EPUB/PDF under SRC to Markdown in DEST; SRC and DEST required (SRC=/mnt/books/edu DEST=data/knowledge/<profile> [ARGS="--dry-run 'Book folder'"])
 	@test -n "$(SRC)" -a -n "$(DEST)" || { echo "usage: make knowledge-convert SRC=<book dir> DEST=<output dir> [ARGS=...]"; exit 2; }
 	@python3 hermes/skills/document-converter/scripts/doc2md.py --source "$(SRC)" --dest "$(DEST)" $(ARGS)
 
+##| Builds data/knowledge/<NAME> from that profile's book list only. EPUB/PDF
+##| books listed there are converted to Markdown automatically by default
+##| (KNOWLEDGE_CONVERT=1; set 0 to copy only .md/.txt). Does not sync into
+##| Hermes; run hermes-profile next (or use knowledge-refresh for both).
 knowledge-stage: ## Build data/knowledge/<NAME> from hermes/profiles/<NAME>/knowledge-sources.txt (NAME=strategy [BOOKS_ROOT=/mnt/books KNOWLEDGE_CONVERT=0])
 	@test -n "$(NAME)" || { echo "usage: make knowledge-stage NAME=<profile> [BOOKS_ROOT=<dir>]"; exit 2; }
 	@bash scripts/knowledge-stage.sh "$(NAME)"
 
+##| Runs knowledge-stage (with the same automatic EPUB/PDF conversion of listed
+##| books) and then syncs into each installed profile, for every profile with a
+##| book list or just NAME. Books no list includes are reported, not converted.
+##| Does not run knowledge-learn.
 knowledge-refresh: ## After adding books: stage + sync every book-backed profile (or NAME=<profile>) and report updated/current/missing/uncategorized
 	@bash scripts/knowledge-refresh.sh $(NAME)
-
-knowledge-inventory: ## Read-only: library vs. book lists by content: uncategorized, already imported (source not linked), missing sources
-	@bash scripts/knowledge-refresh.sh --inventory $(NAME)
 
 # Values reach the script through the environment (command-line make variables
 # are exported), so book paths with spaces or quotes are passed through intact.
 # APPLY counts only when given on the make command line, never from a stray
 # exported shell variable.
+##| Asks a model which profile each uncategorized book belongs to and prints
+##| proposals (dry-run). APPLY=1 appends approved or guardrail-clean book-list
+##| lines; it converts nothing (run knowledge-refresh afterwards).
 knowledge-classify: ## AI proposals for uncategorized books (dry-run; already-staged books are reported, never re-classified). APPLY=1 assigns guardrail-clean ones; APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1 SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n]
 	@args=(); \
 	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
@@ -268,6 +288,9 @@ knowledge-classify: ## AI proposals for uncategorized books (dry-run; already-st
 
 # Proposal only by default. APPLY counts only on the make command line and only
 # together with explicit approvals; it appends book-list lines, nothing else.
+##| Finds staged knowledge whose book-list line is gone and library copies of
+##| books already staged, and proposes book-list fixes. APPLY=1 with approvals
+##| appends the approved lines; nothing is deleted or converted.
 knowledge-reconcile: ## Proposal only: staged knowledge with no book-list source, library copies of staged books. APPLY=1 APPROVE='<profile>=<library path>' / APPROVALS=<file> appends approved lines [SCOPE=<library path>]
 	@args=(); \
 	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \
@@ -279,6 +302,9 @@ knowledge-reconcile: ## Proposal only: staged knowledge with no book-list source
 # One bounded headless /learn turn per knowledge file into the exact skill
 # <profile>-knowledge; state, logs and a lock live in the profile's
 # knowledge-learn/ folder, so an interrupted run resumes where it stopped.
+##| Turns a profile's synced Markdown into its <NAME>-knowledge skill with one
+##| headless Hermes /learn run per file. Re-running resumes; unchanged files are
+##| skipped. This is the model-cost step; DRY_RUN=1 lists the work first.
 knowledge-learn: ## Learn synced books into <NAME>-knowledge, one file per Hermes run, resumable (NAME=<profile>|all [TIMEOUT=1800 MAX_TURNS=200 LIMIT=n JOBS=1 DRY_RUN=1 FORCE=1 RETRY=1])
 	@test -n "$(NAME)" || { echo "usage: make knowledge-learn NAME=<profile>|all [TIMEOUT=s LIMIT=n JOBS=n DRY_RUN=1]   (status: make knowledge-learn-status)"; exit 2; }
 	@args=($(NAME)); \
@@ -291,10 +317,19 @@ knowledge-learn: ## Learn synced books into <NAME>-knowledge, one file per Herme
 	 [[ "$${RETRY:-0}" == "1" ]] && args+=(--retry); \
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/knowledge-learn.py "$${args[@]}"
 
+##| Read-only. Per profile: synced files and size, how many the <NAME>-knowledge
+##| skill has learned, how many are still to learn (new or changed) or blocked.
 knowledge-learn-status: ## Read-only: raw synced knowledge vs. learned <profile>-knowledge skill per profile (NAME=<profile> [JSON=1])
 	@args=(--status $(NAME)); \
 	 [[ "$${JSON:-0}" == "1" ]] && args+=(--json); \
 	 python3 scripts/knowledge-learn.py "$${args[@]}"
+
+##| Creates the Hermes profile if needed (SOUL.md, .env) and copies the staged
+##| Markdown from data/knowledge/<NAME> into it. Run after knowledge-stage;
+##| knowledge-refresh already does this sync for installed profiles.
+hermes-profile: ## Create/refresh a Hermes profile and sync its staged books from data/knowledge/<NAME> (NAME=marketing [KNOWLEDGE_ROOT=data/knowledge])
+	@test -n "$(NAME)" || { echo "usage: make hermes-profile NAME=<profile> [KNOWLEDGE_ROOT=<dir>]"; exit 2; }
+	@bash scripts/hermes-profile.sh "$(NAME)"
 
 ##@ Windows VM
 
