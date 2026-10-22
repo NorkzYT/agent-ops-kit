@@ -17,6 +17,14 @@
 #      KNOWLEDGE_CONVERT   1 (default) converts EPUB/PDF; 0 copies text only
 #      DOC2MD              converter path (default the document-converter skill)
 #      KNOWLEDGE_MANIFEST  book list override (tests)
+#      PROFILES_DIR        profile seeds (default hermes/profiles)
+#      KNOWLEDGE_ASSIGNMENTS  override of <profile>/knowledge-assignments.json
+#
+# Canonical books: a manifest entry that hermes/profiles/<profile>/
+# knowledge-assignments.json lists as shared (written by knowledge-apply) is
+# NOT copied here; the profile reads it through refs/<name>.ref.md pointing at
+# the one canonical copy under $KNOWLEDGE_CANONICAL. Such entries are counted
+# and skipped so a refresh never duplicates the book text.
 #
 # Safety: copy-only, never writes under BOOKS_ROOT. Rejects bad profile names,
 # absolute or `..` manifest paths, symlinked entries, entries that resolve
@@ -34,8 +42,16 @@ profile="${1:-}"
 if [[ ! "$profile" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || [[ "$profile" == *".."* ]]; then
   die "invalid profile name: '$profile'"
 fi
-manifest="${KNOWLEDGE_MANIFEST:-$ROOT/hermes/profiles/$profile/knowledge-sources.txt}"
+pdir_root="${PROFILES_DIR:-$ROOT/hermes/profiles}"
+manifest="${KNOWLEDGE_MANIFEST:-$pdir_root/$profile/knowledge-sources.txt}"
 [[ -f "$manifest" ]] || die "no book list at $manifest"
+assignments="${KNOWLEDGE_ASSIGNMENTS:-$pdir_root/$profile/knowledge-assignments.json}"
+declare -A canonical=()
+if [[ -f "$assignments" ]]; then
+  canon_list="$(python3 "$ROOT/scripts/knowledge_plan.py" canonical-entries "$assignments")" \
+    || die "cannot read canonical assignments from $assignments"
+  while IFS= read -r e; do [[ -n "$e" ]] && canonical["$e"]=1; done <<< "$canon_list"
+fi
 
 books="${BOOKS_ROOT:-/mnt/books}"
 kroot="${KNOWLEDGE_ROOT:-$ROOT/data/knowledge}"
@@ -49,11 +65,16 @@ real_out="$(cd "$kroot/$profile" && pwd -P)"
 case "$real_out/" in "$real_books"/*) die "output $real_out is inside the book library — refusing" ;; esac
 case "$real_books/" in "$real_out"/*) die "book library is inside the output $real_out — refusing" ;; esac
 
-copied=0 current=0 pending=0 failed=0 entries=0
+copied=0 current=0 pending=0 failed=0 entries=0 shared=0
 while IFS= read -r entry || [[ -n "$entry" ]]; do
   entry="${entry%$'\r'}"
   [[ -z "${entry//[[:space:]]/}" || "$entry" == \#* ]] && continue
   entries=$((entries + 1))
+  if [[ -n "${canonical[$entry]+x}" ]]; then
+    shared=$((shared + 1))
+    log "canonical: '$entry' is shared through refs/ (knowledge-apply); not copied here"
+    continue
+  fi
   case "/$entry/" in
     //*|*/../*|*/./*) die "unsafe manifest path: '$entry'" ;;
   esac
@@ -88,6 +109,6 @@ while IFS= read -r entry || [[ -n "$entry" ]]; do
   esac
 done < "$manifest"
 
-log "staged '$profile' from $entries book entries: $copied text copied, $current up to date, $pending EPUB/PDF waiting for conversion, $failed with problems"
+log "staged '$profile' from $entries book entries: $copied text copied, $current up to date, $pending EPUB/PDF waiting for conversion, $failed with problems, $shared canonical (referenced, not copied)"
 log "next: make hermes-profile NAME=$profile   then /learn in that profile's chat"
 [[ "$failed" -eq 0 ]] || exit 3

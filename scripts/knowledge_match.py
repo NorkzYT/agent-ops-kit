@@ -234,6 +234,8 @@ class Corpus:
             entries = manifests.get(pdir.name, [])
             for f in walk_files(pdir, TEXT_EXTS):
                 rel = f.relative_to(pdir).as_posix()
+                if rel.startswith("refs/") and rel.endswith(".ref.md"):
+                    continue                         # canonical reference, not book text
                 sf = StagedFile(pdir.name, rel, f)
                 for e in entries:
                     if e.startswith("/") or ".." in e.split("/"):

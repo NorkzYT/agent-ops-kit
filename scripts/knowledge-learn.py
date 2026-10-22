@@ -20,7 +20,12 @@ on-demand skill ``<p>-knowledge`` one source file at a time:
   * every unit gets its own log under ``<profile>/knowledge-learn/logs/``;
   * a per-profile lock stops two runners from editing one skill;
   * books are read-only input: the runner never writes under ``knowledge/``
-    and stops the profile if a source changes while it is being learned.
+    and stops the profile if a source changes while it is being learned;
+  * a ``knowledge/refs/<name>.ref.md`` file is a canonical reference
+    (scripts/knowledge_plan.py): the unit's text is the shared copy under
+    ``$KNOWLEDGE_CANONICAL/sources/<source_id>/`` and it is learned only when
+    the reference validates (path inside the canonical root, regular file,
+    sha256 matches); an invalid reference is reported and never learned.
 
 Usage:
   knowledge-learn.py --status [PROFILE ...|--all] [--json]
@@ -49,6 +54,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import knowledge_plan as kp  # noqa: E402  (canonical reference files)
+
 SEEDS = REPO / "hermes" / "profiles"
 KNOWLEDGE_EXT = (".md", ".txt")
 STATE_DIR = "knowledge-learn"
@@ -135,9 +143,14 @@ def slugify(text: str, width: int = 40) -> str:
     return (s[:width].rstrip("-")) or "source"
 
 
+def unit_stem(rel: str) -> str:
+    name = Path(rel).name
+    return name[:-len(kp.REF_SUFFIX)] if name.endswith(kp.REF_SUFFIX) else Path(rel).stem
+
+
 def unit_slugs(rels: List[str]) -> Dict[str, str]:
     """Stable, unique reference-file prefix per source (file stem; hash on collision)."""
-    base = {r: slugify(Path(r).stem) for r in rels}
+    base = {r: slugify(unit_stem(r)) for r in rels}
     counts: Dict[str, int] = {}
     for s in base.values():
         counts[s] = counts.get(s, 0) + 1
@@ -251,8 +264,19 @@ def units(p: Profile) -> List[dict]:
     out = []
     for f, rel in zip(files, rels):
         rec = state["units"].get(rel, {})
-        digest = sha256(f)
-        if rec.get("status") == "learned" and rec.get("sha256") == digest and skill is not None:
+        path, kind, problem, ref = f, "file", "", {}
+        if kp.is_ref(f):
+            kind = "ref"
+            try:
+                ref = kp.parse_ref(f)
+                resolved, problem = kp.resolve_ref(ref)
+            except ValueError as exc:
+                resolved, problem = None, str(exc)
+            path = resolved or f
+        digest = sha256(path)
+        if kind == "ref" and problem:
+            cls = "invalid-ref"
+        elif rec.get("status") == "learned" and rec.get("sha256") == digest and skill is not None:
             cls = "learned"
         elif rec.get("status") == "learned" and rec.get("sha256") != digest:
             cls = "changed"
@@ -260,8 +284,9 @@ def units(p: Profile) -> List[dict]:
             cls = "blocked"
         else:
             cls = "pending"
-        out.append({"rel": rel, "path": f, "sha256": digest, "size": f.stat().st_size,
-                    "slug": slugs[rel], "class": cls, "record": rec,
+        out.append({"rel": rel, "path": path, "sha256": digest, "size": path.stat().st_size,
+                    "slug": slugs[rel], "class": cls, "record": rec, "kind": kind,
+                    "source": ref.get("source", ""), "problem": problem,
                     "refs": source_refs(skill, slugs[rel])})
     return out
 
@@ -271,7 +296,7 @@ def readiness(name: str) -> dict:
     p = Profile(name)
     r = {"profile": name, "skill": skill_name(name), "installed": p.installed,
          "raw_files": 0, "raw_bytes": 0, "learned": 0, "pending": 0, "changed": 0,
-         "blocked": 0, "skill_path": "", "running": False, "notes": []}
+         "blocked": 0, "invalid_ref": 0, "references": 0, "skill_path": "", "running": False, "notes": []}
     if not p.installed:
         r["status"] = "not-installed"
         r["notes"].append(f"make hermes-profile NAME={name}")
@@ -281,7 +306,10 @@ def readiness(name: str) -> dict:
     r["raw_files"] = len(us)
     r["raw_bytes"] = sum(u["size"] for u in us)
     for u in us:
-        r[u["class"]] = r.get(u["class"], 0) + 1
+        key = u["class"].replace("-", "_")
+        r[key] = r.get(key, 0) + 1
+        if u["kind"] == "ref":
+            r["references"] += 1
     if skill is not None:
         r["skill_path"] = str(skill.relative_to(p.home))
     if len(find_skill(p.home, name)) > 1:
@@ -294,10 +322,13 @@ def readiness(name: str) -> dict:
         r["status"] = "needs-learn"
         if any(u["record"].get("status") == "learned" for u in us):
             r["notes"].append("state says learned but the skill is missing")
-    elif todo or r["blocked"]:
+    elif todo or r["blocked"] or r["invalid_ref"]:
         r["status"] = "partial"
     else:
         r["status"] = "ready"
+    if r["invalid_ref"]:
+        r["notes"].append(f"{r['invalid_ref']} canonical reference(s) do not validate (never learned): "
+                          + "; ".join(f"{u['rel']}: {u['problem']}" for u in us if u["class"] == "invalid-ref")[:300])
     if r["blocked"]:
         r["notes"].append(f"{r['blocked']} blocked after {DEFAULT_MAX_ATTEMPTS} failed attempts (RETRY=1)")
     if r["changed"]:
@@ -320,7 +351,8 @@ def print_status(rows: List[dict]) -> None:
     counts: Dict[str, int] = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
-    say("\nraw = files synced into knowledge/; LEARNED = files distilled into <profile>-knowledge.")
+    say("\nraw = files synced into knowledge/ (canonical references count once each); "
+        "LEARNED = files distilled into <profile>-knowledge.")
     say("summary: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
 
 
@@ -329,11 +361,16 @@ def print_status(rows: List[dict]) -> None:
 # --------------------------------------------------------------------------- #
 def learn_request(p: Profile, u: dict, total: int) -> str:
     sk = skill_name(p.name)
-    src = p.knowledge / u["rel"]
+    src = u["path"]
+    shared = ""
+    if u.get("kind") == "ref":
+        shared = (f"\nThis file is the shared canonical copy of the library book `{u.get('source')}`; the profile "
+                  f"holds only the reference `{p.knowledge / u['rel']}` (validated: path and sha256). The canonical "
+                  "store is read-only too; never write, move or copy anything there.\n")
     return f"""Learn the knowledge-base skill `{sk}` for the `{p.name}` profile from ONE source file:
 
 {src}
-
+{shared}
 Requirements (all load-bearing):
 - The skill name is exactly `{sk}`, category `{SKILL_CATEGORY}`. If it already exists, load it with
   `skill_view` and extend it; never create a second knowledge skill for this profile and never
@@ -451,6 +488,9 @@ def learn_profile(name: str, args) -> dict:
         say(f"{tag} no raw knowledge in {p.knowledge}; run: make knowledge-refresh NAME={name}")
         result["outcome"] = "no-knowledge"
         return result
+    for u in us:
+        if u["class"] == "invalid-ref":
+            say(f"{tag} invalid reference {u['rel']}: {u['problem']} (not learned)", sys.stderr)
     todo = [u for u in us if u["class"] in ("pending", "changed")
             or (args.force and u["class"] == "learned")
             or (args.retry and u["class"] == "blocked")]
@@ -510,6 +550,8 @@ def learn_profile(name: str, args) -> dict:
                 break
     if result["failed"] and result["outcome"] == "ok":
         result["outcome"] = "incomplete"
+    if any(u["class"] == "invalid-ref" for u in us) and result["outcome"] == "ok":
+        result["outcome"] = "invalid-ref"
     return result
 
 
@@ -554,7 +596,7 @@ def learn_unit(p: Profile, u: dict, total: int, args, tag: str) -> str:
         touched = newest_mtime(skill) >= started - 1
         refs = source_refs(skill, u["slug"])
         listed = skill_mentions(skill, u["slug"], u["rel"])
-        src = p.knowledge / u["rel"]
+        src = u["path"]
         intact = src.is_file() and sha256(src) == u["sha256"]
         if not intact:
             status = "source-modified"
@@ -656,7 +698,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     say("")
     if not args.dry_run:
         print_status([readiness(n) for n in names])
-    bad_outcomes = {"incomplete", "source-modified", "prompt-error", "locked", "interrupted"}
+    bad_outcomes = {"incomplete", "source-modified", "prompt-error", "locked", "interrupted", "invalid-ref"}
     return 1 if any(r["outcome"] in bad_outcomes for r in results) else 0
 
 

@@ -145,7 +145,24 @@ class HelpTest(unittest.TestCase):
         lines = self.out.splitlines()
         i = lines.index("Knowledge")
         self.assertTrue(lines[i + 1].startswith("  Flow: inventory"), lines[i + 1])
-        self.assertIn("one canonical profile per book", "\n".join(lines[i + 1:i + 8]))
+        notes = " ".join(l.strip() for l in lines[i + 1:i + 14])
+        self.assertIn("one canonical profile per book", notes)
+        for step in ("inventory", "classify", "edit/review the plan", "knowledge-apply PLAN=<plan> APPROVE=1",
+                     "knowledge-learn-status"):
+            self.assertIn(step, notes.split("Legacy flow")[0], step)
+
+    def test_apply_help_names_the_single_command_and_its_guards(self):
+        text = self.entry("knowledge-apply")
+        for phrase in ("PLAN=", "APPROVE=1", "DRY_RUN=1", "validate", "canonical", "refs/", "learn",
+                       "resume", "never migrated"):
+            self.assertIn(phrase, text, phrase)
+        self.assertIn("test-knowledge-apply", self.out)
+        code, out = make("-n", "knowledge-apply", "PLAN=/tmp/x.plan.json", "APPROVE=1", "DRY_RUN=1")
+        self.assertEqual(code, 0, out)
+        self.assertIn("knowledge-apply.py", out)
+        code, out = make("knowledge-apply")            # no PLAN: usage only, nothing runs
+        self.assertEqual(code, 2, out)
+        self.assertIn("usage: make knowledge-apply PLAN=", out)
 
     def test_helper_script_runs_without_make(self):
         r = subprocess.run(["python3", str(REPO / "scripts" / "make-help.py"), str(REPO / "Makefile")],
@@ -155,7 +172,8 @@ class HelpTest(unittest.TestCase):
 
     def test_every_knowledge_target_has_a_plain_language_explanation(self):
         for target in ("knowledge-inventory", "knowledge-convert", "knowledge-stage",
-                       "knowledge-classify", "knowledge-refresh", "knowledge-reconcile",
+                       "knowledge-classify", "knowledge-apply", "knowledge-legacy-report",
+                       "knowledge-refresh", "knowledge-reconcile",
                        "knowledge-learn", "knowledge-learn-status", "hermes-profile"):
             with self.subTest(target=target):
                 self.assertEqual(self.section_of(target), "Knowledge")

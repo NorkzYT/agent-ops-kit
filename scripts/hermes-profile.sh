@@ -17,6 +17,9 @@
 #                      machine over SSH (optional administration; worker lanes use the peer);
 #                      optional PROFILE_SSH_PORT, PROFILE_SSH_KEY, PROFILE_SSH_CWD (default ~)
 #      KNOWLEDGE_ROOT  where the profile knowledge corpora live (default data/knowledge)
+#      PROFILES_DIR    profile seeds (default hermes/profiles; tests and knowledge-apply)
+#      HERMES_HOME     Hermes home; when unset, read from ENV_FILE, else ~/.hermes
+#      HERMES_BIN      hermes executable (default: hermes on PATH; tests use a stub)
 #      ENV_FILE        dotenv to read keys from (default .env; overridable for tests)
 set -euo pipefail
 
@@ -28,14 +31,18 @@ cd "$ROOT"
 env_file="${ENV_FILE:-.env}"
 name="${1:-}"
 [[ -n "$name" ]] || die "usage: scripts/hermes-profile.sh <name>   (see hermes/profiles/)"
-src="hermes/profiles/$name"
+src="${PROFILES_DIR:-hermes/profiles}/$name"
 [[ -f "$src/SOUL.md" ]] || die "no $src/SOUL.md. Copy hermes/profiles/_template to hermes/profiles/$name first."
 [[ "$name" != "_template" ]] || die "copy _template to a real name first"
 [[ -f "$env_file" ]] || die "$env_file not found. Run: make init"
 
 export PATH="$HOME/.local/bin:$PATH"
-have hermes || die "hermes not installed. Run: make hermes-install"
-HERMES_HOME="$(env_file_get HERMES_HOME "$env_file" 2>/dev/null || echo "$HOME/.hermes")"
+HERMES_BIN="${HERMES_BIN:-hermes}"
+have "$HERMES_BIN" || die "hermes not installed. Run: make hermes-install"
+hermes() { "$HERMES_BIN" "$@"; }
+if [[ -z "${HERMES_HOME:-}" ]]; then
+  HERMES_HOME="$(env_file_get HERMES_HOME "$env_file" 2>/dev/null || echo "$HOME/.hermes")"
+fi
 export HERMES_HOME
 pdir="$HERMES_HOME/profiles/$name"
 
@@ -107,8 +114,8 @@ cat <<MSG
 Profile '$name' is ready.
   Chat:        $name chat        (or: hermes -p $name chat)
   Knowledge:   books sync from ${KNOWLEDGE_ROOT:-$ROOT/data/knowledge}/$name into
-               $pdir/knowledge/ on each run. Then, in chat:
-               /learn $pdir/knowledge
+               $pdir/knowledge/ on each run (refs/*.ref.md point at the shared
+               canonical copy). Then: make knowledge-learn NAME=$name
   Kanban:      hermes kanban create "<task>" --assignee $name
   Own Discord: PROFILE_DISCORD_BOT_TOKEN=<token> make hermes-profile NAME=$name && $name gateway install
 MSG

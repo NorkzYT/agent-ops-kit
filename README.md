@@ -133,11 +133,13 @@ Discord prompt template.
 
 ```bash
 make knowledge-inventory     # read-only: uncategorized, already imported (by content), missing sources
-make knowledge-classify      # AI proposals for new books only (dry-run); staged copies are skipped
-make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='<profile>=<library path>'
+make knowledge-classify      # AI proposals + reviewed plan plan-<report>.json (dry-run)
+make knowledge-apply PLAN=plan-<report>.json APPROVE=1   # one command: assign, canonical copy once, refs, install, learn
 make knowledge-reconcile     # proposal: link staged knowledge that has no book-list source
-make knowledge-refresh       # stage + sync every profile (NAME=<profile> for one)
+make knowledge-refresh       # legacy: stage + sync every profile (NAME=<profile> for one)
 ```
+
+The plan flow is in [docs/knowledge-apply.md](docs/knowledge-apply.md).
 
 ## Repository layout
 

@@ -32,7 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
+	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
 # is a section note (one paragraph per line), `##| text` lines just above a
@@ -234,8 +234,9 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
 ##@ Knowledge
-##> Flow: inventory (what is new) -> classify / reconcile (decide book lists) -> refresh (stage + sync; or knowledge-stage then hermes-profile) -> learn (build the <profile>-knowledge skill) -> learn-status
-##> Ownership: one canonical profile per book. A second profile only by explicit approval (SECONDARY='<profile>=<source>' SECONDARY_REASON='...') for a substantial, recurring, independent purpose. Books already in several lists are reported, never changed.
+##> Flow: inventory (what is new) -> classify (writes the reviewed plan plan-<report>.json) -> edit/review the plan (decide assign/skip/existing, approve any new profile spec) -> knowledge-apply PLAN=<plan> APPROVE=1 (one command: assign, canonical copy once, references, install/sync, learn) -> knowledge-learn-status
+##> Legacy flow (still works): classify APPLY=1 / reconcile -> refresh (stage + sync) -> learn. Books assigned through a plan are stored once under data/knowledge-canonical and referenced from each profile's knowledge/refs/ (no duplicate Markdown); refresh never copies them again.
+##> Ownership: one canonical profile per book. A second profile only by explicit approval (SECONDARY='<profile>=<source>' SECONDARY_REASON='...', or secondary_reason in the plan) for a substantial, recurring, independent purpose. Books already in several lists are reported, never changed.
 ##> Library: /mnt/books is read-only; nothing here writes, moves or deletes a book.
 
 ##| Read-only. Compares the library (/mnt/books) with every profile book list
@@ -274,12 +275,16 @@ knowledge-refresh: ## After adding books: stage + sync every book-backed profile
 # APPLY counts only when given on the make command line, never from a stray
 # exported shell variable.
 ##| Asks a model which profile each uncategorized book belongs to and prints
-##| proposals (dry-run). APPLY=1 appends approved or guardrail-clean book-list
-##| lines; it converts nothing (run knowledge-refresh afterwards). Policy: one
-##| canonical profile per book; an approval for a book whose text another
-##| profile already has is refused unless given as SECONDARY='<profile>=<source>'
-##| with SECONDARY_REASON (the substantial, recurring, independent purpose).
-knowledge-classify: ## AI proposals for uncategorized books (dry-run; already-staged books are reported, never re-classified). APPLY=1 assigns guardrail-clean ones; APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1 SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n]
+##| proposals (dry-run). Also writes the reviewed plan plan-<report>.json: one
+##| editable item per book (content hash, proposal, decision assign/skip/
+##| existing/review) and any new-profile proposal (never created here); apply
+##| it with knowledge-apply. Legacy: APPLY=1 appends approved or guardrail-clean
+##| book-list lines and stages a full copy (run knowledge-refresh afterwards).
+##| Policy: one canonical profile per book; an approval for a book whose text
+##| another profile already has is refused unless given as
+##| SECONDARY='<profile>=<source>' with SECONDARY_REASON (the substantial,
+##| recurring, independent purpose).
+knowledge-classify: ## AI proposals + reviewed plan for uncategorized books (dry-run; staged books are reported, never re-classified). Then: knowledge-apply PLAN=<plan>. Legacy APPLY=1 assigns guardrail-clean ones; APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1 SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n]
 	@args=(); \
 	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
 	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \
@@ -292,6 +297,37 @@ knowledge-classify: ## AI proposals for uncategorized books (dry-run; already-st
 	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
 	 [[ -n "$${LIMIT:-}" ]] && args+=(--limit "$$LIMIT"); \
 	 python3 scripts/knowledge-classify.py "$${args[@]}"
+
+# APPROVE counts only when given on the make command line, never from a stray
+# exported shell variable. The plan path reaches the script through the
+# environment so paths with spaces or quotes stay intact.
+##| Applies one reviewed plan, exactly as written, in one run: validate (every
+##| item decided: assign/skip/existing; every new profile approved with a full
+##| spec; source hashes unchanged; safe names) -> create approved new profiles
+##| from hermes/profiles/_template -> append book lists + knowledge-assignments
+##| .json -> copy/convert each unique book ONCE into data/knowledge-canonical ->
+##| write tiny knowledge/refs/*.ref.md per profile (no duplicate Markdown) ->
+##| install or sync the profiles -> knowledge-learn (resumable) -> report +
+##| checkpoint under data/knowledge-canonical/apply/<plan id>/. Any refusal
+##| stops before a write; a failed step stops nonzero and prints the resume
+##| command (same plan; verified work is skipped). Legacy full copies in a
+##| profile are reported, never migrated or deleted.
+knowledge-apply: ## Apply a reviewed plan in one command: validate -> new profiles -> assign -> canonical copy once -> references -> install -> learn -> report (PLAN=<plan.json> APPROVE=1 [DRY_RUN=1 LEARN=0 INSTALL=0])
+	@test -n "$(PLAN)" || { echo "usage: make knowledge-apply PLAN=plan-<report>.json APPROVE=1 [DRY_RUN=1 LEARN=0 INSTALL=0]   (plan written by: make knowledge-classify)"; exit 2; }
+	@args=(--plan "$$PLAN"); \
+	 [[ "$(if $(filter command line,$(origin APPROVE)),$(APPROVE))" == "1" ]] && args+=(--approve); \
+	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
+	 [[ "$${LEARN:-1}" == "0" ]] && args+=(--no-learn); \
+	 [[ "$${INSTALL:-1}" == "0" ]] && args+=(--no-install); \
+	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/knowledge-apply.py "$${args[@]}"
+
+##| Read-only. Lists files under data/knowledge/<profile> whose bytes equal a
+##| canonical copy (legacy full copies of books now shared through refs/).
+##| Nothing is migrated or deleted; remove a copy by hand after its reference
+##| learned. Needs any plan file for the environment checks (PLAN=<plan>).
+knowledge-legacy-report: ## Read-only: legacy profile-local copies of books that have a canonical copy (PLAN=<plan.json>)
+	@test -n "$(PLAN)" || { echo "usage: make knowledge-legacy-report PLAN=<plan.json>"; exit 2; }
+	@python3 scripts/knowledge-apply.py --plan "$$PLAN" --legacy-report
 
 # Proposal only by default. APPLY counts only on the make command line and only
 # together with explicit approvals; it appends book-list lines, nothing else.
@@ -314,8 +350,10 @@ knowledge-reconcile: ## Proposal only: staged knowledge with no book-list source
 # <profile>-knowledge; state, logs and a lock live in the profile's
 # knowledge-learn/ folder, so an interrupted run resumes where it stopped.
 ##| Turns a profile's synced Markdown into its <NAME>-knowledge skill with one
-##| headless Hermes /learn run per file. Re-running resumes; unchanged files are
-##| skipped. This is the model-cost step; DRY_RUN=1 lists the work first.
+##| headless Hermes /learn run per file. A knowledge/refs/*.ref.md reference is
+##| learned from the shared canonical copy it points to, after the path and
+##| sha256 validate. Re-running resumes; unchanged files are skipped. This is
+##| the model-cost step; DRY_RUN=1 lists the work first.
 knowledge-learn: ## Learn synced books into <NAME>-knowledge, one file per Hermes run, resumable (NAME=<profile>|all [TIMEOUT=1800 MAX_TURNS=200 LIMIT=n JOBS=1 DRY_RUN=1 FORCE=1 RETRY=1])
 	@test -n "$(NAME)" || { echo "usage: make knowledge-learn NAME=<profile>|all [TIMEOUT=s LIMIT=n JOBS=n DRY_RUN=1]   (status: make knowledge-learn-status)"; exit 2; }
 	@args=($(NAME)); \
@@ -381,6 +419,9 @@ test-knowledge-classify: ## Run the knowledge-classify/reconcile/match tests (sy
 
 test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub converter, offline)
 	@bash scripts/test_knowledge_stage.sh
+
+test-knowledge-apply: ## Run the reviewed-plan / knowledge-apply tests (temp library, profiles, canonical store, stub hermes; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_knowledge_apply.py'
 
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'

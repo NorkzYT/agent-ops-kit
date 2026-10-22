@@ -37,6 +37,12 @@ learns one file per bounded Hermes run into `strategy-knowledge`, skips files
 already learned, and resumes after a timeout. See
 [knowledge-learn.md](knowledge-learn.md).
 
+Books assigned through a reviewed plan (`make knowledge-apply`, see
+[knowledge-apply.md](knowledge-apply.md)) are stored once under
+`data/knowledge-canonical` and referenced from `knowledge/refs/`; the refresh
+counts them as "canonical (referenced, not copied)" and never copies them
+again.
+
 ## What the refresh does
 
 For each profile with `hermes/profiles/<name>/knowledge-sources.txt`:

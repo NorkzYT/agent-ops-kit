@@ -147,7 +147,24 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
 Actions: `would-assign` (dry-run), `assigned`, `already-listed`, `refused`,
 `failed`, `none`.
 
-## Apply
+## Reviewed plan (recommended)
+
+Every run also writes `plan-<report>.json`: one editable item per source with
+its content hash, the proposal and a `decision` (`assign` for guardrail-clean
+proposals, `existing` for text already staged, `review` otherwise), plus any
+new-profile proposal the model made (`new_profiles`, `approved: false`; nothing
+is created by classify). Decide every item, approve any new profile spec, then
+one command assigns, stores each book once, writes references, installs and
+learns:
+
+```bash
+make knowledge-apply PLAN=plan-<report>.json DRY_RUN=1
+make knowledge-apply PLAN=plan-<report>.json APPROVE=1
+```
+
+See [knowledge-apply.md](knowledge-apply.md).
+
+## Apply (legacy, profile-local copy)
 
 With `APPLY=1`, a source is assigned when it is `proposed`, or when you
 approved it. An approval is your decision and overrides `needs_review`,

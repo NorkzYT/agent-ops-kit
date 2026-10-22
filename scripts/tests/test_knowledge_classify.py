@@ -209,7 +209,8 @@ class ClassifyE2E(unittest.TestCase):
 
     def run_kc(self, *args, report=True, **env):
         e = dict(self.env, **env)
-        rpath = self.tmp / f"report-{len(list(self.tmp.glob('report-*.json')))}.json"
+        n = len(list(self.tmp.glob("report-*.json")))
+        rpath = self.tmp / f"report-{n}.json"
         argv = [sys.executable, str(SCRIPT), *args] + (["--report", str(rpath)] if report else [])
         p = subprocess.run(argv, capture_output=True, text=True, env=e, timeout=120)
         data = json.loads(rpath.read_text()) if report and rpath.exists() else None
@@ -490,6 +491,46 @@ class ClassifyE2E(unittest.TestCase):
         self.assertIn("classifier-error", items["edu/Strategy Book"]["review_reasons"])
         self.assertNotIn("Strategy", self.manifests()["alpha"])
 
+    def test_writes_an_editable_reviewed_plan_next_to_the_report(self):
+        p, items = self.run_kc()
+        plan_path = self.tmp / "plan-report-0.json"
+        self.assertTrue(plan_path.is_file(), "no plan written")
+        self.assertIn("knowledge-apply PLAN=", p.stdout)
+        self.assertIn(str(plan_path), p.stdout)
+        self.assertEqual(sorted(x.name for x in self.tmp.glob("report-*.json")), ["report-0.json"],
+                         "the plan must not match the report glob (latest-report lookups)")
+        plan = json.loads(plan_path.read_text())
+        self.assertEqual(plan["plan_version"], 1)
+        self.assertEqual(plan["new_profiles"], [])
+        by = {i["source"]: i for i in plan["items"]}
+        ok = by["edu/Strategy Book"]
+        self.assertEqual((ok["decision"], ok["profile"], ok["proposed_profile"], ok["status"]),
+                         ("assign", "alpha", "alpha", "proposed"))
+        self.assertEqual(len(ok["source_sha256"]), 64)
+        self.assertTrue(ok["source_id"])
+        for rel in ("edu/Herb Book", "edu/Vague Book", "edu/Broken Book", "edu/Wrong Profile"):
+            self.assertEqual(by[rel]["decision"], "review", rel)
+        self.assertEqual(by["edu/Herb Book"]["profile"], "herbalism")      # pre-filled, still needs a decision
+        self.assertIn("high-risk-profile:herbalism", by["edu/Herb Book"]["review_reasons"])
+        for i in plan["items"]:
+            for key in ("rationale", "risk", "purpose", "chapters", "tags", "note"):
+                self.assertIn(key, i, key)
+        self.assertNotIn("edu/Listed Book", by)
+        self.assertEqual(self.manifests()["alpha"], "# alpha\nedu/Listed Book", "classify changed a book list")
+        self.assert_library_unchanged()
+
+    def test_plan_marks_already_imported_as_existing(self):
+        self.run_kc("--apply", "--approved-only", "--approve", "alpha=edu/Long Book")
+        self._chmod(self.books, writable=True)
+        (self.books / "edu" / "Strategy Twin").mkdir()
+        (self.books / "edu" / "Strategy Twin" / "s.md").write_text((self.books / "edu/Long Book/long.txt").read_text())
+        self._chmod(self.books, writable=False)
+        self.lib_before = tree_hash(self.books)
+        p, items = self.run_kc("edu/Strategy Twin")
+        plan = json.loads((self.tmp / "plan-report-1.json").read_text())
+        twin = next(i for i in plan["items"] if i["source"] == "edu/Strategy Twin")
+        self.assertEqual((twin["status"], twin["decision"], twin["owners"]), ("already-imported", "existing", ["alpha"]))
+
     def test_make_target(self):
         mk = ["make", "-s", "-C", str(REPO), "knowledge-classify"]
         env = dict(self.env, SOURCE="edu/Strategy Book", APPLY="1")    # APPLY from the environment is ignored
@@ -524,6 +565,18 @@ class ParseVerdict(unittest.TestCase):
                      '{"profile":"alpha","confidence":0.9,"rationale":"x","risk":{"a":1}}', "[1, 2]"):
             self.assertEqual(kc.parse_verdict(text, self.allowed).status, "malformed", text)
         self.assertEqual(kc.parse_verdict("I'm unable to help with that request.", self.allowed).status, "refused")
+
+    def test_new_profile_suggestion_is_a_proposal_never_a_profile(self):
+        v = kc.parse_verdict(json.dumps({"profile": "none", "confidence": 0.8, "rationale": "no fit",
+                                         "new_profile": {"name": "amazon-selling", "purpose": "Amazon FBA selling"}}),
+                             self.allowed)
+        self.assertEqual((v.status, v.profile), ("classified", ""))
+        self.assertEqual(v.new_profile, {"name": "amazon-selling", "purpose": "Amazon FBA selling"})
+        for bad in ({"name": "../x", "purpose": "p"}, {"name": "alpha", "purpose": "exists"}, {"name": "ok-name"}, "amazon"):
+            v = kc.parse_verdict(json.dumps({"profile": "none", "confidence": 0.8, "rationale": "r", "new_profile": bad}),
+                                 self.allowed)
+            self.assertEqual(v.status, "classified", bad)
+            self.assertEqual(v.new_profile, {}, bad)
 
     def test_unknown_risk_labels_are_kept_as_other(self):
         v = kc.parse_verdict('{"profile":"alpha","confidence":0.9,"rationale":"x","risk":["bio"]}', self.allowed)
