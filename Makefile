@@ -34,12 +34,13 @@ endef
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
 
-# `##@ Title` lines start a help section; `target: ## text` lines are listed under it.
-# `##> text` lines print as-is under the section title; `##| text` lines just
-# above a target are printed, indented, under that target's entry.
-help: ## Show this help
-	@echo "Usage: make <target> [VAR=value]"
-	@awk 'BEGIN{FS=":.*##"} /^##@ /{printf "\n\033[1m%s\033[0m\n",substr($$0,5); next} /^##> /{printf "  %s\n",substr($$0,5); next} /^##\| /{more=more sprintf("  %-25s  %s\n","",substr($$0,5)); next} /^[a-zA-Z_-]+( [a-zA-Z_-]+)*:.*##/{printf "  \033[36m%-25s\033[0m %s\n%s",$$1,$$2,more} {more=""}' $(MAKEFILE_LIST)
+# Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
+# is a section note (one paragraph per line), `##| text` lines just above a
+# target are wrapped under its entry, `target: ## text` is the summary.
+# Color only on a terminal; COLOR=1 forces it, COLOR=0 / NO_COLOR=1 / TERM=dumb
+# turn it off. HELP_WIDTH=<n> sets the wrap width.
+help: ## Show this help (COLOR=0|1, NO_COLOR=1, HELP_WIDTH=<n>)
+	@COLOR='$(COLOR)' NO_COLOR='$(NO_COLOR)' HELP_WIDTH='$(HELP_WIDTH)' python3 scripts/make-help.py $(MAKEFILE_LIST)
 
 ##@ Setup and Docker stack
 
@@ -233,8 +234,9 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
 ##@ Knowledge
-##> Flow: inventory -> classify/reconcile (book lists) -> refresh, or stage + hermes-profile
-##> (Markdown into the profile) -> learn (skill) -> learn-status. Nothing writes under /mnt/books.
+##> Flow: inventory (what is new) -> classify / reconcile (decide book lists) -> refresh (stage + sync; or knowledge-stage then hermes-profile) -> learn (build the <profile>-knowledge skill) -> learn-status
+##> Ownership: one canonical profile per book. A second profile only by explicit approval (SECONDARY='<profile>=<source>' SECONDARY_REASON='...') for a substantial, recurring, independent purpose. Books already in several lists are reported, never changed.
+##> Library: /mnt/books is read-only; nothing here writes, moves or deletes a book.
 
 ##| Read-only. Compares the library (/mnt/books) with every profile book list
 ##| (hermes/profiles/<p>/knowledge-sources.txt) and reports, by text content:
@@ -273,7 +275,10 @@ knowledge-refresh: ## After adding books: stage + sync every book-backed profile
 # exported shell variable.
 ##| Asks a model which profile each uncategorized book belongs to and prints
 ##| proposals (dry-run). APPLY=1 appends approved or guardrail-clean book-list
-##| lines; it converts nothing (run knowledge-refresh afterwards).
+##| lines; it converts nothing (run knowledge-refresh afterwards). Policy: one
+##| canonical profile per book; an approval for a book whose text another
+##| profile already has is refused unless given as SECONDARY='<profile>=<source>'
+##| with SECONDARY_REASON (the substantial, recurring, independent purpose).
 knowledge-classify: ## AI proposals for uncategorized books (dry-run; already-staged books are reported, never re-classified). APPLY=1 assigns guardrail-clean ones; APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1 SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n]
 	@args=(); \
 	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
@@ -282,6 +287,8 @@ knowledge-classify: ## AI proposals for uncategorized books (dry-run; already-st
 	 [[ "$${METADATA_ONLY:-0}" == "1" ]] && args+=(--metadata-only); \
 	 [[ -n "$${APPROVE:-}" ]] && args+=(--approve "$$APPROVE"); \
 	 [[ -n "$${APPROVALS:-}" ]] && args+=(--approvals "$$APPROVALS"); \
+	 [[ -n "$${SECONDARY:-}" ]] && args+=(--secondary "$$SECONDARY"); \
+	 [[ -n "$${SECONDARY_REASON:-}" ]] && args+=(--secondary-reason "$$SECONDARY_REASON"); \
 	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
 	 [[ -n "$${LIMIT:-}" ]] && args+=(--limit "$$LIMIT"); \
 	 python3 scripts/knowledge-classify.py "$${args[@]}"
@@ -290,12 +297,16 @@ knowledge-classify: ## AI proposals for uncategorized books (dry-run; already-st
 # together with explicit approvals; it appends book-list lines, nothing else.
 ##| Finds staged knowledge whose book-list line is gone and library copies of
 ##| books already staged, and proposes book-list fixes. APPLY=1 with approvals
-##| appends the approved lines; nothing is deleted or converted.
+##| appends the approved lines; nothing is deleted or converted. Also lists
+##| books in several book lists (reported only). Linking a source another
+##| profile already lists or stages needs SECONDARY= and SECONDARY_REASON=.
 knowledge-reconcile: ## Proposal only: staged knowledge with no book-list source, library copies of staged books. APPLY=1 APPROVE='<profile>=<library path>' / APPROVALS=<file> appends approved lines [SCOPE=<library path>]
 	@args=(); \
 	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \
 	 [[ -n "$${APPROVE:-}" ]] && args+=(--approve "$$APPROVE"); \
 	 [[ -n "$${APPROVALS:-}" ]] && args+=(--approvals "$$APPROVALS"); \
+	 [[ -n "$${SECONDARY:-}" ]] && args+=(--secondary "$$SECONDARY"); \
+	 [[ -n "$${SECONDARY_REASON:-}" ]] && args+=(--secondary-reason "$$SECONDARY_REASON"); \
 	 [[ -n "$${SCOPE:-}" ]] && args+=(--scope "$$SCOPE"); \
 	 python3 scripts/knowledge-reconcile.py "$${args[@]}"
 

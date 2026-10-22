@@ -38,7 +38,8 @@ make doctor
 ```
 
 Then @mention the bot in Discord. Full walkthrough: [docs/install.md](docs/install.md).
-`make help` lists every target, grouped by area.
+`make help` lists every target, grouped by area (colored on a terminal;
+`COLOR=0`/`NO_COLOR=1` turn it off, `COLOR=1` forces it, `HELP_WIDTH=<n>` sets the wrap width).
 
 ## Change a setting
 

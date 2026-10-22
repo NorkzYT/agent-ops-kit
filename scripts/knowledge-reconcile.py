@@ -17,12 +17,17 @@ fingerprints, exact or strong evidence, never file names):
      library file whose text matches (candidates). Several candidates are all
      listed; none is chosen for you;
   B. library books no book list includes whose text is already staged
-     ("already imported, source not linked"), with every owner profile.
+     ("already imported, source not linked"), with every owner profile;
+  C. library paths listed in more than one book list. The policy is one
+     canonical profile per book; these are reported for an operator decision
+     and never changed or removed here.
 
 With --apply and an approval `<profile>=<library path>`, the line is appended
 to hermes/profiles/<profile>/knowledge-sources.txt only when every book file at
 that path matches a staged file of that profile without a source (exact or
-strong). Nothing is staged, synced, deleted or learned; duplicate staged data
+strong) and no other profile lists that path or stages its text. Linking
+into such a second profile needs an explicit secondary approval
+(--secondary PROFILE=SOURCE --secondary-reason TEXT). Nothing is staged, synced, deleted or learned; duplicate staged data
 is kept; the library is only read.
 
 Exit 0 when everything was handled, 3 when an approval was refused or could
@@ -84,6 +89,7 @@ class Decision:
     source: str
     action: str = "would-link"   # would-link | linked | already-listed | refused | failed
     note: str = ""
+    secondary_reason: str = ""
     error: bool = False
 
 
@@ -152,7 +158,18 @@ def analyse(s, lib, corpus, manifests, scopes, with_candidates: bool):
     return orphans, imported
 
 
-def decide(s, lib, corpus, manifests, approvals: Dict[str, str], profiles, apply: bool) -> List[Decision]:
+def multi_owner(manifests: Dict[str, List[str]]) -> List[Dict[str, object]]:
+    """Book-list lines covered by more than one profile's book list (reported, never changed)."""
+    out = []
+    for e in sorted({e for es in manifests.values() for e in es}):
+        owners = sorted(p for p, es in manifests.items() if kc.covered_by(e, es))
+        if len(owners) > 1:
+            out.append({"source": e, "profiles": owners})
+    return out
+
+
+def decide(s, lib, corpus, manifests, approvals: Dict[str, str], profiles, apply: bool,
+           secondary: Dict[str, str], reason: str) -> List[Decision]:
     """Check each approval against content evidence; append only with --apply."""
     out = []
     for rel, prof in approvals.items():
@@ -177,6 +194,13 @@ def decide(s, lib, corpus, manifests, approvals: Dict[str, str], profiles, apply
             d.note = ("no exact/strong content evidence that " + (", ".join(missing) or rel)
                       + f" is the source of a staged file in {prof} without a book-list source")
             continue
+        others = {p for p, es in manifests.items() if p != prof and kc.covered_by(rel, es)}
+        others |= {m.profile for f in files for m in corpus.matches(fps[f][0]) if m.profile != prof}
+        if others and rel not in secondary:
+            d.action, d.error, d.note = "refused", True, kc.secondary_refusal(prof, rel, sorted(others))
+            continue
+        if others:
+            d.secondary_reason = reason
         second = [km.stage_output(f) for f in files
                   if km.stage_output(f) not in {sf.rel for sf in orphans}]
         if second:
@@ -192,7 +216,7 @@ def decide(s, lib, corpus, manifests, approvals: Dict[str, str], profiles, apply
     return out
 
 
-def write_report(s, orphans, imported, decisions, applied: bool, report: Optional[Path]):
+def write_report(s, orphans, imported, multi, decisions, applied: bool, report: Optional[Path]):
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     path = report or s.staging / "reports" / f"reconcile-{stamp}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +224,7 @@ def write_report(s, orphans, imported, decisions, applied: bool, report: Optiona
                     "library": str(s.books), "knowledge_root": str(s.kroot), "strong_threshold": km.STRONG},
             "staged_without_source": [asdict(o) for o in orphans],
             "already_imported": [asdict(sm) for sm in imported],
+            "multi_owner": multi,
             "decisions": [asdict(d) for d in decisions]}
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     appr = path.with_suffix(".approvals.txt")
@@ -217,7 +242,7 @@ def write_report(s, orphans, imported, decisions, applied: bool, report: Optiona
     return path, appr
 
 
-def print_report(s, orphans, imported, decisions, applied, rpath, apath, manifests) -> None:
+def print_report(s, orphans, imported, multi, decisions, applied, rpath, apath, manifests) -> None:
     shq = kc.shq
     print()
     print("== knowledge reconcile report ==")
@@ -259,11 +284,18 @@ def print_report(s, orphans, imported, decisions, applied, rpath, apath, manifes
             print(f"      printf '%s\\n' {shq(sm.source)} >> {ignore}")
         else:
             print("    a matching staged file has no source: see its candidates above")
+    print()
+    print(f"Listed in several book lists ({len(multi)}): policy is one canonical profile per book; keep a "
+          "second one only with an explicit secondary approval. Reported only: nothing is changed or removed")
+    for o in multi:
+        print(f"- {o['source']}: {', '.join(o['profiles'])}")
     if decisions:
         print()
         print("Approvals:")
         for d in decisions:
             print(f"- {d.profile}={d.source}   action: {d.action}" + (f"   note: {d.note}" if d.note else ""))
+            if d.secondary_reason:
+                print(f"    secondary profile (approved): {d.secondary_reason}")
     print()
     print(f"report: {rpath}")
     print(f"approvals template: {apath}")
@@ -284,6 +316,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--apply", action="store_true", help="append approved lines (needs --approve/--approvals)")
     p.add_argument("--approve", action="append", default=[], metavar="PROFILE=SOURCE")
     p.add_argument("--approvals", action="append", default=[], metavar="FILE")
+    p.add_argument("--secondary", action="append", default=[], metavar="PROFILE=SOURCE",
+                   help="explicitly approve linking a source another profile already lists or stages "
+                        "(needs --secondary-reason)")
+    p.add_argument("--secondary-reason", metavar="TEXT",
+                   help="the substantial, recurring, independent purpose the secondary profile serves")
     p.add_argument("--scope", action="append", default=[], metavar="LIBRARY_PATH",
                    help="search only these library paths for candidates (default: whole library)")
     p.add_argument("--report", type=Path, help="JSON report path (default <staging>/reports/reconcile-<time>.json)")
@@ -296,6 +333,7 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
     kc.check_roots(s)
     profiles = kc.load_profiles(s)
     approvals = kc.load_approvals(args.approve, args.approvals)
+    secondary, reason = kc.load_secondary(args.secondary, args.secondary_reason, approvals)
     if args.apply and not approvals:
         raise SafetyError("--apply links only explicit approvals: pass APPROVE='<profile>=<library path>' "
                           "or APPROVALS=<file> (run without APPLY first for proposals)")
@@ -309,13 +347,14 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
     books = s.books.resolve()
     lib = km.Library(books, s.doc2md, convert=s.convert)
     corpus = km.Corpus(books, s.kroot, manifests)
-    decisions = decide(s, lib, corpus, manifests, approvals, profiles, args.apply)
+    decisions = decide(s, lib, corpus, manifests, approvals, profiles, args.apply, secondary, reason)
     if any(d.action == "linked" for d in decisions):      # report the state after the append
         manifests = {name: kc.manifest_entries(p.manifest) for name, p in profiles.items()}
         corpus = km.Corpus(books, s.kroot, manifests)
     orphans, imported = analyse(s, lib, corpus, manifests, args.scope, with_candidates=not approvals)
-    rpath, apath = write_report(s, orphans, imported, decisions, args.apply, args.report)
-    print_report(s, orphans, imported, decisions, args.apply, rpath, apath, manifests)
+    multi = multi_owner(manifests)
+    rpath, apath = write_report(s, orphans, imported, multi, decisions, args.apply, args.report)
+    print_report(s, orphans, imported, multi, decisions, args.apply, rpath, apath, manifests)
     return 3 if any(d.error for d in decisions) else 0
 
 

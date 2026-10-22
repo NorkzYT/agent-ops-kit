@@ -1,8 +1,11 @@
 """Makefile: grouped `make help` output and the hermes-config-apply target.
 
 Offline: `make help` only parses the Makefile and `make -n` prints recipes
-without running them, so nothing under HERMES_HOME is touched.
+without running them, so nothing under HERMES_HOME is touched. Color is checked
+on a pseudo-terminal (pty) and with COLOR/NO_COLOR; captured output is plain.
 """
+import os
+import pty
 import re
 import shutil
 import subprocess
@@ -15,10 +18,37 @@ SECTIONS = ("Setup and Docker stack", "Proxies and auth", "Hermes", "Health and 
             "Specialist routing", "Knowledge", "Windows VM", "Tests (offline)")
 
 
-def make(*args):
-    r = subprocess.run(["make", "--no-print-directory", *args], cwd=REPO,
+HELP_ENV = {k: v for k, v in os.environ.items()
+            if k not in ("COLOR", "NO_COLOR", "HELP_WIDTH", "COLUMNS", "MAKEFLAGS", "MFLAGS")}
+
+
+def make(*args, raw=False, **env):
+    r = subprocess.run(["make", "--no-print-directory", *args], cwd=REPO, env=dict(HELP_ENV, **env),
                        capture_output=True, text=True, timeout=30)
-    return r.returncode, ANSI.sub("", r.stdout)
+    return r.returncode, r.stdout if raw else ANSI.sub("", r.stdout)
+
+
+def make_on_tty(*args, **env):
+    """`make` with stdout on a pseudo-terminal, as when an operator types it."""
+    master, slave = pty.openpty()
+    try:
+        p = subprocess.Popen(["make", "--no-print-directory", *args], cwd=REPO,
+                             env={**HELP_ENV, "TERM": "xterm", **env}, stdout=slave,
+                             stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        os.close(slave)
+        chunks = []
+        while True:
+            try:
+                data = os.read(master, 65536)
+            except OSError:                       # EIO: the child closed the terminal
+                break
+            if not data:
+                break
+            chunks.append(data)
+        p.wait(timeout=30)
+        return p.returncode, b"".join(chunks).decode("utf-8", "replace").replace("\r\n", "\n")
+    finally:
+        os.close(master)
 
 
 def documented_targets():
@@ -66,20 +96,62 @@ class HelpTest(unittest.TestCase):
         self.assertEqual(section_of("test-router"), "Tests (offline)")
         self.assertEqual(section_of("up"), "Setup and Docker stack")
 
-    def details(self, target):
-        """The indented `##|` detail lines printed under the target's entry."""
+    def column(self):
+        """The one column every target description starts at."""
+        cols = {m.start(2) - m.start(0) for m in re.finditer(r"^  (\S+(?: \S+)*?) {2,}(\S)", self.out, re.M)}
+        self.assertEqual(len(cols), 1, cols)
+        return cols.pop()
+
+    def block(self, target):
+        """(summary lines, `##|` detail lines) of a target: the summary wraps at the
+        description column, details are indented two more spaces."""
         lines = self.out.splitlines()
         i = next(n for n, l in enumerate(lines) if l.startswith(f"  {target} "))
-        block = []
+        col = self.column()
+        summary, details = [lines[i][col:]], []
         for l in lines[i + 1:]:
-            if not l.startswith(" " * 29):
+            if l.startswith(" " * (col + 2)) and l[col + 2] != " ":
+                details.append(l.strip())
+            elif l.startswith(" " * col) and l[col] != " " and not details:
+                summary.append(l.strip())
+            else:
                 break
-            block.append(l.strip())
-        return block
+        return summary, details
+
+    def details(self, target):
+        return self.block(target)[1]
 
     def entry(self, target):
-        line = next(l for l in self.out.splitlines() if l.startswith(f"  {target} "))
-        return " ".join([line.strip(), *self.details(target)])
+        summary, details = self.block(target)
+        return " ".join(summary + details)
+
+    def test_descriptions_are_aligned_and_wrapped_to_the_width(self):
+        col = self.column()
+        self.assertEqual(col, 2 + max(len(t) for t in documented_targets()) + 2)
+        for width in ("100", "72"):
+            with self.subTest(width=width):
+                out = make("help", HELP_WIDTH=width)[1]
+                long = [l for l in out.splitlines() if len(l) > int(width) and " " in l.strip()]
+                self.assertEqual(long, [])
+        self.assertEqual(make("help", HELP_WIDTH="100")[1], self.out)   # 100 columns when not a terminal
+
+    def test_wrapping_keeps_every_word_of_a_summary(self):
+        line = next(l for l in (REPO / "Makefile").read_text().splitlines()
+                    if l.startswith("knowledge-classify:"))
+        self.assertEqual(" ".join(self.block("knowledge-classify")[0]), " ".join(line.split("## ", 1)[1].split()))
+        self.assertGreater(len(self.block("knowledge-classify")[0]), 1)
+
+    def test_section_notes_sit_under_the_title(self):
+        lines = self.out.splitlines()
+        i = lines.index("Knowledge")
+        self.assertTrue(lines[i + 1].startswith("  Flow: inventory"), lines[i + 1])
+        self.assertIn("one canonical profile per book", "\n".join(lines[i + 1:i + 8]))
+
+    def test_helper_script_runs_without_make(self):
+        r = subprocess.run(["python3", str(REPO / "scripts" / "make-help.py"), str(REPO / "Makefile")],
+                           capture_output=True, text=True, timeout=30, env=dict(HELP_ENV, HELP_WIDTH="100"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, self.out)
 
     def test_every_knowledge_target_has_a_plain_language_explanation(self):
         for target in ("knowledge-inventory", "knowledge-convert", "knowledge-stage",
@@ -101,10 +173,45 @@ class HelpTest(unittest.TestCase):
         self.assertIn("automatic EPUB/PDF conversion of listed books", self.entry("knowledge-refresh"))
 
     def test_config_apply_help_says_no_restart(self):
-        line = next(l for l in self.out.splitlines() if l.startswith("  hermes-config-apply "))
-        self.assertIn("HERMES_SKIP_GATEWAY=1", line)
-        self.assertIn("--force", line)
-        self.assertIn("no gateway restart", line)
+        text = self.entry("hermes-config-apply")
+        self.assertIn("HERMES_SKIP_GATEWAY=1", text)
+        self.assertIn("--force", text)
+        self.assertIn("no gateway restart", text)
+
+    def test_ownership_policy_is_in_the_knowledge_help(self):
+        self.assertIn("one canonical profile per book", self.entry("knowledge-classify"))
+        self.assertIn("SECONDARY=", self.entry("knowledge-classify"))
+        self.assertIn("SECONDARY=", self.entry("knowledge-reconcile"))
+
+
+@unittest.skipUnless(shutil.which("make"), "make not installed")
+class HelpColorTest(unittest.TestCase):
+    def test_captured_output_is_plain(self):
+        code, raw = make("help", raw=True)
+        self.assertEqual(code, 0)
+        self.assertNotIn("\x1b", raw)
+
+    def test_terminal_output_is_colored(self):
+        code, out = make_on_tty("help")
+        self.assertEqual(code, 0, out)
+        self.assertRegex(out, r"\x1b\[[0-9;]*m")
+        self.assertIn("\nKnowledge", ANSI.sub("", out))
+
+    def test_color_1_forces_color_without_a_terminal(self):
+        for args, env in (((), {"COLOR": "1"}), (("COLOR=1",), {})):
+            with self.subTest(args=args, env=env):
+                code, raw = make("help", *args, raw=True, **env)
+                self.assertEqual(code, 0)
+                self.assertRegex(raw, r"\x1b\[[0-9;]*m")
+                self.assertEqual(ANSI.sub("", raw), make("help")[1])   # same layout, only colored
+
+    def test_no_color_and_color_0_turn_it_off_on_a_terminal(self):
+        for args, env in (((), {"NO_COLOR": "1"}), ((), {"COLOR": "0"}), (("COLOR=0",), {}),
+                          ((), {"TERM": "dumb"})):
+            with self.subTest(args=args, env=env):
+                code, out = make_on_tty("help", *args, **env)
+                self.assertEqual(code, 0, out)
+                self.assertNotIn("\x1b", out)
 
 
 @unittest.skipUnless(shutil.which("make"), "make not installed")

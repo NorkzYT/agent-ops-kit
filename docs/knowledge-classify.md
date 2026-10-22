@@ -165,6 +165,25 @@ It does not sync into `~/.hermes`, run `/learn` or delete anything. Review
 `git diff hermes/profiles`, then run `make knowledge-refresh NAME=<profile>` and
 `/learn`.
 
+### One canonical profile per book
+
+Each book belongs to one profile by default. An approval for a book whose text
+is already staged in another profile is `refused` (exit 3) with the command to
+use instead. A second (secondary) profile is allowed only by explicit approval,
+and only when it serves a substantial, recurring, independent purpose, not
+because the book is merely relevant:
+
+```bash
+make knowledge-classify APPLY=1 APPROVED_ONLY=1 SECONDARY='<profile>=<library path>' \
+  SECONDARY_REASON='<the recurring purpose this profile has for the book>'
+```
+
+`SECONDARY_REASON` is required (at least 20 characters) and is recorded in the
+JSON report and printed with the item. Secondary approvals are command-line
+only, never read from an approvals file. Books already in several book lists
+are reported by `make knowledge-reconcile` and never changed or removed; which
+one stays canonical is your decision, made by editing the book lists yourself.
+
 Approvals use the format `<profile>=<library path>`, one per line in a file
 (`#` comments allowed). The approvals template from each run lists every
 proposal commented out. Uncomment the lines you accept and change the profile
@@ -178,6 +197,8 @@ where needed.
 | `APPROVE=` / `--approve` | — | — | One `<profile>=<source>` approval |
 | `APPROVALS=` / `--approvals` | — | — | File of approvals |
 | `APPROVED_ONLY=1` / `--approved-only` | — | off | Approvals only: no staging, no model calls |
+| `SECONDARY=` / `--secondary` | — | — | One `<profile>=<source>` approval as a second owner of a book another profile has |
+| `SECONDARY_REASON=` / `--secondary-reason` | — | — | Required with `SECONDARY`: the substantial, recurring, independent purpose |
 | `SOURCE=` / positional | — | all uncategorized | Limit the run to one source |
 | `CLASSIFIER=` / `--classifier` | `KNOWLEDGE_CLASSIFIER` | `cliproxy` | `cliproxy`, `local` (Ollama only) or `none` (stage and report, no model) |
 | `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-5.6-luna` | CLIProxyAPI model |
@@ -218,6 +239,9 @@ give it a book list first.
   whose text is already staged, with every owner. When the owners' staged files
   already come from a book-list line, nothing needs linking; the report prints
   the `hermes/knowledge-ignore.txt` line that stops listing the copy.
+- **Listed in several book lists**: book-list lines more than one profile's
+  list covers. Policy is one canonical profile per book; these are reported for
+  your decision and never changed or removed.
 
 ```bash
 make knowledge-reconcile                                   # proposal + report, nothing changes
@@ -229,7 +253,10 @@ make knowledge-reconcile APPLY=1 APPROVALS=data/knowledge-staging/reports/<run>.
 
 `APPLY=1` without an approval is refused. An approval is applied only when
 every book file at that library path matches, by content, a staged file of that
-profile that has no source; anything weaker is `refused` (exit 3). Applying
+profile that has no source; anything weaker is `refused` (exit 3). When another
+profile already lists that path or stages its text, the approval is also
+refused unless given as `SECONDARY='<profile>=<library path>'` with
+`SECONDARY_REASON` (see One canonical profile per book). Applying
 appends that one line to the profile's book list. It does not stage, sync,
 delete duplicate staged data, run `/learn` or write to the library. Prefer the
 candidate marked "refresh updates this same file"; another candidate makes the

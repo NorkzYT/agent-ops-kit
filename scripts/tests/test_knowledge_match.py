@@ -164,7 +164,8 @@ class ContentAwareE2E(unittest.TestCase):
                         KNOWLEDGE_CLASSIFY_NO_DOTENV="1", KNOWLEDGE_CLASSIFY_BASE_URL=self.cloud.url,
                         CLIPROXY_API_KEY="test-key", OLLAMA_BASE_URL="", OLLAMA_CHAT_MODEL="",
                         MODEL_ROUTER_PRIVATE_TERMS="", MODEL_ROUTER_PRIVATE_PATHS="", KNOWLEDGE_CLASSIFY_LIMIT="50")
-        for k in ("APPLY", "APPROVE", "APPROVALS", "SOURCE", "SCOPE", "CLASSIFIER", "LIMIT", "KNOWLEDGE_CLASSIFIER",
+        for k in ("APPLY", "APPROVE", "APPROVALS", "SECONDARY", "SECONDARY_REASON", "SOURCE", "SCOPE", "CLASSIFIER",
+                  "LIMIT", "KNOWLEDGE_CLASSIFIER",
                   "KNOWLEDGE_HIGH_RISK_PROFILES", "MAKEFLAGS", "MFLAGS"):
             self.env.pop(k, None)
         self.lib0, self.k0, self.m0 = tree_hash(self.books), tree_hash(self.kroot), self.manifests()
@@ -332,6 +333,85 @@ class ContentAwareE2E(unittest.TestCase):
         p, rep = self.run_py(RECONCILE, "--apply", "--approve", "strategy=text/Legacy/C.md")
         self.assertEqual(rep["decisions"][0]["action"], "already-listed")
         self.assertEqual(self.manifests()["strategy"].count("text/Legacy/C.md"), 1)
+
+    # ------------------------------------------------------------------ #
+    # Ownership policy: one canonical profile per book; a secondary profile
+    # only on explicit approval with a stated purpose; existing multi-owner
+    # books are reported, never changed.
+    REASON = "recurring pricing reviews need these frameworks independently of offers"
+
+    def test_approval_into_a_second_profile_is_refused_without_secondary_approval(self):
+        p, rep = self.run_py(CLASSIFY, "--apply", "--approved-only", "--approve", "strategy=edu/Leads Book")
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        it = rep["items"][0]
+        self.assertEqual((it["action"], it["owners"], it["secondary_reason"]), ("refused", ["offers"], ""))
+        self.assertIn("one canonical profile per book", it["action_note"])
+        self.assertIn("SECONDARY='strategy=edu/Leads Book'", p.stdout)
+        self.assertEqual(self.cloud.requests, [])
+        self.assert_untouched()
+
+    def test_secondary_needs_a_stated_purpose(self):
+        for args in ((), ("--secondary-reason", "useful"), ("--secondary-reason", "   ")):
+            p, _ = self.run_py(CLASSIFY, "--apply", "--approved-only", "--secondary", "strategy=edu/Leads Book", *args)
+            self.assertEqual(p.returncode, 1, f"{args}: {p.stdout}{p.stderr}")
+            self.assertIn("SECONDARY_REASON", p.stderr)
+        p, _ = self.run_py(CLASSIFY, "--approved-only", "--secondary-reason", self.REASON)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)              # a reason without a secondary
+        p, _ = self.run_py(CLASSIFY, "--approved-only", "--approve", "offers=edu/Leads Book",
+                           "--secondary", "strategy=edu/Leads Book", "--secondary-reason", self.REASON)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)              # conflicting approvals
+        self.assert_untouched()
+
+    def test_explicit_secondary_approval_adds_the_second_profile(self):
+        p = self.make("knowledge-classify", "APPLY=1", "APPROVED_ONLY=1", "SECONDARY=strategy=edu/Leads Book",
+                      f"SECONDARY_REASON={self.REASON}", )
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("secondary profile (approved): " + self.REASON, p.stdout)
+        report = sorted((self.staging / "reports").glob("classify-*.json"))[-1]
+        it = json.loads(report.read_text())["items"][0]
+        self.assertEqual((it["action"], it["approved_profile"], it["owners"], it["secondary_reason"]),
+                         ("assigned", "strategy", ["offers"], self.REASON))
+        m = self.manifests()
+        self.assertEqual(m["strategy"], self.m0["strategy"] + "edu/Leads Book\n")
+        self.assertEqual({k: v for k, v in m.items() if k != "strategy"},
+                         {k: v for k, v in self.m0.items() if k != "strategy"})
+
+    def test_a_secondary_for_a_book_with_no_owner_is_just_its_canonical_profile(self):
+        p, rep = self.run_py(CLASSIFY, "--approved-only", "--secondary", "strategy=edu/Fresh Book",
+                             "--secondary-reason", self.REASON)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        it = rep["items"][0]
+        self.assertEqual((it["action"], it["owners"], it["secondary_reason"]), ("would-assign", [], ""))
+        self.assert_untouched()
+
+    def test_reconcile_reports_existing_multi_owner_books_and_changes_nothing(self):
+        p, rep = self.run_py(RECONCILE)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("Listed in several book lists (1)", p.stdout)
+        self.assertIn("- books-in-text/alex/B.txt: marketing, offers", p.stdout)
+        self.assertIn("one canonical profile per book", p.stdout)
+        self.assertEqual(rep["multi_owner"], [{"source": "books-in-text/alex/B.txt",
+                                               "profiles": ["marketing", "offers"]}])
+        self.assert_untouched()
+
+    def test_reconcile_link_into_a_second_book_list_needs_secondary_approval(self):
+        with open(self.seeds / "offers" / "knowledge-sources.txt", "a") as fh:
+            fh.write("text/Legacy\n")
+        m0 = self.manifests()
+        p, rep = self.run_py(RECONCILE, "--apply", "--approve", "strategy=text/Legacy/C.md")
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
+        d = rep["decisions"][0]
+        self.assertEqual(d["action"], "refused")
+        self.assertIn("one canonical profile per book", d["note"])
+        self.assertIn("offers", d["note"])
+        self.assertEqual(self.manifests(), m0)
+        p, rep = self.run_py(RECONCILE, "--apply", "--secondary", "strategy=text/Legacy/C.md",
+                             "--secondary-reason", self.REASON)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        d = rep["decisions"][0]
+        self.assertEqual((d["action"], d["secondary_reason"]), ("linked", self.REASON))
+        self.assertEqual(self.manifests()["strategy"], m0["strategy"] + "text/Legacy/C.md\n")
+        self.assertEqual(self.manifests()["offers"], m0["offers"])
 
     def test_inventory_separates_new_imported_and_missing(self):
         with open(self.seeds / "offers" / "knowledge-sources.txt", "a") as fh:

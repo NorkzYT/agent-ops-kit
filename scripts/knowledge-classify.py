@@ -53,6 +53,12 @@ hermes/profiles/<profile>/knowledge-sources.txt and stages that one book into
 data/knowledge/<profile> with scripts/knowledge-stage.sh. Nothing is deleted,
 nothing is synced into Hermes and /learn is never run.
 
+Ownership policy: one canonical profile per book. An approval into a profile
+whose text is already staged elsewhere is refused unless the operator approves
+that profile as a secondary owner explicitly (--secondary PROFILE=SOURCE with
+--secondary-reason stating a substantial, recurring, independent purpose).
+Existing books with several owners are reported and never changed.
+
 Exit 0 when every source was handled (needs_review is a normal outcome),
 3 when a source could not be staged, classified or assigned, 1 on a usage or
 safety error. Settings: see docs/knowledge-classify.md.
@@ -669,6 +675,7 @@ class Item:
     approved_profile: str = ""
     library_exemption: bool = False                         # detector hits overridden for a library book
     owners: List[str] = field(default_factory=list)          # profiles that already stage this text
+    secondary_reason: str = ""     # operator's stated purpose for a second owner (ownership policy)
     imported_as: List[Dict[str, object]] = field(default_factory=list)
     action: str = "none"           # none | would-assign | assigned | already-listed | refused | failed
     action_note: str = ""
@@ -835,6 +842,38 @@ def load_approvals(cli: Sequence[str], files: Sequence[str]) -> Dict[str, str]:
     return out
 
 
+MIN_SECONDARY_REASON = 20
+
+
+def load_secondary(cli: Sequence[str], reason: Optional[str],
+                   approvals: Dict[str, str]) -> Tuple[Dict[str, str], str]:
+    """Explicit secondary-owner approvals ({source: profile}), merged into approvals.
+
+    One canonical profile per book is the default; a second one needs this
+    deliberate, command-line-only approval plus a stated purpose."""
+    reason = " ".join((reason or "").split())
+    if not cli:
+        if reason:
+            raise SafetyError("SECONDARY_REASON given without SECONDARY='<profile>=<source>'")
+        return {}, ""
+    if len(reason) < MIN_SECONDARY_REASON:
+        raise SafetyError("a secondary profile needs SECONDARY_REASON (--secondary-reason): the substantial, "
+                          f"recurring, independent purpose it serves (at least {MIN_SECONDARY_REASON} characters)")
+    out: Dict[str, str] = {}
+    for prof, rel in (parse_approval(a, "--secondary") for a in cli):
+        for seen in (out, approvals):
+            if rel in seen and seen[rel] != prof:
+                raise SafetyError(f"conflicting approvals for {rel!r}: {seen[rel]} and {prof}")
+        out[rel] = approvals[rel] = prof
+    return out, reason
+
+
+def secondary_refusal(prof: str, rel: str, others: Sequence[str]) -> str:
+    return (f"ownership policy: one canonical profile per book; {rel} already belongs to {', '.join(others)}. "
+            f"Add {prof} as a secondary profile only for a substantial, recurring, independent purpose: "
+            f"SECONDARY={shq(prof + '=' + rel)} SECONDARY_REASON='<that purpose>' (instead of APPROVE)")
+
+
 def append_manifest(manifest: Path, rel: str) -> bool:
     """Append one line; False when it is already listed. Never rewrites the file."""
     if manifest.is_symlink() or not manifest.is_file():
@@ -960,6 +999,8 @@ def print_report(s: Settings, items: List[Item], applied: bool, approved_only: b
             print(f"    needs_review: {', '.join(i.review_reasons)}")
         if i.stage_problems:
             print(f"    staging: {'; '.join(i.stage_problems)}")
+        if i.secondary_reason:
+            print(f"    secondary profile (approved): {i.secondary_reason}")
         if i.action_note:
             print(f"    note: {i.action_note}")
         if not applied and not i.approved_profile and i.action != "refused" and i.status != "already-imported":
@@ -996,6 +1037,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="operator-approved mapping (repeatable); assigned only with --apply")
     p.add_argument("--approvals", action="append", default=[], metavar="FILE",
                    help="file of PROFILE=SOURCE lines (# comments); assigned only with --apply")
+    p.add_argument("--secondary", action="append", default=[], metavar="PROFILE=SOURCE",
+                   help="explicitly approve PROFILE as a second owner of a book another profile already has "
+                        "(needs --secondary-reason); one canonical profile per book otherwise")
+    p.add_argument("--secondary-reason", metavar="TEXT",
+                   help="the substantial, recurring, independent purpose the secondary profile serves")
     p.add_argument("--approved-only", action="store_true", help="process approvals only; no staging, no model calls")
     p.add_argument("--classifier", choices=("cliproxy", "local", "none"),
                    default=os.environ.get("KNOWLEDGE_CLASSIFIER", "cliproxy"))
@@ -1051,6 +1097,7 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
     s.library_exempt, s.exemption_note = library_exemption(s)
     profiles = load_profiles(s)
     approvals = load_approvals(args.approve, args.approvals)
+    secondary, reason = load_secondary(args.secondary, args.secondary_reason, approvals)
     for rel in list(approvals) + list(args.sources):
         safe_rel(s, rel)
     for rel, prof in approvals.items():
@@ -1078,8 +1125,12 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
                 it.status, it.action, it.error = "already-imported", "refused", True
                 it.action_note = (f"its text is already staged in {prof}; assigning would re-ingest it. "
                                   "Link the source instead: make knowledge-reconcile")
+            elif sm.owners and rel not in secondary:
+                it.action, it.error = "refused", True
+                it.action_note = secondary_refusal(prof, rel, sm.owners)
             elif sm.owners:
-                it.action_note = f"note: its text is also staged in {', '.join(sm.owners)}"
+                it.secondary_reason = reason
+                it.action_note = f"its text is also staged in {', '.join(sm.owners)}"
         items.append(it)
     if not args.approved_only:
         chosen = [r for r in (args.sources or pending) if r not in approvals]
