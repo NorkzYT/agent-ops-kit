@@ -166,7 +166,7 @@ class ContentAwareE2E(unittest.TestCase):
                         MODEL_ROUTER_PRIVATE_TERMS="", MODEL_ROUTER_PRIVATE_PATHS="", KNOWLEDGE_CLASSIFY_LIMIT="50")
         for k in ("APPLY", "APPROVE", "APPROVALS", "SECONDARY", "SECONDARY_REASON", "SOURCE", "SCOPE", "CLASSIFIER",
                   "LIMIT", "KNOWLEDGE_CLASSIFIER",
-                  "KNOWLEDGE_HIGH_RISK_PROFILES", "MAKEFLAGS", "MFLAGS"):
+                  "MAKEFLAGS", "MFLAGS"):
             self.env.pop(k, None)
         self.lib0, self.k0, self.m0 = tree_hash(self.books), tree_hash(self.kroot), self.manifests()
         self._chmod(self.books, writable=False)

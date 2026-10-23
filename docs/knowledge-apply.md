@@ -27,9 +27,10 @@ Every item lands in one state:
 | state | meaning | what moves it |
 |---|---|---|
 | `ready` | `assign` to an existing profile or an approved new profile, `skip`, `existing` | nothing; it runs on apply |
-| `pending review` | `review` with a concrete existing-profile proposal (`proposed_profile`), e.g. a high-risk content label | `APPROVE_ALL=1`, or set `decision` by hand |
+| `pending review` | `review` with a concrete existing-profile proposal (`proposed_profile`), e.g. low confidence | `APPROVE_ALL=1`, or set `decision` by hand |
 | `pending profile approval` | item tied to a `new_profiles` proposal that is not approved, or whose spec is incomplete | `APPROVE_ALL=1` when the spec is complete; otherwise fill the spec (or regenerate the plan) |
 | `pending error` | classifier error, no target, source that could not be hashed | `SKIP_ERRORS=1` (skip this run) or decide it by hand |
+| `pending stale` | `review` that still carries a risk label from an earlier release (`high-risk-content:*`, `high-risk-profile:*`, `model-risk:*`) | regenerate the plan with `make knowledge-classify`, or decide it by hand; never `APPROVE_ALL` or `SKIP_ERRORS` |
 
 Only structural problems are errors (exit 1, nothing written): stale source
 hashes, unknown decisions or actions, unsafe names, malformed JSON, a hand-set
@@ -43,10 +44,11 @@ pending item; `VERBOSE=1` adds review reasons, missing spec fields and sources.
 concrete proposals. It works on a copy of the plan; the file is never edited.
 
 * clean `assign` stays `assign`; `skip` and `existing` stay as written;
-* `pending review` with an existing-profile proposal becomes `assign` to it.
-  High-risk content or profile review labels (a knowledge-plan gate, not a
-  routing label) are accepted by this (it is an explicit approval); the
-  specialist router has no high-risk tier;
+* `pending review` with an existing-profile proposal becomes `assign` to it;
+* `pending stale` (a risk label from an earlier release) is left alone: the
+  classifier no longer judges topics, so the plan is regenerated rather than
+  re-interpreted (see "Plans from earlier releases" in
+  [knowledge-classify.md](knowledge-classify.md));
 * `pending profile approval` with a **complete** proposal becomes `assign` and
   the proposal becomes approved (the profile is created). An incomplete
   proposal stays pending: nothing is guessed;
@@ -182,8 +184,10 @@ garbage collection.
 exit 0, the four states and no write; `VERBOSE=1`; an apply with pending items
 refuses before any write; stale hashes stay errors; `APPROVE_ALL` preview shows
 the changes and the bound plan id; incomplete specs and errors are never
-guessed; `SKIP_ERRORS=1` applies everything (high-risk proposal accepted,
+guessed; `SKIP_ERRORS=1` applies everything (low-confidence proposal accepted,
 profile created from a complete spec, receipt with digest, idempotent re-run);
+legacy risk labels make a `review` item pending stale, untouched by
+`APPROVE_ALL`/`SKIP_ERRORS`, while a hand-decided item applies;
 a changed file is refused under the bound id; hand edits and terminal decisions
 survive; `resolve_plan` semantics. Classifier side
 (`test_knowledge_classify.py`): complete specs in the plan, one bounded

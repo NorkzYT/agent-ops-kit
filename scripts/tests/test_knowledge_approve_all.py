@@ -44,7 +44,7 @@ class PlanStatesTest(tka.ApplyFixture):
         items = [
             self.item("edu/Strategy Book"),                                                    # clean -> assign
             self.item("edu/Two Files", decision="review", status="needs-review", profile="beta",
-                      proposed_profile="beta", review_reasons=["high-risk-content:medical"]),   # existing proposal
+                      proposed_profile="beta", review_reasons=["low-confidence"]),               # existing proposal
             self.item("edu/Cloud Security", decision="review", status="needs-review", profile=spec["name"],
                       proposed_profile="", review_reasons=["no-profile", f"new-profile-proposal:{spec['name']}"],
                       new_profile_suggestion={"name": spec["name"], "purpose": spec["purpose"]}),
@@ -79,7 +79,7 @@ class PlanStatesTest(tka.ApplyFixture):
         p = self.run_apply(self.unedited_plan(), "--dry-run", "--verbose")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("in_scope", p.stdout)
-        self.assertIn("high-risk-content:medical", p.stdout)
+        self.assertIn("low-confidence", p.stdout)
         self.assert_nothing_written()
 
     def test_actual_apply_with_pending_items_refuses_before_any_write(self):
@@ -130,7 +130,7 @@ class BulkApprovalApplyTest(tka.ApplyFixture):
         items = [
             self.item("edu/Strategy Book"),
             self.item("edu/Two Files", decision="review", status="needs-review", profile="beta",
-                      proposed_profile="beta", review_reasons=["high-risk-content:medical", "high-risk-profile:beta"]),
+                      proposed_profile="beta", review_reasons=["low-confidence"]),
             self.item("edu/Cloud Security", decision="review", status="needs-review", profile="cloud-security",
                       proposed_profile="", review_reasons=["no-profile", "new-profile-proposal:cloud-security"]),
             self.item("edu/Amazon Selling Guide", decision="review", status="error", profile="",
@@ -152,7 +152,7 @@ class BulkApprovalApplyTest(tka.ApplyFixture):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(plan.read_bytes(), before, "the plan file was edited in place")
         self.assertIn("edu/Strategy Book", self.manifest("alpha"))
-        self.assertIn("edu/Two Files", self.manifest("beta"))                      # high-risk accepted explicitly
+        self.assertIn("edu/Two Files", self.manifest("beta"))                      # proposal accepted explicitly
         self.assertIn("edu/Cloud Security", self.manifest("cloud-security"))     # proposal created
         self.assertNotIn("Amazon", self.manifest("alpha") + self.manifest("beta"))
         soul = (self.seeds / "cloud-security" / "SOUL.md").read_text()
@@ -232,6 +232,69 @@ class BulkApprovalApplyTest(tka.ApplyFixture):
         self.assertEqual(res2.counts["skip"], 1)
         self.assertEqual(res2.digest, self.expected_digest(self.plan_all(name="again"), True))
         self.assertEqual(plan["items"][1]["decision"], "review", "resolve_plan mutated the loaded plan")
+
+
+class LegacyRiskLabelTest(tka.ApplyFixture):
+    """Plans written before the risk labels were removed: a ``review`` item that still carries a
+    ``high-risk-content:``, ``high-risk-profile:`` or ``model-risk:`` reason is stale. It is never
+    approved, skipped or re-labelled here; the operator regenerates the plan (or decides by hand)."""
+
+    LEGACY = ("high-risk-content:medical", "high-risk-profile:beta", "model-risk:offensive-security")
+
+    def legacy_plan(self, reasons=("high-risk-content:medical",), **extra):
+        items = [
+            self.item("edu/Strategy Book"),
+            self.item("edu/Two Files", decision="review", status="needs-review", profile="beta",
+                      proposed_profile="beta", review_reasons=list(reasons)),
+        ]
+        return self.plan(items, [], **extra)
+
+    def test_resolve_marks_legacy_review_items_stale_and_never_guesses(self):
+        for reason in self.LEGACY:
+            plan = kp.load_plan(self.legacy_plan((reason,), name="p-" + reason.split(":")[0]))
+            profiles = kp.existing_profiles(self.seeds)
+            for kw in ({}, {"approve_all": True}, {"skip_errors": True}, {"approve_all": True, "skip_errors": True}):
+                res = kp.resolve_plan(plan, profiles, **kw)
+                row = next(r for r in res.items if r["source"] == "edu/Two Files")
+                self.assertEqual(row["state"], kp.PENDING_STALE, (reason, kw))
+                self.assertEqual(row["decision"], "review", (reason, kw))
+                self.assertEqual(res.counts[kp.PENDING_STALE], 1)
+                self.assertEqual(res.counts[kp.PENDING_REVIEW], 0)
+                self.assertFalse(res.changes, (reason, kw))
+                self.assertTrue(res.pending)
+            self.assertEqual(plan["items"][1]["review_reasons"], [reason], "resolve_plan rewrote the reasons")
+        # a mixed list (a legacy label next to a live reason) is stale too: the item needs a fresh classification
+        res = kp.resolve_plan(kp.load_plan(self.legacy_plan(("low-confidence", "model-risk:medical"), name="mixed")),
+                              kp.existing_profiles(self.seeds), approve_all=True)
+        self.assertEqual(res.counts[kp.PENDING_STALE], 1)
+
+    def test_dry_run_reports_stale_with_the_regenerate_command(self):
+        p = self.run_apply(self.legacy_plan(), "--dry-run", "--approve-all")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("ready 1", p.stdout)
+        self.assertIn("pending stale 1", p.stdout)
+        self.assertIn("edu/Two Files", p.stdout)
+        self.assertIn("make knowledge-classify", p.stdout)
+        self.assertIn("risk label", p.stdout)
+        self.assertNotIn("edu/Two Files -> beta", p.stdout)          # not offered for bulk approval
+        self.assert_nothing_written()
+
+    def test_apply_refuses_stale_items_even_with_approve_all_and_skip_errors(self):
+        p = self.run_apply(self.legacy_plan(), "--approve", "--approve-all", "--skip-errors", "--no-learn")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("stale", p.stderr)
+        self.assertIn("knowledge-classify", p.stderr)
+        self.assertNotIn("Two Files", self.manifest("beta"))
+        self.assert_nothing_written()
+
+    def test_hand_decided_items_keep_their_history_and_apply(self):
+        # The operator set decision=assign by hand; old reasons are history, not a gate.
+        items = [self.item("edu/Two Files", decision="assign", status="needs-review", profile="beta",
+                           proposed_profile="beta", review_reasons=["high-risk-content:medical"])]
+        p = self.run_apply(self.plan(items), "--approve", "--no-learn")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("edu/Two Files", self.manifest("beta"))
+        self.assertNotIn("high-risk", p.stdout.lower())
 
 
 if __name__ == "__main__":

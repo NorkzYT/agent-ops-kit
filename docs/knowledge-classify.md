@@ -108,8 +108,10 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    candidate profile is described by its purpose (the `You are …` line of its
    `SOUL.md`) and its current corpus: book-list size, staged file count and up
    to six book titles from its book list. It must return a single JSON object:
-   `{"profile", "confidence", "rationale", "risk", "topics"}`. The book
-   evidence is wrapped and labeled as untrusted data.
+   `{"profile", "confidence", "rationale", "topics"}`. The book evidence is
+   wrapped and labeled as untrusted data. The prompt asks for fit only: the
+   subject matter is never a reason to withhold or lower a match, and a
+   legacy `risk` field in an answer is ignored, never stored.
 5. **Checks.** A source gets `needs_review` when any of these holds:
 
    | Reason | Cause |
@@ -119,13 +121,18 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    | `classifier-error` | Proxy unreachable or HTTP error (exit 3) |
    | `no-profile` | The model answered `none` |
    | `low-confidence` | Confidence below `--threshold` (default 0.75) |
-   | `high-risk-profile:<p>` | Proposal is `health-fitness`, `herbalism`, `red-team`, `security` or `security-reviewer` |
-   | `high-risk-content:<cat>` | Title or file names match, or the text repeatedly matches, medical, offensive-security or weapons terms |
-   | `model-risk:<cat>` | The model itself flagged medical, offensive-security, weapons, self-harm, legal or other risk |
-   | `suspicious-text` | The evidence contains prompt-injection phrasing |
+   | `suspicious-text` | The evidence contains prompt-injection phrasing (an integrity check on the untrusted text, not a topic judgement) |
    | `partially-imported`, `multiple-owners` | Some of its text is already staged; or it is staged in several profiles |
 | `content-unchecked` | Its text could not be compared with staged knowledge, so it might already be imported |
 | `private-source`, `private-excerpt`, `metadata-only`, `no-text` | Less evidence, or private content (a path in `knowledge-private.txt`, or a detector hit with the exemption off) |
+
+   No reason is a risk label. There is no high-risk profile list, no medical,
+   security or weapons term matching and no model risk field: a confident
+   `herbalism` or `red-team` proposal is a clean `assign` like any other, and
+   the classifier never prints, stores or gates on a risk judgement. Earlier
+   releases wrote `high-risk-profile:*`, `high-risk-content:*` and
+   `model-risk:*`; see "Plans from earlier releases" below for what happens to
+   a plan that still carries one.
 
 6. **Report.** Every source appears on stdout with its status, profile,
    confidence, classifier, how much was sent, privacy labels (and whether the
@@ -164,11 +171,43 @@ make knowledge-apply PLAN=plan-<report>.json APPROVE=1
 
 See [knowledge-apply.md](knowledge-apply.md).
 
+### Plans from earlier releases
+
+Earlier releases labelled medical, security and weapons topics
+(`high-risk-profile:*`, `high-risk-content:*`, `model-risk:*` review reasons)
+and gated them behind an approval. Those labels no longer exist and a new run
+never writes them. Nothing on disk is edited retroactively:
+
+* books already assigned (book lists, `knowledge-assignments.json`, canonical
+  copies, learned skills) stay as they are; nothing needs to be redone;
+* a plan item the operator already decided (`assign`, `skip`, `existing`)
+  applies as written; an old label in its `review_reasons` is history only;
+* a plan item still at `review` that carries one of those labels is reported
+  as **pending stale** by `make knowledge-apply ... DRY_RUN=1`. `APPROVE_ALL`
+  and `SKIP_ERRORS` leave it alone and an apply refuses while it is there,
+  because the gate that produced it is gone and its proposal was never judged
+  without it.
+
+Re-classification is only required for those stale items. Workflow:
+
+```bash
+make knowledge-apply PLAN=plan-<old>.json DRY_RUN=1   # lists "pending stale" items, if any
+make knowledge-classify                                # fresh plan: the stale books are still uncategorized,
+                                                       # so they are classified again, with no risk label
+make knowledge-apply PLAN=plan-<new>.json DRY_RUN=1
+make knowledge-apply PLAN=plan-<new>.json APPROVE=1 [APPROVE_ALL=1]
+```
+
+Books already assigned through the old plan are `already-imported` in the
+new run and are not sent to the model again. Alternatively, set each stale
+item's `decision` by hand (`assign` with a `profile`, `skip` or `existing`)
+and re-run the apply; the old plan is never rewritten by a tool.
+
 ## Apply (legacy, profile-local copy)
 
 With `APPLY=1`, a source is assigned when it is `proposed`, or when you
-approved it. An approval is your decision and overrides `needs_review`,
-including for high-risk profiles. Assigning a source:
+approved it. An approval is your decision and overrides `needs_review`.
+Assigning a source:
 
 1. re-validates the path (inside the library, no `..`, no symlinks, still
    uncategorized), that the profile is book-backed and, for an approval, that
@@ -223,7 +262,6 @@ where needed.
 | `--excerpt-chars` | `KNOWLEDGE_EXCERPT_CHARS` | 3000 | Excerpt size, 0–12000 |
 | `--threshold` | `KNOWLEDGE_CLASSIFY_THRESHOLD` | 0.75 | Minimum confidence to apply without review |
 | `LIMIT=` / `--limit` | `KNOWLEDGE_CLASSIFY_LIMIT` | 20 | Sources classified per run |
-| — | `KNOWLEDGE_HIGH_RISK_PROFILES` | see above | Comma list of profiles that always need approval |
 | — | `KNOWLEDGE_PRIVATE` | `hermes/knowledge-private.txt` | Library paths that never go to the cloud (also under the exemption) |
 | `--no-library-exemption` | `KNOWLEDGE_LIBRARY_EXEMPT_ROOT` | `/mnt/books` | The book library whose books CLIProxyAPI may classify despite detector hits; `off` disables |
 | — | `KNOWLEDGE_STAGING` | `data/knowledge-staging` | Quarantine; must not overlap the library or `KNOWLEDGE_ROOT` |
@@ -333,7 +371,9 @@ stub outside the book-library exemption, a library book with card-number-like
 text reaching the cloud stub under the exemption while a `knowledge-private.txt`
 path stays local or skipped, the exemption being off for any other root, the
 local classifier and `--no-library-exemption`, the model-router detectors still
-flagging that text, malformed, refused, low-confidence and high-risk answers,
+flagging that text, malformed, refused and low-confidence answers, no risk
+label for medical or security topics (a confident `herbalism` proposal is a
+clean assign; the old `KNOWLEDGE_HIGH_RISK_PROFILES` knob is ignored),
 apply-only-when-approved, unsafe paths, the Make targets and an unchanged
 library; plus the content matcher against near collisions (series volume,
 revised edition, same file name), EPUB/PDF/text copies of staged text reported

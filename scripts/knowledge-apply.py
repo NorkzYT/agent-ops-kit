@@ -11,7 +11,9 @@
 
 States (dry-run): ``ready`` (assign, skip, existing; executable now), ``pending review``
 (review item with a concrete existing-profile proposal), ``pending profile approval``
-(item tied to an unapproved or incomplete new-profile proposal), ``pending error``
+(item tied to an unapproved or incomplete new-profile proposal), ``pending stale``
+(review item that still carries a risk label from an older classifier; regenerate the
+plan, it is never approved or skipped here), ``pending error``
 (classifier error or no target). Pending is reported, never guessed and never
 "invalid"; structural problems (bad decisions, stale hashes, unsafe names) are
 errors. ``--approve-all`` accepts the classifier's concrete proposals on a copy of
@@ -503,7 +505,8 @@ def print_summary(s: Settings, res: kp.Resolution, v: Optional[kp.Validated], dr
     print(f"plan: {s.plan_path} (id {s.plan_id})   policy: {pol}")
     print(f"library: {s.books} (read-only)   canonical: {s.canon}   knowledge root: {s.kroot}")
     print(f"ready {c[kp.READY]}   existing {c['existing']}   skip {c['skip']}   pending review {c[kp.PENDING_REVIEW]}"
-          f"   pending profile approval {c[kp.PENDING_PROFILE]}   pending error {c[kp.PENDING_ERROR]}")
+          f"   pending profile approval {c[kp.PENDING_PROFILE]}   pending error {c[kp.PENDING_ERROR]}"
+          + (f"   pending stale {c[kp.PENDING_STALE]}" if c.get(kp.PENDING_STALE) else ""))
     if res.changes:
         print(f"APPROVE_ALL changes {len(res.changes)} decision(s) on a copy of the plan (the file is not edited):")
     for spec in res.specs:
@@ -548,6 +551,15 @@ def print_summary(s: Settings, res: kp.Resolution, v: Optional[kp.Validated], dr
         if legacy:
             print("  note: this plan predates complete specs (the classifier wrote purpose only); regenerate it "
                   "with make knowledge-classify to get complete, editable proposals, or fill the fields in by hand.")
+    pend_stale = [r for r in res.items if r["state"] == kp.PENDING_STALE]
+    if pend_stale:
+        print(f"pending stale ({len(pend_stale)}; written by an older classifier with a risk label that no longer "
+              "exists; APPROVE_ALL and SKIP_ERRORS leave these alone):")
+        for r in pend_stale:
+            extra = f"   [{', '.join(r['reasons'])}]" if s.verbose else ""
+            print(f"- {r['source']}{extra}")
+        print("  next: regenerate the plan with make knowledge-classify (the current classifier writes no risk label), "
+              "or set each item's decision by hand (assign with a profile, skip or existing).")
     pend_err = [r for r in res.items if r["state"] == kp.PENDING_ERROR]
     if pend_err:
         print(f"pending error ({len(pend_err)}; no target to approve: SKIP_ERRORS=1 skips them this run, or edit the plan):")
@@ -560,7 +572,7 @@ def print_summary(s: Settings, res: kp.Resolution, v: Optional[kp.Validated], dr
     elif not s.learn:
         steps = steps.replace(" -> learn", " (learn skipped: --no-learn)")
     print(f"steps: {steps}")
-    if not s.verbose and (pend_review or pend_spec or pend_err):
+    if not s.verbose and (pend_review or pend_spec or pend_err or pend_stale):
         print("(VERBOSE=1 shows review reasons, missing spec fields and sources)")
 
 
@@ -569,6 +581,9 @@ def next_command(s: Settings, res: kp.Resolution) -> str:
     has_err = res.counts[kp.PENDING_ERROR] > 0
     if not res.pending:
         return s.resume_cmd()
+    if res.counts.get(kp.PENDING_STALE):
+        return ("regenerate the plan (it carries risk labels from an older classifier): make knowledge-classify, "
+                "then apply the new plan-<report>.json; or set those items' decisions by hand and re-run")
     if not res.policy["approve_all"] and (res.counts[kp.PENDING_REVIEW] or any(
             sp["state"] == "pending-unapproved" for sp in res.specs)):
         return "preview the bulk approval: " + s.resume_cmd(approve_all=True, skip_errors=has_err).replace(
@@ -639,7 +654,8 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
         more = f" and {len(res.pending) - 8} more" if len(res.pending) > 8 else ""
         err(f"{len(res.pending)} pending item(s): nothing was applied. Pending is never guessed; "
             f"{res.counts[kp.PENDING_REVIEW]} pending review, {res.counts[kp.PENDING_PROFILE]} pending profile "
-            f"approval, {res.counts[kp.PENDING_ERROR]} pending error: {shown}{more}. Next: {next_command(s, res)}"
+            f"approval, {res.counts[kp.PENDING_ERROR]} pending error, {res.counts.get(kp.PENDING_STALE, 0)} pending stale: "
+            f"{shown}{more}. Next: {next_command(s, res)}"
             + ("" if s.approve_all else "   (APPROVE_ALL=1 counts only on the make command line)"))
         return 1
     if not args.approve:

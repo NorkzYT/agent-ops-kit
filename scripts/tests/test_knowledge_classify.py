@@ -11,7 +11,7 @@ private content never reaches the cloud stub (metadata-only or skipped); under
 the exemption a library book with PAN-like text goes to the configured cloud stub
 as bounded evidence while a knowledge-private path still stays local or skipped,
 and the model-router detectors are unchanged; malformed, refused, low-confidence and
-high-risk results need review and are never assigned; --apply assigns only
+unreliable results need review and are never assigned (no topic is labelled a risk); --apply assigns only
 guardrail-clean proposals and explicit approvals; unsafe paths are refused; the
 library is never modified.
 """
@@ -220,7 +220,7 @@ class ClassifyE2E(unittest.TestCase):
                         MODEL_ROUTER_PRIVATE_TERMS="Project Neptune", MODEL_ROUTER_PRIVATE_PATHS="",
                         KNOWLEDGE_CLASSIFY_LIMIT="50")
         for k in ("APPLY", "APPROVE", "APPROVALS", "SOURCE", "CLASSIFIER", "LIMIT", "KNOWLEDGE_CLASSIFIER",
-                  "KNOWLEDGE_HIGH_RISK_PROFILES", "KNOWLEDGE_LIBRARY_EXEMPT_ROOT", "MAKEFLAGS", "MFLAGS"):
+                  "KNOWLEDGE_LIBRARY_EXEMPT_ROOT", "MAKEFLAGS", "MFLAGS"):
             self.env.pop(k, None)
         self.lib_before = tree_hash(self.books)
         self._chmod(self.books, writable=False)
@@ -439,16 +439,44 @@ class ClassifyE2E(unittest.TestCase):
             "edu/Refused Book": "classifier-refused",
             "edu/Wrong Profile": "classifier-malformed",
             "edu/Vague Book": "low-confidence",
-            "edu/Herb Book": "high-risk-profile:herbalism",
-            "edu/Hacking Exposed": "high-risk-content:offensive-security",
             "edu/Injected": "suspicious-text",
         }
         for rel, reason in cases.items():
             self.assertTrue(items[rel]["needs_review"], rel)
             self.assertIn(reason, items[rel]["review_reasons"], rel)
             self.assertEqual(items[rel]["action"], "none", rel)
-        self.assertIn("model-risk:medical", items["edu/Herb Book"]["review_reasons"])
+        # No topic is a risk: a confident herbalism proposal (the model even answered risk=["medical"])
+        # and a confident "Hacking Exposed" title are clean proposals, with no risk label anywhere.
+        for rel in ("edu/Herb Book", "edu/Hacking Exposed"):
+            self.assertEqual(items[rel]["status"], "proposed", rel)
+            self.assertFalse(items[rel]["needs_review"], rel)
+            self.assertEqual(items[rel]["review_reasons"], [], rel)
+            self.assertNotIn("risk", items[rel], rel)
+        self.assertEqual(items["edu/Herb Book"]["profile"], "herbalism")
         self.assertEqual(items["edu/Wrong Profile"]["profile"], "")
+        for text in (p.stdout, (self.tmp / "report-0.json").read_text(), (self.tmp / "plan-report-0.json").read_text(),
+                     (self.tmp / "report-0.approvals.txt").read_text()):
+            self.assertNotIn("high-risk", text.lower())
+            self.assertNotIn("model-risk", text)
+        self.assertNotIn("high_risk", (self.tmp / "report-0.json").read_text())
+
+    def test_no_risk_labels_gates_or_knobs(self):
+        # The former gate is gone entirely: no default list, no content patterns, no env knob, no prompt field.
+        for name in ("DEFAULT_HIGH_RISK", "RISK_PATTERNS", "RISK_LABELS", "RISK_BODY_MIN", "risk_hits"):
+            self.assertFalse(hasattr(kc, name), name)
+        self.assertNotIn("risk", kc.SYSTEM_PROMPT.lower())
+        self.assertFalse(hasattr(kc.Settings, "high_risk"))
+        self.assertNotIn("high_risk", kc.Profile.__dataclass_fields__)
+        self.assertNotIn("risk", kc.Item.__dataclass_fields__)
+        self.assertNotIn("risk", kc.Verdict.__dataclass_fields__)
+        # The old env knob is ignored: a confident alpha proposal stays clean with alpha "listed".
+        p, items = self.run_kc("edu/Strategy Book", KNOWLEDGE_HIGH_RISK_PROFILES="alpha,herbalism")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual((items["edu/Strategy Book"]["status"], items["edu/Strategy Book"]["review_reasons"]), ("proposed", []))
+        # Privacy and structural guardrails are untouched by the removal.
+        self.assertTrue(hasattr(kc, "INJECTION_RE"))
+        self.assertTrue(hasattr(kc, "REFUSAL_RE"))
+        self.assertTrue(hasattr(kc, "privacy_labels"))
 
     def test_apply_assigns_only_guardrail_clean_proposals(self):
         before = self.manifests()
@@ -457,20 +485,25 @@ class ClassifyE2E(unittest.TestCase):
         p, items = self.run_kc("--apply")
         self.assertEqual(p.returncode, 3, p.stdout + p.stderr)
         assigned = sorted(r for r, i in items.items() if i["action"] == "assigned")
-        self.assertEqual(assigned, ["edu/Converted Book", "edu/It's Quoted", "edu/Long Book", "edu/Strategy Book"])
+        self.assertEqual(assigned, ["edu/Converted Book", "edu/Hacking Exposed", "edu/Herb Book", "edu/It's Quoted",
+                                    "edu/Long Book", "edu/Strategy Book"])
         alpha = (self.seeds / "alpha" / "knowledge-sources.txt").read_text()
         self.assertTrue(alpha.startswith(before["alpha"] + "\n"), "existing lines were rewritten")
         for rel in assigned:
-            self.assertIn(rel + "\n", alpha)
-        for rel in ("edu/Herb Book", "edu/Vague Book", "edu/Broken Book", "edu/Hacking Exposed", "edu/Secret Notes"):
+            if rel != "edu/Herb Book":
+                self.assertIn(rel + "\n", alpha)
+        self.assertIn("edu/Herb Book\n", self.manifests()["herbalism"])      # confident proposal, no risk gate
+        for rel in ("edu/Vague Book", "edu/Broken Book", "edu/Secret Notes"):
             self.assertNotIn(rel, "".join(self.manifests().values()))
-        for name in ("herbalism", "red-team", "_template"):
+        for name in ("red-team", "_template"):
             self.assertEqual(before[name], self.manifests()[name])
+        self.assertNotIn("high-risk", p.stdout.lower())
         self.assertTrue((self.kroot / "alpha/Strategy Book/strategy.md").is_file())
         self.assertTrue((self.kroot / "alpha/Converted Book/book.md").is_file())
         self.assertTrue((self.kroot / "alpha/mine.md").is_file(), "staged knowledge was deleted")
-        self.assertFalse((self.kroot / "herbalism").exists())
+        self.assertTrue((self.kroot / "herbalism/Herb Book/herbs.txt").is_file())
         self.assertIn("make knowledge-refresh NAME=alpha", p.stdout)
+        self.assertIn("make knowledge-refresh NAME=herbalism", p.stdout)
         self.assert_library_unchanged()
         # Rerun: assigned books are no longer uncategorized.
         p, items = self.run_kc("--apply")
@@ -585,13 +618,15 @@ class ClassifyE2E(unittest.TestCase):
                          ("assign", "alpha", "alpha", "proposed"))
         self.assertEqual(len(ok["source_sha256"]), 64)
         self.assertTrue(ok["source_id"])
-        for rel in ("edu/Herb Book", "edu/Vague Book", "edu/Broken Book", "edu/Wrong Profile"):
+        for rel in ("edu/Vague Book", "edu/Broken Book", "edu/Wrong Profile"):
             self.assertEqual(by[rel]["decision"], "review", rel)
-        self.assertEqual(by["edu/Herb Book"]["profile"], "herbalism")      # pre-filled, still needs a decision
-        self.assertIn("high-risk-profile:herbalism", by["edu/Herb Book"]["review_reasons"])
+        herb = by["edu/Herb Book"]                                          # no risk gate: a clean assign
+        self.assertEqual((herb["decision"], herb["profile"], herb["review_reasons"]), ("assign", "herbalism", []))
         for i in plan["items"]:
-            for key in ("rationale", "risk", "purpose", "chapters", "tags", "note"):
+            for key in ("rationale", "purpose", "chapters", "tags", "note"):
                 self.assertIn(key, i, key)
+            self.assertNotIn("risk", i)
+            self.assertFalse([r for r in i["review_reasons"] if r.startswith(("high-risk", "model-risk"))], i["source"])
         self.assertNotIn("edu/Listed Book", by)
         self.assertEqual(self.manifests()["alpha"], "# alpha\nedu/Listed Book", "classify changed a book list")
         self.assert_library_unchanged()
@@ -629,7 +664,8 @@ class ParseVerdict(unittest.TestCase):
     def test_valid_and_fenced(self):
         v = kc.parse_verdict('```json\n{"profile":"alpha","confidence":0.8,"rationale":"x","risk":"none"}\n```',
                              self.allowed)
-        self.assertEqual((v.status, v.profile, v.confidence, v.risk), ("classified", "alpha", 0.8, []))
+        self.assertEqual((v.status, v.profile, v.confidence), ("classified", "alpha", 0.8))
+        self.assertFalse(hasattr(v, "risk"))
         v = kc.parse_verdict('{"profile":"none","confidence":0.3,"rationale":"no fit"}', self.allowed)
         self.assertEqual((v.status, v.profile), ("classified", ""))
 
@@ -639,7 +675,7 @@ class ParseVerdict(unittest.TestCase):
                      '{"profile":"alpha","confidence":true,"rationale":"x"}',
                      '{"profile":"../alpha","confidence":0.9,"rationale":"x"}',
                      '{"profile":"alpha","confidence":0.9,"rationale":""}',
-                     '{"profile":"alpha","confidence":0.9,"rationale":"x","risk":{"a":1}}', "[1, 2]"):
+                     "[1, 2]"):
             self.assertEqual(kc.parse_verdict(text, self.allowed).status, "malformed", text)
         self.assertEqual(kc.parse_verdict("I'm unable to help with that request.", self.allowed).status, "refused")
 
@@ -674,9 +710,12 @@ class ParseVerdict(unittest.TestCase):
         self.assertEqual(v.new_profile["parent"], "none")
         self.assertEqual(kc.parse_spec_fields({"in_scope": "not a list", "parent": 3}, self.allowed), {})
 
-    def test_unknown_risk_labels_are_kept_as_other(self):
-        v = kc.parse_verdict('{"profile":"alpha","confidence":0.9,"rationale":"x","risk":["bio"]}', self.allowed)
-        self.assertEqual(v.risk, ["other"])
+    def test_legacy_risk_field_is_ignored_not_a_label(self):
+        # Older models (or a cached prompt) may still answer with "risk": it is neither validated nor kept.
+        for risk in ('["bio"]', '["medical","weapons"]', '{"a":1}', '"none"'):
+            v = kc.parse_verdict('{"profile":"alpha","confidence":0.9,"rationale":"x","risk":' + risk + '}', self.allowed)
+            self.assertEqual((v.status, v.profile), ("classified", "alpha"), risk)
+            self.assertNotIn("risk", v.__dict__)
 
     def test_sanitize_strips_links_and_controls(self):
         s = kc.sanitize("a\x00b ![img](x.png) [t](http://e.x) see https://e.x/y mail me@e.x\n\n\n\nz <<<", 500)

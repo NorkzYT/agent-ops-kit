@@ -9,7 +9,7 @@ applied by ``make knowledge-apply PLAN=<plan> APPROVE=1``):
   {"plan_version": 1, "generated": ..., "library": ..., "report": ...,
    "items": [{"source": "<collection>/<path>", "source_id": "<16 hex>",
               "source_sha256": "<64 hex>", "status": "proposed|needs-review|already-imported|...",
-              "proposed_profile": "...", "confidence": 0.9, "rationale": "...", "risk": [...],
+              "proposed_profile": "...", "confidence": 0.9, "rationale": "...",
               "review_reasons": [...], "decision": "assign|skip|existing|review",
               "profile": "<target profile>", "purpose": "", "chapters": [], "tags": [],
               "secondary_reason": "", "note": ""}],
@@ -21,6 +21,12 @@ Decisions: ``assign`` (write the assignment and learn it), ``skip`` (leave the
 book out of this run), ``existing`` (already owned; nothing to do) are terminal.
 ``review`` is the default for anything the guardrails flagged and must be
 changed by hand before the plan can be applied.
+
+No review reason is a risk label. Plans written before the ``high-risk-*`` and
+``model-risk:*`` labels were removed are not re-interpreted: a ``review`` item
+that still carries one is ``pending-stale`` (never approved, skipped or
+re-labelled here) until the operator regenerates the plan with
+``make knowledge-classify`` or sets its decision by hand.
 
 Source identity is content, never a file name: sha256 over the sorted book
 files (name, size, bytes) of the library path. Two library copies of the same
@@ -60,7 +66,10 @@ KNOWN_ACTIONS = ("assign", "canonicalize", "reference", "install", "learn")
 # items are not (and are never guessed); invalid plans raise PlanError.
 READY, PENDING_REVIEW, PENDING_PROFILE, PENDING_ERROR = ("ready", "pending-review", "pending-profile-approval",
                                                           "pending-error")
-STATES = (READY, "skip", "existing", PENDING_REVIEW, PENDING_PROFILE, PENDING_ERROR)
+PENDING_STALE = "pending-stale"
+STATES = (READY, "skip", "existing", PENDING_REVIEW, PENDING_PROFILE, PENDING_ERROR, PENDING_STALE)
+# Review reasons older classifiers wrote; the current one writes no risk label at all.
+LEGACY_RISK_PREFIXES = ("high-risk-content:", "high-risk-profile:", "model-risk:")
 NEW_PROFILE_REASON = "new-profile-proposal:"
 BOOK_EXTS = (".epub", ".pdf", ".md", ".txt")
 TEXT_EXTS = (".md", ".txt")
@@ -192,7 +201,7 @@ def default_decision(status: str, needs_review: bool, action: str = "none") -> s
 
 
 def plan_item(source: str, identity: Optional[SourceIdentity], status: str, proposed_profile: str,
-              profile: str, decision: str, confidence=None, rationale: str = "", risk=(),
+              profile: str, decision: str, confidence=None, rationale: str = "",
               review_reasons=(), owners=(), note: str = "", new_profile: Optional[Dict[str, str]] = None,
               secondary_reason: str = "") -> Dict[str, object]:
     return {
@@ -203,7 +212,6 @@ def plan_item(source: str, identity: Optional[SourceIdentity], status: str, prop
         "proposed_profile": proposed_profile,
         "confidence": confidence,
         "rationale": rationale,
-        "risk": list(risk),
         "review_reasons": list(review_reasons),
         "owners": list(owners),
         "new_profile_suggestion": dict(new_profile or {}),
@@ -500,6 +508,11 @@ def approval_digest(decisions: Iterable[Tuple[str, str, str]], approved_profiles
     return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:SOURCE_ID_LEN]
 
 
+def legacy_risk_reasons(reasons: Iterable[object]) -> List[str]:
+    """The review reasons of an item that are risk labels from an older classifier."""
+    return [str(r) for r in reasons if isinstance(r, str) and r.startswith(LEGACY_RISK_PREFIXES)]
+
+
 def proposal_for(item: Dict[str, object], specs: Dict[str, Dict[str, object]]) -> str:
     """Name of the new-profile proposal an item is tied to, or ''."""
     prof = item.get("profile")
@@ -521,8 +534,10 @@ def resolve_plan(plan: Dict[str, object], profiles: Dict[str, Path], approve_all
 
       * clean ``assign`` stays assign; ``skip``/``existing`` stay as written;
       * ``review`` with a concrete existing-profile proposal (``profile`` or ``proposed_profile``)
-        becomes assign to it (high-risk review labels included: APPROVE_ALL is the operator's
-        explicit approval; profile policies stay advisory);
+        becomes assign to it (APPROVE_ALL is the operator's explicit approval);
+      * ``review`` that still carries a legacy risk label (``high-risk-content:``,
+        ``high-risk-profile:``, ``model-risk:``) is ``pending-stale``: the plan predates the
+        removal of risk labels and is regenerated, never re-interpreted here;
       * ``review`` tied to a COMPLETE new-profile proposal becomes assign and the proposal is
         approved; an incomplete proposal stays pending-profile-approval;
       * ``review`` with no target (classifier error, no profile, unhashable source) stays
@@ -549,7 +564,9 @@ def resolve_plan(plan: Dict[str, object], profiles: Dict[str, Path], approve_all
         reasons = [str(r) for r in (it.get("review_reasons") or []) if isinstance(r, str)]
         row = {"source": src, "decision": decision, "profile": prof, "reasons": reasons, "state": "", "change": "",
                "status": it.get("status", ""), "spec": ""}
-        if decision == "review":
+        if decision == "review" and legacy_risk_reasons(reasons):
+            row["state"] = PENDING_STALE
+        elif decision == "review":
             spec_name = proposal_for(it, specs)
             target = prof if prof in profiles else (it.get("proposed_profile") if it.get("proposed_profile") in profiles else "")
             unhashable = not it.get("source_sha256")
