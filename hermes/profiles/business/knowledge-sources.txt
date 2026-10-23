@@ -5,4 +5,4 @@ edu/The Psychology of Money
 edu/Rich Dad’s CASHFLOW Quadrant - Rich Dad’s Guide to Financial Freedom
 edu/The 4-Hour Workweek - Ferris, Timothy
 edu/The Diary of a CEO - The 33 Laws of Business and Life - Steven Bartlett
-books-in-text/poor-charlies-almanack-the-wit-and-wisdom-of-charles
+edu/Poor Charlie's Almanack The Wit and Wisdom of Charles T. Munger, Expanded Third Edition

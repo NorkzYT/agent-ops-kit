@@ -117,6 +117,30 @@ To keep a book out of every profile on purpose, add its line to
 Logs for each profile's stage and sync run go to a temp folder; the report
 prints its path.
 
+## Retired collection: books-in-text
+
+No book list uses `books-in-text/` any more; it can be deleted from the
+library by hand. Each of its 9 text files matched, with `strong` evidence
+(resemblance 0.94-0.998), the EPUB in the `edu/` folder of the same title, and
+every book-list line was replaced by those folders:
+
+| Old line | New lines | Profiles |
+|----------|-----------|----------|
+| `books-in-text/poor-charlies-almanack-the-wit-and-wisdom-of-charles` | `edu/Poor Charlie's Almanack The Wit and Wisdom of Charles T. Munger, Expanded Third Edition` | strategy, business |
+| `books-in-text/the-great-mental-models` | the four `edu/The Great Mental Models, Volume 1-4 ...` folders | strategy, philosophy |
+| `books-in-text/alex-hormozi` | `edu/$100M Leads - ...`, `edu/$100M Money Models_ ...`, `edu/$100M Offers - ...`, `edu/100M Offers Made Easy - ...` | offers-sales |
+| `books-in-text/alex-hormozi/$100M Leads_ ....txt` | `edu/$100M Leads - How to Get Strangers To Want To Buy Your Stuff` | marketing |
+| `books-in-text/the-great-mental-models/The Great Mental Models, Volume 3_ ....txt` | `edu/The Great Mental Models, Volume 3 Systems and Mathematics-` | software-engineering |
+
+`scripts/tests/test_knowledge_manifests.py` fails if a book list uses the
+collection again. Staged data is never pruned, so the earlier `.txt` copies
+under `data/knowledge/<profile>/{alex-hormozi,poor-charlies-...,the-great-mental-models}`
+stay in place and the inventory lists them under **Staged without a manifest
+source**. The next `make knowledge-refresh` for those profiles converts the
+`edu/` EPUBs into new Markdown files, so after it succeeds remove the old
+`.txt` folders by hand (and from the installed profile's `knowledge/`) before
+`/learn`, or the profile indexes each book twice.
+
 ## Exit codes
 
 | Code | Meaning |
