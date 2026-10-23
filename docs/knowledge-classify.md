@@ -16,16 +16,27 @@ can be assigned without your approval.
 
 ```bash
 make knowledge-inventory                       # read-only: new, already imported, missing sources
-make knowledge-classify                        # DRY-RUN: proposals for new books + report, no book list changes
+make knowledge-classify                        # DRY-RUN: proposals + plan + Markdown review + HTML workspace
 make knowledge-classify SOURCE='edu/Some Book' # one uncategorized book only
+make knowledge-classify MODEL=gpt-5.6-sol EFFORT=high     # another CLIProxyAPI model / reasoning effort
+# review: read <report>.review.md, or open <report>.review.html offline, edit decisions there and
+# export the revised plan (or edit plan-<report>.json directly); then one command applies it:
+make knowledge-apply PLAN=data/knowledge-staging/reports/plan-<report>.json DRY_RUN=1
+make knowledge-apply PLAN=data/knowledge-staging/reports/plan-<report>.json APPROVE=1
+make knowledge-learn-status
+make knowledge-reconcile                       # PROPOSAL: library sources for staged files without one
+make knowledge-reconcile APPLY=1 APPROVE='<profile>=<library path>'   # append that one line
+```
+
+Legacy path (profile-local copy, no plan; still works):
+
+```bash
 make knowledge-classify APPLY=1                # assign proposals that passed every check
 make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE='herbalism=edu/Some Book'
                                                # assign one mapping you approved (no model call)
 make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVALS=data/knowledge-staging/reports/<run>.approvals.txt
 make knowledge-refresh NAME=<profile>          # sync into the installed profile
 # then in `hermes -p <profile> chat`:  /learn ~/.hermes/profiles/<profile>/knowledge
-make knowledge-reconcile                       # PROPOSAL: library sources for staged files without one
-make knowledge-reconcile APPLY=1 APPROVE='<profile>=<library path>'   # append that one line
 ```
 
 `APPLY=1` counts only on the make command line. An exported `APPLY` shell
@@ -104,7 +115,8 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    any other host is not trusted with private text.
 4. **Classify.** The model gets one OpenAI-compatible chat call. By default that
    is CLIProxyAPI at `http://127.0.0.1:${CLIPROXY_PORT}/v1` with
-   `gpt-5.6-luna`, the cheapest routine tier (Opus is not needed). Each
+   `gpt-5.6-terra` at reasoning effort `medium`, the benchmarked default
+   (Opus is not needed). Each
    candidate profile is described by its purpose (the `You are …` line of its
    `SOUL.md`) and its current corpus: book-list size, staged file count and up
    to six book titles from its book list. It must return a single JSON object:
@@ -135,10 +147,15 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    a plan that still carries one.
 
 6. **Report.** Every source appears on stdout with its status, profile,
-   confidence, classifier, how much was sent, privacy labels (and whether the
-   book-library exemption was used), rationale, review
-   reasons and a ready-to-run approve command. The full JSON report and an
-   approvals template are written to `data/knowledge-staging/reports/`.
+   confidence, classifier (model and effort, the model the proxy reports it
+   served, latency), how much was sent, privacy labels (and whether the
+   book-library exemption was used), rationale and review reasons. Under
+   `data/knowledge-staging/reports/` the run writes the JSON report, the
+   reviewed plan `plan-<report>.json`, a Markdown review `<report>.review.md`,
+   an offline HTML workspace `<report>.review.html` and the legacy approvals
+   template; stdout ends with their paths and the exact next commands
+   (reviewed-plan flow first, legacy `APPLY=1` labelled separately). See
+   "Review artifacts" below.
 
 ## Statuses and actions
 
@@ -170,6 +187,36 @@ make knowledge-apply PLAN=plan-<report>.json APPROVE=1
 ```
 
 See [knowledge-apply.md](knowledge-apply.md).
+
+### Review artifacts
+
+Next to the report and plan every run writes two derived, read-only views
+(`scripts/knowledge_review.py`; the plan JSON stays the authority):
+
+- `<report>.review.md` — totals, assignments per profile, every new-profile
+  proposal with its spec, then every source in original order with status,
+  decision, existing owners, proposed and selected profile, confidence, review
+  reasons, the classifier's rationale and request metadata, the source id and
+  any new-profile spec. **Classifier facts** (what the model and guardrails
+  produced) are kept apart from **Review guidance** (deterministic hints
+  derived from the status and flags: "accept if scope matches", "resolve the
+  review flags", "existing book with several owners"...). `suspicious-text`
+  is explained as the integrity check it is, never as a topic judgement.
+- `<report>.review.html` — a self-contained decision workspace that works
+  offline (no external JavaScript, CSS or fonts; no book text; no secrets):
+  search, filters by status / decision / profile, a readable panel per item
+  and per new-profile proposal, client-side editing of each item's decision
+  and profile and each proposal's `approved` flag and spec fields, and
+  **Export revised plan** which downloads a plan JSON that is a copy of the
+  original with only those fields changed (schema, `source_id`, `source_sha256`
+  and every other field are preserved verbatim; invalid decisions or names
+  are refused). Save it next to the original (or over it) and run
+  `make knowledge-apply PLAN=<file> DRY_RUN=1`. Hostile titles or rationales
+  cannot execute: data is embedded as `\u`-escaped JSON and rendered through
+  text nodes only.
+
+`python3 scripts/knowledge_review.py <report.json>` re-renders both files from
+an existing report and its plan.
 
 ### Plans from earlier releases
 
@@ -257,7 +304,8 @@ where needed.
 | `SECONDARY_REASON=` / `--secondary-reason` | — | — | Required with `SECONDARY`: the substantial, recurring, independent purpose |
 | `SOURCE=` / positional | — | all uncategorized | Limit the run to one source |
 | `CLASSIFIER=` / `--classifier` | `KNOWLEDGE_CLASSIFIER` | `cliproxy` | `cliproxy`, `local` (Ollama only) or `none` (stage and report, no model) |
-| `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-5.6-luna` | CLIProxyAPI model |
+| `MODEL=` / `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-5.6-terra` | CLIProxyAPI model (benchmarked: see "Choosing the model and effort") |
+| `EFFORT=` / `--effort` | `KNOWLEDGE_CLASSIFY_EFFORT` | `medium` | CLIProxyAPI reasoning effort, sent as top-level `reasoning_effort` on every classification and spec-completion request (`medium` or `high`; `minimal`/`low` accepted for compatibility). Not sent to the local model, whose options are its own; the report says so (`effort_note`) |
 | `METADATA_ONLY=1` / `--metadata-only` | — | off | Never send an excerpt |
 | `--excerpt-chars` | `KNOWLEDGE_EXCERPT_CHARS` | 3000 | Excerpt size, 0–12000 |
 | `--threshold` | `KNOWLEDGE_CLASSIFY_THRESHOLD` | 0.75 | Minimum confidence to apply without review |
@@ -278,6 +326,22 @@ never printed.
 Candidate profiles are folders under `hermes/profiles/` with a
 `knowledge-sources.txt` (except `_template`). To make a profile a candidate,
 give it a book list first.
+
+Each item records `model_requested`, `effort_requested`, `model_served` (the
+model name the proxy returned), `usage` (prompt / completion / reasoning
+tokens when the proxy returns them) and `latency_s`; the run header records
+`model`, `effort` and `models_served`. No key or URL is written.
+
+### Choosing the model and effort
+
+`make knowledge-benchmark` compares CLIProxyAPI models and efforts on the exact
+production prompt and evidence against a versioned, operator-reviewed rubric
+(`docs/benchmarks/knowledge-classify/`). It never writes a plan, a book list or
+a profile; results go under `OUT` (default: a timestamped folder in the
+gitignored staging area). See
+[benchmarks/knowledge-classify/README.md](benchmarks/knowledge-classify/README.md)
+for the rubric, the scoring and the latest results, which set the default
+above.
 
 ## Reconcile legacy staged knowledge
 
@@ -362,8 +426,18 @@ changed profile and post the report table. Do not run /learn; list the /learn co
 
 ## Tests
 
-`make test-knowledge-classify` runs `scripts/tests/test_knowledge_classify.py`
-and `scripts/tests/test_knowledge_match.py` offline. They use a synthetic
+`make test-knowledge-classify` runs `scripts/tests/test_knowledge_classify.py`,
+`scripts/tests/test_knowledge_review.py` (Markdown review and HTML workspace:
+escaping of hostile titles and rationales, no external assets, no book text,
+and the export function run in node when installed, proving only decision /
+profile / approval / spec fields change), `scripts/tests/test_knowledge_benchmark.py`
+(rubric validation, catalog from a synthetic library by content hash, identical
+prompts per cell, recorded failures, scorer metrics, Make target) and
+`scripts/tests/test_knowledge_match.py` offline. The classify tests also prove
+that `--effort` / `EFFORT=` / `KNOWLEDGE_CLASSIFY_EFFORT` reach every cloud
+request as `reasoning_effort` (and never the local model), that the requested
+model, effort, served model, token usage and latency are recorded without
+secrets, and that the review artifacts are written and announced. They use a synthetic
 read-only library, temp profile seeds, a stub converter, and stub
 OpenAI-compatible servers for the cloud and local models. They cover the
 dry-run default, bounded evidence, private content never reaching the cloud

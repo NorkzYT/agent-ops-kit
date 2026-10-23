@@ -32,7 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
+	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
 # is a section note (one paragraph per line), `##| text` lines just above a
@@ -237,7 +237,7 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
 ##@ Knowledge
-##> Flow: inventory (what is new) -> classify (writes the reviewed plan plan-<report>.json with complete new-profile specs) -> knowledge-apply PLAN=<plan> DRY_RUN=1 (report: ready / pending review / pending profile approval / pending error / pending stale for risk labels from an earlier release: regenerate the plan) -> edit/review the plan if needed (decide assign/skip/existing, adjust any new profile spec) -> knowledge-apply PLAN=<plan> APPROVE=1 APPROVE_ALL=<plan id> [SKIP_ERRORS=1] (one command: approve proposals, create profiles, canonical copy once, references, install/sync, learn) -> knowledge-learn-status
+##> Flow: inventory (what is new) -> classify (writes the reviewed plan plan-<report>.json with complete new-profile specs, plus <report>.review.md and the offline <report>.review.html workspace to read, filter, edit and export the plan) -> knowledge-apply PLAN=<plan> DRY_RUN=1 (report: ready / pending review / pending profile approval / pending error / pending stale for risk labels from an earlier release: regenerate the plan) -> edit/review the plan if needed (decide assign/skip/existing, adjust any new profile spec) -> knowledge-apply PLAN=<plan> APPROVE=1 APPROVE_ALL=<plan id> [SKIP_ERRORS=1] (one command: approve proposals, create profiles, canonical copy once, references, install/sync, learn) -> knowledge-learn-status
 ##> Legacy flow (still works): classify APPLY=1 / reconcile -> refresh (stage + sync) -> learn. Books assigned through a plan are stored once under data/knowledge-canonical and referenced from each profile's knowledge/refs/ (no duplicate Markdown); refresh never copies them again.
 ##> Ownership: one canonical profile per book. A second profile only by explicit approval (SECONDARY='<profile>=<source>' SECONDARY_REASON='...', or secondary_reason in the plan) for a substantial, recurring, independent purpose. Books already in several lists are reported, never changed.
 ##> Library: /mnt/books is read-only; nothing here writes, moves or deletes a book.
@@ -287,7 +287,7 @@ knowledge-refresh: ## After adding books: stage + sync every book-backed profile
 ##| another profile already has is refused unless given as
 ##| SECONDARY='<profile>=<source>' with SECONDARY_REASON (the substantial,
 ##| recurring, independent purpose).
-knowledge-classify: ## AI proposals + reviewed plan for uncategorized books (dry-run; staged books are reported, never re-classified). Then: knowledge-apply PLAN=<plan>. Legacy APPLY=1 assigns guardrail-clean ones; APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1 SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n]
+knowledge-classify: ## AI proposals + reviewed plan, Markdown review and offline HTML workspace for uncategorized books (dry-run). Then: knowledge-apply PLAN=<plan>. [MODEL=gpt-5.6-terra EFFORT=medium|high SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n] Legacy: APPLY=1, APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1]
 	@args=(); \
 	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
 	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \
@@ -298,8 +298,33 @@ knowledge-classify: ## AI proposals + reviewed plan for uncategorized books (dry
 	 [[ -n "$${SECONDARY:-}" ]] && args+=(--secondary "$$SECONDARY"); \
 	 [[ -n "$${SECONDARY_REASON:-}" ]] && args+=(--secondary-reason "$$SECONDARY_REASON"); \
 	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
+	 [[ -n "$${MODEL:-}" ]] && args+=(--model "$$MODEL"); \
+	 [[ -n "$${EFFORT:-}" ]] && args+=(--effort "$$EFFORT"); \
 	 [[ -n "$${LIMIT:-}" ]] && args+=(--limit "$$LIMIT"); \
 	 python3 scripts/knowledge-classify.py "$${args[@]}"
+
+# Benchmark artifacts go under OUT only (default: a timestamped folder in the
+# gitignored staging area). The runner imports the classifier's prompt and
+# evidence builders but has no code path that touches book lists, profiles or
+# data/knowledge. Values reach the script through the environment.
+##| Compares CLIProxyAPI models and reasoning efforts on the classification
+##| prompt against a versioned rubric (docs/benchmarks/knowledge-classify/
+##| rubric-v1.json, built from the operator-reviewed plan). CATALOG=build
+##| (default when the catalog is missing) precomputes the exact production
+##| evidence from the library once; every cell then gets identical requests.
+##| Writes results.json (raw per-request metadata), scores.json and report.md
+##| under OUT. Never writes a plan, a manifest or a profile.
+knowledge-benchmark: ## Benchmark classifier models x efforts against the rubric; writes results/scores/report under OUT only [RUBRIC=<json> CATALOG=<json>|build OUT=<dir> MODELS=a,b EFFORTS=medium,high REPEATS=2 CONCURRENCY=4 TIMEOUT=120 SOURCES=<n>|stratified]
+	@args=(run --rubric "$${RUBRIC:-docs/benchmarks/knowledge-classify/rubric-v1.json}"); \
+	 [[ -n "$${OUT:-}" ]] && args+=(--out "$$OUT"); \
+	 [[ -n "$${CATALOG:-}" ]] && args+=(--catalog "$$CATALOG"); \
+	 [[ -n "$${MODELS:-}" ]] && args+=(--models "$$MODELS"); \
+	 [[ -n "$${EFFORTS:-}" ]] && args+=(--efforts "$$EFFORTS"); \
+	 [[ -n "$${REPEATS:-}" ]] && args+=(--repeats "$$REPEATS"); \
+	 [[ -n "$${CONCURRENCY:-}" ]] && args+=(--concurrency "$$CONCURRENCY"); \
+	 [[ -n "$${TIMEOUT:-}" ]] && args+=(--timeout "$$TIMEOUT"); \
+	 [[ -n "$${SOURCES:-}" ]] && args+=(--sources "$$SOURCES"); \
+	 python3 scripts/knowledge-benchmark.py "$${args[@]}"
 
 # APPROVE and APPROVE_ALL count only when given on the make command line, never
 # from a stray exported shell variable. The plan path reaches the script through

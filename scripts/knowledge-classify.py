@@ -37,16 +37,24 @@ list includes):
      source is classified locally or skipped, and a private excerpt with clean
      metadata goes to the cloud as metadata only. The exemption lives only in
      this script; the model-router plugin and its detectors are unchanged;
-  4. ask the configured classifier (CLIProxyAPI `gpt-5.6-luna` by default, or
-     the local Ollama model) for strict JSON: profile, confidence, rationale, topics.
+  4. ask the configured classifier (CLIProxyAPI `gpt-5.6-terra` at reasoning
+     effort `medium` by default — --model/--effort, KNOWLEDGE_CLASSIFY_MODEL/
+     KNOWLEDGE_CLASSIFY_EFFORT, make MODEL=/EFFORT= — or the local Ollama model,
+     to which the cloud effort does not apply) for strict JSON: profile,
+     confidence, rationale, topics. The requested model and effort, the model
+     the proxy reports it served, token usage and latency are recorded per item.
      Each candidate profile is described by its purpose (SOUL.md) and its
      current corpus: book-list size, staged file count and a few book titles;
   5. deterministic guardrails decide needs_review: malformed or refused output,
      unknown profile, low confidence, suspicious (prompt-injection) text,
      metadata-only or private evidence. No topic or profile is labelled a risk:
      medical, security or weapons content is classified like any other book;
-  6. report every decision (stdout table + JSON report + approvals template)
-     and write the reviewed plan plan-<report>.json (scripts/knowledge_plan.py):
+  6. report every decision (stdout table + JSON report + approvals template),
+     write a readable Markdown review (<report>.review.md) and a self-contained
+     offline HTML decision workspace (<report>.review.html; scripts/
+     knowledge_review.py: search, filters, per-item panels, edit decisions and
+     new-profile specs, export the revised plan JSON) and the reviewed plan
+     plan-<report>.json (scripts/knowledge_plan.py):
      one editable item per source with its content hash, the proposed
      assignment and a decision (`assign` for guardrail-clean proposals,
      `existing` for text already staged, `review` for everything else), plus
@@ -86,6 +94,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -97,8 +106,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import knowledge_match as km  # noqa: E402  (shared content matcher)
 import knowledge_plan as kp   # noqa: E402  (reviewed plan artifact)
+import knowledge_review as kr  # noqa: E402  (Markdown review + offline HTML workspace)
 
-DEFAULT_MODEL = "gpt-5.6-luna"          # cheapest CLIProxyAPI tier; no Opus needed
+DEFAULT_MODEL = "gpt-5.6-terra"         # benchmarked default (docs/benchmarks/knowledge-classify/); no Opus needed
+# CLIProxyAPI reasoning efforts the classifier may request (top-level reasoning_effort).
+# medium/high are the benchmarked ones; minimal/low are accepted for compatibility only.
+EFFORTS = ("minimal", "low", "medium", "high")
+DEFAULT_EFFORT = "medium"
 DEFAULT_EXCERPT = 3000
 MAX_EXCERPT = 12000
 DEFAULT_THRESHOLD = 0.75
@@ -172,6 +186,7 @@ class Settings:
     doc2md: Path
     classifier: str = "cliproxy"           # cliproxy | local | none
     model: str = DEFAULT_MODEL
+    effort: str = DEFAULT_EFFORT           # cliproxy reasoning effort; never sent to the local model
     base_url: str = ""
     local_url: str = ""
     local_model: str = ""
@@ -464,6 +479,21 @@ class Evidence:
     excerpt: str
 
 
+def build_evidence(s: Settings, rel: str, src: Path) -> Tuple[Staged, Dict[str, object], str]:
+    """Stage (copy-convert into quarantine), then the exact bounded evidence the classifier sees:
+    path metadata plus the sanitized outline/sample excerpt (empty under --metadata-only).
+    Shared with the benchmark so both send identical evidence."""
+    try:
+        staged = stage(s, rel, src)
+    except (OSError, SafetyError) as exc:
+        staged = Staged(problems=[f"stage failed: {type(exc).__name__}"])
+    text, title = read_book_text(staged.files) if staged.files else ("", "")
+    meta = build_metadata(rel, src, staged, title)
+    meta["has_text"] = bool(text.strip())
+    excerpt = "" if s.metadata_only else build_excerpt(text, s.excerpt_chars)
+    return staged, meta, excerpt
+
+
 def build_metadata(rel: str, src: Path, staged: Staged, title: str) -> Dict[str, object]:
     files = book_files(src)
     names = [sanitize(f.name, 160) for f in files if f.suffix.lower() in (".epub", ".pdf", ".md", ".txt")][:10]
@@ -525,6 +555,30 @@ def is_local_host(url: str, trusted: Sequence[str] = ()) -> bool:
 
 
 @dataclass
+class Completion:
+    content: str
+    model_served: str = ""         # the model the proxy reports in the response (may differ from the request)
+    usage: Dict[str, int] = field(default_factory=dict)   # prompt/completion/reasoning tokens when returned
+    latency_s: float = 0.0
+
+
+def usage_summary(raw: object) -> Dict[str, int]:
+    """prompt/completion/reasoning token counts from an OpenAI-style usage object; only what was returned."""
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for key in ("prompt_tokens", "completion_tokens"):
+        v = raw.get(key)
+        if isinstance(v, int) and not isinstance(v, bool):
+            out[key] = v
+    details = raw.get("completion_tokens_details")
+    v = details.get("reasoning_tokens") if isinstance(details, dict) else raw.get("reasoning_tokens")
+    if isinstance(v, int) and not isinstance(v, bool):
+        out["reasoning_tokens"] = v
+    return out
+
+
+@dataclass
 class Backend:
     name: str          # cliproxy | local
     url: str
@@ -532,14 +586,22 @@ class Backend:
     key: str = ""
     local: bool = False
     timeout: float = 120.0
+    effort: str = ""   # top-level reasoning_effort on every cloud request; "" (local) sends none
 
-    def complete(self, messages: List[Dict[str, str]]) -> str:
-        payload = json.dumps({"model": self.model, "messages": messages, "stream": False}).encode("utf-8")
+    def request_body(self, messages: List[Dict[str, str]]) -> Dict[str, object]:
+        body: Dict[str, object] = {"model": self.model, "messages": messages, "stream": False}
+        if self.effort and not self.local:
+            body["reasoning_effort"] = self.effort
+        return body
+
+    def complete_full(self, messages: List[Dict[str, str]]) -> Completion:
+        payload = json.dumps(self.request_body(messages)).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if self.key:
             headers["Authorization"] = f"Bearer {self.key}"
         req = urllib.request.Request(f"{self.url.rstrip('/')}/chat/completions", data=payload,
                                      method="POST", headers=headers)
+        t0 = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as fh:  # nosec B310 - operator-configured URL
                 data = json.loads(fh.read().decode("utf-8"))
@@ -547,11 +609,18 @@ class Backend:
             raise ClassifierError(f"HTTP {exc.code} from {self.name}") from None
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise ClassifierError(f"{self.name} unreachable: {type(exc).__name__}") from None
+        latency = time.monotonic() - t0
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             raise ClassifierError(f"{self.name} returned an unexpected response shape") from None
-        return content if isinstance(content, str) else json.dumps(content)
+        served = data.get("model") if isinstance(data, dict) else ""
+        return Completion(content if isinstance(content, str) else json.dumps(content),
+                          sanitize(served, 120) if isinstance(served, str) else "",
+                          usage_summary(data.get("usage") if isinstance(data, dict) else None), round(latency, 3))
+
+    def complete(self, messages: List[Dict[str, str]]) -> str:
+        return self.complete_full(messages).content
 
 
 def make_backends(s: Settings) -> Tuple[Optional[Backend], Optional[Backend]]:
@@ -570,7 +639,8 @@ def make_backends(s: Settings) -> Tuple[Optional[Backend], Optional[Backend]]:
                   "KNOWLEDGE_LOCAL_HOSTS; private sources will be skipped", file=sys.stderr)
     cloud = None
     if s.classifier == "cliproxy":
-        cloud = Backend("cliproxy", s.base_url, s.model, key=env_value("CLIPROXY_API_KEY"), timeout=s.timeout)
+        cloud = Backend("cliproxy", s.base_url, s.model, key=env_value("CLIPROXY_API_KEY"), timeout=s.timeout,
+                        effort=s.effort)
     if s.classifier == "local" and local is None:
         raise SafetyError("--classifier local needs OLLAMA_BASE_URL and OLLAMA_CHAT_MODEL")
     return cloud, local
@@ -614,6 +684,7 @@ def build_spec_messages(name: str, purpose: str, titles: Sequence[str], profiles
 
 
 def build_messages(profiles: Dict[str, Profile], ev: Evidence) -> List[Dict[str, str]]:
+    ev = Evidence({k: v for k, v in ev.metadata.items() if k != "has_text"}, ev.excerpt)
     plist = "\n".join(
         f"- {p.name}: {p.purpose or '(no description)'}\n"
         f"    corpus: {p.entries} book-list entries, {p.staged} staged files"
@@ -786,6 +857,11 @@ class Item:
     needs_review: bool = True
     review_reasons: List[str] = field(default_factory=list)
     classifier: str = ""
+    model_requested: str = ""      # model named in the request
+    effort_requested: str = ""     # cliproxy reasoning_effort sent ("" for the local model: not applicable)
+    model_served: str = ""         # model the proxy reported in its response
+    usage: Dict[str, int] = field(default_factory=dict)   # prompt/completion/reasoning tokens when returned
+    latency_s: float = 0.0
     evidence: str = "none"         # excerpt | metadata-only | none
     sent_chars: int = 0
     excerpt_sha256: str = ""
@@ -829,20 +905,12 @@ def classify_item(s: Settings, rel: str, profiles: Dict[str, Profile], cloud: Op
         item.review_reasons = ["unsafe-path"]
         return item
 
-    # 1. quarantine copy-convert
-    try:
-        staged = stage(s, rel, src)
-    except (OSError, SafetyError) as exc:
-        staged = Staged(problems=[f"stage failed: {type(exc).__name__}"])
+    # 1.-2. quarantine copy-convert, then bounded evidence
+    staged, meta, excerpt = build_evidence(s, rel, src)
     item.staged_files = [str(p) for p in staged.files]
     item.stage_problems = staged.problems
-    text, title = read_book_text(staged.files) if staged.files else ("", "")
-    if not text.strip():
+    if not meta.get("has_text"):
         reasons.append("no-text")
-
-    # 2. evidence
-    meta = build_metadata(rel, src, staged, title)
-    excerpt = "" if s.metadata_only else build_excerpt(text, s.excerpt_chars)
     meta_text = json.dumps(meta, ensure_ascii=False)
 
     # 3. privacy gate
@@ -896,16 +964,18 @@ def classify_item(s: Settings, rel: str, profiles: Dict[str, Profile], cloud: Op
             item.review_reasons = reasons + ["private-payload"]
             return item
     item.classifier = f"{backend.name}:{backend.model}"
+    item.model_requested, item.effort_requested = backend.model, backend.effort if not backend.local else ""
     item.evidence = "excerpt" if ev.excerpt else "metadata-only"
     item.sent_chars = sum(len(m["content"]) for m in messages)
     item.excerpt_sha256 = hashlib.sha256(ev.excerpt.encode("utf-8")).hexdigest()[:16] if ev.excerpt else ""
     try:
-        answer = backend.complete(messages)
+        done = backend.complete_full(messages)
     except ClassifierError as exc:
         item.status, item.action_note, item.error = "error", str(exc), True
         item.review_reasons = reasons + ["classifier-error"]
         return item
-    v = parse_verdict(answer, list(profiles))
+    item.model_served, item.usage, item.latency_s = done.model_served, done.usage, done.latency_s
+    v = parse_verdict(done.content, list(profiles))
     item.rationale, item.topics, item.new_profile = v.rationale, v.topics, v.new_profile
     if v.status != "classified":
         item.status, item.error = "needs-review", True
@@ -1070,25 +1140,51 @@ def write_plan(s: Settings, items: List[Item], report: Path, applied: bool,
     new_profiles = [kp.new_profile_proposal(name, purpose, srcs, specs.get(name))
                     for name, (purpose, srcs) in sorted(proposals.items())]
     path = kp.plan_path_for(report)
-    meta = {"library": str(s.books), "report": str(report), "classifier": s.classifier, "applied": applied,
+    meta = {"library": str(s.books), "report": str(report), "classifier": s.classifier,
+            "model": classifier_model(s), "effort": classifier_effort(s), "applied": applied,
             "profiles": sorted(kp.existing_profiles(s.profiles_dir))}
     return kp.write_plan(path, plan_items, new_profiles, meta)
 
 
+def classifier_model(s: Settings) -> str:
+    return {"cliproxy": s.model, "local": s.local_model}.get(s.classifier, "")
+
+
+def classifier_effort(s: Settings) -> str:
+    """The reasoning effort this run requests from CLIProxyAPI; "" when the cloud is not the classifier."""
+    return s.effort if s.classifier == "cliproxy" else ""
+
+
+def effort_note(s: Settings) -> str:
+    if s.classifier == "cliproxy":
+        return f"top-level reasoning_effort {s.effort} on every CLIProxyAPI request"
+    return f"cliproxy effort does not apply to --classifier {s.classifier} (local model options are its own)"
+
+
+@dataclass
+class Artifacts:
+    report: Path
+    approvals: Path
+    plan: Path
+    markdown: Path
+    html: Path
+
+
 def write_report(s: Settings, items: List[Item], applied: bool, report: Optional[Path],
-                 specs: Optional[Dict[str, Dict[str, object]]] = None) -> Tuple[Path, Path]:
+                 specs: Optional[Dict[str, Dict[str, object]]] = None) -> Artifacts:
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     rdir = s.staging / "reports"
     path = report or rdir / f"classify-{stamp}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     meta = {"generated": _dt.datetime.now().isoformat(timespec="seconds"), "applied": applied,
             "library": str(s.books), "staging": str(s.staging), "classifier": s.classifier,
-            "model": s.model if s.classifier == "cliproxy" else s.local_model,
+            "model": classifier_model(s), "effort": classifier_effort(s), "effort_note": effort_note(s),
+            "models_served": sorted({i.model_served for i in items if i.model_served}),
             "threshold": s.threshold, "excerpt_chars": 0 if s.metadata_only else s.excerpt_chars,
             "library_exemption": s.library_exempt,
             "library_exemption_note": s.exemption_note}
-    path.write_text(json.dumps({"run": meta, "items": [asdict(i) for i in items]}, indent=2,
-                               ensure_ascii=False) + "\n", encoding="utf-8")
+    data = {"run": meta, "items": [asdict(i) for i in items]}
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     appr = path.with_suffix(".approvals.txt")
     lines = ["# Approvals template. Uncomment the mappings you accept, change the profile if needed,",
              "# then: make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVALS=" + str(appr),
@@ -1103,17 +1199,21 @@ def write_report(s: Settings, items: List[Item], applied: bool, report: Optional
         lines.append(f"# {i.status} conf={i.confidence}: {why}")
         lines.append(f"# {i.profile or '<profile>'}={i.source}")
     appr.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    write_plan(s, items, path, applied, specs)
-    return path, appr
+    plan_path = write_plan(s, items, path, applied, specs)
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["_path"] = str(plan_path)
+    md, html = kr.write_review(path, data, plan)
+    return Artifacts(path, appr, plan_path, md, html)
 
 
 def print_report(s: Settings, items: List[Item], applied: bool, approved_only: bool,
-                 rpath: Path, apath: Path, profiles: Dict[str, Profile]) -> None:
+                 art: Artifacts, profiles: Dict[str, Profile]) -> None:
+    rpath, apath = art.report, art.approvals
     print()
     print("== knowledge classification report ==")
     mode = "APPLY" if applied else "DRY-RUN (no book list or data/knowledge changes)"
     who = "none (approvals only)" if approved_only else {
-        "cliproxy": f"cliproxy:{s.model}", "local": f"local:{s.local_model}"}.get(s.classifier, "none")
+        "cliproxy": f"cliproxy:{s.model}/{s.effort}", "local": f"local:{s.local_model}"}.get(s.classifier, "none")
     print(f"mode: {mode}   classifier: {who}   threshold: {s.threshold}")
     print(f"library: {s.books} (read-only)   quarantine: {s.staging}")
     if not approved_only:
@@ -1133,7 +1233,9 @@ def print_report(s: Settings, items: List[Item], applied: bool, approved_only: b
                 via = ", ".join(m["linked_by"]) or "no manifest source"
                 print(f"    imported as: {m['profile']}/{m['staged']}  ({m['evidence']} {m['score']:.2f}, via {via})")
         if i.classifier:
-            print(f"    sent to {i.classifier}: {i.evidence}, {i.sent_chars} chars")
+            served = f", served by {i.model_served}" if i.model_served and i.model_served != i.model_requested else ""
+            eff = f" effort {i.effort_requested}" if i.effort_requested else ""
+            print(f"    sent to {i.classifier}{eff}: {i.evidence}, {i.sent_chars} chars, {i.latency_s:.1f}s{served}")
         if i.library_exemption:
             hits = ", ".join(i.privacy)
             print(f"    privacy: book-library exemption used (detector hits: {hits}); "
@@ -1150,35 +1252,37 @@ def print_report(s: Settings, items: List[Item], applied: bool, approved_only: b
             print(f"    secondary profile (approved): {i.secondary_reason}")
         if i.action_note:
             print(f"    note: {i.action_note}")
-        if not applied and not i.approved_profile and i.action != "refused" and i.status != "already-imported":
-            print("    approve: make knowledge-classify APPLY=1 APPROVED_ONLY=1 APPROVE="
-                  + shq((i.profile or "<profile>") + "=" + i.source))
     print()
     counts: Dict[str, int] = {}
     for i in items:
         counts[i.status] = counts.get(i.status, 0) + 1
     print("summary: " + (", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "nothing to do"))
-    print(f"report: {rpath}")
-    print(f"approvals template: {apath}")
-    plan = kp.plan_path_for(rpath)
+    plan = art.plan
     n_assign = sum(1 for i in items if kp.default_decision(i.status, i.needs_review, i.action) == "assign")
     n_review = sum(1 for i in items if kp.default_decision(i.status, i.needs_review, i.action) == "review")
     proposals = sorted({i.new_profile["name"] for i in items if i.new_profile})
     print(f"plan: {plan}   ({n_assign} assign, {n_review} review"
           + (f"; new profile proposals: {', '.join(proposals)}" if proposals else "") + ")")
-    print("Reviewed-plan path (one command stages, references, installs and learns):")
-    print(f"  1. edit {plan.name}: set every decision to assign (with profile), skip or existing;")
-    print("     approve a new profile only by filling its spec and setting approved: true")
-    print(f"  2. make knowledge-apply PLAN={shq(str(plan))} DRY_RUN=1")
-    print(f"  3. make knowledge-apply PLAN={shq(str(plan))} APPROVE=1")
+    print("artifacts:")
+    print(f"  report (JSON):          {rpath}")
+    print(f"  plan (the authority):   {plan}")
+    print(f"  review (Markdown):      {art.markdown}")
+    print(f"  workspace (HTML):       {art.html}   (offline: search, filter, edit decisions/specs, export plan)")
+    print(f"  approvals (legacy):     {apath}")
     done = sorted({i.approved_profile or i.profile for i in items if i.action == "assigned"})
     if applied and done:
         print("Next: review `git diff hermes/profiles`, then sync and learn (not run automatically):")
         for p in done:
             print(f"  make knowledge-refresh NAME={p}     then in `hermes -p {p} chat`:  /learn")
-    elif not applied:
-        print("Nothing was assigned. Re-run with APPLY=1 (--apply) to assign the `proposed` items,")
-        print("or approve specific mappings with APPROVE='<profile>=<source>' / APPROVALS=<file>.")
+        return
+    print("Next (reviewed plan; one command stages, references, installs and learns):")
+    print(f"  1. read {art.markdown.name} or open {art.html.name} in a browser; edit decisions there and export,")
+    print(f"     or edit {plan.name} directly: every decision assign (with profile), skip or existing;")
+    print("     approve a new profile only by filling its spec and setting approved: true")
+    print(f"  2. make knowledge-apply PLAN={shq(str(plan))} DRY_RUN=1")
+    print(f"  3. make knowledge-apply PLAN={shq(str(plan))} APPROVE=1")
+    print("Legacy (profile-local copy, no plan): make knowledge-classify APPLY=1 assigns the `proposed` items;")
+    print(f"  APPROVED_ONLY=1 APPROVALS={shq(str(apath))} assigns the mappings you uncomment there.")
 
 
 # --------------------------------------------------------------------------- #
@@ -1201,7 +1305,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--approved-only", action="store_true", help="process approvals only; no staging, no model calls")
     p.add_argument("--classifier", choices=("cliproxy", "local", "none"),
                    default=os.environ.get("KNOWLEDGE_CLASSIFIER", "cliproxy"))
-    p.add_argument("--model", default=os.environ.get("KNOWLEDGE_CLASSIFY_MODEL", DEFAULT_MODEL))
+    p.add_argument("--model", default=os.environ.get("KNOWLEDGE_CLASSIFY_MODEL", DEFAULT_MODEL),
+                   help=f"CLIProxyAPI model (default {DEFAULT_MODEL}; KNOWLEDGE_CLASSIFY_MODEL)")
+    p.add_argument("--effort", choices=EFFORTS, default=os.environ.get("KNOWLEDGE_CLASSIFY_EFFORT", DEFAULT_EFFORT),
+                   help=f"CLIProxyAPI reasoning effort sent as top-level reasoning_effort (default {DEFAULT_EFFORT}; "
+                        "KNOWLEDGE_CLASSIFY_EFFORT); not sent to the local model")
     p.add_argument("--metadata-only", action="store_true", help="send path metadata only, no excerpt")
     p.add_argument("--excerpt-chars", type=int, default=int(os.environ.get("KNOWLEDGE_EXCERPT_CHARS", DEFAULT_EXCERPT)))
     p.add_argument("--threshold", type=float, default=float(os.environ.get("KNOWLEDGE_CLASSIFY_THRESHOLD", DEFAULT_THRESHOLD)))
@@ -1222,6 +1330,8 @@ def settings_from(args: argparse.Namespace) -> Settings:
         raise SafetyError("--threshold must be in (0, 1]")
     if args.limit < 1:
         raise SafetyError("--limit must be at least 1")
+    if args.effort not in EFFORTS:
+        raise SafetyError(f"--effort must be one of {', '.join(EFFORTS)} (got {args.effort!r})")
     port = env_value("CLIPROXY_PORT", "8317")
     return Settings(
         books=Path(env("BOOKS_ROOT", "/mnt/books")),
@@ -1231,7 +1341,7 @@ def settings_from(args: argparse.Namespace) -> Settings:
         ignore_file=Path(env("KNOWLEDGE_IGNORE", str(ROOT / "hermes" / "knowledge-ignore.txt"))),
         private_file=Path(env("KNOWLEDGE_PRIVATE", str(ROOT / "hermes" / "knowledge-private.txt"))),
         doc2md=Path(env("DOC2MD", str(ROOT / "hermes" / "skills" / "document-converter" / "scripts" / "doc2md.py"))),
-        classifier=args.classifier, model=args.model,
+        classifier=args.classifier, model=args.model, effort=args.effort,
         base_url=env("KNOWLEDGE_CLASSIFY_BASE_URL", f"http://127.0.0.1:{port}/v1"),
         local_url=env_value("OLLAMA_BASE_URL"), local_model=env_value("OLLAMA_CHAT_MODEL"),
         timeout=float(env("KNOWLEDGE_CLASSIFY_TIMEOUT", "120")),
@@ -1329,8 +1439,8 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
         else:
             it.action = "would-assign"
     specs = complete_proposals(s, items, profiles, *backends)
-    rpath, apath = write_report(s, items, args.apply, args.report, specs)
-    print_report(s, items, args.apply, args.approved_only, rpath, apath, profiles)
+    art = write_report(s, items, args.apply, args.report, specs)
+    print_report(s, items, args.apply, args.approved_only, art, profiles)
     return 3 if any(i.error for i in items) else 0
 
 

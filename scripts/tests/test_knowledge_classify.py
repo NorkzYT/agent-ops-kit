@@ -31,6 +31,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -134,8 +135,10 @@ class Stub:
                 spec = re.search(r'"complete_spec_for": "([^"]*)"', user)
                 if spec:
                     content = SPEC_ANSWERS.get(spec.group(1), stub.spec_default)
-                out = json.dumps({"model": stub.name, "choices": [{"message": {"role": "assistant",
-                                                                                 "content": content}}]}).encode()
+                out = json.dumps({"model": stub.name + "-served",
+                                  "usage": {"prompt_tokens": 100, "completion_tokens": 12,
+                                            "completion_tokens_details": {"reasoning_tokens": 5}},
+                                  "choices": [{"message": {"role": "assistant", "content": content}}]}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(out)))
@@ -643,6 +646,96 @@ class ClassifyE2E(unittest.TestCase):
         twin = next(i for i in plan["items"] if i["source"] == "edu/Strategy Twin")
         self.assertEqual((twin["status"], twin["decision"], twin["owners"]), ("already-imported", "existing", ["alpha"]))
 
+
+    # ------------------------------------------------------------------ #
+    # Reasoning effort and readable review artifacts
+    # ------------------------------------------------------------------ #
+    def test_effort_is_sent_on_every_cloud_request_and_recorded(self):
+        p, items = self.run_kc("edu/Strategy Book", "edu/Cloud Book", "--effort", "high", "--model", "gpt-5.6-sol")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        bodies = [json.loads(r["body"]) for r in self.cloud.requests]
+        self.assertGreaterEqual(len(bodies), 3, "classification x2 + one spec completion expected")
+        self.assertTrue(all(b.get("reasoning_effort") == "high" for b in bodies), bodies)
+        self.assertTrue(all(b.get("model") == "gpt-5.6-sol" for b in bodies))
+        it = items["edu/Strategy Book"]
+        self.assertEqual(it["classifier"], "cliproxy:gpt-5.6-sol")
+        self.assertEqual(it["model_requested"], "gpt-5.6-sol")
+        self.assertEqual(it["effort_requested"], "high")
+        self.assertEqual(it["model_served"], "cloud-stub-served")
+        self.assertEqual(it["usage"], {"prompt_tokens": 100, "completion_tokens": 12, "reasoning_tokens": 5})
+        self.assertGreaterEqual(it["latency_s"], 0.0)
+        data = json.loads((self.tmp / "report-0.json").read_text())
+        self.assertEqual((data["run"]["model"], data["run"]["effort"]), ("gpt-5.6-sol", "high"))
+        self.assertEqual(data["run"]["models_served"], ["cloud-stub-served"])
+        self.assertIn("cliproxy:gpt-5.6-sol/high", p.stdout)
+        self.assertNotIn("test-key", (self.tmp / "report-0.json").read_text() + p.stdout)
+        plan = json.loads((self.tmp / "plan-report-0.json").read_text())
+        self.assertEqual((plan["model"], plan["effort"]), ("gpt-5.6-sol", "high"))
+        # The env default and the default effort.
+        self.cloud.requests.clear()
+        p, items = self.run_kc("edu/Strategy Book", KNOWLEDGE_CLASSIFY_EFFORT="medium")
+        self.assertEqual(json.loads(self.cloud.requests[0]["body"])["reasoning_effort"], "medium")
+        self.cloud.requests.clear()
+        p, items = self.run_kc("edu/Strategy Book")
+        self.assertEqual(json.loads(self.cloud.requests[0]["body"])["reasoning_effort"], kc.DEFAULT_EFFORT)
+        self.assertIn(kc.DEFAULT_EFFORT, kc.EFFORTS)
+        # Unsupported efforts are refused before anything is sent.
+        self.cloud.requests.clear()
+        p, _ = self.run_kc("edu/Strategy Book", "--effort", "xhigh")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(self.cloud.requests, [])
+        self.assert_library_unchanged()
+
+    def test_local_classifier_does_not_pretend_cloud_effort_applies(self):
+        p, items = self.run_kc("edu/Diary", "edu/Strategy Book", "--effort", "high",
+                               OLLAMA_BASE_URL=self.local.url, OLLAMA_CHAT_MODEL="local-model")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        for r in self.local.requests:
+            self.assertNotIn("reasoning_effort", json.loads(r["body"]))
+        self.assertEqual(items["edu/Diary"]["effort_requested"], "")
+        self.assertEqual(items["edu/Diary"]["model_requested"], "local-model")
+        self.assertEqual(items["edu/Strategy Book"]["effort_requested"], "high")
+        p, items = self.run_kc("edu/Strategy Book", "--classifier", "local", "--effort", "high",
+                               OLLAMA_BASE_URL=self.local.url, OLLAMA_CHAT_MODEL="local-model")
+        data = json.loads((self.tmp / "report-1.json").read_text())
+        self.assertEqual(data["run"]["effort"], "")
+        self.assertIn("cliproxy effort does not apply", data["run"]["effort_note"])
+
+    def test_writes_readable_markdown_and_html_review_next_to_the_plan(self):
+        p, items = self.run_kc()
+        self.assertEqual(p.returncode, 3, p.stdout + p.stderr)      # malformed/refused answers: exit 3, still reported
+        md, html = self.tmp / "report-0.review.md", self.tmp / "report-0.review.html"
+        self.assertTrue(md.is_file() and html.is_file(), "review artifacts missing")
+        for path in (md, html, self.tmp / "plan-report-0.json", self.tmp / "report-0.json",
+                     self.tmp / "report-0.approvals.txt"):
+            self.assertIn(str(path), p.stdout, f"{path.name} not announced")
+        text = md.read_text()
+        self.assertIn("## Totals", text)
+        self.assertIn("## Assignments per profile", text)
+        for src in items:
+            self.assertIn(src, text, src)
+        self.assertIn("suspicious-text", text)
+        self.assertIn("new profile", text.lower())
+        self.assertIn("Classifier facts", text)
+        self.assertIn("Review guidance", text)
+        body = text[text.index("## Every source"):]
+        order = [body.index("`" + src.replace("'", "'") + "`")
+                 for src in [i["source"] for i in json.loads((self.tmp / "report-0.json").read_text())["items"]]]
+        self.assertEqual(order, sorted(order), "sources are listed in their original order")
+        page = html.read_text()
+        self.assertNotIn("http://", page.replace(self.cloud.url, ""))
+        self.assertNotIn("https://", page)
+        self.assertIn('id="plan-data"', page)
+        self.assertNotIn("START-MARKER", page)             # no book text in the workspace
+        self.assertNotIn("START-MARKER", text)
+        # Reviewed-plan flow first, legacy apply labelled and last.
+        out = p.stdout
+        self.assertLess(out.index("make knowledge-apply PLAN="), out.index("Legacy"))
+        self.assertIn("review.md", out)
+        self.assertIn("review.html", out)
+        self.assertNotIn("Re-run with APPLY=1", out)
+        self.assert_library_unchanged()
+
     def test_make_target(self):
         mk = ["make", "-s", "-C", str(REPO), "knowledge-classify"]
         env = dict(self.env, SOURCE="edu/Strategy Book", APPLY="1")    # APPLY from the environment is ignored
@@ -656,6 +749,32 @@ class ClassifyE2E(unittest.TestCase):
         self.assertIn("edu/It's Quoted\n", self.manifests()["alpha"])
         self.assertTrue((self.kroot / "alpha/It's Quoted/q.txt").is_file())
         self.assert_library_unchanged()
+        # MODEL= and EFFORT= reach the script; EFFORT is validated there.
+        p = subprocess.run(["make", "-n", "-C", str(REPO), "knowledge-classify", "MODEL=gpt-5.6-terra", "EFFORT=high"],
+                           capture_output=True, text=True, env=self.env, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("--model", p.stdout)
+        self.assertIn("--effort", p.stdout)
+        self.cloud.requests.clear()
+        p = subprocess.run(mk + ["MODEL=gpt-5.6-terra", "EFFORT=high"], capture_output=True, text=True,
+                           env=dict(self.env, SOURCE="edu/Strategy Book"), timeout=120)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        body = json.loads(self.cloud.requests[0]["body"])
+        self.assertEqual((body["model"], body["reasoning_effort"]), ("gpt-5.6-terra", "high"))
+
+
+class Defaults(unittest.TestCase):
+    def test_benchmarked_default_is_terra_at_medium_effort(self):
+        # Set by the v1 benchmark (docs/benchmarks/knowledge-classify/results-v1-2026-10-23.md).
+        self.assertEqual((kc.DEFAULT_MODEL, kc.DEFAULT_EFFORT), ("gpt-5.6-terra", "medium"))
+        env = {k: v for k, v in os.environ.items() if k not in ("KNOWLEDGE_CLASSIFY_MODEL", "KNOWLEDGE_CLASSIFY_EFFORT")}
+        with mock.patch.dict(os.environ, env, clear=True):
+            args = kc.build_parser().parse_args([])
+        self.assertEqual((args.model, args.effort), ("gpt-5.6-terra", "medium"))
+        doc = (REPO / "docs" / "knowledge-classify.md").read_text()
+        self.assertIn("| `MODEL=` / `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-5.6-terra` |", doc)
+        self.assertNotIn("gpt-5.6-luna", doc.split("## Tests")[0].split("### Choosing the model and effort")[0])
+        self.assertIn("MODEL=gpt-5.6-terra EFFORT=medium", (REPO / "Makefile").read_text())
 
 
 class ParseVerdict(unittest.TestCase):
