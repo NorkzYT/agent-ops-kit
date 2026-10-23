@@ -69,18 +69,34 @@ class AiModeTest(unittest.TestCase):
         self.assertEqual(fake.calls[0]["max_picks"], 6)
         self.assertNotIn("kw:", json.dumps(t))
 
-    def test_model_may_select_high_risk_profiles_which_stay_advisory_short(self):
-        fake = Recorder(["red-team", "security-reviewer", "health-fitness", "herbalism"])
+    def test_model_may_select_every_profile_without_a_high_risk_label(self):
+        fake = Recorder(["red-team", "security-reviewer", "health-fitness", "herbalism", "strategy"])
         t = sp.route_text(NEUTRAL, settings(), readiness=ready, classifier=fake)
-        self.assertEqual(names(t), ["red-team", "security-reviewer", "health-fitness", "herbalism"])
+        self.assertEqual(names(t), ["red-team", "security-reviewer", "health-fitness", "herbalism", "strategy"])
+        executions = {r["execution"] for r in t["routes"]}
+        self.assertEqual(len(executions), 1, "one tier-based execution mode for every selected profile")
         for r in t["routes"]:
-            self.assertTrue(r["high_risk"] and r["advisory_only"])
-            self.assertEqual((r["execution"], r["toolsets"]), ("short", sp.ADVISORY_TOOLSETS))
-            self.assertIn("no external actions", r["constraint"])
+            self.assertTrue(r["advisory_only"])
+            self.assertNotIn("high_risk", r)
+            self.assertNotIn("constraint", r)
             self.assertEqual(r["knowledge"]["status"], "ready")
-        self.assertIn("HIGH-RISK", sp.render_plan(t))
-        self.assertIn("AI-selected", sp.render_plan(t))
-        self.assertIn("-t skills", sp.render_plan(t))
+        plan = sp.render_plan(t)
+        self.assertNotIn("HIGH-RISK", plan)
+        self.assertIn("AI-selected", plan)
+        self.assertIn("-t skills", plan)
+        self.assertNotIn("high_risk", json.dumps(t))
+
+    def test_cap_can_be_raised_to_fifteen(self):
+        self.assertEqual(sp.HARD_MAX_PROFILES, 15)
+        picks = [f"p{i}" for i in range(16)]
+        cat = {n: sp.Specialist(n, f"purpose {n}", ()) for n in picks}
+        with mock.patch.object(sp, "catalog", return_value=cat):
+            fake = Recorder(picks)
+            t = sp.route_text(NEUTRAL, settings(max_profiles=sp.clamp_max(15)), readiness=ready, classifier=fake)
+        self.assertEqual(fake.calls[0]["max_picks"], 15)
+        self.assertEqual(names(t), picks[:15])
+        self.assertEqual(t["dropped"], [{"profile": "p15", "reason": "cap"}])
+        self.assertEqual(sp.clamp_max(99), 15)
 
     def test_cap_is_max_profiles_not_two(self):
         picks = ["strategy", "business", "marketing", "philosophy", "survival", "martial-arts", "offers-sales"]
@@ -205,25 +221,26 @@ class DynamicCatalogTest(unittest.TestCase):
         (self.seeds / name / "knowledge-assignments.json").write_text(json.dumps(
             {"version": 1, "profile": name, "assignments": [], "profile_spec": spec}))
 
-    def test_catalog_adds_installed_book_backed_profiles_with_purpose_and_conservative_risk(self):
+    def test_catalog_adds_installed_book_backed_profiles_with_purpose_and_no_risk_label(self):
         cat = sp.catalog(settings(profiles_root=self.root, seeds_root=self.seeds))
         self.assertIn("cloud-security", cat)
         self.assertIn("psychology", cat)
         self.assertNotIn("windows-operator", cat)
         self.assertNotIn("_template", cat)
         self.assertEqual(cat["cloud-security"].purpose, "Cloud security posture, IAM and logging review.")
-        self.assertTrue(cat["cloud-security"].high_risk, "security purpose -> high-risk, advisory-only")
         self.assertEqual(cat["psychology"].purpose, "Psychological theories, personality and self-understanding.")
-        self.assertTrue(cat["psychology"].high_risk, "mental-health domain is inferred high-risk conservatively")
+        self.assertFalse(hasattr(cat["cloud-security"], "high_risk"), "no risk inference from the purpose text")
         self.assertEqual(cat["cloud-security"].signals, ())
         self.assertFalse(cat["cloud-security"].implementer)
         self.assertEqual(cat["strategy"], sp.BY_NAME["strategy"], "registry entries are never replaced")
-        explicit = dict(purpose="Gardening tips.", high_risk=True)
+        explicit = dict(purpose="Gardening tips.", high_risk=True)   # legacy spec key: accepted, ignored
         self.seed("gardening", explicit)
         self.install("gardening", True, "# SOUL.md\n")
-        self.assertTrue(sp.catalog(settings(profiles_root=self.root, seeds_root=self.seeds))["gardening"].high_risk)
+        g = sp.catalog(settings(profiles_root=self.root, seeds_root=self.seeds))["gardening"]
+        self.assertEqual((g.purpose, g.implementer, g.local), ("Gardening tips.", False, False))
         self.install("cooking", True, "# SOUL.md\n\n## Scope\n\nPurpose: Home cooking and recipes.\n")
-        self.assertFalse(sp.catalog(settings(profiles_root=self.root, seeds_root=self.seeds))["cooking"].high_risk)
+        self.assertEqual(sp.catalog(settings(profiles_root=self.root, seeds_root=self.seeds))["cooking"].purpose,
+                         "Home cooking and recipes.")
 
     def test_ai_mode_offers_dynamic_profiles_and_routes_them_advisory(self):
         fake = Recorder(["cloud-security", "psychology", "strategy"])
@@ -234,8 +251,9 @@ class DynamicCatalogTest(unittest.TestCase):
         self.assertNotIn("marketing", fake.calls[0]["pool"], "registry profiles that are not installed are not offered")
         self.assertEqual(names(t), ["cloud-security", "psychology", "strategy"])
         cs = t["routes"][0]
-        self.assertTrue(cs["high_risk"] and cs["advisory_only"])
-        self.assertEqual((cs["execution"], cs["toolsets"]), ("short", "skills"))
+        self.assertTrue(cs["advisory_only"])
+        self.assertNotIn("high_risk", cs)
+        self.assertEqual(cs["execution"], t["routes"][2]["execution"], "dynamic profiles follow the tier too")
         self.assertEqual(cs["knowledge"]["status"], "needs-learn")       # knowledge, no /learn skill yet
         self.assertEqual(t["catalog"], {"profiles": 16, "dynamic": 2, "eligible": 3})
 

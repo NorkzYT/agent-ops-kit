@@ -2,7 +2,7 @@
 
 The orchestrator can pick the book-backed specialist profiles a task needs
 on its own. The router in the `model-router` plugin reads the **current user
-task only**, selects 0-6 profiles, and adds a short note to that turn. The
+task only**, selects 0-15 profiles, and adds a short note to that turn. The
 orchestrator then runs each specialist as its own profile and merges the
 answers into one reply.
 
@@ -15,14 +15,16 @@ classifier, and never puts book or skill content into the orchestrator prompt.
 `specialist_selection_mode` (`MODEL_ROUTER_SPECIALIST_MODE`) decides **which**
 eligible profiles a task gets. Deterministic code always decides **who may be
 selected** (privacy, allowlist, installed and readiness status, the
-`specialist_max_profiles` cap) and **how** a selection runs (advisory only,
-`short` with the `skills` toolset, the high-risk constraint). The model never
+`specialist_max_profiles` cap) and **how** a selection runs (advisory only;
+`short` with the `skills` toolset, or `kanban`, by task tier). There is no
+high-risk tier or label: every installed profile is selectable on the same
+terms. The model never
 dispatches, never invents a profile and never changes those rules.
 
 | mode | what selects | notes |
 |---|---|---|
-| `ai` (shipped default) | the configured classifier (`specialist_classifier: cliproxy`, model `specialist_classifier_model`, or `local`) picks from the eligible **installed** catalog for every substantive public task | no keyword scoring, no silent keyword fallback; a model failure, timeout, off-schema answer or missing classifier selects **none** and the trace says why (`classifier-failed`, `classifier-unconfigured`). It may select high-risk profiles; they stay advisory-only. Up to `specialist_max_profiles` picks, not the hybrid cap of two. Unknown, disabled, not-installed, private-ineligible and duplicate names are dropped with a reason. |
-| `hybrid` | keyword rules first; the classifier only for weak or no matches or verified attachments | the pilot's original behaviour (below); at most two non-high-risk classifier additions |
+| `ai` (shipped default) | the configured classifier (`specialist_classifier: cliproxy`, model `specialist_classifier_model`, or `local`) picks from the eligible **installed** catalog for every substantive public task | no keyword scoring, no silent keyword fallback; a model failure, timeout, off-schema answer or missing classifier selects **none** and the trace says why (`classifier-failed`, `classifier-unconfigured`). Any installed profile may be selected. Up to `specialist_max_profiles` picks (0-15), not the hybrid cap of two. Unknown, disabled, not-installed, private-ineligible and duplicate names are dropped with a reason. |
+| `hybrid` | keyword rules first; the classifier only for weak or no matches or verified attachments | the pilot's original behaviour (below); at most two classifier additions |
 | `keywords` | keyword rules only | offline, deterministic; what `make specialist-route` and `/route-specialists` show |
 
 `MODEL_ROUTER_SPECIALISTS=true` with the shipped defaults (`.env.example`:
@@ -40,11 +42,9 @@ installed under `~/.hermes/profiles/<name>`) join the catalog in `ai` mode
 alongside the registry. Their purpose comes from the spec in
 `hermes/profiles/<name>/knowledge-assignments.json` (`specialist_seeds_root`
 names that folder; optional) or from the `Purpose:` line knowledge-apply
-renders into the installed `SOUL.md`. They are advisory by default and
-inferred **high-risk** conservatively when the spec or purpose names a
-sensitive domain (security, offensive testing, medical/health, psychology,
-herbal, legal, weapons, biotech) or sets `high_risk: true`; high-risk means
-`short` + `skills` only. Keyword and hybrid modes never score them (they
+renders into the installed `SOUL.md`. They are advisory like every other
+profile; no risk tier is inferred from the purpose text, and a legacy
+`high_risk: true` spec key is ignored. Keyword and hybrid modes never score them (they
 have no keyword rules). The allowlist (`specialist_profiles`) accepts
 installed dynamic names.
 
@@ -67,8 +67,8 @@ never removes or re-runs a profile that already ran, never dispatches
 duplicates, and a specialist child never expands the route itself. A domain
 with no existing profile is a new-profile idea for the knowledge plan
 (`make knowledge-classify` → `make knowledge-apply ... APPROVE_ALL=1`), never
-something to create mid-task. Privacy and the high-risk rule apply to appended
-profiles too (`hermes/SOUL.md`).
+something to create mid-task. Privacy applies to appended profiles too
+(`hermes/SOUL.md`).
 
 **A route only selects.** The specialist's knowledge is in play only when it
 runs under its own profile: `hermes -p <profile> -z '<brief>' -t skills` loads
@@ -80,22 +80,25 @@ model sees them.
 
 ## What it routes to
 
-| Profile | Picked for | High-risk |
-|---------|-----------|-----------|
-| `strategy` | business model, competitive position, prioritisation, pivots | |
-| `business` | unit economics, cash flow, runway, business plans | |
-| `offers-sales` | offer design, pricing, lead gen, sales funnels | |
-| `marketing` | positioning, messaging, campaigns, channels | |
-| `leadership-teamwork` | teams, one-on-ones, feedback, hiring | |
-| `software-engineering` | architecture, review standards, testing strategy | |
-| `security-reviewer` | security review, threat model, vulnerabilities | yes |
-| `red-team` | scoped red-team and pentest planning on owned targets | yes |
-| `negotiation-communication` | negotiations, hard conversations, message drafts | |
-| `health-fitness` | training, nutrition, recovery | yes |
-| `herbalism` | plants, preparations, traditional use | yes |
-| `survival` | preparedness, emergency kits, first aid | |
-| `martial-arts` | grappling technique, conditioning | |
-| `philosophy` | stoicism, ethics, mental models | |
+| Profile | Picked for |
+|---------|-----------|
+| `strategy` | business model, competitive position, prioritisation, pivots |
+| `business` | unit economics, cash flow, runway, business plans |
+| `offers-sales` | offer design, pricing, lead gen, sales funnels |
+| `marketing` | positioning, messaging, campaigns, channels |
+| `leadership-teamwork` | teams, one-on-ones, feedback, hiring |
+| `software-engineering` | architecture, review standards, testing strategy |
+| `security-reviewer` | security review, threat model, vulnerabilities |
+| `red-team` | scoped red-team and pentest planning on owned targets |
+| `negotiation-communication` | negotiations, hard conversations, message drafts |
+| `health-fitness` | training, nutrition, recovery |
+| `herbalism` | plants, preparations, traditional use |
+| `survival` | preparedness, emergency kits, first aid |
+| `martial-arts` | grappling technique, conditioning |
+| `philosophy` | stoicism, ethics, mental models |
+
+No profile carries a high-risk label; each profile's own `SOUL.md` states its
+scope and refusals.
 
 Every specialist is advisory. Implementation is not routed to a specialist:
 coding goes through the coordinator's own coding path (Claude Opus/Fable,
@@ -199,19 +202,17 @@ list, and drops the lowest-ranked.
   unsent, any input that carries a `#privacy`/`#private` marker. No
   specialist runs on the local model, so a private task routes no
   specialist; the turn itself stays on the private Ollama route.
-- **High-risk is advisory.** `health-fitness`, `herbalism`,
-  `security-reviewer` and `red-team` (and dynamic profiles inferred
-  high-risk) always run `short` with only the `skills` toolset. That means no
-  terminal, files, web, browser, messages or Kanban, thus no external or
-  high-impact action. In `hybrid` mode the classifier can never add a
-  high-risk profile; in `ai` mode it may select one, and the constraint
-  still applies.
+- **No high-risk tier.** Every profile is selectable in every mode and runs
+  by the same rules; the router does not label, filter or constrain profiles
+  by domain. `short` routes still get only the `skills` toolset (no
+  terminal, files, web, browser, messages or Kanban); the profile's own
+  `SOUL.md` carries its scope and refusals.
 - **Isolated profiles.** `kanban` means a board task with the profile as
   assignee. The dispatcher runs it under that profile's own `HERMES_HOME`,
   SOUL, memory and skills. `short` means one bounded answer from
   `hermes -p <profile> -z '<brief>' -t skills`. `delegate_task` is never used
   for specialists because it cannot carry a profile.
-- **Execution mode.** Deep tasks (elevated/high tier) use `kanban`. Short questions use `short`. High-risk always uses `short`.
+- **Execution mode.** Deep tasks (elevated/high tier) use `kanban`. Short questions use `short`. The tier decides for every profile.
 - **Knowledge readiness** is checked in the installed profile, never assumed
   from the repo templates. The check only lists files and reads `SKILL.md`
   frontmatter. It never opens a book.
@@ -302,7 +303,7 @@ The JSON trace is followed by a summary:
 --- summary ---
 task 91d1e4d8c8b9d337  source typed  privacy public  tier elevated  classifier off
 selected 2/4:
-  security-reviewer          short  knowledge no-knowledge  reasons kw:review,kw:authz,kw:security  [HIGH-RISK advisory-only]
+  security-reviewer          kanban knowledge no-knowledge  reasons kw:review,kw:authz,kw:security  [advisory]
   marketing                  kanban knowledge ready  reasons kw:marketing  [advisory]
 profiles root /home/you/.hermes/profiles
 ```
@@ -332,8 +333,8 @@ In any Hermes chat, after the plugin reloads:
 /route-specialists Design an offer and pricing for my course
 ```
 
-Trace fields: `routes[]` (`profile`, `score`, `reasons`, `high_risk`,
-`advisory_only`, `execution`, `toolsets`, `constraint`, `knowledge`),
+Trace fields: `routes[]` (`profile`, `score`, `reasons`, `advisory_only`,
+`execution`, `toolsets` for `short`, `knowledge`),
 `attachment_signals` (profiles added from verified attachments, `att:`
 reasons), `dropped[]` (`privacy:local-only`, `cap`, `not-allowed`,
 `readiness:<status>`, `classifier:not-eligible`, `classifier:cap`), `privacy`, `tier`, `task`
@@ -372,9 +373,10 @@ label), `classifier`, `classifier_gate` (`no-match` | `ambiguous` |
    make specialist-install DRY_RUN=1
    make specialist-install                        # MAX=4 MODE=ai REQUIRE_READY=0 CLASSIFIER=none PROFILES=all
    make specialist-install MODE=ai CLASSIFIER=cliproxy MAX=6   # AI-only selection (the shipped .env defaults)
+   make specialist-install MODE=ai CLASSIFIER=cliproxy MAX=15  # the full cap
    ```
 
-   It sets `specialist_routing: true`. A key you pass (`MAX=0-6`,
+   It sets `specialist_routing: true`. A key you pass (`MAX=0-15`,
    `MODE=ai|hybrid|keywords`, `REQUIRE_READY=1|0`, `CLASSIFIER=none|local|cliproxy`,
    `PROFILES=a,b` or `all`) is
    written. A key you do not pass keeps its current value, or gets the default
@@ -449,7 +451,7 @@ The installer renders the `specialist_*` keys presence-aware:
 | key absent (or empty) | the value already in `~/.hermes/config.yaml` (what `make specialist-install` wrote) |
 | key absent, no live value | the default (`false`, `4`, `false`, `none`, `10`, all profiles) |
 
-Keys: `MODEL_ROUTER_SPECIALISTS`, `MODEL_ROUTER_SPECIALIST_MAX` (0-6),
+Keys: `MODEL_ROUTER_SPECIALISTS`, `MODEL_ROUTER_SPECIALIST_MAX` (0-15),
 `MODEL_ROUTER_SPECIALIST_REQUIRE_READY`, `MODEL_ROUTER_SPECIALIST_CLASSIFIER`
 (`none|local|cliproxy`), `MODEL_ROUTER_SPECIALIST_MODE` (`ai|hybrid|keywords`,
 default `ai`), `MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT` (seconds),
@@ -472,8 +474,8 @@ debugging or backward compatibility.
 
 ```bash
 make specialist-status                                   # read-only: settings incl. selection mode, readiness
-make specialist-install DRY_RUN=1 MODE=ai CLASSIFIER=cliproxy MAX=6
-make specialist-install MODE=ai CLASSIFIER=cliproxy MAX=6   # plugin files + keys via hermes config set; NO restart
+make specialist-install DRY_RUN=1 MODE=ai CLASSIFIER=cliproxy MAX=15
+make specialist-install MODE=ai CLASSIFIER=cliproxy MAX=15  # plugin files + keys via hermes config set; NO restart
 (set -a; . ~/.hermes/.env; set +a; make specialist-classify-probe TASK="<a real task>")   # live AI selection, nothing dispatched
 make specialist-enable                                    # restarts the gateway only with the operator's yes (or make hermes-restart)
 make specialist-logs                                      # mode=ai classifier=used ... in the live log

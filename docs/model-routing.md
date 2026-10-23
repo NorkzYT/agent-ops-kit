@@ -592,14 +592,14 @@ reason on record: without the extension a `#privacy` payload reaches the proxy.
 
 The same plugin can suggest book-backed specialist profiles per task through a
 `pre_llm_call` hook. The plugin default is off (`specialist_routing`); the shipped
-`.env.example` turns it on with `MODEL_ROUTER_SPECIALIST_MAX=6` (the hard cap)
+`.env.example` turns it on with `MODEL_ROUTER_SPECIALIST_MAX=6` (hard cap 15)
 and `MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy`. It uses the same
 current-task extraction and `#privacy`/`#private` marker check, and only runs in
 the `default` profile. Typed keywords and verified attachment text (PDF/DOCX
 extracted locally) add deterministic signals. For a public task with weak or no
 keyword matches, or with verified attachments, the hybrid classifier (CLIProxyAPI
 `gpt-5.6-terra` at `medium` effort, or `local`, the routine role below) may add
-at most two non-high-risk profiles. The cap applies once, to the combined list.
+at most two profiles. The cap applies once, to the combined list.
 Marked turns never reach either classifier. See
 [specialist-routing.md](specialist-routing.md).
 

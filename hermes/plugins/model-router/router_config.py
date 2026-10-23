@@ -107,7 +107,7 @@ class RouterSettings:
     specialist_classifier: str = "none"                            # none | local (Ollama) | cliproxy
     # ai: the classifier selects from the eligible installed catalog (no keyword scoring, no
     # silent fallback; deterministic code still enforces privacy, allowlist, readiness, caps,
-    # dispatch mode and high-risk advisory rules). hybrid/keywords: opt-in, for debugging and
+    # dispatch mode). hybrid/keywords: opt-in, for debugging and
     # backward compatibility. With specialist_classifier none, ai mode routes nothing.
     specialist_selection_mode: str = "ai"                          # ai | hybrid | keywords
     specialist_classifier_timeout: float = 10.0                    # total seconds, both models

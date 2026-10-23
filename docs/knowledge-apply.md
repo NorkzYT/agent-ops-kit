@@ -44,9 +44,9 @@ concrete proposals. It works on a copy of the plan; the file is never edited.
 
 * clean `assign` stays `assign`; `skip` and `existing` stay as written;
 * `pending review` with an existing-profile proposal becomes `assign` to it.
-  High-risk content or profile labels are accepted by this (it is an explicit
-  approval); profile policies stay advisory and the specialist router keeps
-  enforcing them;
+  High-risk content or profile review labels (a knowledge-plan gate, not a
+  routing label) are accepted by this (it is an explicit approval); the
+  specialist router has no high-risk tier;
 * `pending profile approval` with a **complete** proposal becomes `assign` and
   the proposal becomes approved (the profile is created). An incomplete
   proposal stays pending: nothing is guessed;

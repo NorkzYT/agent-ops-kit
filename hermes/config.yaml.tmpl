@@ -254,7 +254,7 @@ compression:
 # once when the role model fails; then the request is refused, never sent to a
 # cloud provider. ollama_model is the legacy single-model key (the routine role).
 # specialist_routing (pilot, MODEL_ROUTER_SPECIALISTS) adds a content-free
-# note naming the 0-6 book-backed profiles a task needs; it only runs in the
+# note naming the 0-15 book-backed profiles a task needs; it only runs in the
 # default (orchestrator) profile and never dispatches by itself.
 # specialist_selection_mode (MODEL_ROUTER_SPECIALIST_MODE, default ai): in ai
 # mode the classifier (specialist_classifier: cliproxy, model
@@ -263,10 +263,10 @@ compression:
 # profiles from the eligible INSTALLED catalog (registry + profiles created by
 # knowledge-apply) for every substantive public task; no keyword scoring, no
 # silent fallback; a model failure selects none. Deterministic code still
-# enforces privacy, the allowlist, installed/readiness status, the cap, the
-# dispatch mode and the high-risk advisory-only constraint. hybrid (keywords
-# first, classifier for weak/no matches, at most two non-high-risk additions)
-# and keywords are opt-in. #privacy turns never reach cliproxy.
+# enforces privacy, the allowlist, installed/readiness status, the cap and the
+# dispatch mode; no profile carries a high-risk label. hybrid (keywords first,
+# classifier for weak/no matches, at most two additions) and keywords are
+# opt-in. #privacy turns never reach cliproxy.
 # The specialist_* values and private_terms/private_paths keep what is already
 # in config.yaml when their MODEL_ROUTER_* key is absent from .env.
 # private_terms/private_paths no longer affect request routing (#privacy only).

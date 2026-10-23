@@ -232,11 +232,11 @@ class ActivateTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.settings()["specialist_max_profiles"], 2)
         self.assertEqual(self.settings()["specialist_profiles"], ["strategy"])
-        r = self.run_cmd("install", "--max", "5", "--profiles", "all", "--classifier", "local")
+        r = self.run_cmd("install", "--max", "15", "--profiles", "all", "--classifier", "local")
         self.assertEqual(r.returncode, 0, r.stderr)
         s = self.settings()
         self.assertEqual((s["specialist_max_profiles"], s["specialist_profiles"],
-                          s["specialist_classifier"]), (5, [], "local"))
+                          s["specialist_classifier"]), (15, [], "local"))
         r = self.run_cmd("install", "--classifier", "cliproxy")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.settings()["specialist_classifier"], "cliproxy")
@@ -244,10 +244,11 @@ class ActivateTest(unittest.TestCase):
         self.assertIn("never runs for #privacy turns", r.stdout + r.stderr)
 
     def test_install_rejects_bad_input_before_writing(self):
-        for args in (("--max", "7"), ("--profiles", "strategy,bogus"), ("--classifier", "cloud")):
+        for args in (("--max", "16"), ("--max", "-1"), ("--profiles", "strategy,bogus"), ("--classifier", "cloud")):
             r = self.run_cmd("install", *args)
             self.assertEqual(r.returncode, 1, args)
             self.assertIn("error:", r.stderr)
+        self.assertIn("--max must be 0-15", self.run_cmd("install", "--max", "16").stderr)
         self.assertEqual(self.writes(), [])
 
     def test_install_refuses_without_plugin_enabled_or_config(self):

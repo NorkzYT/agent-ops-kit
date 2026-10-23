@@ -478,21 +478,19 @@ class ClassifierGateTest(unittest.TestCase):
         self.assertEqual([r["profile"] for r in weak["routes"]], ["strategy", "philosophy"])
         self.assertNotIn("strategy", seen[1])  # the pool never repeats a deterministic match
 
-    def test_at_most_two_additions_and_never_high_risk(self):
+    def test_at_most_two_additions_from_the_whole_catalog(self):
         def greedy(visible, pool):
             return ["security-reviewer", "red-team", "health-fitness", "herbalism",
                     "philosophy", "marketing", "business", "survival"]
 
         t = sp.route_text(NO_MATCH, settings(max_profiles=6), readiness=ready, classifier=greedy)
         added = [r["profile"] for r in t["routes"] if r["reasons"] == ["classifier"]]
-        self.assertEqual(added, ["philosophy", "marketing"])
-        self.assertTrue(set(added).isdisjoint(sp.CLASSIFIER_FORBIDDEN))
+        self.assertEqual(added, ["security-reviewer", "red-team"])   # no high-risk filter
         reasons = {d["profile"]: d["reason"] for d in t["dropped"]}
-        for name in ("security-reviewer", "red-team", "health-fitness", "herbalism"):
-            self.assertEqual(reasons[name], "classifier:not-eligible")
-        self.assertEqual(reasons["business"], "classifier:cap")
+        for name in ("health-fitness", "herbalism", "philosophy", "marketing", "business", "survival"):
+            self.assertEqual(reasons[name], "classifier:cap")
         self.assertEqual(sp.MAX_CLASSIFIER_ADDITIONS, 2)
-        self.assertEqual(set(sp.HIGH_RISK), {"security-reviewer", "red-team", "health-fitness", "herbalism"})
+        self.assertFalse(hasattr(sp, "HIGH_RISK"))
 
     def test_private_task_never_reaches_classifier(self):
         called = []
@@ -729,14 +727,14 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.specialist_routing"), "true")
 
     def test_fresh_install_defaults_and_invalid_values(self):
-        r = self.install("MODEL_ROUTER_SPECIALISTS=maybe\nMODEL_ROUTER_SPECIALIST_MAX=9\n")
+        r = self.install("MODEL_ROUTER_SPECIALISTS=maybe\nMODEL_ROUTER_SPECIALIST_MAX=16\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = self.home / "config.yaml"
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_routing"), "false")
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_max_profiles"), "4")
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_classifier"), "none")
         self.assertIn("is not a boolean", r.stderr)
-        self.assertIn("is not 0-6", r.stderr)
+        self.assertIn("is not 0-15", r.stderr)
 
     def test_render_pins_schema_version_kanban_and_title_effort(self):
         r = self.install("", "--force")

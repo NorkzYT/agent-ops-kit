@@ -72,13 +72,13 @@ payload is never sent to them by compression or title generation; see
   `ollama_base_url` is refused unsent.
 
 - **Specialist routing pilot** (`pre_llm_call` hook, off by default) —
-  `specialists.py` deterministically picks 0-4 book-backed profiles for the
+  `specialists.py` deterministically picks 0-15 book-backed profiles for the
   current genuine user task and appends a `<specialist-routing>` note to the
-  orchestrator's turn (privacy first, high-risk profiles advisory with the
-  `skills` toolset only, readiness from the installed profile's `/learn`
-  skill). With `specialist_classifier: cliproxy` a public task with no or
+  orchestrator's turn (privacy first, every profile advisory, `short` routes
+  with the `skills` toolset only, readiness from the installed profile's
+  `/learn` skill; no high-risk tier). With `specialist_classifier: cliproxy` a public task with no or
   only weak keyword matches, or with verified attachments, asks CLIProxyAPI
-  (`gpt-5.6-terra`, `medium` reasoning) for at most two non-high-risk
+  (`gpt-5.6-terra`, `medium` reasoning) for at most two
   additions, from the typed task plus the verified attached documents (PDF
   and DOCX text extracted locally, bounded; wire text, `#privacy` and routing
   notes withheld). `local` asks the routine local model instead. A
@@ -146,5 +146,5 @@ configured `specialist_classifier` selects up to `specialist_max_profiles`
 profiles from the eligible installed catalog, including profiles created by
 knowledge-apply; a model failure selects none), `hybrid` (keywords first,
 classifier for weak/no matches) or `keywords` (deterministic only). Privacy,
-allowlist, readiness, caps, dispatch mode and the high-risk advisory-only
-constraint are enforced in code in every mode. See `docs/specialist-routing.md`.
+allowlist, readiness, caps and dispatch mode are enforced in code in every
+mode; there is no high-risk label or filter. See `docs/specialist-routing.md`.

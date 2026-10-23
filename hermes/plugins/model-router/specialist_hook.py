@@ -8,7 +8,7 @@
   profile's own HERMES_HOME) or a short bounded review. It never dispatches,
   never calls a cloud model, and returns nothing on any error.
 * ``/route-specialists <task>`` — offline dry-run: prints the content-free
-  routing trace (profiles, reasons, high-risk, knowledge readiness).
+  routing trace (profiles, reasons, knowledge readiness).
 
 The hook runs only in the configured orchestrator profile(s) (``default``) and
 never in a subagent turn, so a specialist never fans out to other specialists.
@@ -100,7 +100,7 @@ def local_classifier(settings: RouterSettings, *,
     role once on a model-level failure, inside one total budget
     (``specialist_classifier_timeout``). ``route_text`` calls it only for
     public tasks with no or only weak keyword matches and keeps at most two
-    non-high-risk answers. Any failure or timeout returns no names. Neither
+    answers. Any failure or timeout returns no names. Neither
     the prompt nor the answer is logged.
     """
     chain = settings.local_chain("routine")

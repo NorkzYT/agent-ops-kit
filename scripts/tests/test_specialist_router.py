@@ -67,9 +67,15 @@ class RegistryTest(unittest.TestCase):
         self.assertFalse((REPO / "hermes" / "profiles" / "local-engineer").exists())
         self.assertEqual([s.name for s in sp.REGISTRY if s.local or s.implementer], [])
 
-    def test_high_risk_set(self):
-        self.assertEqual(set(sp.HIGH_RISK),
-                         {"health-fitness", "herbalism", "security-reviewer", "red-team"})
+    def test_no_high_risk_label_anywhere(self):
+        # The high-risk filter/label was removed: no registry flag, no module constant, and the
+        # classifier pool excludes only local-only profiles (none today). Every profile stays.
+        self.assertFalse(hasattr(sp, "HIGH_RISK"))
+        self.assertFalse(hasattr(sp.REGISTRY[0], "high_risk"))
+        self.assertEqual(sp.CLASSIFIER_FORBIDDEN, frozenset())
+        self.assertEqual(len(sp.REGISTRY), 14)
+        for name in ("health-fitness", "herbalism", "security-reviewer", "red-team"):
+            self.assertIn(name, sp.BY_NAME)
 
     def test_each_profile_is_reachable(self):
         samples = {
@@ -98,7 +104,8 @@ class MatchTest(unittest.TestCase):
         t = route("Help me design an irresistible offer and pricing for my course.")
         self.assertEqual(names(t), ["offers-sales"])
         r = t["routes"][0]
-        self.assertFalse(r["high_risk"])
+        self.assertNotIn("high_risk", r)
+        self.assertNotIn("constraint", r)
         self.assertTrue(r["advisory_only"])
         self.assertTrue(r["reasons"] and all(x.startswith("kw:") for x in r["reasons"]))
         self.assertEqual(r["knowledge"]["status"], "ready")
@@ -181,10 +188,12 @@ class UnderSelectionRegressionTest(unittest.TestCase):
         t = route("Review the authentication design and implement fixes with tests")
         self.assertEqual(set(names(t)), {"security-reviewer", "software-engineering"})
         sec = next(r for r in t["routes"] if r["profile"] == "security-reviewer")
-        # High-risk controls are untouched: advisory, short, skills-only, constrained.
-        self.assertTrue(sec["high_risk"])
-        self.assertEqual((sec["execution"], sec["toolsets"]), ("short", sp.ADVISORY_TOOLSETS))
-        self.assertEqual(sec["constraint"], sp.ADVISORY_CONSTRAINT)
+        eng = next(r for r in t["routes"] if r["profile"] == "software-engineering")
+        # No high-risk gating: security-reviewer runs like any other specialist (same tier-based
+        # execution mode as software-engineering), still advisory, no constraint label.
+        self.assertNotIn("high_risk", sec)
+        self.assertNotIn("constraint", sec)
+        self.assertEqual(sec["execution"], eng["execution"])
         self.assertTrue(all(r["advisory_only"] for r in t["routes"]))
 
     def test_authentication_word_counts_as_security_evidence(self):
@@ -203,22 +212,33 @@ class UnderSelectionRegressionTest(unittest.TestCase):
         self.assertEqual(dropped, {"security-reviewer", "software-engineering"})
 
 
-class HighRiskTest(unittest.TestCase):
-    def test_high_risk_routes_are_advisory_short_and_constrained(self):
+class NoHighRiskGatingTest(unittest.TestCase):
+    FORMER = ("red-team", "security-reviewer", "health-fitness", "herbalism")
+
+    def test_former_high_risk_profiles_route_like_any_other(self):
         t = route("Scope a red team exercise and a security review for our app, build a "
                   "strength training plan with protein targets, and list herbs for tea. "
-                  "Compare options and trade-offs in a deep plan.")
-        hr = [r for r in t["routes"] if r["high_risk"]]
-        self.assertEqual({r["profile"] for r in hr},
-                         {"red-team", "security-reviewer", "health-fitness", "herbalism"})
-        for r in hr:
+                  "Compare options and trade-offs in a deep plan.", max_profiles=6)
+        self.assertTrue(set(self.FORMER) <= set(names(t)))
+        self.assertIn(t["tier"], ("elevated", "high"))
+        for r in t["routes"]:
             self.assertTrue(r["advisory_only"])
-            self.assertEqual(r["execution"], "short")  # even when the task is deep
-            self.assertEqual(r["toolsets"], sp.ADVISORY_TOOLSETS)
-            self.assertIn("no external actions", r["constraint"])
-        self.assertIn("HIGH-RISK", sp.render_plan(t))
+            self.assertNotIn("high_risk", r)
+            self.assertNotIn("constraint", r)
+            self.assertEqual(r["execution"], "kanban")   # deep task: tier decides, not a risk label
+            self.assertNotIn("toolsets", r)
+        plan = sp.render_plan(t)
+        self.assertNotIn("HIGH-RISK", plan)
+        self.assertNotIn("high-risk", plan.lower())
 
-    def test_classifier_cannot_add_high_risk_or_local(self):
+    def test_short_tasks_keep_the_skills_only_tool_scope(self):
+        t = route("What are traditional uses of chamomile?")
+        self.assertEqual(names(t), ["herbalism"])
+        r = t["routes"][0]
+        self.assertEqual((r["execution"], r["toolsets"]), ("short", sp.ADVISORY_TOOLSETS))
+        self.assertIn("-t skills", sp.render_plan(t))
+
+    def test_hybrid_classifier_may_add_former_high_risk_profiles_within_its_cap(self):
         seen = {}
 
         def fake(visible, pool):
@@ -230,9 +250,17 @@ class HighRiskTest(unittest.TestCase):
             "around me, and I would like a structured way to think it through.",
             settings(classifier="local"), readiness=ready, classifier=fake)
         self.assertEqual(t["classifier"], "used")
-        self.assertEqual(names(t), ["philosophy"])
-        self.assertTrue(set(seen["pool"]).isdisjoint(set(sp.HIGH_RISK) | sp.CLASSIFIER_FORBIDDEN))
-        self.assertTrue(all(d["reason"] == "classifier:not-eligible" for d in t["dropped"]))
+        self.assertTrue(set(self.FORMER) <= set(seen["pool"]))     # every profile is offered
+        self.assertEqual(names(t), ["red-team", "health-fitness"])  # MAX_CLASSIFIER_ADDITIONS still 2
+        reasons = {d["profile"]: d["reason"] for d in t["dropped"]}
+        self.assertEqual(reasons["philosophy"], "classifier:cap")
+        self.assertEqual(reasons["?"], "classifier:not-eligible")
+
+    def test_private_task_still_fails_closed(self):
+        t = route("#privacy scope a red team exercise and a security review for our app")
+        self.assertEqual(t["privacy"], "local-only")
+        self.assertEqual(names(t), [])
+        self.assertTrue(all(d["reason"] == "privacy:local-only" for d in t["dropped"]))
 
     def test_classifier_skipped_for_clear_or_short_tasks_and_errors_are_contained(self):
         calls = []
@@ -1211,7 +1239,10 @@ class CapAndStateTest(unittest.TestCase):
         self.assertEqual(route(self.WIDE, max_profiles=0)["routes"], [])
 
     def test_clamp(self):
-        self.assertEqual(sp.clamp_max(99), sp.HARD_MAX_PROFILES)
+        self.assertEqual(sp.HARD_MAX_PROFILES, 15)
+        self.assertEqual(sp.clamp_max(99), 15)
+        self.assertEqual(sp.clamp_max(15), 15)
+        self.assertEqual(sp.clamp_max(7), 7)
         self.assertEqual(sp.clamp_max(-3), 0)
         self.assertEqual(sp.clamp_max("x"), sp.DEFAULT_MAX_PROFILES)
 

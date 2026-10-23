@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Dry-run the specialist-router pilot for one task. Offline; nothing is dispatched.
 
-Prints the routing trace as JSON: selected profiles, reason labels, high-risk
-and advisory flags, execution mode (kanban | short), knowledge readiness, and
+Prints the routing trace as JSON: selected profiles, reason labels, advisory
+flags, execution mode (kanban | short), knowledge readiness, and
 what was dropped and why, then a one-screen summary of the same trace. Neither
 contains the task text (only a 16-hex hash). Readiness is stat-only: it lists
 file names under each profile's knowledge/ and skills/ folders and reads
@@ -60,7 +60,7 @@ Usage:
   python3 scripts/specialist-route.py [--plan] [--profiles-root DIR] "task text"
 
 Output: the JSON trace, then a summary: selected profiles with execution mode,
-knowledge readiness, reasons and HIGH-RISK/advisory flags; dropped profiles and
+knowledge readiness, reasons and advisory flags; dropped profiles and
 why; the task source (typed, or attachment-derived for a bare uploaded file).
 
 Related:
@@ -80,8 +80,7 @@ def summary(trace: dict) -> str:
         lines.append(f"selected {len(routes)}/{trace.get('max_profiles')}:")
         for r in routes:
             k = r["knowledge"]
-            flags = ["HIGH-RISK advisory-only" if r.get("high_risk") else
-                     "advisory" if r.get("advisory_only") else "implementer"]
+            flags = ["advisory" if r.get("advisory_only") else "implementer"]
             if r.get("local_only"):
                 flags.append("local-only")
             lines.append(f"  {r['profile']:<26} {r['execution']:<6} knowledge {k['status']}"

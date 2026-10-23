@@ -571,7 +571,7 @@ def enable(args) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Install, enable and check the specialist-router pilot")
     ap.add_argument("command", choices=("status", "install", "enable", "disable"))
-    ap.add_argument("--max", type=int, default=None, help="specialist_max_profiles (0-6)")
+    ap.add_argument("--max", type=int, default=None, help="specialist_max_profiles (0-15; the plugin's HARD_MAX_PROFILES)")
     rr = ap.add_mutually_exclusive_group()
     rr.add_argument("--require-ready", dest="require_ready", action="store_true", default=None)
     rr.add_argument("--no-require-ready", dest="require_ready", action="store_false")

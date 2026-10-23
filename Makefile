@@ -207,7 +207,7 @@ specialist-logs-follow: ## Recent specialist-routing decisions, then follow live
 specialist-status: ## Read-only: plugin vs repo, specialist_* settings (incl. selection mode), gateway, restart pending, knowledge readiness
 	@PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py status
 
-specialist-install: ## Install the router plugin + set specialist_routing on (hermes config set, read back); NO restart [MAX=4 MODE=ai|hybrid|keywords REQUIRE_READY=0|1 CLASSIFIER=none|local|cliproxy PROFILES=a,b|all DRY_RUN=1]
+specialist-install: ## Install the router plugin + set specialist_routing on (hermes config set, read back); NO restart [MAX=0-15 MODE=ai|hybrid|keywords REQUIRE_READY=0|1 CLASSIFIER=none|local|cliproxy PROFILES=a,b|all DRY_RUN=1]
 	@args=(install); \
 	 [[ -n "$${MAX:-}" ]] && args+=(--max "$$MAX"); \
 	 [[ -n "$${MODE:-}" ]] && args+=(--mode "$$MODE"); \

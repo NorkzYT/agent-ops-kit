@@ -125,9 +125,10 @@ the job id. If scheduling fails, say so and ask to be pinged.
   `make test-router`.
 - Specialist routing (pilot; plugin default off, `.env.example` on with the
   `cliproxy` classifier, `gpt-5.6-terra`): `specialist_routing` in the same
-  plugin suggests 0-6 book-backed profiles per current task (six is the hard
+  plugin suggests 0-15 book-backed profiles per current task (15 is the hard
   cap; verified attachment signals count before it); private tasks never
-  reach cloud-backed profiles; high-risk profiles are advisory only. Dry-run:
+  reach cloud-backed profiles; every profile is advisory, none is labelled
+  high-risk. Dry-run:
   `TASK="..." make specialist-route`; live decisions: `make specialist-logs`.
   A bare uploaded prompt file routes on its verified content
   (`attachment-derived`). Activation: `make specialist-status`,

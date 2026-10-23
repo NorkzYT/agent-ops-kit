@@ -37,13 +37,12 @@ Rules:
   * **Attachment signals.** The same verified, cleaned documents also score
     keywords (:func:`attachment_signals`, ``att:<label>`` reasons) for a
     public turn: a profile is added on at least one strong signal, never a
-    high-risk or local one, and a document carrying router diagnostics
-    scores nothing. Typed evidence ranks first, then attachment evidence,
+    local-only one, and a document carrying router diagnostics scores
+    nothing. Typed evidence ranks first, then attachment evidence,
     then the classifier's additions; the cap applies to the combined list.
-  * **High-risk profiles are advisory.** ``health-fitness``, ``herbalism``,
-    ``security-reviewer`` and ``red-team`` are routed review/advice only: no
-    tool action with external or high-impact effect. The optional classifier
-    can never add one; they need deterministic keyword evidence.
+  * **No high-risk label.** Every registered or dynamic profile is selectable
+    on the same terms; there is no risk tier, no forced ``short`` mode and no
+    extra constraint text. Tool scope is decided by the execution mode alone.
   * **Isolated execution.** Each route names how it runs: ``kanban`` (a board
     task assigned to the profile — the dispatcher runs it under that
     profile's own HERMES_HOME) for deep work, or ``short``
@@ -53,7 +52,7 @@ Rules:
     (Claude Opus/Fable, ``coder``, the kanban workflow).
     The specialist loads its own ``/learn`` knowledge skill on demand; no book
     or skill content is ever put into the orchestrator prompt.
-  * **Bounded.** At most ``max_profiles`` routes (default 4, max 6), ordered by
+  * **Bounded.** At most ``max_profiles`` routes (default 4, max 15), ordered by
     source (typed, attachment, classifier), score, then registry order. Unknown
     names in settings are reported, never routed.
   * **No content in traces.** A trace carries profile names, stable reason
@@ -81,10 +80,10 @@ from . import task_intent as ti
 Signal = Tuple[str, int, "re.Pattern[str]"]
 SELECT_THRESHOLD = 2
 DEFAULT_MAX_PROFILES = 4
-# The optional classifier adds at most this many profiles, never a high-risk
-# or local-only one (CLASSIFIER_FORBIDDEN, checked again after the pool filter).
+# The optional classifier (hybrid mode) adds at most this many profiles, never a
+# local-only one (CLASSIFIER_FORBIDDEN, checked again after the pool filter).
 MAX_CLASSIFIER_ADDITIONS = 2
-HARD_MAX_PROFILES = 6
+HARD_MAX_PROFILES = 15
 # How profiles are selected. ``ai``: the configured classifier picks from the
 # eligible catalog (no keyword scoring, no silent keyword fallback; a model
 # failure selects none). ``hybrid``: keywords first, classifier for weak/no
@@ -138,7 +137,6 @@ class Specialist:
     name: str
     purpose: str
     signals: Tuple[Signal, ...]
-    high_risk: bool = False      # advisory/review only, never acts
     local: bool = False          # runs on the private local model; eligible when private (none today)
     implementer: bool = False    # writes code (none today: every specialist is advisory)
 
@@ -190,12 +188,12 @@ REGISTRY: Tuple[Specialist, ...] = (
                     r"access[- ]control|secrets?|credentials?|permissions?|rbac|oauth2?|oidc|sso|jwts?|mfa|2fa) "
                     r"(?:design|flow|layer|logic|scheme|model|system|handling|storage|middleware|code|implementation)s?"),
         _w("security", r"security|secure|insecure|auth(?:entication|ori[sz]ation|n|z)?|permissions?|encryption"),
-    ), high_risk=True),
+    )),
     Specialist("red-team", "controlled offensive testing of owned targets (advisory)", (
         _s("redteam", r"red[- ]team(?:ing)?|pen ?test(?:ing)?|penetration test(?:ing)?|offensive security|attack (?:surface|path|chain)s?"),
         _s("exploit", r"exploit(?:s|ation|able)?|proof[- ]of[- ]concept exploit|payloads?|fuzz(?:ing|er)?"),
         _w("attack", r"attack(?:s|er|ers)?|adversar(?:y|ial)"),
-    ), high_risk=True),
+    )),
     Specialist("negotiation-communication", "negotiation plans, hard conversations, message drafts", (
         _s("negotiate", r"negotiat(?:e|es|ed|ion|ions|ing)|counter[- ]?offers?|batna|walk[- ]away (?:point|price)|concessions?"),
         _s("conversation", r"(?:difficult|hard|tough|awkward) (?:conversation|talk|message|email)s?|talking points|push ?back on|objection handling|persua(?:de|sion|sive)"),
@@ -211,12 +209,12 @@ REGISTRY: Tuple[Specialist, ...] = (
         _s("training", r"workouts?|training (?:plan|program|block)|strength training|hypertrophy|cardio|deload|squats?|deadlifts?|bench press|vo2 ?max"),
         _s("nutrition", r"calories|protein|macros|diet(?:s|ing)?|nutrition|fat loss|lose weight|weight loss|body composition|fasting|longevity"),
         _w("health", r"fitness|health|healthy|exercise|gym|muscles?|sleep|recovery|injur(?:y|ies)"),
-    ), high_risk=True),
+    )),
     Specialist("herbalism", "botanical knowledge, traditional uses (educational, advisory)", (
         _s("herbal", r"herbs?|herbal(?:ism|ist)?|tinctures?|botanicals?|medicinal plants?|decoctions?|poultices?|salves?|essential oils?"),
         _s("plant", r"plant identification|identify (?:this|a) plant|forag(?:e|ing)|chamomile|echinacea|yarrow|valerian|ashwagandha|elderberr(?:y|ies)|nettles?"),
         _w("plants", r"plants?|remed(?:y|ies)|teas?|infusions?"),
-    ), high_risk=True),
+    )),
     Specialist("survival", "lawful, low-risk preparedness and emergency skills", (
         _s("prep", r"survival|prepper|prepping|preparedness|bug[- ]out|emergency (?:kit|plan|supplies|preparedness)|off[- ]grid|power outage"),
         _s("skills", r"water purification|purify water|fire starting|start a fire|first aid|land navigation|food storage|wilderness|ham radio|shelter building"),
@@ -235,15 +233,9 @@ REGISTRY: Tuple[Specialist, ...] = (
 )
 
 BY_NAME: Dict[str, Specialist] = {s.name: s for s in REGISTRY}
-HIGH_RISK: Tuple[str, ...] = tuple(s.name for s in REGISTRY if s.high_risk)
-CLASSIFIER_FORBIDDEN = frozenset(HIGH_RISK) | {s.name for s in REGISTRY if s.local}
-# A dynamically created profile (knowledge-apply) is inferred high-risk when its
-# spec/purpose names a sensitive domain; conservative on purpose (advisory-only).
-_DYNAMIC_HIGH_RISK_RE = re.compile(
-    r"(?i)\b(?:security|secure|offensive|red[- ]team|pen(?:etration)?[- ]?test\w*|exploit\w*|attack\w*|"
-    r"vulnerabilit\w*|threat\w*|medic\w*|health\w*|clinical|drug\w*|dosage\w*|therap\w*|psycholog\w*|"
-    r"psychiatr\w*|mental[- ]health|herbal\w*|remed(?:y|ies)|weapon\w*|firearm\w*|legal|law|biotech\w*|"
-    r"gene[- ]editing|genetic\w*|pharma\w*|surviv\w*|self[- ]harm)\b")
+# Profiles the hybrid classifier and attachment signals may never add: local-only
+# ones (none today). There is no high-risk tier: every profile is selectable.
+CLASSIFIER_FORBIDDEN = frozenset(s.name for s in REGISTRY if s.local)
 _DYNAMIC_CAP = 200          # profile directories scanned at most
 _SOUL_READ = 16 * 1024      # bytes of a SOUL.md read for its purpose line
 
@@ -256,11 +248,6 @@ PLAN_CLOSE = "</specialist-routing>"
 # one answer, and only the skills toolset (load the /learn knowledge skill) —
 # no terminal, file, web, browser, messaging or kanban tools.
 ADVISORY_TOOLSETS = "skills"
-
-ADVISORY_CONSTRAINT = (
-    "review/advice only: no external actions (messages, purchases, posts, scans, "
-    "network calls against third parties) and no high-impact changes"
-)
 
 
 # --------------------------------------------------------------------------- #
@@ -481,20 +468,12 @@ def _seed_spec(seeds_root: Optional[Path], name: str) -> Dict[str, Any]:
     return spec if isinstance(spec, dict) else {}
 
 
-def _spec_high_risk(spec: Dict[str, Any], purpose: str) -> bool:
-    if spec.get("high_risk") is True:
-        return True
-    words = " ".join([purpose, str(spec.get("purpose") or "")]
-                     + [str(x) for x in (spec.get("in_scope") or []) if isinstance(x, str)])
-    return bool(_DYNAMIC_HIGH_RISK_RE.search(words))
-
-
 def dynamic_specialists(profiles_root: Optional[Path], seeds_root: Optional[Path] = None) -> Dict[str, Specialist]:
     """Installed profiles outside the registry that are book-backed (a ``knowledge/`` folder, or a
     spec in ``<seeds_root>/<name>/knowledge-assignments.json``). Purpose comes from that spec, else
     the SOUL.md ``Purpose:`` line. No keyword signals (keyword/hybrid modes never score them); never an
-    implementer; high-risk inferred conservatively from the spec/purpose. Stat-level plus two bounded
-    reads per profile; the model never adds to this catalog."""
+    implementer. A legacy ``high_risk`` spec key is ignored. Stat-level plus two bounded reads per
+    profile; the model never adds to this catalog."""
     out: Dict[str, Specialist] = {}
     if profiles_root is None:
         return out
@@ -515,7 +494,7 @@ def dynamic_specialists(profiles_root: Optional[Path], seeds_root: Optional[Path
         purpose = str(spec.get("purpose") or "").strip()[:240] or _soul_purpose(d / "SOUL.md")
         if not purpose:
             continue
-        out[name] = Specialist(name, purpose, (), high_risk=_spec_high_risk(spec, purpose))
+        out[name] = Specialist(name, purpose, ())
     return out
 
 
@@ -649,9 +628,9 @@ def attachment_signals(docs: Sequence[Tuple[str, str]]) -> Dict[str, Tuple[int, 
 
     Each document is scored on its own, within :data:`CLASSIFIER_CONTEXT_CHARS`
     in total. A profile needs ``SELECT_THRESHOLD`` with at least one strong
-    signal (long documents collect weak words by chance). High-risk and local
-    profiles (:data:`CLASSIFIER_FORBIDDEN`) need the sender's own words, and a
-    document carrying router diagnostics scores nothing. The best document
+    signal (long documents collect weak words by chance). Local-only profiles
+    (:data:`CLASSIFIER_FORBIDDEN`) need the sender's own words, and a document
+    carrying router diagnostics scores nothing. The best document
     score per profile wins."""
     found: Dict[str, Tuple[int, List[str]]] = {}
     room = CLASSIFIER_CONTEXT_CHARS
@@ -734,11 +713,8 @@ def _privacy(raw_text: str) -> pv.PrivacyDecision:
 
 def _execution(tier: str, spec: Specialist) -> str:
     """``kanban`` (durable board task) for deep work (or an implementer);
-    ``short`` (one bounded answer, read-only toolsets) for a small review.
-    High-risk profiles are always ``short``: their tool surface is cut to
-    :data:`ADVISORY_TOOLSETS`, which is what makes "advisory only" enforceable."""
-    if spec.high_risk:
-        return "short"
+    ``short`` (one bounded answer, :data:`ADVISORY_TOOLSETS` only) for a small
+    review. The tier decides for every profile; there is no risk-based override."""
     if spec.implementer or tier in ("elevated", "high", "max"):
         return "kanban"
     return "short"
@@ -869,8 +845,8 @@ def route_text(
     # carries verified attachments (``attachment``: the documents may need a
     # profile the typed words do not name); never for a private task. It sees
     # the typed task plus the verified documents (classifier_context) and
-    # adds at most MAX_CLASSIFIER_ADDITIONS non-high-risk, non-local
-    # profiles; an error or timeout adds nothing.
+    # adds at most MAX_CLASSIFIER_ADDITIONS non-local profiles; an error or
+    # timeout adds nothing.
     gate = "no-match" if not candidates else ("ambiguous" if not any_strong else "")
     if not gate and sep.attachment and sep.proven:
         gate = "attachment"
@@ -955,15 +931,12 @@ def _route_dict(spec: Specialist, score: int, labels: List[str], r: Readiness, t
         "profile": spec.name,
         "score": score,
         "reasons": labels,
-        "high_risk": spec.high_risk,
         "advisory_only": not spec.implementer,
         "execution": _execution(tier, spec),
         "knowledge": r.as_dict(),
     }
     if route["execution"] == "short":
         route["toolsets"] = ADVISORY_TOOLSETS
-    if spec.high_risk:
-        route["constraint"] = ADVISORY_CONSTRAINT
     if private:
         route["local_only"] = True
     return route
@@ -982,8 +955,8 @@ def _ai_select(trace: Dict[str, Any], task: "ti.CurrentTask", decision: "ti.Deci
                classifier: Optional[Classifier], rdy: Callable[[str], Readiness], pdec: pv.PrivacyDecision,
                started: float) -> Dict[str, Any]:
     """AI-only selection. Deterministic code decides WHO MAY be selected (allowlist, privacy,
-    installed/readiness, caps) and HOW a selection runs (advisory, short+skills, high-risk
-    constraint); the configured classifier decides WHICH of the eligible profiles the task needs.
+    installed/readiness, caps) and HOW a selection runs (advisory, short+skills by tier); the
+    configured classifier decides WHICH of the eligible profiles the task needs.
     No keyword scoring, no silent fallback: an unconfigured, failing, timing-out or off-schema
     classifier selects none and says so in the trace (content-free)."""
     cat = catalog(settings)
@@ -1088,9 +1061,7 @@ def render_plan(trace: Dict[str, Any]) -> str:
         k = r["knowledge"]
         knowledge = k["status"] + (" (stale: re-run /learn)" if k.get("stale") else "")
         flags = []
-        if r.get("high_risk"):
-            flags.append("HIGH-RISK " + ADVISORY_CONSTRAINT)
-        elif r.get("advisory_only"):
+        if r.get("advisory_only"):
             flags.append("advisory")
         if r.get("local_only"):
             flags.append("local-only")

@@ -195,7 +195,7 @@ MODEL_ROUTER_TASK_TTL="$(getenv MODEL_ROUTER_TASK_TTL 1800)"; export MODEL_ROUTE
 # already in $HERMES_HOME/config.yaml (what `make specialist-install` wrote), so
 # --force never resets a live setting; only a fresh install gets the default.
 #   MODEL_ROUTER_SPECIALISTS                   true|false        (default false)
-#   MODEL_ROUTER_SPECIALIST_MAX                0-6               (default 4)
+#   MODEL_ROUTER_SPECIALIST_MAX                0-15              (default 4)
 #   MODEL_ROUTER_SPECIALIST_REQUIRE_READY      true|false        (default false)
 #   MODEL_ROUTER_SPECIALIST_CLASSIFIER         none|local|cliproxy (default none)
 #   MODEL_ROUTER_SPECIALIST_MODE               ai|hybrid|keywords (default ai: the classifier selects;
@@ -231,7 +231,7 @@ router_knob() {
   else raw="$def"; src="default"; fi
   case "$kind" in
     bool) val="$(norm_bool "$raw")" || { warn "$var=$raw ($src) is not a boolean; using $def"; val="$def"; src="default"; } ;;
-    int) [[ "$raw" =~ ^[0-9]+$ ]] && (( 10#$raw <= 6 )) && val="$((10#$raw))" || { warn "$var=$raw ($src) is not 0-6; using $def"; val="$def"; src="default"; } ;;
+    int) [[ "$raw" =~ ^[0-9]+$ ]] && (( 10#$raw <= 15 )) && val="$((10#$raw))" || { warn "$var=$raw ($src) is not 0-15; using $def"; val="$def"; src="default"; } ;;
     seconds) [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]] && val="$raw" || { warn "$var=$raw ($src) is not a number; using $def"; val="$def"; src="default"; } ;;
     classifier) raw="${raw,,}"; [[ -z "$raw" || "$raw" == "null" ]] && raw=none
                 [[ "$raw" == none || "$raw" == local || "$raw" == cliproxy ]] && val="$raw" || { warn "$var=$raw ($src) is not none|local|cliproxy; using $def"; val="$def"; src="default"; } ;;
