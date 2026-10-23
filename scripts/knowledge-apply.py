@@ -1,9 +1,25 @@
 #!/usr/bin/env python3
 """knowledge-apply.py — apply one reviewed knowledge plan end to end.
 
-    knowledge-apply.py --plan PLAN --dry-run          validate and show what would happen
+    knowledge-apply.py --plan PLAN --dry-run          validate and show the plan's states; write nothing
     knowledge-apply.py --plan PLAN --approve          apply it (make knowledge-apply PLAN=... APPROVE=1)
+    knowledge-apply.py --plan PLAN --dry-run --approve-all [--skip-errors]
+                                                      preview the explicit bulk approval (APPROVE_ALL=1)
+    knowledge-apply.py --plan PLAN --approve --approve-all <plan id> [--skip-errors]
+                                                      apply it; the id binds the approval to the previewed file
     knowledge-apply.py --plan PLAN --legacy-report    read-only: profile-local copies of canonical books
+
+States (dry-run): ``ready`` (assign, skip, existing; executable now), ``pending review``
+(review item with a concrete existing-profile proposal), ``pending profile approval``
+(item tied to an unapproved or incomplete new-profile proposal), ``pending error``
+(classifier error or no target). Pending is reported, never guessed and never
+"invalid"; structural problems (bad decisions, stale hashes, unsafe names) are
+errors. ``--approve-all`` accepts the classifier's concrete proposals on a copy of
+the plan (the file is never edited): pending review -> assign, complete proposals
+-> approved + assign; errors stay pending unless ``--skip-errors`` turns them into
+skip. An actual apply refuses while anything is pending. The receipt
+(``approval.json`` next to the report) records the plan id, file sha256, policy,
+every changed decision and a digest of the whole approved decision set.
 
 One run, in this order, each step idempotent so the same plan can be re-run to
 resume after a failure:
@@ -84,6 +100,10 @@ class Settings:
         self.learn_timeout = int(env("KNOWLEDGE_LEARN_TIMEOUT", "1800"))
         self.approve = args.approve
         self.dry_run = args.dry_run
+        self.approve_all = args.approve_all is not None
+        self.approve_all_id = "" if args.approve_all in (None, "1") else str(args.approve_all)
+        self.skip_errors = args.skip_errors
+        self.verbose = args.verbose
         self.plan_id = ""
 
     def check(self) -> None:
@@ -101,8 +121,13 @@ class Settings:
     def run_dir(self) -> Path:
         return self.canon / "apply" / self.plan_id
 
-    def resume_cmd(self) -> str:
-        return f"make knowledge-apply PLAN={shq(str(self.plan_path))} APPROVE=1"
+    def resume_cmd(self, approve_all: Optional[bool] = None, skip_errors: Optional[bool] = None) -> str:
+        cmd = f"make knowledge-apply PLAN={shq(str(self.plan_path))} APPROVE=1"
+        if self.approve_all if approve_all is None else approve_all:
+            cmd += f" APPROVE_ALL={self.plan_id or '1'}"
+        if self.skip_errors if skip_errors is None else skip_errors:
+            cmd += " SKIP_ERRORS=1"
+        return cmd
 
 
 def shq(x: str) -> str:
@@ -444,34 +469,113 @@ def legacy_duplicates(s: Settings, profiles: Sequence[str]) -> List[Dict[str, ob
     return out
 
 
+def write_receipt(s: Settings, res: kp.Resolution) -> Dict[str, object]:
+    """approval.json: exactly what this run approved (plan id + file hash, policy, changed decisions,
+    approved new profiles, digest of the whole decision set). Rewritten only when the digest differs."""
+    path = s.run_dir / "approval.json"
+    receipt = {"plan_id": s.plan_id, "plan": str(s.plan_path), "plan_sha256": kp.sha256_file(s.plan_path),
+               "approval_digest": res.digest, "policy": res.policy, "approved_profiles": res.approved_profiles,
+               "changes": res.changes, "decisions": [list(d) for d in res.decisions], "counts": res.counts,
+               "approved_by": "make knowledge-apply APPROVE=1" + (" APPROVE_ALL" if res.policy["approve_all"] else "")
+               + (" SKIP_ERRORS=1" if res.policy["skip_errors"] else ""), "at": kp.now_iso()}
+    if path.is_file():
+        try:
+            old = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            old = {}
+        if old.get("approval_digest") == receipt["approval_digest"] and old.get("plan_sha256") == receipt["plan_sha256"]:
+            return old
+    path.write_text(json.dumps(receipt, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    log(f"approval receipt: {path} (digest {receipt['approval_digest']})")
+    return receipt
+
+
 # --------------------------------------------------------------------------- #
 # Printing
 # --------------------------------------------------------------------------- #
-def print_plan(s: Settings, v: kp.Validated, dry: bool) -> None:
+def print_summary(s: Settings, res: kp.Resolution, v: Optional[kp.Validated], dry: bool) -> None:
+    """Concise, actionable: counts, what will be written, what is pending and the exact next command.
+    Pending items are one line each; their fields only with --verbose."""
+    c = res.counts
     print()
-    print("== knowledge apply plan ==" if not dry else "== knowledge apply plan (DRY-RUN: nothing written) ==")
-    print(f"plan: {s.plan_path} (id {s.plan_id})")
+    print("== knowledge plan summary" + (" (DRY-RUN: nothing written) ==" if dry else " =="))
+    pol = f"APPROVE_ALL={'on' if res.policy['approve_all'] else 'off'} SKIP_ERRORS={'on' if res.policy['skip_errors'] else 'off'}"
+    print(f"plan: {s.plan_path} (id {s.plan_id})   policy: {pol}")
     print(f"library: {s.books} (read-only)   canonical: {s.canon}   knowledge root: {s.kroot}")
-    print(f"profiles: {s.profiles_dir}   hermes: {s.hermes_home}")
-    for name, spec in v.new_profiles.items():
-        print(f"- create profile {name}: {spec['purpose']}")
-    unique = {v.identities[i['source']].source_id: i['source'] for i in v.assign}
-    for it in v.assign:
-        ident = v.identities[it["source"]]
-        extra = f"   purpose: {it['purpose']}" if it.get("purpose") else ""
-        sec = "   (secondary)" if it.get("secondary_reason") else ""
-        print(f"- assign {it['profile']} <- {it['source']}   canonical {ident.source_id}{sec}{extra}")
-    for it in v.skipped:
-        print(f"- skip   {it['source']}")
-    for it in v.existing:
-        print(f"- keep   {it['source']} (existing: {', '.join(it.get('owners') or []) or 'already owned'})")
-    print(f"canonical copies to make or verify: {len(unique)}   profiles affected: {', '.join(v.affected) or '-'}")
+    print(f"ready {c[kp.READY]}   existing {c['existing']}   skip {c['skip']}   pending review {c[kp.PENDING_REVIEW]}"
+          f"   pending profile approval {c[kp.PENDING_PROFILE]}   pending error {c[kp.PENDING_ERROR]}")
+    if res.changes:
+        print(f"APPROVE_ALL changes {len(res.changes)} decision(s) on a copy of the plan (the file is not edited):")
+    for spec in res.specs:
+        if spec["state"] in ("approved", "approved-by-approve-all"):
+            how = "approved in the plan" if spec["state"] == "approved" else "approved by APPROVE_ALL"
+            print(f"- create profile {spec['name']} ({how}; {spec['items']} source(s)): {spec['purpose']}")
+    if v is not None:
+        unique = {v.identities[i['source']].source_id: i['source'] for i in v.assign}
+        for it in v.assign:
+            ident = v.identities[it["source"]]
+            change = next((r["change"] for r in res.items if r["source"] == it["source"] and r["profile"] == it["profile"]), "")
+            tag = "   (approved proposal)" if change else ""
+            sec = "   (secondary)" if it.get("secondary_reason") else ""
+            print(f"- assign {it['profile']} <- {it['source']}   canonical {ident.source_id}{sec}{tag}")
+        if s.verbose:
+            for it in v.skipped:
+                print(f"- skip   {it['source']}")
+            for it in v.existing:
+                print(f"- keep   {it['source']} (existing: {', '.join(it.get('owners') or []) or 'already owned'})")
+        print(f"canonical copies to make or verify: {len(unique)}   profiles affected: {', '.join(v.affected) or '-'}")
+    pend_review = [r for r in res.items if r["state"] == kp.PENDING_REVIEW]
+    if pend_review:
+        print(f"pending review ({len(pend_review)}; APPROVE_ALL=1 accepts the proposed existing profile, or edit the plan):")
+        for r in pend_review:
+            extra = f"   [{', '.join(r['reasons'])}]" if s.verbose else ""
+            print(f"- {r['source']} -> {r['profile']}{extra}")
+    pend_spec = [sp for sp in res.specs if sp["state"].startswith("pending")]
+    if pend_spec:
+        print(f"pending profile approval ({len(pend_spec)} proposal(s), {c[kp.PENDING_PROFILE]} item(s)):")
+        legacy = False
+        for sp in pend_spec:
+            if sp["state"] == "pending-incomplete":
+                legacy = legacy or sp["legacy"]
+                why = "spec incomplete" + (f": {', '.join(sp['missing'])}" if s.verbose else "")
+                how = "fill it in by hand or regenerate the plan"
+            else:
+                why, how = "complete, not approved", "APPROVE_ALL=1 approves it, or set approved: true"
+            print(f"- {sp['name']} ({len(sp['sources'])} source(s)): {why}; {how}")
+            if s.verbose:
+                for src in sp["sources"]:
+                    print(f"    {src}")
+        if legacy:
+            print("  note: this plan predates complete specs (the classifier wrote purpose only); regenerate it "
+                  "with make knowledge-classify to get complete, editable proposals, or fill the fields in by hand.")
+    pend_err = [r for r in res.items if r["state"] == kp.PENDING_ERROR]
+    if pend_err:
+        print(f"pending error ({len(pend_err)}; no target to approve: SKIP_ERRORS=1 skips them this run, or edit the plan):")
+        for r in pend_err:
+            extra = f"   [{', '.join(r['reasons']) or r['status']}]" if s.verbose else ""
+            print(f"- {r['source']}{extra}")
     steps = "validate -> profiles -> assignments -> canonical -> references -> install -> learn -> report"
     if not s.install:
         steps = steps.replace(" -> install -> learn", " (install and learn skipped: --no-install)")
     elif not s.learn:
         steps = steps.replace(" -> learn", " (learn skipped: --no-learn)")
     print(f"steps: {steps}")
+    if not s.verbose and (pend_review or pend_spec or pend_err):
+        print("(VERBOSE=1 shows review reasons, missing spec fields and sources)")
+
+
+def next_command(s: Settings, res: kp.Resolution) -> str:
+    """The exact command that moves this plan forward."""
+    has_err = res.counts[kp.PENDING_ERROR] > 0
+    if not res.pending:
+        return s.resume_cmd()
+    if not res.policy["approve_all"] and (res.counts[kp.PENDING_REVIEW] or any(
+            sp["state"] == "pending-unapproved" for sp in res.specs)):
+        return "preview the bulk approval: " + s.resume_cmd(approve_all=True, skip_errors=has_err).replace(
+            "APPROVE=1 ", "DRY_RUN=1 APPROVE=1 ").replace(f"APPROVE_ALL={s.plan_id}", "APPROVE_ALL=1")
+    if has_err and not res.policy["skip_errors"]:
+        return s.resume_cmd(skip_errors=True) + "   (or decide those items in the plan)"
+    return "edit the plan (fill or approve the pending proposals), then: " + s.resume_cmd()
 
 
 # --------------------------------------------------------------------------- #
@@ -481,7 +585,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="knowledge-apply", description="Apply one reviewed knowledge plan.")
     p.add_argument("--plan", required=True, help="plan JSON written by knowledge-classify (edited by you)")
     p.add_argument("--approve", action="store_true", help="apply the plan exactly as written (APPROVE=1)")
-    p.add_argument("--dry-run", action="store_true", help="validate and show the actions; write nothing")
+    p.add_argument("--dry-run", action="store_true", help="validate and show the plan's states; write nothing")
+    p.add_argument("--approve-all", nargs="?", const="1", default=None, metavar="PLAN_ID",
+                   help="accept the classifier's concrete proposals (APPROVE_ALL=1); with a plan id, refuse "
+                        "unless the file still hashes to it")
+    p.add_argument("--skip-errors", action="store_true",
+                   help="with --approve-all: classifier-error / no-target items become skip for this run")
+    p.add_argument("--verbose", action="store_true", help="list pending reasons, missing spec fields and sources")
     p.add_argument("--no-learn", action="store_true", help="stop after install/sync; do not run knowledge-learn")
     p.add_argument("--no-install", action="store_true", help="stop after references; no Hermes profile changes")
     p.add_argument("--legacy-report", action="store_true",
@@ -505,24 +615,46 @@ def run(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"- {d['staged']}  ==  {d['canonical_rel']}  (library: {d['sources']})")
             print(f"{len(dups)} profile-local copy/copies of canonical books. {LEGACY_NOTE}")
             return 0
-        v = kp.validate_plan(plan, s.books, s.profiles_dir, ck.data.get("profiles_created", []))
+        if s.approve_all_id and s.approve_all_id != s.plan_id:
+            raise kp.PlanError(f"APPROVE_ALL={s.approve_all_id} does not match this file's plan id {s.plan_id}: "
+                               "the plan changed since the preview. Preview again with DRY_RUN=1 APPROVE_ALL=1 "
+                               f"and use the id it prints (or APPROVE_ALL=1 to approve the file as it is now)")
+        res = kp.resolve_plan(plan, kp.existing_profiles(s.profiles_dir), approve_all=s.approve_all,
+                              skip_errors=s.skip_errors)
+        v = kp.validate_plan(kp.executable_plan(res), s.books, s.profiles_dir, ck.data.get("profiles_created", []))
     except kp.PlanError as exc:
         err(str(exc))
         return 1
-    print_plan(s, v, args.dry_run)
+    print_summary(s, res, v, args.dry_run)
     if args.dry_run:
-        print("\nDRY-RUN: validated; nothing was written. Apply with: " + s.resume_cmd())
+        print("\nDRY-RUN: validated; nothing was written.")
+        if res.pending:
+            print(f"pending: {len(res.pending)} item(s) are not executable yet; an apply would refuse. Next: "
+                  + next_command(s, res))
+        else:
+            print("Apply with: " + s.resume_cmd())
         return 0
+    if res.pending:
+        shown = ", ".join(f"{r['source']} ({r['state']})" for r in res.pending[:8])
+        more = f" and {len(res.pending) - 8} more" if len(res.pending) > 8 else ""
+        err(f"{len(res.pending)} pending item(s): nothing was applied. Pending is never guessed; "
+            f"{res.counts[kp.PENDING_REVIEW]} pending review, {res.counts[kp.PENDING_PROFILE]} pending profile "
+            f"approval, {res.counts[kp.PENDING_ERROR]} pending error: {shown}{more}. Next: {next_command(s, res)}"
+            + ("" if s.approve_all else "   (APPROVE_ALL=1 counts only on the make command line)"))
+        return 1
     if not args.approve:
         err("the plan validates, and nothing was applied: approval is required. "
             f"Re-run with APPROVE=1 on the make command line: {s.resume_cmd()}")
         return 1
 
     s.run_dir.mkdir(parents=True, exist_ok=True)
+    receipt = write_receipt(s, res)
     ck.data["profiles"] = v.affected
-    ck.done("validate", items=len(plan["items"]), assign=len(v.assign))
+    ck.done("validate", items=len(plan["items"]), assign=len(v.assign), approval_digest=receipt["approval_digest"])
     report: Dict[str, object] = {"plan": str(s.plan_path), "plan_id": s.plan_id, "started": kp.now_iso(),
-                                 "profiles": v.affected, "outcome": "running"}
+                                 "profiles": v.affected, "outcome": "running",
+                                 "approval": str(s.run_dir / "approval.json"),
+                                 "approval_digest": receipt["approval_digest"], "policy": res.policy}
     step = "profiles"
     try:
         report["profiles_created"] = create_profiles(s, v, ck)

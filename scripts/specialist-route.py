@@ -19,6 +19,9 @@ Options:
   --allow a,b           allowlist of profiles (default: all book-backed)
   --require-ready       drop profiles whose /learn knowledge skill is missing
   --plan                also print the note the orchestrator would receive
+  --mode MODE           keywords (default here: offline, deterministic) | hybrid | ai.
+                        This script never calls a model, so ai/hybrid show the gate and
+                        select nothing; the live AI probe is make specialist-classify-probe.
 """
 
 from __future__ import annotations
@@ -91,6 +94,8 @@ def summary(trace: dict) -> str:
     if trace.get("unknown_allowed"):
         lines.append(f"unknown allowlist names ignored: {','.join(trace['unknown_allowed'])}")
     lines.append(f"profiles root {trace.get('profiles_root')}")
+    lines.append(f"mode {trace.get('selection_mode')} (offline dry-run); live mode {trace.get('live_selection_mode', '-')}"
+                 f"; AI selection with the live classifier: make specialist-classify-probe TASK=\"...\"")
     return "\n".join(lines)
 
 
@@ -102,6 +107,8 @@ def main(argv=None) -> int:
     ap.add_argument("--allow", default=os.environ.get("ALLOW", ""))
     ap.add_argument("--require-ready", action="store_true")
     ap.add_argument("--plan", action="store_true")
+    ap.add_argument("--mode", default=os.environ.get("MODE", "") or "keywords",
+                    help="keywords (default, offline) | hybrid | ai (no model here: shows the gate only)")
     args = ap.parse_args(argv)
 
     text = args.task if args.task is not None else os.environ.get("TASK", "")
@@ -120,9 +127,16 @@ def main(argv=None) -> int:
         allowed=known, unknown=unknown,
         require_ready=args.require_ready or cfg.specialist_require_ready,
         profiles_root=Path(args.profiles_root).expanduser() if args.profiles_root else None,
+        selection_mode=sp.selection_mode(args.mode), classifier=cfg.specialist_classifier,
     )
     trace = sp.route_text(text, settings)
     trace["profiles_root"] = str(settings.profiles_root or sp.default_profiles_root())
+    trace["live_selection_mode"] = cfg.specialist_selection_mode
+    trace["note"] = ("offline dry-run: no model is called here. "
+                     + (f"Mode {settings.selection_mode} selects nothing without a classifier; "
+                        if settings.selection_mode != "keywords" else "keyword rules only; ")
+                     + f"the live router runs in mode {cfg.specialist_selection_mode}. "
+                     "Live AI selection: make specialist-classify-probe TASK=\"...\"")
     print(json.dumps(trace, indent=2, sort_keys=True))
     print(summary(trace))
     if args.plan:

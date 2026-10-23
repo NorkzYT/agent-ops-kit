@@ -213,7 +213,7 @@ class ActivateTest(unittest.TestCase):
         self.assertIs(s["privacy_routing"], True)          # other keys untouched
         self.assertTrue(self.plugin_matches())
         self.assertEqual(len(self.backups()), 1)
-        self.assertIn("verified        : 5 settings read back", r.stdout)
+        self.assertIn("verified        : 6 settings read back", r.stdout)
         self.assertNotIn("gateway restart", "\n".join(self.calls()))
         self.assertIn("not restarted", r.stdout)
 

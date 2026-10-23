@@ -72,6 +72,25 @@ def answer(profile, conf, rationale="fits the profile", risk=None):
                        "risk": risk or ["none"], "topics": ["t"]})
 
 
+FULL_SPEC = {"name": "amazon-selling", "purpose": "Amazon marketplace selling: listings, FBA, PPC.",
+             "in_scope": ["Seller Central operations", "FBA logistics"], "out_of_scope": ["tax or legal advice"],
+             "parent": "alpha", "overlap": ["alpha"], "boundaries": ["no purchases or account actions"]}
+
+
+def proposal(name, purpose, full=False):
+    np = dict(FULL_SPEC, name=name, purpose=purpose) if full else {"name": name, "purpose": purpose}
+    return json.dumps({"profile": "none", "confidence": 0.8, "rationale": "no existing profile fits",
+                       "risk": ["none"], "topics": ["t"], "new_profile": np})
+
+
+# Spec-completion answers per proposal name (second bounded classifier step).
+SPEC_ANSWERS = {
+    "cloud-security": json.dumps({"purpose": "Cloud security: posture, IAM and logging.",
+                                  "in_scope": ["cloud IAM", "logging and detection"], "out_of_scope": ["offensive testing (red-team)"],
+                                  "parent": "none", "overlap": ["red-team"], "boundaries": ["advice only; no account changes"]}),
+    "half-spec": json.dumps({"purpose": "Half.", "in_scope": ["x"], "parent": "ghost-profile"}),
+}
+
 # Classifier answers per source; anything else gets DEFAULT.
 DEFAULT = answer("alpha", 0.9)
 ANSWERS = {
@@ -83,6 +102,10 @@ ANSWERS = {
     "edu/Refused Book": "I can't help with categorizing this content.",
     "edu/Wrong Profile": answer("coder", 0.99),
     "edu/Injected": answer("alpha", 0.99),
+    "edu/Amazon Book": proposal("amazon-selling", "Amazon marketplace selling", full=True),
+    "edu/Cloud Book": proposal("cloud-security", "Cloud security specialist"),
+    "edu/Cloud Book Two": proposal("cloud-security", "Cloud security, again"),
+    "edu/Half Book": proposal("half-spec", "Half a spec"),
 }
 
 
@@ -91,6 +114,7 @@ class Stub:
 
     def __init__(self, name):
         self.name, self.requests, self.fail = name, [], False
+        self.spec_default = ""      # what a spec-completion prompt gets back by default (empty: malformed)
         stub = self
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -107,6 +131,9 @@ class Stub:
                 user = json.loads(body)["messages"][-1]["content"]
                 m = re.search(r'"source": "([^"]*)"', user)
                 content = ANSWERS.get(m.group(1) if m else "", DEFAULT)
+                spec = re.search(r'"complete_spec_for": "([^"]*)"', user)
+                if spec:
+                    content = SPEC_ANSWERS.get(spec.group(1), stub.spec_default)
                 out = json.dumps({"model": stub.name, "choices": [{"message": {"role": "assistant",
                                                                                  "content": content}}]}).encode()
                 self.send_response(200)
@@ -161,6 +188,10 @@ class ClassifyE2E(unittest.TestCase):
             "It's Quoted/q.txt": "Quoted.\n",
             "Listed Book/l.txt": "Already listed.\n",
             "Long Book/long.txt": "START-MARKER\n" + ("Chapter text about leadership. " * 3000) + "\nEND-MARKER\n",
+            "Amazon Book/a.txt": "Selling on Amazon.\n",
+            "Cloud Book/c.txt": "Cloud security posture.\n",
+            "Cloud Book Two/c2.txt": "More cloud security.\n",
+            "Half Book/h.txt": "Half.\n",
         }
         for rel, text in books.items():
             (b / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -483,6 +514,51 @@ class ClassifyE2E(unittest.TestCase):
         self.assertEqual(self.cloud.requests, [])
         self.assert_library_unchanged()
 
+    def test_new_profile_proposals_are_complete_editable_specs(self):
+        p, items = self.run_kc("edu/Amazon Book", "edu/Cloud Book", "edu/Cloud Book Two", "edu/Half Book")
+        plan = json.loads((self.tmp / "plan-report-0.json").read_text())
+        specs = {s["name"]: s for s in plan["new_profiles"]}
+        self.assertEqual(sorted(specs), ["amazon-selling", "cloud-security", "half-spec"])
+        full = specs["amazon-selling"]                      # complete in the first answer: no second call
+        self.assertEqual(full["spec_status"], "complete")
+        self.assertFalse(full["approved"])
+        self.assertEqual(full["in_scope"], FULL_SPEC["in_scope"])
+        self.assertEqual(full["parent"], "alpha")
+        self.assertEqual(full["sources"], ["edu/Amazon Book"])
+        cloud = specs["cloud-security"]                     # purpose only: one bounded completion call per name
+        self.assertEqual(cloud["spec_status"], "complete")
+        self.assertEqual(cloud["parent"], "none")
+        self.assertEqual(cloud["overlap"], ["red-team"])
+        self.assertEqual(cloud["sources"], ["edu/Cloud Book", "edu/Cloud Book Two"])
+        half = specs["half-spec"]                           # off-schema completion: pending, nothing guessed
+        self.assertTrue(half["spec_status"].startswith("incomplete:"), half["spec_status"])
+        self.assertIn("out_of_scope", half["spec_status"])
+        self.assertEqual(half["parent"], "", "an unknown parent must be dropped, not kept")
+        self.assertIn("APPROVE_ALL", half["note"])
+        completions = [r for r in self.cloud.requests if "complete_spec_for" in r["body"]]
+        self.assertEqual(sorted(json.loads(r["body"])["messages"][-1]["content"].count("complete_spec_for") for r in completions), [1, 1])
+        self.assertEqual(len(completions), 2, "one completion per incomplete proposal name")
+        for r in completions:                               # bounded: name, purpose, titles; never the book text
+            self.assertNotIn("Cloud security posture", r["body"])
+        for it in (items["edu/Cloud Book"], items["edu/Half Book"]):
+            self.assertEqual(it["status"], "needs-review")
+        by = {i["source"]: i for i in plan["items"]}
+        self.assertEqual(by["edu/Cloud Book"]["decision"], "review")
+        self.assertEqual(by["edu/Cloud Book"]["profile"], "cloud-security")
+        self.assertEqual(self.manifests()["alpha"].count("Cloud"), 0)
+        self.assertFalse((self.seeds / "cloud-security").exists())
+        self.assert_library_unchanged()
+
+    def test_spec_completion_failure_leaves_the_proposal_pending(self):
+        self.cloud.spec_default = ""
+        self.cloud.fail = False
+        p, items = self.run_kc("edu/Half Book")
+        plan = json.loads((self.tmp / "plan-report-0.json").read_text())
+        spec = plan["new_profiles"][0]
+        self.assertTrue(spec["spec_status"].startswith("incomplete:"))
+        self.assertEqual(spec["purpose"], "Half a spec")      # the first answer's purpose is kept, nothing invented
+        self.assertFalse(spec["approved"])
+
     def test_classifier_outage_fails_without_assignment(self):
         self.cloud.fail = True
         p, items = self.run_kc("--apply", "edu/Strategy Book")
@@ -501,7 +577,8 @@ class ClassifyE2E(unittest.TestCase):
                          "the plan must not match the report glob (latest-report lookups)")
         plan = json.loads(plan_path.read_text())
         self.assertEqual(plan["plan_version"], 1)
-        self.assertEqual(plan["new_profiles"], [])
+        self.assertEqual(sorted(x["name"] for x in plan["new_profiles"]), ["amazon-selling", "cloud-security", "half-spec"])
+        self.assertTrue(all(x["approved"] is False for x in plan["new_profiles"]))
         by = {i["source"]: i for i in plan["items"]}
         ok = by["edu/Strategy Book"]
         self.assertEqual((ok["decision"], ok["profile"], ok["proposed_profile"], ok["status"]),
@@ -577,6 +654,25 @@ class ParseVerdict(unittest.TestCase):
                                  self.allowed)
             self.assertEqual(v.status, "classified", bad)
             self.assertEqual(v.new_profile, {}, bad)
+
+    def test_new_profile_full_spec_is_validated_field_by_field(self):
+        full = dict(FULL_SPEC, parent="alpha", overlap=["alpha", "ghost"], in_scope=["ok", "", 5],
+                    boundaries=["x" * 500])
+        v = kc.parse_verdict(json.dumps({"profile": "none", "confidence": 0.8, "rationale": "r", "new_profile": full}),
+                             self.allowed)
+        np = v.new_profile
+        self.assertEqual(np["parent"], "alpha")
+        self.assertEqual(np["overlap"], ["alpha"], "unknown overlap names are dropped")
+        self.assertEqual(np["in_scope"], ["ok"], "only non-empty strings are kept")
+        self.assertLessEqual(len(np["boundaries"][0]), kc.MAX_SPEC_ITEM)
+        bad_parent = dict(FULL_SPEC, parent="ghost")
+        v = kc.parse_verdict(json.dumps({"profile": "none", "confidence": 0.8, "rationale": "r", "new_profile": bad_parent}),
+                             self.allowed)
+        self.assertEqual(v.new_profile.get("parent", ""), "", "an unknown parent is dropped")
+        v = kc.parse_verdict(json.dumps({"profile": "none", "confidence": 0.8, "rationale": "r",
+                                         "new_profile": dict(FULL_SPEC, parent="none")}), self.allowed)
+        self.assertEqual(v.new_profile["parent"], "none")
+        self.assertEqual(kc.parse_spec_fields({"in_scope": "not a list", "parent": 3}, self.allowed), {})
 
     def test_unknown_risk_labels_are_kept_as_other(self):
         v = kc.parse_verdict('{"profile":"alpha","confidence":0.9,"rationale":"x","risk":["bio"]}', self.allowed)

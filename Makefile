@@ -179,8 +179,9 @@ local-models: ## Read-only: models on the local Ollama endpoint (capabilities, s
 local-route-readback: ## Read-only: live config vs what hermes-install.sh --force renders now (Hermes' own resolver) + local-only invariants; exit 1 on drift
 	@python3 scripts/local-route.py readback
 
-specialist-classify-probe: ## Dry-run the hybrid specialist router with the LIVE classifier for TASK="..." (content-free trace; nothing dispatched) [CLASSIFIER=local|cliproxy NO_CALL=1 MODEL= FALLBACK_MODEL= TIMEOUT=]
+specialist-classify-probe: ## Dry-run the specialist router with the LIVE classifier for TASK="..." (AI selection in mode ai; content-free trace; nothing dispatched) [MODE=ai|hybrid|keywords CLASSIFIER=local|cliproxy NO_CALL=1 MODEL= FALLBACK_MODEL= TIMEOUT=]
 	@args=(probe); \
+	 [[ -n "$${MODE:-}" ]] && args+=(--mode "$$MODE"); \
 	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
 	 [[ "$${NO_CALL:-0}" == "1" ]] && args+=(--no-call); \
 	 [[ -n "$${MODEL:-}" ]] && args+=(--model "$$MODEL"); \
@@ -190,8 +191,8 @@ specialist-classify-probe: ## Dry-run the hybrid specialist router with the LIVE
 
 ##@ Specialist routing
 
-specialist-route: ## Dry-run the specialist router for TASK="..." or TASK=- < prompt.txt (offline; PLAN=1 shows the note; no TASK prints usage)
-	@python3 scripts/specialist-route.py $(if $(PLAN),--plan) $(if $(REQUIRE_READY),--require-ready)
+specialist-route: ## Offline keyword dry-run of the specialist router for TASK="..." or TASK=- < prompt.txt (no model; PLAN=1 shows the note; MODE=ai shows the gate; live AI: specialist-classify-probe)
+	@python3 scripts/specialist-route.py $(if $(PLAN),--plan) $(if $(REQUIRE_READY),--require-ready) $(if $(MODE),--mode $(MODE))
 
 specialist-logs: ## Last 20 live specialist-routing decisions from the Hermes agent log (content-free; LINES=<n>)
 	@bash scripts/router-logs.sh snapshot specialists
@@ -203,12 +204,13 @@ specialist-logs-follow: ## Recent specialist-routing decisions, then follow live
 # back, never restarts. enable = install + a guarded gateway restart (asks; YES=1
 # on the make command line skips the question; refused inside Hermes or an
 # agent it runs) + a check that the router registered with specialists=on.
-specialist-status: ## Read-only: plugin vs repo, specialist_* settings, gateway, restart pending, knowledge readiness
+specialist-status: ## Read-only: plugin vs repo, specialist_* settings (incl. selection mode), gateway, restart pending, knowledge readiness
 	@PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py status
 
-specialist-install: ## Install the router plugin + set specialist_routing on (hermes config set, read back); NO restart [MAX=4 REQUIRE_READY=0|1 CLASSIFIER=none|local|cliproxy PROFILES=a,b|all DRY_RUN=1]
+specialist-install: ## Install the router plugin + set specialist_routing on (hermes config set, read back); NO restart [MAX=4 MODE=ai|hybrid|keywords REQUIRE_READY=0|1 CLASSIFIER=none|local|cliproxy PROFILES=a,b|all DRY_RUN=1]
 	@args=(install); \
 	 [[ -n "$${MAX:-}" ]] && args+=(--max "$$MAX"); \
+	 [[ -n "$${MODE:-}" ]] && args+=(--mode "$$MODE"); \
 	 [[ "$${REQUIRE_READY:-}" == "1" ]] && args+=(--require-ready); \
 	 [[ "$${REQUIRE_READY:-}" == "0" ]] && args+=(--no-require-ready); \
 	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
@@ -216,9 +218,10 @@ specialist-install: ## Install the router plugin + set specialist_routing on (he
 	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
-specialist-enable: ## specialist-install, then restart the gateway (asks; YES=1 skips; refused inside Hermes) and verify specialists=on [same vars, WAIT=90]
+specialist-enable: ## specialist-install, then restart the gateway (asks; YES=1 skips; refused inside Hermes) and verify specialists=on [same vars incl. MODE=, WAIT=90]
 	@args=(enable); \
 	 [[ -n "$${MAX:-}" ]] && args+=(--max "$$MAX"); \
+	 [[ -n "$${MODE:-}" ]] && args+=(--mode "$$MODE"); \
 	 [[ "$${REQUIRE_READY:-}" == "1" ]] && args+=(--require-ready); \
 	 [[ "$${REQUIRE_READY:-}" == "0" ]] && args+=(--no-require-ready); \
 	 [[ -n "$${CLASSIFIER:-}" ]] && args+=(--classifier "$$CLASSIFIER"); \
@@ -234,7 +237,7 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
 ##@ Knowledge
-##> Flow: inventory (what is new) -> classify (writes the reviewed plan plan-<report>.json) -> edit/review the plan (decide assign/skip/existing, approve any new profile spec) -> knowledge-apply PLAN=<plan> APPROVE=1 (one command: assign, canonical copy once, references, install/sync, learn) -> knowledge-learn-status
+##> Flow: inventory (what is new) -> classify (writes the reviewed plan plan-<report>.json with complete new-profile specs) -> knowledge-apply PLAN=<plan> DRY_RUN=1 (report: ready / pending review / pending profile approval / pending error) -> edit/review the plan if needed (decide assign/skip/existing, adjust any new profile spec) -> knowledge-apply PLAN=<plan> APPROVE=1 APPROVE_ALL=<plan id> [SKIP_ERRORS=1] (one command: approve proposals, create profiles, canonical copy once, references, install/sync, learn) -> knowledge-learn-status
 ##> Legacy flow (still works): classify APPLY=1 / reconcile -> refresh (stage + sync) -> learn. Books assigned through a plan are stored once under data/knowledge-canonical and referenced from each profile's knowledge/refs/ (no duplicate Markdown); refresh never copies them again.
 ##> Ownership: one canonical profile per book. A second profile only by explicit approval (SECONDARY='<profile>=<source>' SECONDARY_REASON='...', or secondary_reason in the plan) for a substantial, recurring, independent purpose. Books already in several lists are reported, never changed.
 ##> Library: /mnt/books is read-only; nothing here writes, moves or deletes a book.
@@ -298,12 +301,21 @@ knowledge-classify: ## AI proposals + reviewed plan for uncategorized books (dry
 	 [[ -n "$${LIMIT:-}" ]] && args+=(--limit "$$LIMIT"); \
 	 python3 scripts/knowledge-classify.py "$${args[@]}"
 
-# APPROVE counts only when given on the make command line, never from a stray
-# exported shell variable. The plan path reaches the script through the
-# environment so paths with spaces or quotes stay intact.
-##| Applies one reviewed plan, exactly as written, in one run: validate (every
-##| item decided: assign/skip/existing; every new profile approved with a full
-##| spec; source hashes unchanged; safe names) -> create approved new profiles
+# APPROVE and APPROVE_ALL count only when given on the make command line, never
+# from a stray exported shell variable. The plan path reaches the script through
+# the environment so paths with spaces or quotes stay intact.
+##| Applies one reviewed plan in one run. DRY_RUN=1 on an unedited classifier
+##| plan is a report, not a wall of errors: ready (assign/skip/existing),
+##| pending review (a proposed existing profile), pending profile approval (a
+##| new-profile proposal), pending error (classifier error, no target); only
+##| structural problems (stale hash, bad name) are errors. APPROVE_ALL=1 is the
+##| explicit bulk approval: on a copy of the plan (the file is never edited)
+##| pending review -> assign, complete new-profile proposals -> approved and
+##| assigned; errors stay pending unless SKIP_ERRORS=1 skips them. Preview it
+##| with DRY_RUN=1; the preview prints APPROVE_ALL=<plan id>, which binds the
+##| apply to that exact file. Receipt: apply/<plan id>/approval.json.
+##| Steps: validate (every executable item decided; approved specs complete;
+##| source hashes unchanged; safe names) -> create approved new profiles
 ##| from hermes/profiles/_template -> append book lists + knowledge-assignments
 ##| .json -> copy/convert each unique book ONCE into data/knowledge-canonical ->
 ##| write tiny knowledge/refs/*.ref.md per profile (no duplicate Markdown) ->
@@ -312,10 +324,14 @@ knowledge-classify: ## AI proposals + reviewed plan for uncategorized books (dry
 ##| stops before a write; a failed step stops nonzero and prints the resume
 ##| command (same plan; verified work is skipped). Legacy full copies in a
 ##| profile are reported, never migrated or deleted.
-knowledge-apply: ## Apply a reviewed plan in one command: validate -> new profiles -> assign -> canonical copy once -> references -> install -> learn -> report (PLAN=<plan.json> APPROVE=1 [DRY_RUN=1 LEARN=0 INSTALL=0])
-	@test -n "$(PLAN)" || { echo "usage: make knowledge-apply PLAN=plan-<report>.json APPROVE=1 [DRY_RUN=1 LEARN=0 INSTALL=0]   (plan written by: make knowledge-classify)"; exit 2; }
+knowledge-apply: ## Apply a reviewed plan in one command: validate -> new profiles -> assign -> canonical copy once -> references -> install -> learn -> report (PLAN=<plan.json> APPROVE=1 [APPROVE_ALL=1|<plan id> SKIP_ERRORS=1 DRY_RUN=1 VERBOSE=1 LEARN=0 INSTALL=0])
+	@test -n "$(PLAN)" || { echo "usage: make knowledge-apply PLAN=plan-<report>.json APPROVE=1 [APPROVE_ALL=1|<plan id> SKIP_ERRORS=1 DRY_RUN=1 VERBOSE=1 LEARN=0 INSTALL=0]   (plan written by: make knowledge-classify; DRY_RUN=1 reports ready/pending)"; exit 2; }
 	@args=(--plan "$$PLAN"); \
 	 [[ "$(if $(filter command line,$(origin APPROVE)),$(APPROVE))" == "1" ]] && args+=(--approve); \
+	 aa="$(if $(filter command line,$(origin APPROVE_ALL)),$(APPROVE_ALL))"; \
+	 [[ -n "$$aa" && "$$aa" != "0" ]] && args+=(--approve-all "$$aa"); \
+	 [[ "$${SKIP_ERRORS:-0}" == "1" ]] && args+=(--skip-errors); \
+	 [[ "$${VERBOSE:-0}" == "1" ]] && args+=(--verbose); \
 	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
 	 [[ "$${LEARN:-1}" == "0" ]] && args+=(--no-learn); \
 	 [[ "$${INSTALL:-1}" == "0" ]] && args+=(--no-install); \
@@ -420,8 +436,8 @@ test-knowledge-classify: ## Run the knowledge-classify/reconcile/match tests (sy
 test-knowledge-stage: ## Run the knowledge-stage tests (temp library, stub converter, offline)
 	@bash scripts/test_knowledge_stage.sh
 
-test-knowledge-apply: ## Run the reviewed-plan / knowledge-apply tests (temp library, profiles, canonical store, stub hermes; offline)
-	@python3 -m unittest discover -s scripts/tests -p 'test_knowledge_apply.py'
+test-knowledge-apply: ## Run the reviewed-plan / knowledge-apply / bulk-approval tests (temp library, profiles, canonical store, stub hermes; offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_knowledge_appl*.py' && python3 -m unittest discover -s scripts/tests -p 'test_knowledge_approve_all.py'
 
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'

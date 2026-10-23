@@ -90,6 +90,7 @@ ck "default task_ttl_seconds = 1800"      "grep -qE '^        task_ttl_seconds: 
 # Specialist-router pilot is opt-in: unset renders off with the default cap.
 ck "default specialist_routing = false"   "grep -qE '^        specialist_routing: false\$' '$cfg2'"
 ck "default specialist_max_profiles = 4"  "grep -qE '^        specialist_max_profiles: 4\$' '$cfg2'"
+ck "default specialist_selection_mode = ai" "grep -qE '^        specialist_selection_mode: ai\$' '$cfg2'"
 
 # --- explicit-false scenario: MODEL_ROUTER_* set to false in .env must render
 # as false (the risky opt-out), NOT be silently forced back to true. This is the
@@ -108,6 +109,7 @@ MODEL_ROUTER_ASTRA=never
 MODEL_ROUTER_TASK_TTL=600
 MODEL_ROUTER_SPECIALISTS=true
 MODEL_ROUTER_SPECIALIST_MAX=2
+MODEL_ROUTER_SPECIALIST_MODE=hybrid
 EOF
 HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf3" \
   HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
@@ -124,6 +126,7 @@ ck "explicit astra_policy = never"            "grep -qE '^        astra_policy: 
 ck "explicit task_ttl_seconds = 600"          "grep -qE '^        task_ttl_seconds: 600\$' '$cfg3'"
 ck "explicit specialist_routing = true"       "grep -qE '^        specialist_routing: true\$' '$cfg3'"
 ck "explicit specialist_max_profiles = 2"     "grep -qE '^        specialist_max_profiles: 2\$' '$cfg3'"
+ck "explicit specialist_selection_mode = hybrid" "grep -qE '^        specialist_selection_mode: hybrid\$' '$cfg3'"
 ck "routing-off leaves no unrendered tokens"  "! grep -q '__[A-Z0-9_]*__' '$cfg3'"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

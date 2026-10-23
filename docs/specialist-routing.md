@@ -1,14 +1,82 @@
 # Specialist routing (pilot)
 
 The orchestrator can pick the book-backed specialist profiles a task needs
-on its own. A deterministic router in the `model-router` plugin reads the
-**current user task only**, chooses 0-4 profiles, and adds a short note to
-that turn. The orchestrator then runs each specialist as its own profile and
-merges the answers into one reply.
+on its own. The router in the `model-router` plugin reads the **current user
+task only**, selects 0-6 profiles, and adds a short note to that turn. The
+orchestrator then runs each specialist as its own profile and merges the
+answers into one reply.
 
 The pilot is **off by default**. It never dispatches anything itself, never
 calls a cloud model to decide privacy, never sends a `#privacy` turn to any
 classifier, and never puts book or skill content into the orchestrator prompt.
+
+## Selection modes
+
+`specialist_selection_mode` (`MODEL_ROUTER_SPECIALIST_MODE`) decides **which**
+eligible profiles a task gets. Deterministic code always decides **who may be
+selected** (privacy, allowlist, installed and readiness status, the
+`specialist_max_profiles` cap) and **how** a selection runs (advisory only,
+`short` with the `skills` toolset, the high-risk constraint). The model never
+dispatches, never invents a profile and never changes those rules.
+
+| mode | what selects | notes |
+|---|---|---|
+| `ai` (shipped default) | the configured classifier (`specialist_classifier: cliproxy`, model `specialist_classifier_model`, or `local`) picks from the eligible **installed** catalog for every substantive public task | no keyword scoring, no silent keyword fallback; a model failure, timeout, off-schema answer or missing classifier selects **none** and the trace says why (`classifier-failed`, `classifier-unconfigured`). It may select high-risk profiles; they stay advisory-only. Up to `specialist_max_profiles` picks, not the hybrid cap of two. Unknown, disabled, not-installed, private-ineligible and duplicate names are dropped with a reason. |
+| `hybrid` | keyword rules first; the classifier only for weak or no matches or verified attachments | the pilot's original behaviour (below); at most two non-high-risk classifier additions |
+| `keywords` | keyword rules only | offline, deterministic; what `make specialist-route` and `/route-specialists` show |
+
+`MODEL_ROUTER_SPECIALISTS=true` with the shipped defaults (`.env.example`:
+`MODEL_ROUTER_SPECIALIST_MODE=ai`, `MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy`,
+`MODEL_ROUTER_SPECIALIST_MAX=6`) therefore means **AI-only selection** with the
+deterministic constraints above. `ai` with `specialist_classifier: none` routes
+nothing (the installer and `make specialist-install` warn).
+
+**Private tasks** (`#privacy` in the current turn): cliproxy is never called.
+Only a `local` classifier may run, and only over the local-eligible profiles;
+none exists today, so a private task routes no specialist (fail-closed).
+
+**Dynamic profiles.** Profiles that `make knowledge-apply` created (book-backed,
+installed under `~/.hermes/profiles/<name>`) join the catalog in `ai` mode
+alongside the registry. Their purpose comes from the spec in
+`hermes/profiles/<name>/knowledge-assignments.json` (`specialist_seeds_root`
+names that folder; optional) or from the `Purpose:` line knowledge-apply
+renders into the installed `SOUL.md`. They are advisory by default and
+inferred **high-risk** conservatively when the spec or purpose names a
+sensitive domain (security, offensive testing, medical/health, psychology,
+herbal, legal, weapons, biotech) or sets `high_risk: true`; high-risk means
+`short` + `skills` only. Keyword and hybrid modes never score them (they
+have no keyword rules). The allowlist (`specialist_profiles`) accepts
+installed dynamic names.
+
+**Traces** stay content-free and carry `selection_mode`, `classifier`
+(`used`, `unconfigured`, `skipped:private`, `skipped:empty-pool`,
+`skipped:not-substantive`, `error:<Type>`), `classifier_detail` (model,
+effort, attempt, outcome), `catalog` (`profiles`, `dynamic`, `eligible`
+counts), the selected `routes[]` with `reasons: ["ai"]` and `knowledge`
+readiness, `dropped[]` with reasons (`classifier:unknown`,
+`classifier:duplicate`, `classifier:not-eligible`, `readiness:<status>`,
+`privacy:local-only`, `cap`), and never the task text. The hook log line adds
+`mode=ai`.
+
+**Expanding the route during a task.** The first route is not final. When
+verified findings or a specialist's result reveal another domain, the
+orchestrator runs the selector again on a concise brief of the current task
+(`make specialist-classify-probe TASK="<brief>"`, live classifier, content-free
+trace) and appends an eligible existing profile within the task-wide cap. It
+never removes or re-runs a profile that already ran, never dispatches
+duplicates, and a specialist child never expands the route itself. A domain
+with no existing profile is a new-profile idea for the knowledge plan
+(`make knowledge-classify` → `make knowledge-apply ... APPROVE_ALL=1`), never
+something to create mid-task. Privacy and the high-risk rule apply to appended
+profiles too (`hermes/SOUL.md`).
+
+**A route only selects.** The specialist's knowledge is in play only when it
+runs under its own profile: `hermes -p <profile> -z '<brief>' -t skills` loads
+that profile's SOUL and its learned `<profile>-knowledge` skill. The note shows
+each profile's readiness (`ready`, `needs-learn`, `no-knowledge`); new books are
+not active until `make knowledge-learn` ran and `make knowledge-learn-status`
+says ready. `specialist_require_ready: true` drops unready profiles before the
+model sees them.
 
 ## What it routes to
 
@@ -132,10 +200,12 @@ list, and drops the lowest-ranked.
   specialist runs on the local model, so a private task routes no
   specialist; the turn itself stays on the private Ollama route.
 - **High-risk is advisory.** `health-fitness`, `herbalism`,
-  `security-reviewer` and `red-team` always run `short` with only the
-  `skills` toolset. That means no terminal, files, web, browser, messages or
-  Kanban, thus no external or high-impact action. The classifier can never
-  add a high-risk profile.
+  `security-reviewer` and `red-team` (and dynamic profiles inferred
+  high-risk) always run `short` with only the `skills` toolset. That means no
+  terminal, files, web, browser, messages or Kanban, thus no external or
+  high-impact action. In `hybrid` mode the classifier can never add a
+  high-risk profile; in `ai` mode it may select one, and the constraint
+  still applies.
 - **Isolated profiles.** `kanban` means a board task with the profile as
   assignee. The dispatcher runs it under that profile's own `HERMES_HOME`,
   SOUL, memory and skills. `short` means one bounded answer from
@@ -171,8 +241,8 @@ list, and drops the lowest-ranked.
 
   Unready profiles still route, with their status shown, unless
   `specialist_require_ready: true`.
-- **Hybrid classifier** (optional; `specialist_classifier: none` by
-  default, `cliproxy` or `local`). Keywords always run first. The classifier
+- **Hybrid classifier** (`specialist_selection_mode: hybrid`, opt-in;
+  `specialist_classifier` `cliproxy` or `local`). Keywords always run first. The classifier
   is asked only for a public turn when the keywords found nothing
   (`gate=no-match`), only weak signals (`gate=ambiguous`), or the turn
   carries verified attachments (`gate=attachment`). Without an attached
@@ -300,11 +370,13 @@ label), `classifier`, `classifier_gate` (`no-match` | `ambiguous` |
 
    ```bash
    make specialist-install DRY_RUN=1
-   make specialist-install                        # MAX=4 REQUIRE_READY=0 CLASSIFIER=none PROFILES=all
+   make specialist-install                        # MAX=4 MODE=ai REQUIRE_READY=0 CLASSIFIER=none PROFILES=all
+   make specialist-install MODE=ai CLASSIFIER=cliproxy MAX=6   # AI-only selection (the shipped .env defaults)
    ```
 
    It sets `specialist_routing: true`. A key you pass (`MAX=0-6`,
-   `REQUIRE_READY=1|0`, `CLASSIFIER=none|local|cliproxy`, `PROFILES=a,b` or `all`) is
+   `MODE=ai|hybrid|keywords`, `REQUIRE_READY=1|0`, `CLASSIFIER=none|local|cliproxy`,
+   `PROFILES=a,b` or `all`) is
    written. A key you do not pass keeps its current value, or gets the default
    when it is missing. With `REQUIRE_READY=1` it stops if no allowed profile
    has a knowledge skill yet, because nothing would route.
@@ -379,16 +451,32 @@ The installer renders the `specialist_*` keys presence-aware:
 
 Keys: `MODEL_ROUTER_SPECIALISTS`, `MODEL_ROUTER_SPECIALIST_MAX` (0-6),
 `MODEL_ROUTER_SPECIALIST_REQUIRE_READY`, `MODEL_ROUTER_SPECIALIST_CLASSIFIER`
-(`none|local|cliproxy`), `MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT` (seconds),
+(`none|local|cliproxy`), `MODEL_ROUTER_SPECIALIST_MODE` (`ai|hybrid|keywords`,
+default `ai`), `MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT` (seconds),
 `MODEL_ROUTER_SPECIALIST_PROFILES` (`a,b` or `all`). An invalid value warns
 and renders the default. The installer logs where each came from, e.g.
-`specialist_routing=true (live config)`. To pin the hybrid router in `.env`:
+`specialist_routing=true (live config)`. To pin AI-only selection in `.env`:
 
 ```
 MODEL_ROUTER_SPECIALISTS=true
-MODEL_ROUTER_SPECIALIST_MAX=4
+MODEL_ROUTER_SPECIALIST_MAX=6
+MODEL_ROUTER_SPECIALIST_MODE=ai
 MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy
 MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT=25
+```
+
+`MODEL_ROUTER_SPECIALIST_MODE=hybrid` keeps the keyword-first router for
+debugging or backward compatibility.
+
+### Activate a change (post-commit; the restart is an approval/ops step)
+
+```bash
+make specialist-status                                   # read-only: settings incl. selection mode, readiness
+make specialist-install DRY_RUN=1 MODE=ai CLASSIFIER=cliproxy MAX=6
+make specialist-install MODE=ai CLASSIFIER=cliproxy MAX=6   # plugin files + keys via hermes config set; NO restart
+(set -a; . ~/.hermes/.env; set +a; make specialist-classify-probe TASK="<a real task>")   # live AI selection, nothing dispatched
+make specialist-enable                                    # restarts the gateway only with the operator's yes (or make hermes-restart)
+make specialist-logs                                      # mode=ai classifier=used ... in the live log
 ```
 
 The cliproxy model and effort default to `gpt-5.6-terra` and `medium` in the
@@ -406,7 +494,7 @@ aux, classifier) are in [model-routing.md](model-routing.md#activate-the-local-h
 ## Verify
 
 ```bash
-make test-specialists      # specialist-router, classifier context/cliproxy, activation tests (stub hermes, stub CLIProxyAPI, temp HERMES_HOME)
+make test-specialists      # specialist-router, AI-only selection + dynamic catalog, classifier context/cliproxy, activation tests (stub hermes, stub CLIProxyAPI, temp HERMES_HOME)
 make test-local-route      # hybrid classifier gate/caps/privacy, local roles, installer render
 make test-specialist-activate  # activation tests only (stub hermes/systemctl, temp HERMES_HOME)
 make test-router           # whole offline suite

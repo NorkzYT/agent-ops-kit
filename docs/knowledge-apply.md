@@ -8,13 +8,59 @@ every profile that uses a book holds a tiny reference instead of a copy.
 ```bash
 make knowledge-inventory                                  # read-only: what is new
 make knowledge-classify                                   # proposals + plan-<report>.json (nothing assigned)
-$EDITOR data/knowledge-staging/reports/plan-classify-<time>.json
-make knowledge-apply PLAN=data/knowledge-staging/reports/plan-classify-<time>.json DRY_RUN=1
-make knowledge-apply PLAN=data/knowledge-staging/reports/plan-classify-<time>.json APPROVE=1
+PLAN=data/knowledge-staging/reports/plan-classify-<time>.json
+make knowledge-apply PLAN=$PLAN DRY_RUN=1                 # report: ready / pending review / pending profile approval / pending error
+make knowledge-apply PLAN=$PLAN DRY_RUN=1 APPROVE=1 APPROVE_ALL=1 [SKIP_ERRORS=1]   # preview the bulk approval; prints APPROVE_ALL=<plan id>
+make knowledge-apply PLAN=$PLAN APPROVE=1 APPROVE_ALL=<plan id> [SKIP_ERRORS=1]     # one command: approve, create profiles, store books once, reference, install, learn
 make knowledge-learn-status
 ```
 
-`/mnt/books` is only read. `APPROVE=1` counts only on the make command line.
+`/mnt/books` is only read. `APPROVE=1` and `APPROVE_ALL` count only on the make
+command line. Editing the plan by hand still works (`APPROVE=1` alone applies it
+exactly as written).
+
+## Dry-run states
+
+`DRY_RUN=1` on an unedited classifier plan is a report, never a wall of errors.
+Every item lands in one state:
+
+| state | meaning | what moves it |
+|---|---|---|
+| `ready` | `assign` to an existing profile or an approved new profile, `skip`, `existing` | nothing; it runs on apply |
+| `pending review` | `review` with a concrete existing-profile proposal (`proposed_profile`), e.g. a high-risk content label | `APPROVE_ALL=1`, or set `decision` by hand |
+| `pending profile approval` | item tied to a `new_profiles` proposal that is not approved, or whose spec is incomplete | `APPROVE_ALL=1` when the spec is complete; otherwise fill the spec (or regenerate the plan) |
+| `pending error` | classifier error, no target, source that could not be hashed | `SKIP_ERRORS=1` (skip this run) or decide it by hand |
+
+Only structural problems are errors (exit 1, nothing written): stale source
+hashes, unknown decisions or actions, unsafe names, malformed JSON, a hand-set
+profile that does not exist. Pending items make an actual apply refuse (exit 1,
+nothing written) and print the exact next command. Dry-run prints one line per
+pending item; `VERBOSE=1` adds review reasons, missing spec fields and sources.
+
+## Bulk approval (`APPROVE_ALL`)
+
+`APPROVE_ALL=1` is the operator's explicit acceptance of the classifier's
+concrete proposals. It works on a copy of the plan; the file is never edited.
+
+* clean `assign` stays `assign`; `skip` and `existing` stay as written;
+* `pending review` with an existing-profile proposal becomes `assign` to it.
+  High-risk content or profile labels are accepted by this (it is an explicit
+  approval); profile policies stay advisory and the specialist router keeps
+  enforcing them;
+* `pending profile approval` with a **complete** proposal becomes `assign` and
+  the proposal becomes approved (the profile is created). An incomplete
+  proposal stays pending: nothing is guessed;
+* `pending error` stays pending and blocks the apply unless `SKIP_ERRORS=1`
+  turns those items into `skip` for this run.
+
+Preview with `DRY_RUN=1`. The preview prints `APPROVE_ALL=<plan id>` (the
+16-hex content hash of the plan file); passing that id to the apply binds the
+approval to exactly the previewed file and refuses if the file changed since
+(`APPROVE_ALL=1` approves the file as it is now). The apply writes
+`data/knowledge-canonical/apply/<plan id>/approval.json`: plan id, file sha256,
+policy flags, every decision the policy changed, the new profiles it approved
+and `approval_digest`, a digest of the whole approved decision set (also in
+`report.json`). Re-running the same command is idempotent and keeps one receipt.
 
 ## The plan
 
@@ -36,9 +82,15 @@ as `existing`. Every `review` must become `assign`, `skip` or `existing` by hand
 
 ### New profiles
 
-When no profile fits, the classifier may add a proposal under `new_profiles`
-(`approved: false`, with the model's one-line purpose). Nothing is created by
-classify. To create it, fill every field and approve it:
+When no profile fits, the classifier adds a complete proposal under
+`new_profiles` (`approved: false`): `purpose`, `in_scope`, `out_of_scope`,
+`parent` (an existing profile or `none`), `overlap`, `boundaries`, `sources`
+and `spec_status` (`complete`, or `incomplete:<fields>` when the model's answers
+did not fill a field). The spec comes from the classification answer, completed
+by at most one bounded follow-up call per proposal name (name, purpose, book
+titles and the profile list; never book text). Nothing is created by classify.
+Review and edit the spec, then either `APPROVE_ALL=1` (approves every complete
+proposal) or approve it by hand:
 
 ```json
 {"name": "amazon-selling", "approved": true,
@@ -49,7 +101,10 @@ classify. To create it, fill every field and approve it:
  "boundaries": ["no purchases or account actions without an explicit ask"]}
 ```
 
-and set the item's `profile` to that name with `decision: assign`. Names must
+and set the item's `profile` to that name with `decision: assign`. Plans written
+before complete specs existed carry proposals with empty lists and no
+`spec_status`; dry-run reports them as pending and says to regenerate the plan
+(`make knowledge-classify`) or fill the fields in by hand. Names must
 match `^[a-z0-9][a-z0-9-]{0,62}$`; a name that already exists is refused (assign
 to the existing profile instead). A new profile with no assigned source is
 refused too. The profile is created from `hermes/profiles/_template/SOUL.md`
@@ -62,11 +117,13 @@ from the next run on.
 `scripts/knowledge-apply.py` runs these steps in order; each is idempotent, so
 re-running the same plan resumes and verifies rather than repeats:
 
-1. **validate** (nothing written on any refusal): every item decided; assigned
-   profiles exist or are approved specs; names safe; every assigned source still
-   hashes to `source_sha256` (stale hash -> refuse: re-run classify); unknown
-   decisions, actions, plan versions or malformed JSON -> refuse; no `APPROVE=1`
-   -> refuse after printing the plan.
+1. **validate** (nothing written on any refusal): resolve the states (and the
+   `APPROVE_ALL` / `SKIP_ERRORS` policy) on a copy of the plan; every executable
+   item decided; assigned profiles exist or are approved, complete specs; names
+   safe; every assigned source still hashes to `source_sha256` (stale hash ->
+   refuse: re-run classify); unknown decisions, actions, plan versions or
+   malformed JSON -> refuse; pending items -> refuse with the next command; no
+   `APPROVE=1` -> refuse after printing the summary. Then the approval receipt.
 2. **profiles**: create approved new profiles under `hermes/profiles/`.
 3. **assignments**: append the line to `knowledge-sources.txt` (never
    rewritten) and upsert `hermes/profiles/<p>/knowledge-assignments.json`
@@ -120,7 +177,18 @@ garbage collection.
 
 ## Tests
 
-`make test-knowledge-apply` (`scripts/tests/test_knowledge_apply.py`): refusal
+`make test-knowledge-apply` (`scripts/tests/test_knowledge_apply.py` and
+`test_knowledge_approve_all.py`). Bulk approval: an unedited plan dry-runs with
+exit 0, the four states and no write; `VERBOSE=1`; an apply with pending items
+refuses before any write; stale hashes stay errors; `APPROVE_ALL` preview shows
+the changes and the bound plan id; incomplete specs and errors are never
+guessed; `SKIP_ERRORS=1` applies everything (high-risk proposal accepted,
+profile created from a complete spec, receipt with digest, idempotent re-run);
+a changed file is refused under the bound id; hand edits and terminal decisions
+survive; `resolve_plan` semantics. Classifier side
+(`test_knowledge_classify.py`): complete specs in the plan, one bounded
+completion call per proposal, off-schema completion stays pending. The
+apply tests also cover: refusal
 without approval, unresolved review items, stale hashes, bad decisions /
 profile names / plan versions / actions, unapproved or incomplete new-profile
 specs; dry-run writes nothing; the full run (assign, canonical once, references,

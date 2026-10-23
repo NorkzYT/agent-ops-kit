@@ -597,7 +597,7 @@ and `MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy`. It uses the same
 current-task extraction and `#privacy`/`#private` marker check, and only runs in
 the `default` profile. Typed keywords and verified attachment text (PDF/DOCX
 extracted locally) add deterministic signals. For a public task with weak or no
-keyword matches, or with verified attachments, the classifier (CLIProxyAPI
+keyword matches, or with verified attachments, the hybrid classifier (CLIProxyAPI
 `gpt-5.6-terra` at `medium` effort, or `local`, the routine role below) may add
 at most two non-high-risk profiles. The cap applies once, to the combined list.
 Marked turns never reach either classifier. See
@@ -624,7 +624,7 @@ and their `.env` fallbacks:
 | `ollama_routine_model` | `OLLAMA_ROUTINE_MODEL` | routine role (`qwen3.5:27b`) |
 | `ollama_fallback_model` | `OLLAMA_FALLBACK_MODEL` | fallback role (`qwen3.6:27b`); empty = no local fallback |
 | `ollama_agent_model` | `OLLAMA_AGENT_MODEL` | agent role (`qwen3.8:27b`) |
-| `specialist_*` | `MODEL_ROUTER_SPECIALIST*` | specialist router and hybrid classifier ([specialist-routing.md](specialist-routing.md)); presence-aware on `--force` |
+| `specialist_*` | `MODEL_ROUTER_SPECIALIST*` | specialist router, selection mode (`MODEL_ROUTER_SPECIALIST_MODE`, default `ai`: the classifier selects from the installed catalog; `hybrid`/`keywords` opt-in) and classifier ([specialist-routing.md](specialist-routing.md)); presence-aware on `--force` |
 | `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | **ignored by request routing** (only `#privacy`); a warning is logged at load when set. Still read by knowledge-classify's offline gate (presence-aware on `--force`, never logged) |
 | `private_paths` | `MODEL_ROUTER_PRIVATE_PATHS` | same as `private_terms` |
 

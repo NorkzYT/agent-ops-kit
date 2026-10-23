@@ -138,3 +138,13 @@ Private routing is **active only** when a host-reachable Ollama chat endpoint is
 configured *and* the zero-egress canary passes. Until then the plugin still runs
 fail-closed: private requests are **refused** (never sent to cloud). See
 `docs/model-routing.md`.
+
+## Specialist selection mode
+
+`specialist_selection_mode` (`MODEL_ROUTER_SPECIALIST_MODE`): `ai` (default; the
+configured `specialist_classifier` selects up to `specialist_max_profiles`
+profiles from the eligible installed catalog, including profiles created by
+knowledge-apply; a model failure selects none), `hybrid` (keywords first,
+classifier for weak/no matches) or `keywords` (deterministic only). Privacy,
+allowlist, readiness, caps, dispatch mode and the high-risk advisory-only
+constraint are enforced in code in every mode. See `docs/specialist-routing.md`.

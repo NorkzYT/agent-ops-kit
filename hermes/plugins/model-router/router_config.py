@@ -105,6 +105,11 @@ class RouterSettings:
     specialist_profiles: List[str] = field(default_factory=list)   # allowlist; empty = all
     specialist_require_ready: bool = False
     specialist_classifier: str = "none"                            # none | local (Ollama) | cliproxy
+    # ai: the classifier selects from the eligible installed catalog (no keyword scoring, no
+    # silent fallback; deterministic code still enforces privacy, allowlist, readiness, caps,
+    # dispatch mode and high-risk advisory rules). hybrid/keywords: opt-in, for debugging and
+    # backward compatibility. With specialist_classifier none, ai mode routes nothing.
+    specialist_selection_mode: str = "ai"                          # ai | hybrid | keywords
     specialist_classifier_timeout: float = 10.0                    # total seconds, both models
     # cliproxy classifier: CLIProxyAPI (OpenAI-compatible, ChatGPT subscription).
     # '' base URL = $CLIPROXY_BASE_URL or http://127.0.0.1:$CLIPROXY_PORT/v1;
@@ -115,6 +120,9 @@ class RouterSettings:
     specialist_classifier_key_env: str = "CLIPROXY_API_KEY"
     specialist_orchestrators: List[str] = field(default_factory=lambda: ["default"])
     specialist_profiles_root: str = ""                             # '' = $HERMES_HOME/profiles
+    # Repo hermes/profiles (knowledge-assignments.json specs of created profiles); optional.
+    # Without it a dynamic profile's purpose comes from its installed SOUL.md.
+    specialist_seeds_root: str = ""
 
 
     def local_model(self, role: str) -> str:
@@ -139,12 +147,18 @@ class RouterSettings:
 
 
 CLASSIFIERS = ("none", "local", "cliproxy")
+SELECTION_MODES = ("ai", "hybrid", "keywords")
 CLASSIFIER_EFFORTS = ("minimal", "low", "medium", "high")
 
 
 def _classifier(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     return value if value in CLASSIFIERS else "none"
+
+
+def _selection_mode(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in SELECTION_MODES else "ai"
 
 
 def _effort(raw: Any) -> str:
@@ -189,6 +203,7 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         specialist_profiles=_split(val("specialist_profiles", "MODEL_ROUTER_SPECIALIST_PROFILES", [])),
         specialist_require_ready=_truthy(val("specialist_require_ready", "MODEL_ROUTER_SPECIALIST_REQUIRE_READY", None), False),
         specialist_classifier=_classifier(val("specialist_classifier", "MODEL_ROUTER_SPECIALIST_CLASSIFIER", "none")),
+        specialist_selection_mode=_selection_mode(val("specialist_selection_mode", "MODEL_ROUTER_SPECIALIST_MODE", "ai")),
         specialist_classifier_timeout=_seconds(val("specialist_classifier_timeout",
                                                    "MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT", 10.0), 10.0),
         specialist_classifier_model=str(val("specialist_classifier_model", "MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL",
@@ -202,4 +217,5 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
                                               "CLIPROXY_API_KEY") or "CLIPROXY_API_KEY").strip(),
         specialist_orchestrators=_split(val("specialist_orchestrators", "MODEL_ROUTER_SPECIALIST_ORCHESTRATORS", ["default"])) or ["default"],
         specialist_profiles_root=str(val("specialist_profiles_root", "MODEL_ROUTER_SPECIALIST_PROFILES_ROOT", "") or ""),
+        specialist_seeds_root=str(val("specialist_seeds_root", "MODEL_ROUTER_SPECIALIST_SEEDS_ROOT", "") or ""),
     )

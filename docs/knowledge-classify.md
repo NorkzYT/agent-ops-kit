@@ -341,3 +341,15 @@ revised edition, same file name), EPUB/PDF/text copies of staged text reported
 re-ingest (also with `APPLY=1`), every owner listed for multi-profile copies,
 profile purpose and corpus context in the prompt, and reconcile being
 proposal-only with apply limited to explicit, content-backed approvals.
+
+## New-profile proposals are complete specs
+
+When no profile fits, the classifier returns a complete proposal (`purpose`,
+`in_scope`, `out_of_scope`, `parent` or `none`, `overlap`, `boundaries`), validated
+field by field (unknown parent/overlap names are dropped, lists are bounded). A
+proposal the first answers left incomplete gets one bounded completion call per
+name (name, purpose, book titles, profile list; never book text) on the backend
+that classified its items. The plan records `spec_status` (`complete` or
+`incomplete:<fields>`); it is a proposal (`approved: false`) until
+`make knowledge-apply ... APPROVE_ALL=1` or a hand approval. See
+[knowledge-apply.md](knowledge-apply.md).

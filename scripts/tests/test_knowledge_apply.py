@@ -116,7 +116,9 @@ def new_profile_spec(name="amazon-selling", approved=True, **over):
     return spec
 
 
-class ApplyTest(unittest.TestCase):
+class ApplyFixture(unittest.TestCase):
+    """Synthetic library, seeds, stub hermes; shared by the apply and bulk-approval tests."""
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="ka-test-"))
         t = self.tmp
@@ -238,6 +240,8 @@ class ApplyTest(unittest.TestCase):
         self.assertEqual(self.calls_for("learn"), [])
         self.assert_library_unchanged()
 
+
+class ApplyTest(ApplyFixture):
     # plan validation (fail closed) ------------------------------------------
     def test_refuses_without_approval(self):
         p = self.run_apply(self.plan([self.item("edu/Strategy Book")]))

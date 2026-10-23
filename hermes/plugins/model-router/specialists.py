@@ -63,6 +63,7 @@ Rules:
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import re
 import time
@@ -84,6 +85,12 @@ DEFAULT_MAX_PROFILES = 4
 # or local-only one (CLASSIFIER_FORBIDDEN, checked again after the pool filter).
 MAX_CLASSIFIER_ADDITIONS = 2
 HARD_MAX_PROFILES = 6
+# How profiles are selected. ``ai``: the configured classifier picks from the
+# eligible catalog (no keyword scoring, no silent keyword fallback; a model
+# failure selects none). ``hybrid``: keywords first, classifier for weak/no
+# matches (the pilot's original behaviour). ``keywords``: deterministic only.
+SELECTION_MODES = ("ai", "hybrid", "keywords")
+DEFAULT_SELECTION_MODE = "ai"
 # Classifier context bounds and the whole-route budget (Hermes caps
 # pre_llm_call at 30 s; document extraction and the classifier share this).
 CLASSIFIER_SENDER_CHARS = 4000
@@ -230,6 +237,15 @@ REGISTRY: Tuple[Specialist, ...] = (
 BY_NAME: Dict[str, Specialist] = {s.name: s for s in REGISTRY}
 HIGH_RISK: Tuple[str, ...] = tuple(s.name for s in REGISTRY if s.high_risk)
 CLASSIFIER_FORBIDDEN = frozenset(HIGH_RISK) | {s.name for s in REGISTRY if s.local}
+# A dynamically created profile (knowledge-apply) is inferred high-risk when its
+# spec/purpose names a sensitive domain; conservative on purpose (advisory-only).
+_DYNAMIC_HIGH_RISK_RE = re.compile(
+    r"(?i)\b(?:security|secure|offensive|red[- ]team|pen(?:etration)?[- ]?test\w*|exploit\w*|attack\w*|"
+    r"vulnerabilit\w*|threat\w*|medic\w*|health\w*|clinical|drug\w*|dosage\w*|therap\w*|psycholog\w*|"
+    r"psychiatr\w*|mental[- ]health|herbal\w*|remed(?:y|ies)|weapon\w*|firearm\w*|legal|law|biotech\w*|"
+    r"gene[- ]editing|genetic\w*|pharma\w*|surviv\w*|self[- ]harm)\b")
+_DYNAMIC_CAP = 200          # profile directories scanned at most
+_SOUL_READ = 16 * 1024      # bytes of a SOUL.md read for its purpose line
 
 # Wraps the injected note. ``task_intent`` cuts the current user message at the
 # opening line, so neither router ever classifies its own suggestion.
@@ -378,11 +394,14 @@ def find_knowledge_skill(profile_home: Path, profile: str,
 
 
 def knowledge_readiness(profile: str, profiles_root: Optional[Path]) -> Readiness:
+    """Stat-only. A name outside the registry counts as a profile only when it is installed
+    (a dynamic, book-backed profile created by knowledge-apply); anything else is unknown."""
+    root = Path(profiles_root) if profiles_root is not None else None
     if profile not in BY_NAME:
-        return Readiness("unknown-profile")
-    if profiles_root is None:
+        if not _safe_profile_name(profile) or root is None or not (root / profile).is_dir():
+            return Readiness("unknown-profile")
+    if root is None:
         return Readiness("not-installed")
-    root = Path(profiles_root)
     home = root / profile
     if not home.is_dir():
         return Readiness("not-installed")
@@ -412,6 +431,104 @@ def default_profiles_root() -> Optional[Path]:
 
 
 # --------------------------------------------------------------------------- #
+# Catalog: registry + dynamically created book-backed profiles
+# --------------------------------------------------------------------------- #
+_PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+def _safe_profile_name(name: str) -> bool:
+    return bool(_PROFILE_NAME_RE.match(name or "")) and ".." not in name
+
+
+def _read_head(path: Path, limit: int) -> str:
+    try:
+        if path.is_symlink() or not path.is_file():
+            return ""
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            return fh.read(limit)
+    except OSError:
+        return ""
+
+
+def _soul_purpose(soul: Path) -> str:
+    """The ``Purpose:`` line knowledge-apply renders into a created profile's SOUL.md, else the
+    first prose paragraph under ``## Role``. Bounded read; never a book or skill."""
+    text = _read_head(soul, _SOUL_READ)
+    for line in text.splitlines():
+        if line.lower().startswith("purpose:"):
+            return " ".join(line.split(":", 1)[1].split())[:240]
+    role = text.find("## Role")
+    if role >= 0:
+        for para in text[role + 7:].split("\n\n"):
+            para = " ".join(para.split())
+            if para and not para.startswith("#") and not para.startswith("<"):
+                return para[:240]
+    return ""
+
+
+def _seed_spec(seeds_root: Optional[Path], name: str) -> Dict[str, Any]:
+    if seeds_root is None:
+        return {}
+    path = Path(seeds_root) / name / "knowledge-assignments.json"
+    raw = _read_head(path, 256 * 1024)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    spec = data.get("profile_spec") if isinstance(data, dict) else None
+    return spec if isinstance(spec, dict) else {}
+
+
+def _spec_high_risk(spec: Dict[str, Any], purpose: str) -> bool:
+    if spec.get("high_risk") is True:
+        return True
+    words = " ".join([purpose, str(spec.get("purpose") or "")]
+                     + [str(x) for x in (spec.get("in_scope") or []) if isinstance(x, str)])
+    return bool(_DYNAMIC_HIGH_RISK_RE.search(words))
+
+
+def dynamic_specialists(profiles_root: Optional[Path], seeds_root: Optional[Path] = None) -> Dict[str, Specialist]:
+    """Installed profiles outside the registry that are book-backed (a ``knowledge/`` folder, or a
+    spec in ``<seeds_root>/<name>/knowledge-assignments.json``). Purpose comes from that spec, else
+    the SOUL.md ``Purpose:`` line. No keyword signals (keyword/hybrid modes never score them); never an
+    implementer; high-risk inferred conservatively from the spec/purpose. Stat-level plus two bounded
+    reads per profile; the model never adds to this catalog."""
+    out: Dict[str, Specialist] = {}
+    if profiles_root is None:
+        return out
+    root = Path(profiles_root)
+    if not root.is_dir():
+        return out
+    try:
+        entries = sorted(root.iterdir())[:_DYNAMIC_CAP]
+    except OSError:
+        return out
+    for d in entries:
+        name = d.name
+        if name in BY_NAME or not _safe_profile_name(name) or d.is_symlink() or not d.is_dir():
+            continue
+        spec = _seed_spec(seeds_root, name)
+        if not spec and not (d / "knowledge").is_dir():
+            continue
+        purpose = str(spec.get("purpose") or "").strip()[:240] or _soul_purpose(d / "SOUL.md")
+        if not purpose:
+            continue
+        out[name] = Specialist(name, purpose, (), high_risk=_spec_high_risk(spec, purpose))
+    return out
+
+
+def catalog(settings: "SpecialistSettings") -> Dict[str, Specialist]:
+    """Registry profiles plus the installed dynamic ones (registry names are never replaced)."""
+    root = settings.profiles_root if settings.profiles_root is not None else default_profiles_root()
+    out = dict(BY_NAME)
+    for name, spec in dynamic_specialists(root, settings.seeds_root).items():
+        out.setdefault(name, spec)
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Routing
 # --------------------------------------------------------------------------- #
 @dataclass
@@ -423,6 +540,8 @@ class SpecialistSettings:
     classifier: str = "none"               # none | local (Ollama) | cliproxy (CLIProxyAPI); never private
     profiles_root: Optional[Path] = None   # None = default_profiles_root()
     unknown: Tuple[str, ...] = field(default_factory=tuple)  # rejected allowlist names
+    selection_mode: str = "hybrid"         # ai | hybrid | keywords (the plugin's shipped default is ai)
+    seeds_root: Optional[Path] = None      # repo hermes/profiles (knowledge-assignments.json specs); optional
 
 
 def clamp_max(raw: Any) -> int:
@@ -433,14 +552,21 @@ def clamp_max(raw: Any) -> int:
     return max(0, min(HARD_MAX_PROFILES, n))
 
 
-def split_allowed(raw: Iterable[str]) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+def split_allowed(raw: Iterable[str], extra_known: Iterable[str] = ()) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """(known, unknown) allowlist names: registry profiles plus ``extra_known`` (installed dynamic ones)."""
+    extra = set(extra_known or ())
     known, unknown = [], []
     for name in raw or ():
         n = str(name).strip().lower()
         if not n:
             continue
-        (known if n in BY_NAME else unknown).append(n)
+        (known if n in BY_NAME or n in extra else unknown).append(n)
     return tuple(dict.fromkeys(known)), tuple(dict.fromkeys(unknown))
+
+
+def selection_mode(raw: Any) -> str:
+    v = str(raw or "").strip().lower()
+    return v if v in SELECTION_MODES else DEFAULT_SELECTION_MODE
 
 
 _PROGRESS_RE = re.compile(
@@ -456,6 +582,8 @@ class ClassifierText(str):
 
     documents: int = 0
     deadline: Optional[float] = None
+    catalog: Optional[Dict[str, str]] = None   # {profile: purpose} for the eligible pool (ai mode)
+    max_picks: Optional[int] = None            # names the classifier may return (ai mode: max_profiles)
 
 
 # Control tags (task_intent, privacy) inside attached content carry no
@@ -645,7 +773,12 @@ def route_text(
         "dropped": [],
         "classifier": "off" if settings.classifier == "none" or classifier is None else "not-needed",
         "unknown_allowed": list(settings.unknown),
+        "selection_mode": selection_mode(settings.selection_mode),
     }
+    mode = trace["selection_mode"]
+    if mode == "keywords":
+        classifier = None
+        trace["classifier"] = "off"
     # A non-inlined document (PDF, large text) sent with no typed text leaves
     # no sender text at all; only the classifier can read it.
     can_classify = settings.classifier != "none" and classifier is not None
@@ -708,6 +841,12 @@ def route_text(
                 decision.status_query and _PROGRESS_RE.search(task.visible))):
         trace["reason"] = "status-or-continuation"
         return trace
+
+    rdy = readiness or (lambda name: knowledge_readiness(
+        name, settings.profiles_root if settings.profiles_root is not None else default_profiles_root()))
+    if mode == "ai":
+        return _ai_select(trace, task, decision, source, sep, raw_text or "", settings, classifier, rdy, pdec,
+                          started)
 
     allowed = set(settings.allowed) if settings.allowed else set(BY_NAME)
     candidates: List[Tuple[int, int, Specialist, List[str]]] = []
@@ -793,8 +932,6 @@ def route_text(
     candidates.sort(key=lambda c: c[:3])
     if documents is not None:
         trace["attachment_signals"] = [c[3].name for c in candidates if c[0] == _ATTACHED]
-    rdy = readiness or (lambda name: knowledge_readiness(
-        name, settings.profiles_root if settings.profiles_root is not None else default_profiles_root()))
     selected: List[Tuple[Specialist, int, List[str], Readiness]] = []
     for _rank, neg_score, _order, spec, labels in candidates:
         r = rdy(spec.name)
@@ -809,25 +946,123 @@ def route_text(
             continue
         selected.append((spec, -neg_score, labels, r))
 
+    _finish(trace, selected, decision.tier, pdec.private)
+    return trace
+
+
+def _route_dict(spec: Specialist, score: int, labels: List[str], r: Readiness, tier: str, private: bool) -> Dict[str, Any]:
+    route: Dict[str, Any] = {
+        "profile": spec.name,
+        "score": score,
+        "reasons": labels,
+        "high_risk": spec.high_risk,
+        "advisory_only": not spec.implementer,
+        "execution": _execution(tier, spec),
+        "knowledge": r.as_dict(),
+    }
+    if route["execution"] == "short":
+        route["toolsets"] = ADVISORY_TOOLSETS
+    if spec.high_risk:
+        route["constraint"] = ADVISORY_CONSTRAINT
+    if private:
+        route["local_only"] = True
+    return route
+
+
+def _finish(trace: Dict[str, Any], selected: Sequence[Tuple[Specialist, int, List[str], Readiness]],
+            tier: str, private: bool) -> None:
     for spec, score, labels, r in selected:
-        route: Dict[str, Any] = {
-            "profile": spec.name,
-            "score": score,
-            "reasons": labels,
-            "high_risk": spec.high_risk,
-            "advisory_only": not spec.implementer,
-            "execution": _execution(decision.tier, spec),
-            "knowledge": r.as_dict(),
-        }
-        if route["execution"] == "short":
-            route["toolsets"] = ADVISORY_TOOLSETS
-        if spec.high_risk:
-            route["constraint"] = ADVISORY_CONSTRAINT
-        if pdec.private:
-            route["local_only"] = True
-        trace["routes"].append(route)
-    if not trace["routes"]:
+        trace["routes"].append(_route_dict(spec, score, labels, r, tier, private))
+    if not trace["routes"] and "reason" not in trace:
         trace["reason"] = "no-match" if not trace["dropped"] else "all-dropped"
+
+
+def _ai_select(trace: Dict[str, Any], task: "ti.CurrentTask", decision: "ti.Decision", source: str,
+               sep: "att.Separation", raw_text: str, settings: SpecialistSettings,
+               classifier: Optional[Classifier], rdy: Callable[[str], Readiness], pdec: pv.PrivacyDecision,
+               started: float) -> Dict[str, Any]:
+    """AI-only selection. Deterministic code decides WHO MAY be selected (allowlist, privacy,
+    installed/readiness, caps) and HOW a selection runs (advisory, short+skills, high-risk
+    constraint); the configured classifier decides WHICH of the eligible profiles the task needs.
+    No keyword scoring, no silent fallback: an unconfigured, failing, timing-out or off-schema
+    classifier selects none and says so in the trace (content-free)."""
+    cat = catalog(settings)
+    allowed = set(settings.allowed) if settings.allowed else set(cat)
+    ineligible: Dict[str, str] = {}
+    pool: List[str] = []
+    for name, spec in cat.items():
+        if name not in allowed:
+            ineligible[name] = "classifier:not-eligible"
+            continue
+        if pdec.private and not spec.local:
+            ineligible[name] = "privacy:local-only"
+            continue
+        r = rdy(name)
+        if r.status in ("not-installed", "unknown-profile") or (
+                settings.require_ready and not spec.implementer and not r.ready):
+            ineligible[name] = f"readiness:{r.status}"
+            continue
+        pool.append(name)
+    trace["catalog"] = {"profiles": len(cat), "dynamic": sum(1 for n in cat if n not in BY_NAME),
+                        "eligible": len(pool)}
+    if pdec.private and settings.classifier != "local":
+        trace["classifier"] = "skipped:private"
+        trace["reason"] = "privacy:local-only"
+        return trace
+    if settings.classifier == "none" or classifier is None:
+        trace["classifier"] = "unconfigured"
+        trace["reason"] = "classifier-unconfigured"
+        return trace
+    if not pool:
+        trace["classifier"] = "skipped:empty-pool"
+        trace["reason"] = "no-eligible-profile"
+        return trace
+    documents = None
+    if sep.attachment and sep.proven and not pdec.private:
+        documents = verified_documents(sep, raw_text, deadline=started + ROUTE_BUDGET)
+    context, trace["classifier_context"] = classifier_context(
+        task, source, sep, raw_text, deadline=started + ROUTE_BUDGET, documents=documents)
+    if not decision.substantive and not context.documents:
+        trace["classifier"] = "skipped:not-substantive"
+        trace["reason"] = "not-substantive"
+        return trace
+    context.catalog = {n: cat[n].purpose for n in pool}
+    context.max_picks = settings.max_profiles
+    trace["classifier_gate"] = "ai"
+    try:
+        result = classifier(context, pool)
+        picked = [str(p).strip().lower() for p in (result or ())]
+        trace["classifier"] = "used"
+        meta = getattr(result, "meta", None)
+        outcome = "ok"
+        if isinstance(meta, dict):
+            trace["classifier_detail"] = {k: meta[k] for k in ("model", "effort", "attempt", "outcome") if k in meta}
+            outcome = str(meta.get("outcome", "ok"))
+    except Exception as exc:  # the selector is the only source of routes: a failure selects none
+        trace["classifier"] = f"error:{type(exc).__name__}"
+        trace["reason"] = "classifier-failed"
+        return trace
+    if outcome != "ok" and outcome != "empty-pool":
+        trace["reason"] = "classifier-failed"
+        return trace
+    selected: List[Tuple[Specialist, int, List[str], Readiness]] = []
+    seen: set = set()
+    for p in picked:
+        if p not in cat:
+            trace["dropped"].append({"profile": "?", "reason": "classifier:unknown"})
+            continue
+        if p in seen:
+            trace["dropped"].append({"profile": p, "reason": "classifier:duplicate"})
+            continue
+        seen.add(p)
+        if p not in pool:
+            trace["dropped"].append({"profile": p, "reason": ineligible.get(p, "classifier:not-eligible")})
+            continue
+        if len(selected) >= settings.max_profiles:
+            trace["dropped"].append({"profile": p, "reason": "cap"})
+            continue
+        selected.append((cat[p], 1, ["ai"], rdy(p)))
+    _finish(trace, selected, decision.tier, pdec.private)
     return trace
 
 
@@ -846,8 +1081,9 @@ def render_plan(trace: Dict[str, Any]) -> str:
                              "attached file's content; ",
                "document": "document-derived: no typed instruction, routed by the classifier on "
                            "the verified attached document; "}.get(trace.get("task_source"), "")
+    how = "AI-selected from the eligible installed catalog" if trace.get("selection_mode") == "ai" else "deterministic"
     lines = [PLAN_OPEN, "[specialist-router pilot] Suggested specialists for the current task "
-             f"({derived}deterministic, task {trace.get('task', '-')}, privacy {trace.get('privacy')}):"]
+             f"({derived}{how}, task {trace.get('task', '-')}, privacy {trace.get('privacy')}):"]
     for r in routes:
         k = r["knowledge"]
         knowledge = k["status"] + (" (stale: re-run /learn)" if k.get("stale") else "")

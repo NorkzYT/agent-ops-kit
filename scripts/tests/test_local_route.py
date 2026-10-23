@@ -546,7 +546,7 @@ class LocalClassifierTest(unittest.TestCase):
 
     def test_hook_logs_no_prompt_content(self):
         calls = []
-        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_classifier="local"))
+        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_selection_mode="hybrid", specialist_classifier="local"))
         h = hook_mod.SpecialistHook(s, backend_factory=FakeBackend({"qwen3.5:27b": "philosophy"}, calls))
         self.assertTrue(h.classifier_ready)
         secret_word = "Quuxbarian"
@@ -561,7 +561,7 @@ class LocalClassifierTest(unittest.TestCase):
 
     def test_hook_private_turn_never_calls_local_classifier(self):
         calls = []
-        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_classifier="local"))
+        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_selection_mode="hybrid", specialist_classifier="local"))
         h = hook_mod.SpecialistHook(s, backend_factory=FakeBackend({"qwen3.5:27b": "philosophy"}, calls))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=f"#privacy {NO_MATCH}"))

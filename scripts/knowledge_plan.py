@@ -39,6 +39,7 @@ CLI (for shell scripts):
 
 from __future__ import annotations
 
+import copy
 import datetime as _dt
 import hashlib
 import json
@@ -55,6 +56,12 @@ ASSIGNMENTS_VERSION = 1
 TERMINAL = ("assign", "skip", "existing")
 DECISIONS = TERMINAL + ("review",)
 KNOWN_ACTIONS = ("assign", "canonicalize", "reference", "install", "learn")
+# Item states a dry-run reports. ready/skip/existing are executable; pending-*
+# items are not (and are never guessed); invalid plans raise PlanError.
+READY, PENDING_REVIEW, PENDING_PROFILE, PENDING_ERROR = ("ready", "pending-review", "pending-profile-approval",
+                                                          "pending-error")
+STATES = (READY, "skip", "existing", PENDING_REVIEW, PENDING_PROFILE, PENDING_ERROR)
+NEW_PROFILE_REASON = "new-profile-proposal:"
 BOOK_EXTS = (".epub", ".pdf", ".md", ".txt")
 TEXT_EXTS = (".md", ".txt")
 REF_SUFFIX = ".ref.md"
@@ -210,22 +217,50 @@ def plan_item(source: str, identity: Optional[SourceIdentity], status: str, prop
     }
 
 
-def new_profile_proposal(name: str, purpose: str, sources: Iterable[str]) -> Dict[str, object]:
-    """A proposal only: every field must be reviewed and ``approved`` set by hand."""
-    return {
+def new_profile_proposal(name: str, purpose: str, sources: Iterable[str],
+                         spec: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    """A proposal only (``approved: false``). ``spec`` carries the classifier's complete
+    fields when it produced them; ``spec_status`` says whether the spec is complete
+    ("complete") or which fields are still missing ("incomplete:<fields>")."""
+    spec = spec or {}
+    out = {
         "name": name,
         "approved": False,
-        "purpose": purpose,
-        "in_scope": [],
-        "out_of_scope": [],
-        "parent": "",
-        "overlap": [],
-        "boundaries": [],
+        "purpose": str(spec.get("purpose") or purpose),
+        "in_scope": list(spec.get("in_scope") or []),
+        "out_of_scope": list(spec.get("out_of_scope") or []),
+        "parent": str(spec.get("parent") or ""),
+        "overlap": list(spec.get("overlap") or []),
+        "boundaries": list(spec.get("boundaries") or []),
         "sources": sorted(set(sources)),
-        "note": "proposed by the classifier, not created. Fill purpose, in_scope, out_of_scope, parent "
-                "(or 'none'), overlap, boundaries; set approved to true; set each item's profile to this "
-                "name and its decision to assign. knowledge-apply creates it only then.",
     }
+    missing = spec_missing(out)
+    out["spec_status"] = "complete" if not missing else "incomplete:" + ",".join(missing)
+    out["note"] = ("proposed by the classifier, not created. Review the spec (edit any field), then either "
+                   "set approved to true and each item's profile to this name with decision assign, or accept "
+                   "every complete proposal at once: make knowledge-apply PLAN=<plan> APPROVE=1 APPROVE_ALL=1. "
+                   "knowledge-apply creates it only then."
+                   + ("" if not missing else f" Incomplete ({', '.join(missing)}): fill it in by hand or re-run "
+                      "make knowledge-classify; APPROVE_ALL leaves it pending."))
+    return out
+
+
+def spec_missing(spec: Dict[str, object]) -> List[str]:
+    """Fields a new-profile spec still needs before it can be approved (``approved`` itself excluded)."""
+    missing = []
+    for key in SPEC_TEXT_FIELDS:
+        v = spec.get(key)
+        if not isinstance(v, str) or not v.strip() or _placeholder(v):
+            missing.append(key)
+    for key in SPEC_LIST_FIELDS:
+        v = spec.get(key)
+        if not _is_list_of_str(v) or not v or any(_placeholder(x) for x in v):
+            missing.append(key)
+    return missing
+
+
+def spec_complete(spec: object) -> bool:
+    return isinstance(spec, dict) and isinstance(spec.get("name"), str) and not spec_missing(spec)
 
 
 def plan_path_for(report: Path) -> Path:
@@ -427,6 +462,170 @@ def validate_plan(plan: Dict[str, object], books: Path, profiles_dir: Path,
         raise PlanError("plan refused:\n  - " + "\n  - ".join(errs))
     affected = sorted({it["profile"] for it in assign})
     return Validated(plan, assign, skipped, existing, identities, specs, profiles, affected)
+
+
+# --------------------------------------------------------------------------- #
+# Plan resolution: states, explicit bulk approval (APPROVE_ALL), digest
+# --------------------------------------------------------------------------- #
+@dataclass
+class Resolution:
+    """The effective plan after the operator's policy was applied to a copy of the loaded plan."""
+    plan: Dict[str, object]                           # deep copy; the file is never edited
+    items: List[Dict[str, object]]                    # per item: source, state, decision, profile, reasons, change
+    specs: List[Dict[str, object]]                    # per new profile: name, state, missing, legacy, sources
+    changes: List[Dict[str, object]]                  # decisions APPROVE_ALL / SKIP_ERRORS changed (source, from, to, profile)
+    approved_profiles: List[str]                      # new profiles approved by this run (not by hand)
+    policy: Dict[str, bool]
+    counts: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def pending(self) -> List[Dict[str, object]]:
+        return [i for i in self.items if i["state"].startswith("pending")]
+
+    @property
+    def decisions(self) -> List[Tuple[str, str, str]]:
+        return sorted((str(i["source"]), str(i["decision"]), str(i["profile"] or "")) for i in self.items)
+
+    @property
+    def digest(self) -> str:
+        return approval_digest(self.decisions, self.approved_profiles, self.policy)
+
+
+def approval_digest(decisions: Iterable[Tuple[str, str, str]], approved_profiles: Iterable[str],
+                    policy: Dict[str, bool]) -> str:
+    """Stable 16-hex digest of exactly what an approval covers: every (source, decision, profile),
+    the new profiles it approves and the policy flags. Written to the approval receipt."""
+    body = {"decisions": sorted([list(d) for d in decisions]), "approved_profiles": sorted(approved_profiles),
+            "policy": {k: bool(v) for k, v in sorted(policy.items())}}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:SOURCE_ID_LEN]
+
+
+def proposal_for(item: Dict[str, object], specs: Dict[str, Dict[str, object]]) -> str:
+    """Name of the new-profile proposal an item is tied to, or ''."""
+    prof = item.get("profile")
+    if isinstance(prof, str) and prof in specs:
+        return prof
+    for r in item.get("review_reasons") or []:
+        if isinstance(r, str) and r.startswith(NEW_PROFILE_REASON) and r[len(NEW_PROFILE_REASON):] in specs:
+            return r[len(NEW_PROFILE_REASON):]
+    sug = item.get("new_profile_suggestion")
+    if isinstance(sug, dict) and sug.get("name") in specs:
+        return str(sug["name"])
+    return ""
+
+
+def resolve_plan(plan: Dict[str, object], profiles: Dict[str, Path], approve_all: bool = False,
+                 skip_errors: bool = False) -> Resolution:
+    """Classify every item and new-profile spec; with ``approve_all`` accept the classifier's
+    concrete proposals on a COPY of the plan. Nothing is guessed:
+
+      * clean ``assign`` stays assign; ``skip``/``existing`` stay as written;
+      * ``review`` with a concrete existing-profile proposal (``profile`` or ``proposed_profile``)
+        becomes assign to it (high-risk review labels included: APPROVE_ALL is the operator's
+        explicit approval; profile policies stay advisory);
+      * ``review`` tied to a COMPLETE new-profile proposal becomes assign and the proposal is
+        approved; an incomplete proposal stays pending-profile-approval;
+      * ``review`` with no target (classifier error, no profile, unhashable source) stays
+        pending-error unless ``skip_errors``, which turns it into skip.
+
+    Structural problems (bad decisions, names, stale hashes) are not judged here; the
+    executable part of the result goes through :func:`validate_plan` afterwards."""
+    eff = copy.deepcopy({k: v for k, v in plan.items() if not k.startswith("_")})
+    policy = {"approve_all": bool(approve_all), "skip_errors": bool(skip_errors)}
+    specs: Dict[str, Dict[str, object]] = {}
+    for spec in eff.get("new_profiles", []):
+        if isinstance(spec, dict) and isinstance(spec.get("name"), str):
+            specs[spec["name"]] = spec
+    items_out: List[Dict[str, object]] = []
+    changes: List[Dict[str, object]] = []
+    approved_now: List[str] = []
+    used_specs: Dict[str, int] = {}
+    for it in eff.get("items", []):
+        if not isinstance(it, dict) or not isinstance(it.get("source"), str):
+            continue   # validate_plan reports the structural error
+        src = str(it["source"])
+        decision = it.get("decision")
+        prof = it.get("profile") if isinstance(it.get("profile"), str) else ""
+        reasons = [str(r) for r in (it.get("review_reasons") or []) if isinstance(r, str)]
+        row = {"source": src, "decision": decision, "profile": prof, "reasons": reasons, "state": "", "change": "",
+               "status": it.get("status", ""), "spec": ""}
+        if decision == "review":
+            spec_name = proposal_for(it, specs)
+            target = prof if prof in profiles else (it.get("proposed_profile") if it.get("proposed_profile") in profiles else "")
+            unhashable = not it.get("source_sha256")
+            if spec_name:
+                row["spec"] = spec_name
+                if approve_all and spec_complete(specs[spec_name]) and not unhashable:
+                    it["decision"], it["profile"] = "assign", spec_name
+                    row.update(decision="assign", profile=spec_name, state=READY, change="approved-proposal")
+                    if spec_name not in approved_now:
+                        approved_now.append(spec_name)
+                    changes.append({"source": src, "from": "review", "to": "assign", "profile": spec_name,
+                                    "why": "new-profile proposal approved by APPROVE_ALL"})
+                else:
+                    row["state"] = PENDING_PROFILE
+            elif target and not unhashable:
+                if approve_all:
+                    it["decision"], it["profile"] = "assign", target
+                    row.update(decision="assign", profile=target, state=READY, change="approved-proposal")
+                    changes.append({"source": src, "from": "review", "to": "assign", "profile": target,
+                                    "why": "existing-profile proposal approved by APPROVE_ALL"})
+                else:
+                    row.update(profile=target, state=PENDING_REVIEW)
+            else:
+                if skip_errors:
+                    it["decision"], it["profile"] = "skip", ""
+                    row.update(decision="skip", profile="", state="skip", change="skipped-error")
+                    changes.append({"source": src, "from": "review", "to": "skip", "profile": "",
+                                    "why": "no target (" + (", ".join(reasons) or "no proposal") + "); SKIP_ERRORS"})
+                else:
+                    row["state"] = PENDING_ERROR
+        elif decision == "assign":
+            if prof in specs:
+                row["spec"] = prof
+                row["state"] = READY if (specs[prof].get("approved") is True or prof in approved_now) else PENDING_PROFILE
+            else:
+                row["state"] = READY
+        elif decision in ("skip", "existing"):
+            row["state"] = decision
+        else:
+            row["state"] = READY      # unknown decision: validate_plan refuses it as invalid
+        if row["state"] == READY and row["spec"]:
+            used_specs[row["spec"]] = used_specs.get(row["spec"], 0) + 1
+        items_out.append(row)
+    for name in approved_now:
+        specs[name]["approved"] = True
+    # a spec approved by APPROVE_ALL whose items are still pending (e.g. unhashable) is not created
+    for name in list(approved_now):
+        if not used_specs.get(name):
+            specs[name]["approved"] = False
+            approved_now.remove(name)
+    specs_out = []
+    for name, spec in specs.items():
+        missing = spec_missing(spec)
+        state = ("approved" if spec.get("approved") is True and name not in approved_now
+                 else "approved-by-approve-all" if name in approved_now
+                 else "pending-incomplete" if missing else "pending-unapproved")
+        specs_out.append({"name": name, "state": state, "missing": missing, "sources": list(spec.get("sources") or []),
+                          "items": used_specs.get(name, 0), "legacy": bool(missing) and "spec_status" not in spec,
+                          "purpose": str(spec.get("purpose") or "")})
+    counts = {s: 0 for s in STATES}
+    for row in items_out:
+        counts[row["state"]] = counts.get(row["state"], 0) + 1
+    return Resolution(eff, items_out, specs_out, changes, sorted(approved_now), policy, counts)
+
+
+def executable_plan(res: Resolution) -> Dict[str, object]:
+    """The part of the effective plan that :func:`validate_plan` can judge now: pending items and
+    unapproved (or unused) specs are left out, so pending is reported as pending, not as invalid."""
+    pending = {i["source"] for i in res.pending}
+    out = dict(res.plan)
+    out["items"] = [it for it in res.plan.get("items", [])
+                    if not (isinstance(it, dict) and it.get("source") in pending)]
+    used = {it.get("profile") for it in out["items"] if isinstance(it, dict) and it.get("decision") == "assign"}
+    out["new_profiles"] = [s for s in res.plan.get("new_profiles", [])
+                           if isinstance(s, dict) and s.get("approved") is True and s.get("name") in used]
+    return out
 
 
 # --------------------------------------------------------------------------- #

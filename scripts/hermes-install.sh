@@ -198,6 +198,8 @@ MODEL_ROUTER_TASK_TTL="$(getenv MODEL_ROUTER_TASK_TTL 1800)"; export MODEL_ROUTE
 #   MODEL_ROUTER_SPECIALIST_MAX                0-6               (default 4)
 #   MODEL_ROUTER_SPECIALIST_REQUIRE_READY      true|false        (default false)
 #   MODEL_ROUTER_SPECIALIST_CLASSIFIER         none|local|cliproxy (default none)
+#   MODEL_ROUTER_SPECIALIST_MODE               ai|hybrid|keywords (default ai: the classifier selects;
+#                                              deterministic code enforces privacy/allowlist/readiness/caps)
 #   MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT seconds, total    (default 10, max 25)
 #   MODEL_ROUTER_SPECIALIST_PROFILES           a,b allowlist     (default all)
 SETTINGS_KEY="plugins.entries.model-router.settings"
@@ -233,6 +235,8 @@ router_knob() {
     seconds) [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]] && val="$raw" || { warn "$var=$raw ($src) is not a number; using $def"; val="$def"; src="default"; } ;;
     classifier) raw="${raw,,}"; [[ -z "$raw" || "$raw" == "null" ]] && raw=none
                 [[ "$raw" == none || "$raw" == local || "$raw" == cliproxy ]] && val="$raw" || { warn "$var=$raw ($src) is not none|local|cliproxy; using $def"; val="$def"; src="default"; } ;;
+    mode) raw="${raw,,}"; [[ -z "$raw" || "$raw" == "null" ]] && raw="$def"
+          [[ "$raw" == ai || "$raw" == hybrid || "$raw" == keywords ]] && val="$raw" || { warn "$var=$raw ($src) is not ai|hybrid|keywords; using $def"; val="$def"; src="default"; } ;;
     list) [[ "${raw// /}" == all ]] && raw=""; val="$(yaml_list "$raw")" ;;
   esac
   printf -v "$var" '%s' "$val"; export "${var?}"
@@ -242,6 +246,7 @@ router_knob MODEL_ROUTER_SPECIALISTS specialist_routing false bool
 router_knob MODEL_ROUTER_SPECIALIST_MAX specialist_max_profiles 4 int
 router_knob MODEL_ROUTER_SPECIALIST_REQUIRE_READY specialist_require_ready false bool
 router_knob MODEL_ROUTER_SPECIALIST_CLASSIFIER specialist_classifier none classifier
+router_knob MODEL_ROUTER_SPECIALIST_MODE specialist_selection_mode ai mode
 router_knob MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT specialist_classifier_timeout 10 seconds
 router_knob MODEL_ROUTER_SPECIALIST_PROFILES specialist_profiles "" list
 # Legacy privacy terms/paths follow the same rule, so --force never wipes them.
@@ -250,7 +255,10 @@ router_knob MODEL_ROUTER_PRIVATE_TERMS private_terms "" list
 router_knob MODEL_ROUTER_PRIVATE_PATHS private_paths "" list
 log "specialist_routing=$MODEL_ROUTER_SPECIALISTS ($MODEL_ROUTER_SPECIALISTS_SOURCE)" \
     "max=$MODEL_ROUTER_SPECIALIST_MAX ($MODEL_ROUTER_SPECIALIST_MAX_SOURCE)" \
-    "classifier=$MODEL_ROUTER_SPECIALIST_CLASSIFIER ($MODEL_ROUTER_SPECIALIST_CLASSIFIER_SOURCE)"
+    "classifier=$MODEL_ROUTER_SPECIALIST_CLASSIFIER ($MODEL_ROUTER_SPECIALIST_CLASSIFIER_SOURCE)" \
+    "mode=$MODEL_ROUTER_SPECIALIST_MODE ($MODEL_ROUTER_SPECIALIST_MODE_SOURCE)"
+[[ "$MODEL_ROUTER_SPECIALISTS" == "true" && "$MODEL_ROUTER_SPECIALIST_MODE" == "ai" && "$MODEL_ROUTER_SPECIALIST_CLASSIFIER" == "none" ]] && \
+  warn "specialist_selection_mode=ai with specialist_classifier=none selects no specialist (fail-closed); set MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy or local"
 [[ "$MODEL_ROUTER_PRIVACY" == "false" ]] && \
   warn "MODEL_ROUTER_PRIVACY=false: private data is NOT kept local in ordinary turns (docs/model-routing.md)"
 

@@ -253,15 +253,20 @@ compression:
 # difficult private turns and private coding, ollama_fallback_model is tried
 # once when the role model fails; then the request is refused, never sent to a
 # cloud provider. ollama_model is the legacy single-model key (the routine role).
-# specialist_routing (pilot, MODEL_ROUTER_SPECIALISTS) adds a deterministic
-# note naming the 0-4 book-backed profiles a task needs; it only runs in the
-# default (orchestrator) profile and never dispatches by itself. With
-# specialist_classifier: cliproxy (or local), public tasks with no or only weak
-# keyword matches, or with verified attachments, ask CLIProxyAPI
-# (specialist_classifier_model gpt-5.6-terra, specialist_classifier_effort
-# medium by default; or the routine local model) for at most two non-high-risk
-# profiles, from the typed task plus the verified attached documents (PDF text
-# extracted locally). #privacy turns never reach any classifier.
+# specialist_routing (pilot, MODEL_ROUTER_SPECIALISTS) adds a content-free
+# note naming the 0-6 book-backed profiles a task needs; it only runs in the
+# default (orchestrator) profile and never dispatches by itself.
+# specialist_selection_mode (MODEL_ROUTER_SPECIALIST_MODE, default ai): in ai
+# mode the classifier (specialist_classifier: cliproxy, model
+# specialist_classifier_model gpt-5.6-terra at specialist_classifier_effort
+# medium; or the routine local model) selects up to specialist_max_profiles
+# profiles from the eligible INSTALLED catalog (registry + profiles created by
+# knowledge-apply) for every substantive public task; no keyword scoring, no
+# silent fallback; a model failure selects none. Deterministic code still
+# enforces privacy, the allowlist, installed/readiness status, the cap, the
+# dispatch mode and the high-risk advisory-only constraint. hybrid (keywords
+# first, classifier for weak/no matches, at most two non-high-risk additions)
+# and keywords are opt-in. #privacy turns never reach cliproxy.
 # The specialist_* values and private_terms/private_paths keep what is already
 # in config.yaml when their MODEL_ROUTER_* key is absent from .env.
 # private_terms/private_paths no longer affect request routing (#privacy only).
@@ -290,5 +295,6 @@ plugins:
         specialist_max_profiles: __MODEL_ROUTER_SPECIALIST_MAX__
         specialist_require_ready: __MODEL_ROUTER_SPECIALIST_REQUIRE_READY__
         specialist_classifier: __MODEL_ROUTER_SPECIALIST_CLASSIFIER__
+        specialist_selection_mode: __MODEL_ROUTER_SPECIALIST_MODE__
         specialist_classifier_timeout: __MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT__
         specialist_profiles: __MODEL_ROUTER_SPECIALIST_PROFILES__

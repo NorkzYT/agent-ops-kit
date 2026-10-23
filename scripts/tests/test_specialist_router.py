@@ -427,7 +427,7 @@ class AsyncDelegationEnvelopeTest(unittest.TestCase):
         self.assertNotEqual(route(quoted).get("reason"), "runtime-envelope")
 
     def test_hook_returns_none_for_envelope(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(
                 session_id="s", user_message=async_envelope(self.HEADERS[0])))
@@ -613,7 +613,7 @@ class KanbanNotifierEnvelopeTest(unittest.TestCase):
                 self.assertEqual(task_intent.runtime_envelope(prose), "")
 
     def test_hook_returns_none_for_wake(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=KANBAN_LIVE))
             self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=PROCESS_ENVELOPES[0]))
@@ -1009,7 +1009,7 @@ class AttachmentRelayTest(unittest.TestCase):
         self.assertEqual(seen, [])
 
     def test_hook_returns_none_for_relay(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(
                 session_id="s", user_message=self.wire([("m.txt", TRANSCRIPT_ROUTABLE_TAIL)], NEUTRAL_ASK)))
@@ -1023,7 +1023,7 @@ class AttachmentRelayTest(unittest.TestCase):
                                                        "Write a marketing campaign for the launch.")))
 
     def test_hook_log_marks_source_and_leaks_nothing(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         prompt = "Write a Zorblax marketing campaign for the launch.\n"
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)), \
                 self.assertLogs("hermes.plugin.model_router", "INFO") as logs:
@@ -1228,7 +1228,7 @@ class CapAndStateTest(unittest.TestCase):
                          "public")
 
     def test_hook_privacy_is_per_turn_not_per_session(self):
-        cfg = config_mod.RouterSettings(specialist_routing=True)
+        cfg = config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid")
         h = hook_mod.SpecialistHook(cfg)
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(session_id="s1",
@@ -1402,7 +1402,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(env.specialist_max_profiles, 2)
 
     def test_hook_behaviour(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             out = h.on_pre_llm_call(session_id="s", user_message=[
                 {"type": "text", "text": "Write a marketing campaign for the launch."}])

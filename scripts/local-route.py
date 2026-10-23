@@ -7,11 +7,12 @@ local (Ollama) model roles of the model-router plugin.
             resolves them, and whether each role model exists on the endpoint.
   catalog   Read-only. Models on the local endpoint: capabilities (tools,
             thinking), size, quantization, which one is loaded, which role uses it.
-  probe     Dry-run of the hybrid specialist router for one task with the LIVE
-            classifier (local, or --classifier cliproxy): keywords first, the
-            classifier only for a public task with no or only weak keyword
-            matches. Prints the content-free trace (no task text) and the
-            classifier model/outcome. Nothing is dispatched or written.
+  probe     Dry-run of the specialist router (live mode: ai by default) for one task with the LIVE
+            classifier (local, or --classifier cliproxy). Mode ai: the
+            classifier selects from the eligible installed catalog; hybrid:
+            keywords first, classifier only for weak/no matches (--mode
+            overrides the live mode). Prints the content-free trace (no task
+            text) and the classifier model/outcome. Nothing is dispatched or written.
             --no-call shows the gate without calling.
   readback  Renders what the installer would write now (hermes-install.sh
             --render-only, temp file) and compares it with the live config as
@@ -199,8 +200,9 @@ def status(args) -> int:
             where = "MAIN provider (cloud)" if r["provider"] == "auto" else r["base_url"]
             out(f"  aux {task:<16}: {r['provider']} {r['model'] or '(main model)'} @ {where}"
                 + (f"; fallback {_route_line(r['fallback_chain'])}" if r["fallback_chain"] else ""))
-    out(f"  specialists     : routing={cfg.specialist_routing} max={cfg.specialist_max_profiles} "
-        f"classifier={cfg.specialist_classifier} timeout={cfg.specialist_classifier_timeout:g}s")
+    out(f"  specialists     : routing={cfg.specialist_routing} mode={cfg.specialist_selection_mode} "
+        f"max={cfg.specialist_max_profiles} classifier={cfg.specialist_classifier} "
+        f"timeout={cfg.specialist_classifier_timeout:g}s")
     loaded = [m for m, i in (models or {}).items() if i.get("loaded")]
     if loaded:
         out(f"  loaded now      : {', '.join(loaded)}  (switching to another 27b role reloads it)")
@@ -259,11 +261,10 @@ def probe(args) -> int:
     kind = args.classifier or ("cliproxy" if cfg.specialist_classifier == "cliproxy" else "local")
     sp = plugin("specialists")
     hook = plugin("specialist_hook")
-    known, unknown = sp.split_allowed(cfg.specialist_profiles)
-    settings = sp.SpecialistSettings(
-        enabled=True, max_profiles=sp.clamp_max(cfg.specialist_max_profiles), allowed=known,
-        unknown=unknown, require_ready=cfg.specialist_require_ready, classifier=kind,
-        profiles_root=Path(cfg.specialist_profiles_root).expanduser() if cfg.specialist_profiles_root else None)
+    if args.mode:
+        cfg.specialist_selection_mode = args.mode
+    settings = hook.specialist_settings(cfg)
+    settings.enabled, settings.classifier = True, kind
     if args.no_call:
         classifier = lambda visible, pool: hook.Picks([], {"model": "-", "attempt": 0, "outcome": "not-called"})  # noqa: E731
     elif kind == "cliproxy":
@@ -275,12 +276,13 @@ def probe(args) -> int:
     elapsed = int((time.monotonic() - started) * 1000)
     trace["classifier_ready"] = classifier is not None
     trace["live_specialist_routing"] = cfg.specialist_routing
+    trace["live_selection_mode"] = cfg.specialist_selection_mode
     trace["live_classifier"] = cfg.specialist_classifier
     trace["local_models"] = role_models(cfg)
     trace["elapsed_ms"] = elapsed
     print(json.dumps(trace, indent=2, sort_keys=True))
     detail = trace.get("classifier_detail") or {}
-    out(f"--- summary ---\ntask {trace.get('task')}  privacy {trace.get('privacy')}  "
+    out(f"--- summary ---\ntask {trace.get('task')}  mode {trace.get('selection_mode')}  privacy {trace.get('privacy')}  "
         f"gate {trace.get('classifier_gate', '-')}  classifier {trace.get('classifier')}  "
         f"model {detail.get('model', '-')}  outcome {detail.get('outcome', '-')}  {elapsed} ms")
     out("routes: " + (", ".join(f"{r['profile']}({','.join(r['reasons'])})" for r in trace["routes"]) or "none"))
@@ -387,6 +389,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--model", default="", help="routine model for this probe only")
     p.add_argument("--fallback-model", default=None, help="fallback model for this probe only ('' = none)")
     p.add_argument("--timeout", type=float, default=0.0, help="classifier budget in seconds for this probe")
+    p.add_argument("--mode", choices=("ai", "hybrid", "keywords"), default="",
+                   help="selection mode for this probe (default: the live specialist_selection_mode)")
     sub.add_parser("readback")
     args = ap.parse_args(argv)
     return {"status": status, "catalog": catalog, "probe": probe, "readback": readback}[args.command](args)

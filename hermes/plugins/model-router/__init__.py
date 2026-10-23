@@ -60,12 +60,13 @@ def register(ctx) -> None:
         logger.warning("model_router: private_terms/private_paths are ignored by request routing; "
                        "only a #privacy marker in the current turn keeps a request local")
     logger.info(
-        "model_router registered (privacy=%s complexity=%s local=%s specialists=%s) "
+        "model_router registered (privacy=%s complexity=%s local=%s specialists=%s mode=%s) "
         "local_models=routine:%s,fallback:%s,agent:%s classifier=%s coding_effort=%s",
         settings.privacy_routing,
         settings.complexity_routing,
         "configured" if (settings.ollama_base_url and settings.local_chain("routine")) else "unset",
         "on" if specialists.active else "off",
+        specialists.settings.selection_mode,
         settings.local_model("routine") or "-",
         settings.local_model("fallback") or "-",
         settings.local_model("agent") or "-",
