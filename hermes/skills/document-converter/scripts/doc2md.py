@@ -10,8 +10,10 @@ separate destination root, and never writes to, moves or deletes a source file.
 
 Supported:
   .epub  stdlib only (zipfile + XML/HTML parsers), spine order, headings kept
-  .pdf   poppler `pdftotext` for text-layer PDFs; pages with no text layer are
-         OCRed with `pdftoppm` + `tesseract` when both are installed
+  .pdf   poppler `pdftotext` for text-layer PDFs; blank pages between text pages
+         (or every page, for a scan) are OCRed with `pdftoppm` + `tesseract` when
+         both are installed. Short title/divider pages and leading/trailing blank
+         pages are kept as they are.
 
 Every file gets one status: converted, partial, up-to-date, would-convert,
 unsupported, encrypted, scanned, symlink, too-large, error. Exit code is 0 when
@@ -59,7 +61,7 @@ MAX_EPUB_MEMBER_BYTES = 64 * 1024 * 1024   # 64 MiB per XHTML/OPF member
 MAX_EPUB_TOTAL_BYTES = 512 * 1024 * 1024   # 512 MiB of text read per EPUB
 PDF_TIMEOUT = 600                          # seconds per poppler call
 OCR_PAGE_TIMEOUT = 180                     # seconds per page (render + OCR)
-MIN_PAGE_CHARS = 25                        # below this a page has "no text layer"
+MIN_PAGE_CHARS = 25                        # every page below this: a scan with no text layer
 
 # Font obfuscation is not DRM: the text is readable and EPUB readers ignore it.
 FONT_OBFUSCATION = {
@@ -549,7 +551,15 @@ def convert_pdf(path: Path, ocr: str, lang: str, max_ocr_pages: int) -> tuple[st
         n_pages = len(pages)
     pages += [""] * max(0, n_pages - len(pages))
 
-    empty = [i for i, p in enumerate(pages) if len(re.sub(r"\s", "", p)) < MIN_PAGE_CHARS]
+    chars = [len(re.sub(r"\s", "", p)) for p in pages]
+    if all(c < MIN_PAGE_CHARS for c in chars):
+        empty = list(range(len(pages)))  # no real text layer anywhere: a scan
+    else:
+        # Short title/divider pages carry their text, and blank pages before the
+        # first or after the last text page are covers/endpapers. Only blank
+        # pages inside the text can be scanned pages missing a text layer.
+        text = [i for i, c in enumerate(chars) if c]
+        empty = [i for i in range(text[0] + 1, text[-1]) if not chars[i]]
     ocr_ok = bool(tool("tesseract") and tool("pdftoppm"))
     warnings, ocr_done = [], 0
     method = "pdftotext"
