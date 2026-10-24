@@ -64,6 +64,8 @@ a = sys.argv[1:]
 with open(os.environ["STUB_CALLS"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"argv": a}) + "\n")
 if a[:2] == ["profile", "create"]:
+    if os.environ.get("STUB_MODE") == "create-fail":
+        print("profile create failed", file=sys.stderr); sys.exit(5)
     os.makedirs(os.path.join(os.environ["HERMES_HOME"], "profiles", a[2]), exist_ok=True)
     sys.exit(0)
 if a[0] == "-p" and "config" in a:
@@ -388,6 +390,27 @@ class ApplyTest(ApplyFixture):
         self.assertEqual(self.calls_for("learn"), [])
         self.assertEqual(self.assignments("beta")["assignments"][1]["secondary_reason"],
                          "beta reads it for weekly planning reviews")
+
+    def test_new_profile_installs_with_the_default_hermes_on_path(self):
+        # HERMES_BIN unset: hermes-profile.sh must resolve `hermes` on PATH, not recurse
+        # into its own hermes() wrapper (bash stack overflow, exit -11).
+        plan = self.plan([self.item("edu/Strategy Book", profile="beta")])
+        env = {k: v for k, v in self.env.items() if k != "HERMES_BIN"}
+        env["HOME"] = str(self.tmp)  # hermes-profile.sh prepends $HOME/.local/bin: keep the real hermes off PATH
+        p = subprocess.run([sys.executable, str(APPLY), "--plan", str(plan), "--approve", "--no-learn"],
+                           capture_output=True, text=True, env=env, timeout=180)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual([c["argv"] for c in self.calls_for("create")], [["profile", "create", "beta", "--clone"]])
+        self.assertTrue((self.home / "profiles" / "beta" / "SOUL.md").is_file())
+
+    def test_failed_profile_create_fails_the_install_step(self):
+        plan = self.plan([self.item("edu/Strategy Book", profile="beta")])
+        p = self.run_apply(plan, "--approve", "--no-learn", STUB_MODE="create-fail")
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+        ck = json.loads(next((self.canon / "apply").glob("*/checkpoint.json")).read_text())
+        self.assertEqual(ck["failed_step"], "install")
+        self.assertIn("hermes-profile.sh beta exit 5", ck["steps"]["install"]["error"])
+        self.assertFalse((self.home / "profiles" / "beta").exists())
 
     def test_approved_new_profile_is_created_from_the_template_and_becomes_a_candidate(self):
         spec = new_profile_spec()

@@ -39,7 +39,9 @@ src="${PROFILES_DIR:-hermes/profiles}/$name"
 export PATH="$HOME/.local/bin:$PATH"
 HERMES_BIN="${HERMES_BIN:-hermes}"
 have "$HERMES_BIN" || die "hermes not installed. Run: make hermes-install"
-hermes() { "$HERMES_BIN" "$@"; }
+# `command` skips this function: with the default HERMES_BIN=hermes a bare
+# "$HERMES_BIN" would call hermes() itself and recurse until bash segfaults.
+hermes() { command "$HERMES_BIN" "$@"; }
 if [[ -z "${HERMES_HOME:-}" ]]; then
   HERMES_HOME="$(env_file_get HERMES_HOME "$env_file" 2>/dev/null || echo "$HOME/.hermes")"
 fi
