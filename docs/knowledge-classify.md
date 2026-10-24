@@ -230,20 +230,83 @@ Next to the report and plan every run writes two derived, read-only views
 `python3 scripts/knowledge_review.py <report.json>` re-renders both files from
 an existing report and its plan.
 
-### Proposed profiles: consolidation defaults
+### Taxonomy: broad parents first (enforced on every run)
 
-`new_profiles` entries are suggestions from the classifier, made one book at
-a time. They are never created, merged or rewritten by a tool; the operator
-decides. Defaults when reviewing them:
+Rerun the same command and the proposals come back consolidated:
 
-* prefer a broad parent profile (an existing one, or one new broad profile
-  per family) and record the narrower subject as item `tags` or as aliases in
-  the parent's `in_scope`;
+```bash
+make knowledge-classify LIMIT=100
+```
+
+Two layers enforce the policy; neither creates a profile.
+
+**1. Prompt policy.** The classifier is told to choose an existing broad
+profile whenever it can reasonably own the book (the subtopic goes into the
+answer's `tags`), to answer `none` only when no existing profile fits, to
+propose only broad parent-level families (`psychology`, `blue-team-security`;
+never `depth-psychology` or `blue-team-incident-response`), to put
+subcategories in `tags` rather than in the name, and never to propose several
+overlapping new profiles.
+
+**2. Deterministic consolidation** (`scripts/knowledge_taxonomy.py`), applied
+after parsing and before the plan, report and review are written. Each
+proposed new-profile name is resolved in this order:
+
+| Rule | Example | Result |
+|------|---------|--------|
+| `family-alias`: listed as an alias in the family map | `depth-psychology` | folds into `psychology` |
+| `existing-profile`: `<existing profile>-<child>` | `red-team-web-apps` | assigned to `red-team` |
+| `family-prefix`: `<family>-<child>` | `psychology-cognitive` | folds into `psychology` |
+| `sibling-prefix`: `<another proposal in this run>-<child>` | `machine-learning-ai` next to `machine-learning` | folds into `machine-learning` |
+| none of the above | `biotechnology-genetics` alone | preserved verbatim |
+
+Only dash-separated children fold (`businesslike-writing` is not a child of
+`business`); `_template` never captures anything. Folded items keep their
+spec fields, point at the canonical name (`profile`, `new_profile_suggestion`,
+`new-profile-proposal:<canonical>`), record the original under `taxonomy`
+(`proposed`, `canonical`, `rule`) and the review reason
+`taxonomy-consolidated:<proposed>-><canonical>`, and carry the narrower
+subject as plan `tags`. The plan then holds **one proposal per family** with
+`aliases` (the names folded into it), `tags` (their subjects plus the
+family's own), the union of every member's spec fields (the first complete
+value wins; `overlap`, `tags`, `aliases` are unioned) and a `parent` default
+from the family map when the model gave none. Spec completion runs once per
+canonical family, never per alias.
+
+When the canonical family **already exists** as a profile (book-backed or
+installed under `hermes/profiles/`), the item is assigned to it instead of a
+new proposal: `profile` is set, `new_profile` cleared, review reason
+`taxonomy-existing-profile:<proposed>-><existing>`. The decision stays
+`review`: a deterministic remap is confirmed by the operator, never applied
+by `APPLY=1` or `APPROVE_ALL`.
+
+The family map is explicit configuration in
+[`hermes/knowledge-taxonomy.json`](../hermes/knowledge-taxonomy.json)
+(`families.<canonical>.aliases|tags|parent`); `KNOWLEDGE_TAXONOMY=<path>`
+points at another file, `KNOWLEDGE_TAXONOMY=off` keeps only the structural
+rules (existing-profile and sibling prefixes). A missing or invalid file is
+an error, never a silent default. The committed map covers `psychology`
+(`depth-psychology`, `psychology-mental-health`, `psychology-personality`,
+`psychology-psychotherapy`, ...) and `blue-team-security`
+(`blue-team-incident-response`, `blue-team-security-operations`, ...).
+
+Every artifact says what happened: the plan and the report carry `taxonomy`
+(`applied`, `taxonomy_file`, `families.<canonical>.{existing, aliases,
+sources, tags, rules}`), the terminal summary prints
+`taxonomy: consolidation applied` with `<canonical> <- <aliases>` lines, and
+the Markdown review and HTML workspace list the aliases grouped under each
+canonical proposal ("Consolidation applied"). Consolidation is idempotent: a
+rerun with the same answers yields the same plan. No reason it writes is a
+risk label, and it never reads book text.
+
+Defaults when reviewing what is left (unchanged):
+
+* prefer a broad parent profile (an existing one, or the one new broad
+  profile per family) and keep the narrower subject as item `tags` or as
+  aliases in the parent's `in_scope`;
 * do not create a narrow sibling profile on the strength of one book;
-* when proposals overlap (several `psychology-*` profiles next to
-  `depth-psychology`; `blue-team-security` next to
-  `blue-team-security-operations`), approve at most one, point the other
-  items at it (`profile`, decision `assign`), and leave the rest
+* if two canonical proposals still overlap, approve at most one, point the
+  other items at it (`profile`, decision `assign`), and leave the rest
   `approved: false` (an unapproved proposal is never created). `APPROVE_ALL`
   approves any complete proposal a `review` item still points at, so decide
   those items first;
@@ -343,6 +406,7 @@ where needed.
 | `--excerpt-chars` | `KNOWLEDGE_EXCERPT_CHARS` | 3000 | Excerpt size, 0–12000 |
 | `--threshold` | `KNOWLEDGE_CLASSIFY_THRESHOLD` | 0.75 | Minimum confidence to apply without review |
 | `LIMIT=` / `--limit` | `KNOWLEDGE_CLASSIFY_LIMIT` | 20 | Sources classified per run |
+| — | `KNOWLEDGE_TAXONOMY` | `hermes/knowledge-taxonomy.json` | Family map for proposal consolidation (see "Taxonomy"); `off` keeps only the structural rules |
 | — | `KNOWLEDGE_PRIVATE` | `hermes/knowledge-private.txt` | Library paths that never go to the cloud (also under the exemption) |
 | `--no-library-exemption` | `KNOWLEDGE_LIBRARY_EXEMPT_ROOT` | `/mnt/books` | The book library whose books CLIProxyAPI may classify despite detector hits; `off` disables |
 | — | `KNOWLEDGE_STAGING` | `data/knowledge-staging` | Quarantine; must not overlap the library or `KNOWLEDGE_ROOT` |
@@ -466,7 +530,12 @@ and the export function run in node when installed, proving only decision /
 profile / approval / spec fields change), `scripts/tests/test_knowledge_benchmark.py`
 (rubric validation, catalog from a synthetic library by content hash, identical
 prompts per cell, recorded failures, scorer metrics, Make target) and
-`scripts/tests/test_knowledge_match.py` offline. The classify tests also prove
+`scripts/tests/test_knowledge_match.py` and `scripts/tests/test_knowledge_taxonomy.py`
+(family map loading and validation, resolution rules, one proposal per family,
+source remapping, existing-profile preference, unknown-family preservation,
+idempotence, spec enrichment and the prompt policy text) offline. The classify
+tests also prove the taxonomy layer end to end (plan, report, terminal summary,
+Markdown and HTML review metadata, `KNOWLEDGE_TAXONOMY` override and `off`) and
 that `--effort` / `EFFORT=` / `KNOWLEDGE_CLASSIFY_EFFORT` reach every cloud
 request as `reasoning_effort` (and never the local model), that the requested
 model, effort, served model, token usage and latency are recorded without
@@ -499,4 +568,6 @@ name (name, purpose, book titles, profile list; never book text) on the backend
 that classified its items. The plan records `spec_status` (`complete` or
 `incomplete:<fields>`); it is a proposal (`approved: false`) until
 `make knowledge-apply ... APPROVE_ALL=1` or a hand approval. See
-[knowledge-apply.md](knowledge-apply.md).
+[knowledge-apply.md](knowledge-apply.md). Overlapping proposals are folded
+into one broad family per run before the plan is written (see "Taxonomy:
+broad parents first"); the proposal records `aliases` and `tags`.

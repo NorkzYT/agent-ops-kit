@@ -206,7 +206,7 @@ def default_decision(status: str, needs_review: bool, action: str = "none") -> s
 def plan_item(source: str, identity: Optional[SourceIdentity], status: str, proposed_profile: str,
               profile: str, decision: str, confidence=None, rationale: str = "",
               review_reasons=(), owners=(), note: str = "", new_profile: Optional[Dict[str, str]] = None,
-              secondary_reason: str = "") -> Dict[str, object]:
+              secondary_reason: str = "", tags: Sequence[str] = ()) -> Dict[str, object]:
     return {
         "source": source,
         "source_id": identity.source_id if identity else "",
@@ -222,18 +222,22 @@ def plan_item(source: str, identity: Optional[SourceIdentity], status: str, prop
         "profile": profile,
         "purpose": "",
         "chapters": [],
-        "tags": [],
+        "tags": list(tags),
         "secondary_reason": secondary_reason,
         "note": note,
     }
 
 
 def new_profile_proposal(name: str, purpose: str, sources: Iterable[str],
-                         spec: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+                         spec: Optional[Dict[str, object]] = None,
+                         consolidated: Sequence[str] = ()) -> Dict[str, object]:
     """A proposal only (``approved: false``). ``spec`` carries the classifier's complete
     fields when it produced them; ``spec_status`` says whether the spec is complete
-    ("complete") or which fields are still missing ("incomplete:<fields>")."""
+    ("complete") or which fields are still missing ("incomplete:<fields>"). ``tags`` are the
+    subcategories the family owns and ``aliases`` the narrower names the taxonomy layer folded
+    into it (``consolidated``: the ones folded in this run)."""
     spec = spec or {}
+    aliases = sorted(set(spec.get("aliases") or []) | set(consolidated))
     out = {
         "name": name,
         "approved": False,
@@ -243,11 +247,16 @@ def new_profile_proposal(name: str, purpose: str, sources: Iterable[str],
         "parent": str(spec.get("parent") or ""),
         "overlap": list(spec.get("overlap") or []),
         "boundaries": list(spec.get("boundaries") or []),
+        "tags": list(spec.get("tags") or []),
+        "aliases": aliases,
         "sources": sorted(set(sources)),
     }
     missing = spec_missing(out)
     out["spec_status"] = "complete" if not missing else "incomplete:" + ",".join(missing)
-    out["note"] = ("proposed by the classifier, not created. Review the spec (edit any field), then either "
+    out["note"] = (("" if not consolidated else
+                    f"taxonomy consolidation applied: the narrower proposals {', '.join(consolidated)} were folded "
+                    "into this broad family (their subjects are tags); approve at most this one. ")
+                   + "proposed by the classifier, not created. Review the spec (edit any field), then either "
                    "set approved to true and each item's profile to this name with decision assign, or accept "
                    "every complete proposal at once: make knowledge-apply PLAN=<plan> APPROVE=1 APPROVE_ALL=1. "
                    "knowledge-apply creates it only then."

@@ -90,7 +90,20 @@ SPEC_ANSWERS = {
                                   "in_scope": ["cloud IAM", "logging and detection"], "out_of_scope": ["offensive testing (red-team)"],
                                   "parent": "none", "overlap": ["red-team"], "boundaries": ["advice only; no account changes"]}),
     "half-spec": json.dumps({"purpose": "Half.", "in_scope": ["x"], "parent": "ghost-profile"}),
+    "psychology": json.dumps({"purpose": "Psychology: mind, behaviour, therapy and personality.",
+                              "in_scope": ["clinical and depth psychology", "personality and development"],
+                              "out_of_scope": ["herbal remedies (herbalism)"], "parent": "none", "overlap": ["herbalism"],
+                              "boundaries": ["education only; no diagnosis"]}),
+    "blue-team-security": json.dumps({"purpose": "Defensive security: detection, response, operations.",
+                                      "in_scope": ["incident response", "security operations"],
+                                      "out_of_scope": ["offensive testing (red-team)"], "parent": "none",
+                                      "overlap": ["red-team"], "boundaries": ["advice only"]}),
+    "biotechnology-genetics": json.dumps({"purpose": "Genetics and biotechnology.", "in_scope": ["genomics"],
+                                          "out_of_scope": ["clinical advice"], "parent": "none", "overlap": [],
+                                          "boundaries": ["education only"]}),
 }
+TAXONOMY_SOURCES = ("edu/Depth Book", "edu/Therapy Book", "edu/Mind Book", "edu/Blue Book", "edu/Red Web Book",
+                    "edu/Genetics Book")
 
 # Classifier answers per source; anything else gets DEFAULT.
 DEFAULT = answer("alpha", 0.9)
@@ -107,6 +120,16 @@ ANSWERS = {
     "edu/Cloud Book": proposal("cloud-security", "Cloud security specialist"),
     "edu/Cloud Book Two": proposal("cloud-security", "Cloud security, again"),
     "edu/Half Book": proposal("half-spec", "Half a spec"),
+    # Narrow sibling proposals the taxonomy layer must consolidate (the stub ignores the prompt policy on purpose).
+    "edu/Depth Book": proposal("depth-psychology", "Jungian depth psychology"),
+    "edu/Therapy Book": json.dumps({"profile": "none", "confidence": 0.8, "rationale": "no existing profile fits",
+                                    "topics": ["therapy"], "tags": ["psychotherapy"],
+                                    "new_profile": dict(FULL_SPEC, name="psychology-psychotherapy",
+                                                        purpose="Psychotherapy practice", tags=["cbt"])}),
+    "edu/Mind Book": proposal("psychology-mental-health", "Mental health"),
+    "edu/Blue Book": proposal("blue-team-incident-response", "Incident response"),
+    "edu/Red Web Book": proposal("red-team-web-apps", "Web application pentesting"),
+    "edu/Genetics Book": proposal("biotechnology-genetics", "Genetics"),
 }
 
 
@@ -196,6 +219,12 @@ class ClassifyE2E(unittest.TestCase):
             "Cloud Book/c.txt": "Cloud security posture.\n",
             "Cloud Book Two/c2.txt": "More cloud security.\n",
             "Half Book/h.txt": "Half.\n",
+            "Depth Book/d.txt": "Archetypes and the unconscious.\n",
+            "Therapy Book/t.txt": "Therapy practice.\n",
+            "Mind Book/m.txt": "Mental health.\n",
+            "Blue Book/b.txt": "Incident response playbooks.\n",
+            "Red Web Book/w.txt": "Web application testing.\n",
+            "Genetics Book/g.txt": "Genes.\n",
         }
         for rel, text in books.items():
             (b / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -641,7 +670,9 @@ class ClassifyE2E(unittest.TestCase):
                          "the plan must not match the report glob (latest-report lookups)")
         plan = json.loads(plan_path.read_text())
         self.assertEqual(plan["plan_version"], 1)
-        self.assertEqual(sorted(x["name"] for x in plan["new_profiles"]), ["amazon-selling", "cloud-security", "half-spec"])
+        self.assertEqual(sorted(x["name"] for x in plan["new_profiles"]),
+                         ["amazon-selling", "biotechnology-genetics", "blue-team-security", "cloud-security",
+                          "half-spec", "psychology"], "one proposal per broad family, never a narrow sibling")
         self.assertTrue(all(x["approved"] is False for x in plan["new_profiles"]))
         by = {i["source"]: i for i in plan["items"]}
         ok = by["edu/Strategy Book"]
@@ -763,6 +794,137 @@ class ClassifyE2E(unittest.TestCase):
         self.assertIn("review.html", out)
         self.assertNotIn("Re-run with APPLY=1", out)
         self.assert_library_unchanged()
+
+    def test_taxonomy_consolidates_narrow_siblings_into_one_broad_proposal_per_family(self):
+        p, items = self.run_kc(*TAXONOMY_SOURCES)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        plan = json.loads((self.tmp / "plan-report-0.json").read_text())
+        specs = {s["name"]: s for s in plan["new_profiles"]}
+        self.assertEqual(sorted(specs), ["biotechnology-genetics", "blue-team-security", "psychology"])
+        for narrow in ("depth-psychology", "psychology-psychotherapy", "psychology-mental-health",
+                       "blue-team-incident-response", "red-team-web-apps"):
+            self.assertNotIn(narrow, specs, narrow)
+            self.assertFalse((self.seeds / narrow).exists())
+        psy = specs["psychology"]
+        self.assertEqual(psy["sources"], ["edu/Depth Book", "edu/Mind Book", "edu/Therapy Book"])
+        self.assertEqual(psy["aliases"], ["depth-psychology", "psychology-mental-health", "psychology-psychotherapy"])
+        for tag in ("depth-psychology", "mental-health", "psychotherapy", "cbt"):
+            self.assertIn(tag, psy["tags"], tag)
+        self.assertEqual(psy["spec_status"], "complete", psy)
+        self.assertEqual(psy["parent"], "alpha", "the first complete spec's parent is kept, nothing overwritten")
+        self.assertEqual(psy["in_scope"], FULL_SPEC["in_scope"])
+        self.assertFalse(psy["approved"])
+        self.assertIn("consolidat", psy["note"].lower())
+        blue = specs["blue-team-security"]
+        self.assertEqual(blue["sources"], ["edu/Blue Book"])
+        self.assertEqual(blue["aliases"], ["blue-team-incident-response"])
+        self.assertIn("incident-response", blue["tags"])
+        self.assertEqual(blue["spec_status"], "complete", blue)
+        genes = specs["biotechnology-genetics"]                   # unknown family: preserved verbatim
+        self.assertEqual((genes["sources"], genes["aliases"]), (["edu/Genetics Book"], []))
+        # Spec completion ran once per canonical family (never per alias).
+        completions = [re.search(r'"complete_spec_for": "([^"]*)"', json.loads(r["body"])["messages"][-1]["content"]).group(1)
+                       for r in self.cloud.requests if "complete_spec_for" in r["body"]]
+        self.assertEqual(sorted(completions), ["biotechnology-genetics", "blue-team-security"])
+        # Items point at the canonical family and keep the alias as data.
+        by = {i["source"]: i for i in plan["items"]}
+        for src in ("edu/Depth Book", "edu/Mind Book", "edu/Therapy Book"):
+            self.assertEqual((by[src]["profile"], by[src]["decision"]), ("psychology", "review"), src)
+            self.assertEqual(by[src]["new_profile_suggestion"]["name"], "psychology")
+            self.assertIn("new-profile-proposal:psychology", by[src]["review_reasons"])
+        depth = items["edu/Depth Book"]
+        self.assertEqual(depth["taxonomy"], {"proposed": "depth-psychology", "canonical": "psychology", "rule": "family-alias"})
+        self.assertIn("taxonomy-consolidated:depth-psychology->psychology", depth["review_reasons"])
+        self.assertEqual(by["edu/Depth Book"]["tags"], depth["tags"])
+        self.assertIn("depth-psychology", by["edu/Depth Book"]["tags"])
+        self.assertIn("psychotherapy", by["edu/Therapy Book"]["tags"])
+        # A child of an existing broad profile is assigned to it (for review), not proposed.
+        web = by["edu/Red Web Book"]
+        self.assertEqual((web["profile"], web["proposed_profile"], web["decision"]), ("red-team", "red-team", "review"))
+        self.assertEqual(web["new_profile_suggestion"], {})
+        self.assertIn("taxonomy-existing-profile:red-team-web-apps->red-team", web["review_reasons"])
+        self.assertNotIn("no-profile", web["review_reasons"])
+        self.assertIn("web-apps", web["tags"])
+        self.assertEqual(items["edu/Red Web Book"]["status"], "needs-review")
+        # Metadata: plan and report say consolidation was applied and list aliases per canonical family.
+        for meta in (plan["taxonomy"], json.loads((self.tmp / "report-0.json").read_text())["run"]["taxonomy"]):
+            self.assertTrue(meta["applied"])
+            self.assertEqual(meta["taxonomy_file"], str(REPO / "hermes" / "knowledge-taxonomy.json"))
+            self.assertEqual(meta["families"]["psychology"]["aliases"],
+                             ["depth-psychology", "psychology-mental-health", "psychology-psychotherapy"])
+            self.assertEqual(meta["families"]["red-team"]["existing"], True)
+            self.assertNotIn("biotechnology-genetics", meta["families"])
+        self.assertIn("taxonomy: consolidation applied", p.stdout)
+        self.assertIn("psychology <- depth-psychology, psychology-mental-health, psychology-psychotherapy", p.stdout)
+        self.assertIn("red-team (existing) <- red-team-web-apps", p.stdout)
+        self.assertIn("new profile proposals: biotechnology-genetics, blue-team-security, psychology", p.stdout)
+        # Nothing assigned, nothing created, library untouched; no risk label anywhere.
+        self.assertEqual(self.manifests()["red-team"], "# red-team\n")
+        text = json.dumps(plan) + json.dumps(items)
+        self.assertNotRegex(text, r"high-risk|model-risk|suspicious-text")
+        self.assert_library_unchanged()
+
+    def test_taxonomy_consolidation_is_reported_in_the_markdown_and_html_review(self):
+        p, items = self.run_kc(*TAXONOMY_SOURCES)
+        md = (self.tmp / "report-0.review.md").read_text()
+        self.assertIn("Consolidation applied", md)
+        self.assertIn("`psychology`", md)
+        sec = md[md.index("## New profile proposals"):md.index("## Every source")]
+        self.assertIn("depth-psychology", sec)
+        self.assertIn("Aliases", sec)
+        self.assertIn("red-team-web-apps", sec)
+        self.assertNotIn("### `depth-psychology`", sec)
+        page = (self.tmp / "report-0.review.html").read_text()
+        self.assertIn("Consolidation applied", page)
+        self.assertIn("depth-psychology", page)
+
+    def test_taxonomy_prefers_an_existing_book_backed_family_over_a_new_proposal(self):
+        (self.seeds / "psychology").mkdir()
+        (self.seeds / "psychology" / "SOUL.md").write_text("# SOUL.md\n\nYou are the psychology specialist.\n")
+        (self.seeds / "psychology" / "knowledge-sources.txt").write_text("# psychology\n")
+        p, items = self.run_kc("edu/Depth Book", "edu/Therapy Book", "edu/Mind Book")
+        plan = json.loads((self.tmp / "plan-report-0.json").read_text())
+        self.assertEqual(plan["new_profiles"], [], "an installed family is assigned, never proposed again")
+        for src in ("edu/Depth Book", "edu/Therapy Book", "edu/Mind Book"):
+            it, pi = items[src], {i["source"]: i for i in plan["items"]}[src]
+            self.assertEqual((it["profile"], it["status"], it["new_profile"]), ("psychology", "needs-review", {}), src)
+            self.assertEqual((pi["profile"], pi["decision"]), ("psychology", "review"))
+            self.assertTrue(any(r.startswith("taxonomy-existing-profile:") for r in it["review_reasons"]), it["review_reasons"])
+        self.assertEqual(plan["taxonomy"]["families"]["psychology"]["existing"], True)
+        self.assertEqual(self.manifests()["psychology"], "# psychology\n")
+        self.assertNotIn("complete_spec_for", self.cloud.bodies(), "no spec completion for an existing profile")
+        self.assert_library_unchanged()
+
+    def test_taxonomy_file_is_configurable_and_off_keeps_the_structural_rules(self):
+        custom = self.tmp / "tax.json"
+        custom.write_text(json.dumps({"families": {"mind-sciences": {"aliases": ["depth-psychology", "psychology-mental-health",
+                                                                                    "psychology-psychotherapy"], "parent": "alpha"}}}))
+        p, items = self.run_kc("edu/Depth Book", "edu/Blue Book", KNOWLEDGE_TAXONOMY=str(custom))
+        plan = json.loads((self.tmp / "plan-report-0.json").read_text())
+        names = sorted(s["name"] for s in plan["new_profiles"])
+        self.assertEqual(names, ["blue-team-incident-response", "mind-sciences"])
+        self.assertEqual(plan["taxonomy"]["taxonomy_file"], str(custom))
+        p, items = self.run_kc("edu/Depth Book", "edu/Red Web Book", KNOWLEDGE_TAXONOMY="off")
+        plan = json.loads((self.tmp / "plan-report-1.json").read_text())
+        self.assertEqual(sorted(s["name"] for s in plan["new_profiles"]), ["depth-psychology"])
+        self.assertEqual(items["edu/Red Web Book"]["profile"], "red-team")       # structural rule still applies
+        self.assertEqual(plan["taxonomy"]["taxonomy_file"], "")
+        p, items = self.run_kc("edu/Depth Book", KNOWLEDGE_TAXONOMY=str(self.tmp / "missing.json"))
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("taxonomy", p.stderr)
+
+    def test_taxonomy_rerun_is_idempotent(self):
+        p1, _ = self.run_kc(*TAXONOMY_SOURCES)
+        p2, _ = self.run_kc(*TAXONOMY_SOURCES)
+        a = json.loads((self.tmp / "plan-report-0.json").read_text())
+        b = json.loads((self.tmp / "plan-report-1.json").read_text())
+        for d in (a, b):
+            for k in ("generated", "report"):
+                d.pop(k, None)
+        self.assertEqual(a["new_profiles"], b["new_profiles"])
+        self.assertEqual(a["taxonomy"], b["taxonomy"])
+        self.assertEqual([(i["source"], i["profile"], i["review_reasons"], i["tags"]) for i in a["items"]],
+                         [(i["source"], i["profile"], i["review_reasons"], i["tags"]) for i in b["items"]])
 
     def test_make_target(self):
         mk = ["make", "-s", "-C", str(REPO), "knowledge-classify"]

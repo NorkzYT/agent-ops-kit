@@ -187,6 +187,21 @@ def per_profile(report: Dict[str, object], plan: Dict[str, object]) -> List[Tupl
 # --------------------------------------------------------------------------- #
 # Markdown
 # --------------------------------------------------------------------------- #
+def consolidation_lines(plan: Dict[str, object]) -> List[str]:
+    """What the taxonomy layer did in this run: aliases grouped under each canonical family."""
+    tax = plan.get("taxonomy") if isinstance(plan.get("taxonomy"), dict) else {}
+    fams = tax.get("families") if isinstance(tax.get("families"), dict) else {}
+    if not fams:
+        return ["Consolidation applied: none needed (no overlapping proposals in this run).", ""]
+    out = ["**Consolidation applied** (deterministic, before this plan was written; nothing was created):", ""]
+    for name, f in sorted(fams.items()):
+        f = f if isinstance(f, dict) else {}
+        kind = "existing profile, assigned for review" if f.get("existing") else "one proposal for this family"
+        out.append(f"- {md_code(name)} ({kind}) ← {md_text(', '.join(f.get('aliases') or []))}; "
+                   f"sources: {md_text('; '.join(f.get('sources') or []))}")
+    return out + [""]
+
+
 def render_markdown(report: Dict[str, object], plan: Dict[str, object]) -> str:
     run = report.get("run", {}) if isinstance(report.get("run"), dict) else {}
     items = [i for i in report.get("items", []) if isinstance(i, dict)]
@@ -234,6 +249,7 @@ def render_markdown(report: Dict[str, object], plan: Dict[str, object]) -> str:
     L.append("")
     L.append(CONSOLIDATION)
     L.append("")
+    L.extend(consolidation_lines(plan))
     if not props:
         L.append("None.")
     for name, spec in sorted(props.items()):
@@ -246,6 +262,10 @@ def render_markdown(report: Dict[str, object], plan: Dict[str, object]) -> str:
             L.append(f"- **{key.replace('_', ' ').capitalize()}:**")
             for x in spec.get(key) or []:
                 L.append(f"  - {md_text(x)}")
+        if spec.get("tags"):
+            L.append(f"- **Tags (subcategories):** {md_text(', '.join(spec.get('tags') or []))}")
+        if spec.get("aliases"):
+            L.append(f"- **Aliases folded into this family:** {md_text(', '.join(spec.get('aliases') or []))}")
         L.append(f"- **Sources:** {md_text('; '.join(spec.get('sources') or []))}")
         L.append("- **Review guidance:** a proposal only; nothing exists until the plan is applied with "
                  "`approved: true` and a complete spec. Prefer one broad profile over several near-duplicates "
@@ -348,6 +368,18 @@ def app_script() -> str:
     return APP_JS
 
 
+def consolidation_html(plan: Dict[str, object]) -> str:
+    tax = plan.get("taxonomy") if isinstance(plan.get("taxonomy"), dict) else {}
+    fams = tax.get("families") if isinstance(tax.get("families"), dict) else {}
+    if not fams:
+        return "<p>Consolidation applied: none needed (no overlapping proposals in this run).</p>"
+    rows = "".join(
+        "<li><code>" + html.escape(str(n)) + "</code>" + (" (existing profile, assigned for review)" if (f or {}).get("existing") else "")
+        + " &larr; " + html.escape(", ".join((f or {}).get("aliases") or [])) + "</li>"
+        for n, f in sorted(fams.items()))
+    return "<p><strong>Consolidation applied</strong> (deterministic, before this plan was written):</p><ul>" + rows + "</ul>"
+
+
 def render_html(report: Dict[str, object], plan: Dict[str, object]) -> str:
     run = report.get("run", {}) if isinstance(report.get("run"), dict) else {}
     report_name = Path(str(plan.get("report") or "report")).name
@@ -358,7 +390,7 @@ def render_html(report: Dict[str, object], plan: Dict[str, object]) -> str:
     who = html.escape(f"{run.get('classifier', '')}:{run.get('model', '')}" + (f"/{run['effort']}" if run.get("effort") else ""))
     fields = {"title": title, "who": who, "generated": html.escape(str(run.get("generated", ""))), "chips": chips,
               "plan_name": html.escape(Path(str(plan.get("_path") or "plan-" + report_name)).name),
-              "consolidation": html.escape(CONSOLIDATION), "css": CSS, "plan_json": json_for_html(plan_public),
+              "consolidation": html.escape(CONSOLIDATION) + consolidation_html(plan), "css": CSS, "plan_json": json_for_html(plan_public),
               "report_json": json_for_html(report_for_html(report)), "app": APP_JS}
     page = HTML_TEMPLATE
     for key, value in fields.items():            # plain substitution: the CSS/JS contain braces

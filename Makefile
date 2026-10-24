@@ -286,7 +286,10 @@ knowledge-refresh: ## After adding books: stage + sync every book-backed profile
 ##| Policy: one canonical profile per book; an approval for a book whose text
 ##| another profile already has is refused unless given as
 ##| SECONDARY='<profile>=<source>' with SECONDARY_REASON (the substantial,
-##| recurring, independent purpose).
+##| recurring, independent purpose). Taxonomy: existing broad profiles first;
+##| overlapping new-profile proposals are folded into one broad family per run
+##| (hermes/knowledge-taxonomy.json, KNOWLEDGE_TAXONOMY=<file>|off); rerun
+##| the same command to get consolidated proposals.
 knowledge-classify: ## AI proposals + reviewed plan, Markdown review and offline HTML workspace for uncategorized books (dry-run). Then: knowledge-apply PLAN=<plan>. [MODEL=gpt-5.6-terra EFFORT=medium|high SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n] Legacy: APPLY=1, APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1]
 	@args=(); \
 	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
