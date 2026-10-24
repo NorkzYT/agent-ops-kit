@@ -53,7 +53,9 @@ Subjective choices (also listed in the rubric):
 - biotech-science is conditional: only the biotech family is exact and nothing
   else is lenient;
 - `suspicious-text` is an integrity review of the production run, not a model
-  score; the benchmark scores profile fit only.
+  score; the benchmark scores profile fit only. (Historical: the classifier no
+  longer writes that reason; the stratum name is kept so v1 scores stay
+  comparable.)
 
 ## Running it
 

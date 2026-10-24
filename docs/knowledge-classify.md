@@ -121,7 +121,8 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    `SOUL.md`) and its current corpus: book-list size, staged file count and up
    to six book titles from its book list. It must return a single JSON object:
    `{"profile", "confidence", "rationale", "topics"}`. The book evidence is
-   wrapped and labeled as untrusted data. The prompt asks for fit only: the
+   wrapped and labeled as untrusted data: it is sanitized, bounded and
+   delimited, and is never treated as instructions. The prompt asks for fit only: the
    subject matter is never a reason to withhold or lower a match, and a
    legacy `risk` field in an answer is ignored, never stored.
 5. **Checks.** A source gets `needs_review` when any of these holds:
@@ -133,7 +134,6 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    | `classifier-error` | Proxy unreachable or HTTP error (exit 3) |
    | `no-profile` | The model answered `none` |
    | `low-confidence` | Confidence below `--threshold` (default 0.75) |
-   | `suspicious-text` | The evidence contains prompt-injection phrasing (an integrity check on the untrusted text, not a topic judgement) |
    | `partially-imported`, `multiple-owners` | Some of its text is already staged; or it is staged in several profiles |
 | `content-unchecked` | Its text could not be compared with staged knowledge, so it might already be imported |
 | `private-source`, `private-excerpt`, `metadata-only`, `no-text` | Less evidence, or private content (a path in `knowledge-private.txt`, or a detector hit with the exemption off) |
@@ -145,6 +145,16 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    releases wrote `high-risk-profile:*`, `high-risk-content:*` and
    `model-risk:*`; see "Plans from earlier releases" below for what happens to
    a plan that still carries one.
+
+   Instruction-like text in a curated book is not a reason either. AI and
+   security books quote prompts ("ignore previous instructions", JSON with a
+   `profile` field...); that text is content, classified like any other book.
+   It stays untrusted data: sanitized, bounded to the excerpt, inside the
+   evidence delimiters (which the book cannot close), and the verdict is the
+   strictly validated model answer, never JSON found in the book. Privacy
+   controls, the outbound payload check and source path/hash checks are
+   unchanged. Earlier releases flagged it as `suspicious-text`; see "Plans
+   from earlier releases".
 
 6. **Report.** Every source appears on stdout with its status, profile,
    confidence, classifier (model and effort, the model the proxy reports it
@@ -200,8 +210,10 @@ Next to the report and plan every run writes two derived, read-only views
   any new-profile spec. **Classifier facts** (what the model and guardrails
   produced) are kept apart from **Review guidance** (deterministic hints
   derived from the status and flags: "accept if scope matches", "resolve the
-  review flags", "existing book with several owners"...). `suspicious-text`
-  is explained as the integrity check it is, never as a topic judgement.
+  review flags", "existing book with several owners"...). An item that still
+  carries `suspicious-text` (an older plan) is pointed at regeneration or a
+  hand decision. New-profile proposals carry the consolidation defaults
+  below.
 - `<report>.review.html` — a self-contained decision workspace that works
   offline (no external JavaScript, CSS or fonts; no book text; no secrets):
   search, filters by status / decision / profile, a readable panel per item
@@ -218,18 +230,39 @@ Next to the report and plan every run writes two derived, read-only views
 `python3 scripts/knowledge_review.py <report.json>` re-renders both files from
 an existing report and its plan.
 
+### Proposed profiles: consolidation defaults
+
+`new_profiles` entries are suggestions from the classifier, made one book at
+a time. They are never created, merged or rewritten by a tool; the operator
+decides. Defaults when reviewing them:
+
+* prefer a broad parent profile (an existing one, or one new broad profile
+  per family) and record the narrower subject as item `tags` or as aliases in
+  the parent's `in_scope`;
+* do not create a narrow sibling profile on the strength of one book;
+* when proposals overlap (several `psychology-*` profiles next to
+  `depth-psychology`; `blue-team-security` next to
+  `blue-team-security-operations`), approve at most one, point the other
+  items at it (`profile`, decision `assign`), and leave the rest
+  `approved: false` (an unapproved proposal is never created). `APPROVE_ALL`
+  approves any complete proposal a `review` item still points at, so decide
+  those items first;
+* a single-book topic with no fitting parent can wait: `skip` it this run
+  rather than add a profile.
+
 ### Plans from earlier releases
 
 Earlier releases labelled medical, security and weapons topics
 (`high-risk-profile:*`, `high-risk-content:*`, `model-risk:*` review reasons)
-and gated them behind an approval. Those labels no longer exist and a new run
-never writes them. Nothing on disk is edited retroactively:
+and gated them behind an approval, and flagged instruction-like book text as
+`suspicious-text`. None of these reasons exists any more and a new run never
+writes them (`knowledge_plan.RETIRED_REASONS`, `LEGACY_RISK_PREFIXES`). Nothing on disk is edited retroactively:
 
 * books already assigned (book lists, `knowledge-assignments.json`, canonical
   copies, learned skills) stay as they are; nothing needs to be redone;
 * a plan item the operator already decided (`assign`, `skip`, `existing`)
   applies as written; an old label in its `review_reasons` is history only;
-* a plan item still at `review` that carries one of those labels is reported
+* a plan item still at `review` that carries one of those reasons is reported
   as **pending stale** by `make knowledge-apply ... DRY_RUN=1`. `APPROVE_ALL`
   and `SKIP_ERRORS` leave it alone and an apply refuses while it is there,
   because the gate that produced it is gone and its proposal was never judged
@@ -240,7 +273,7 @@ Re-classification is only required for those stale items. Workflow:
 ```bash
 make knowledge-apply PLAN=plan-<old>.json DRY_RUN=1   # lists "pending stale" items, if any
 make knowledge-classify                                # fresh plan: the stale books are still uncategorized,
-                                                       # so they are classified again, with no risk label
+                                                       # so they are classified again, without those reasons
 make knowledge-apply PLAN=plan-<new>.json DRY_RUN=1
 make knowledge-apply PLAN=plan-<new>.json APPROVE=1 [APPROVE_ALL=1]
 ```

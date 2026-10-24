@@ -23,9 +23,10 @@ book out of this run), ``existing`` (already owned; nothing to do) are terminal.
 changed by hand before the plan can be applied.
 
 No review reason is a risk label. Plans written before the ``high-risk-*`` and
-``model-risk:*`` labels were removed are not re-interpreted: a ``review`` item
-that still carries one is ``pending-stale`` (never approved, skipped or
-re-labelled here) until the operator regenerates the plan with
+``model-risk:*`` labels were removed, or while instruction-like book text was
+flagged ``suspicious-text``, are not re-interpreted: a ``review`` item that
+still carries a retired reason is ``pending-stale`` (never approved, skipped
+or re-labelled here) until the operator regenerates the plan with
 ``make knowledge-classify`` or sets its decision by hand.
 
 Source identity is content, never a file name: sha256 over the sorted book
@@ -70,6 +71,8 @@ PENDING_STALE = "pending-stale"
 STATES = (READY, "skip", "existing", PENDING_REVIEW, PENDING_PROFILE, PENDING_ERROR, PENDING_STALE)
 # Review reasons older classifiers wrote; the current one writes no risk label at all.
 LEGACY_RISK_PREFIXES = ("high-risk-content:", "high-risk-profile:", "model-risk:")
+# Retired exact reasons: instruction-like text in a curated book is data, not a review gate.
+RETIRED_REASONS = ("suspicious-text",)
 NEW_PROFILE_REASON = "new-profile-proposal:"
 BOOK_EXTS = (".epub", ".pdf", ".md", ".txt")
 TEXT_EXTS = (".md", ".txt")
@@ -513,6 +516,13 @@ def legacy_risk_reasons(reasons: Iterable[object]) -> List[str]:
     return [str(r) for r in reasons if isinstance(r, str) and r.startswith(LEGACY_RISK_PREFIXES)]
 
 
+def retired_reasons(reasons: Iterable[object]) -> List[str]:
+    """The review reasons of an item that the current classifier no longer writes (legacy risk
+    labels and ``suspicious-text``): a ``review`` item carrying one is stale, never re-decided."""
+    return [str(r) for r in reasons if isinstance(r, str) and (r.startswith(LEGACY_RISK_PREFIXES)
+                                                               or r in RETIRED_REASONS)]
+
+
 def proposal_for(item: Dict[str, object], specs: Dict[str, Dict[str, object]]) -> str:
     """Name of the new-profile proposal an item is tied to, or ''."""
     prof = item.get("profile")
@@ -535,9 +545,9 @@ def resolve_plan(plan: Dict[str, object], profiles: Dict[str, Path], approve_all
       * clean ``assign`` stays assign; ``skip``/``existing`` stay as written;
       * ``review`` with a concrete existing-profile proposal (``profile`` or ``proposed_profile``)
         becomes assign to it (APPROVE_ALL is the operator's explicit approval);
-      * ``review`` that still carries a legacy risk label (``high-risk-content:``,
-        ``high-risk-profile:``, ``model-risk:``) is ``pending-stale``: the plan predates the
-        removal of risk labels and is regenerated, never re-interpreted here;
+      * ``review`` that still carries a retired reason (a legacy risk label ``high-risk-content:``,
+        ``high-risk-profile:``, ``model-risk:``, or ``suspicious-text``) is ``pending-stale``: the
+        plan predates their removal and is regenerated or decided by hand, never re-interpreted here;
       * ``review`` tied to a COMPLETE new-profile proposal becomes assign and the proposal is
         approved; an incomplete proposal stays pending-profile-approval;
       * ``review`` with no target (classifier error, no profile, unhashable source) stays
@@ -564,7 +574,7 @@ def resolve_plan(plan: Dict[str, object], profiles: Dict[str, Path], approve_all
         reasons = [str(r) for r in (it.get("review_reasons") or []) if isinstance(r, str)]
         row = {"source": src, "decision": decision, "profile": prof, "reasons": reasons, "state": "", "change": "",
                "status": it.get("status", ""), "spec": ""}
-        if decision == "review" and legacy_risk_reasons(reasons):
+        if decision == "review" and retired_reasons(reasons):
             row["state"] = PENDING_STALE
         elif decision == "review":
             spec_name = proposal_for(it, specs)

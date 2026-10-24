@@ -46,8 +46,9 @@ list includes):
      Each candidate profile is described by its purpose (SOUL.md) and its
      current corpus: book-list size, staged file count and a few book titles;
   5. deterministic guardrails decide needs_review: malformed or refused output,
-     unknown profile, low confidence, suspicious (prompt-injection) text,
-     metadata-only or private evidence. No topic or profile is labelled a risk:
+     unknown profile, low confidence, metadata-only or private evidence.
+     Book text is untrusted data, never instructions; instruction-like
+     phrasing inside a book does not gate it or change its decision. No topic or profile is labelled a risk:
      medical, security or weapons content is classified like any other book;
   6. report every decision (stdout table + JSON report + approvals template),
      write a readable Markdown review (<report>.review.md) and a self-contained
@@ -132,12 +133,13 @@ NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # No topic is a risk label: there is no high-risk profile list, no medical /
 # security / weapons term matching and no model "risk" field. Review is only
 # forced by structural and privacy guardrails (unreliable answer, low
-# confidence, prompt-injection text, private or thin evidence, ownership).
-# Prompt-injection phrasing in the evidence (an integrity check on the
-# untrusted book text, not a topic judgement) still forces needs_review.
-INJECTION_RE = re.compile(
-    r"(ignore (?:all |any )?(?:previous|prior|above) instructions|disregard (?:the |all )?(?:system|previous|prior)|"
-    r"system prompt|\"(?:profile|confidence)\"\s*:)", re.I)
+# confidence, private or thin evidence, ownership).
+# Book text is always untrusted data, never instructions: it is sanitized,
+# bounded and delimited, and the verdict is the strictly validated model
+# answer. Instruction-like phrasing inside a curated book (AI and security
+# books quote prompts) is content like any other and is not a review reason;
+# plans that still carry the retired `suspicious-text` reason are stale
+# (knowledge_plan.RETIRED_REASONS).
 REFUSAL_RE = re.compile(r"\b(I can(?:no|')t|I am unable|I'm unable|I won't|cannot help|can't assist|"
                         r"not able to (?:help|assist)|against (?:my|the) polic)", re.I)
 
@@ -942,8 +944,6 @@ def classify_item(s: Settings, rel: str, profiles: Dict[str, Profile], cloud: Op
 
     if not ev.excerpt:
         reasons.append("metadata-only")
-    if INJECTION_RE.search(meta_text + "\n" + excerpt):
-        reasons.append("suspicious-text")
 
     # 4. classify
     if backend is None:

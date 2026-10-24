@@ -12,8 +12,9 @@
 States (dry-run): ``ready`` (assign, skip, existing; executable now), ``pending review``
 (review item with a concrete existing-profile proposal), ``pending profile approval``
 (item tied to an unapproved or incomplete new-profile proposal), ``pending stale``
-(review item that still carries a risk label from an older classifier; regenerate the
-plan, it is never approved or skipped here), ``pending error``
+(review item that still carries a retired reason from an older classifier: a risk label
+or ``suspicious-text``; regenerate the plan or decide it by hand, it is never approved or
+skipped here), ``pending error``
 (classifier error or no target). Pending is reported, never guessed and never
 "invalid"; structural problems (bad decisions, stale hashes, unsafe names) are
 errors. ``--approve-all`` accepts the classifier's concrete proposals on a copy of
@@ -553,12 +554,13 @@ def print_summary(s: Settings, res: kp.Resolution, v: Optional[kp.Validated], dr
                   "with make knowledge-classify to get complete, editable proposals, or fill the fields in by hand.")
     pend_stale = [r for r in res.items if r["state"] == kp.PENDING_STALE]
     if pend_stale:
-        print(f"pending stale ({len(pend_stale)}; written by an older classifier with a risk label that no longer "
-              "exists; APPROVE_ALL and SKIP_ERRORS leave these alone):")
+        print(f"pending stale ({len(pend_stale)}; written by an older classifier with a review reason that no longer "
+              "exists (a risk label, or suspicious-text: book text is data, not a review gate); APPROVE_ALL and "
+              "SKIP_ERRORS leave these alone):")
         for r in pend_stale:
-            extra = f"   [{', '.join(r['reasons'])}]" if s.verbose else ""
-            print(f"- {r['source']}{extra}")
-        print("  next: regenerate the plan with make knowledge-classify (the current classifier writes no risk label), "
+            shown = r["reasons"] if s.verbose else kp.retired_reasons(r["reasons"])
+            print(f"- {r['source']}   [{', '.join(shown)}]")
+        print("  next: regenerate the plan with make knowledge-classify (the current classifier writes neither), "
               "or set each item's decision by hand (assign with a profile, skip or existing).")
     pend_err = [r for r in res.items if r["state"] == kp.PENDING_ERROR]
     if pend_err:
@@ -582,7 +584,7 @@ def next_command(s: Settings, res: kp.Resolution) -> str:
     if not res.pending:
         return s.resume_cmd()
     if res.counts.get(kp.PENDING_STALE):
-        return ("regenerate the plan (it carries risk labels from an older classifier): make knowledge-classify, "
+        return ("regenerate the plan (it carries retired review reasons from an older classifier): make knowledge-classify, "
                 "then apply the new plan-<report>.json; or set those items' decisions by hand and re-run")
     if not res.policy["approve_all"] and (res.counts[kp.PENDING_REVIEW] or any(
             sp["state"] == "pending-unapproved" for sp in res.specs)):

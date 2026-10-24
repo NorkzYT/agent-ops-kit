@@ -20,8 +20,11 @@ operator's edits into a deep copy of the original plan and touches only the edit
 fields (item decision and profile; proposal approved, purpose, in_scope, out_of_scope,
 parent, overlap, boundaries): schema, hash and identity fields are preserved verbatim.
 
-No review reason is a risk label: ``suspicious-text`` is an integrity check on the
-untrusted book text (prompt-injection phrasing), never a topic judgement.
+No review reason is a risk label. Book text is untrusted data, never instructions, and
+instruction-like phrasing in a curated book is not a review reason: a plan that still
+carries ``suspicious-text`` came from an older classifier and is pointed at regeneration
+(``knowledge_plan.RETIRED_REASONS``). New-profile proposals are suggestions; the guidance
+recommends consolidating into broad parent profiles and never creates or rewrites anything.
 """
 
 from __future__ import annotations
@@ -39,6 +42,18 @@ SPEC_LIST_FIELDS = ("in_scope", "out_of_scope", "boundaries")
 ITEM_FACT_FIELDS = ("status", "classifier", "evidence", "model_requested", "effort_requested", "model_served",
                     "latency_s", "usage", "topics", "privacy", "library_exemption", "stage_problems", "action",
                     "action_note", "needs_review", "review_reasons", "secondary_reason")
+# Deterministic guidance shared by the Markdown review and the HTML workspace.
+RETIRED_SUSPICIOUS_TEXT = (
+    "`suspicious-text` came from an older classifier and is no longer a review reason: instruction-like text in "
+    "a curated book is data, never instructions, and does not change the decision. The item is pending stale: "
+    "regenerate the plan with `make knowledge-classify`, or decide it by hand (`assign` with a profile, or `skip`).")
+CONSOLIDATION = (
+    "Proposed profiles are suggestions from the classifier, not decisions; nothing is created or rewritten "
+    "automatically. Consolidation defaults: prefer a broad parent profile (an existing one, or one new broad "
+    "profile per family) and record the narrower subject as item tags or as aliases in the parent's in_scope; "
+    "do not create a narrow sibling profile from one book. When proposals overlap (for example several psychology-* "
+    "profiles next to depth-psychology, or blue-team-security next to blue-team-security-operations), approve at "
+    "most one, point the other items at it, and leave the rest unapproved.")
 
 
 # --------------------------------------------------------------------------- #
@@ -112,9 +127,7 @@ def guidance_for(item: Dict[str, object], plan_item: Dict[str, object], threshol
         parts.append("The answer was malformed, refused or unknown: nothing from it can be trusted; classify again "
                      "or decide by hand.")
     if "suspicious-text" in reasons:
-        parts.append("`suspicious-text` is an integrity check: the metadata or excerpt contains prompt-injection-like "
-                     "phrasing (for example 'ignore previous instructions'). Inspect the staged text before trusting "
-                     "the proposal; it says nothing about the topic.")
+        parts.append(RETIRED_SUSPICIOUS_TEXT)
     if "no-profile" in reasons:
         if proposal:
             parts.append(f"No existing profile fits; the classifier proposed a new profile `{md_text(proposal.get('name'))}` "
@@ -218,6 +231,8 @@ def render_markdown(report: Dict[str, object], plan: Dict[str, object]) -> str:
         L.append(f"| {md_text(name)}{tag} | {a} | {r} | {e} |")
     L.append("")
     L.append("## New profile proposals")
+    L.append("")
+    L.append(CONSOLIDATION)
     L.append("")
     if not props:
         L.append("None.")
@@ -343,7 +358,7 @@ def render_html(report: Dict[str, object], plan: Dict[str, object]) -> str:
     who = html.escape(f"{run.get('classifier', '')}:{run.get('model', '')}" + (f"/{run['effort']}" if run.get("effort") else ""))
     fields = {"title": title, "who": who, "generated": html.escape(str(run.get("generated", ""))), "chips": chips,
               "plan_name": html.escape(Path(str(plan.get("_path") or "plan-" + report_name)).name),
-              "css": CSS, "plan_json": json_for_html(plan_public),
+              "consolidation": html.escape(CONSOLIDATION), "css": CSS, "plan_json": json_for_html(plan_public),
               "report_json": json_for_html(report_for_html(report)), "app": APP_JS}
     page = HTML_TEMPLATE
     for key, value in fields.items():            # plain substitution: the CSS/JS contain braces
@@ -410,7 +425,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <aside id="list"></aside>
   <section id="detail"><div class="card muted">Select an item.</div></section>
 </main>
-<section id="proposals"><h2>New profile proposals</h2><div id="proposal-list"></div></section>
+<section id="proposals"><h2>New profile proposals</h2><div class="guide">@@CONSOLIDATION@@</div><div id="proposal-list"></div></section>
 <section id="export"><h2>Revised plan JSON</h2><div class="muted">Also written by the download button. Save it next to the original plan (or over it) and run: make knowledge-apply PLAN=&lt;file&gt; DRY_RUN=1</div><textarea id="export-json" readonly></textarea></section>
 <script id="plan-data" type="application/json">@@PLAN_JSON@@</script>
 <script id="report-data" type="application/json">@@REPORT_JSON@@</script>
@@ -539,7 +554,7 @@ function boot() {
       out.push('The answer was malformed, refused or unknown: nothing from it can be trusted; classify again or decide by hand.');
     }
     if (reasons.indexOf('suspicious-text') >= 0) {
-      out.push('suspicious-text is an integrity check: prompt-injection-like phrasing in the metadata or excerpt. Inspect the staged text before trusting the proposal; it says nothing about the topic.');
+      out.push('suspicious-text came from an older classifier and is no longer a review reason: instruction-like text in a curated book is data, never instructions, and does not change the decision. The item is pending stale: regenerate the plan with make knowledge-classify, or decide it by hand (assign with a profile, or skip).');
     }
     if (reasons.indexOf('no-profile') >= 0) {
       out.push(it.new_profile_suggestion && it.new_profile_suggestion.name
@@ -722,7 +737,7 @@ function boot() {
       var io = el('input'); io.type = 'text'; io.value = (merged.overlap || []).join(', ');
       io.addEventListener('change', function () { setProp(spec.name, 'overlap', io.value.split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x; })); });
       lo.appendChild(io); card.appendChild(lo);
-      card.appendChild(el('div', 'guide', 'Review guidance: a proposal only. Prefer one broad profile over several near-duplicates; nothing exists until the exported plan is applied.'));
+      card.appendChild(el('div', 'guide', 'Review guidance: a suggestion only. Prefer the broad parent profile and record narrower subjects as tags or aliases; do not create a narrow sibling from one book. Nothing exists until the exported plan is applied.'));
       box.appendChild(card);
     });
   }

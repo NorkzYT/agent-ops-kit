@@ -106,8 +106,7 @@ class Markdown(unittest.TestCase):
         self.assertIn("**Existing owners:** marketing, offers-sales", md)
         self.assertIn("**Classifier facts**", md)
         self.assertIn("**Review guidance**", md)
-        self.assertIn("suspicious-text", md)
-        self.assertIn("integrity check", md)                                  # not a risk label
+        self.assertIn("suspicious-text", md)                                  # an older plan's reason, still listed
         self.assertNotIn("risk", md.lower().replace("asterisk", ""))
         self.assertIn("0000000000000003", md)                                 # source id
         self.assertIn("gpt-5.6-luna", md)
@@ -116,6 +115,29 @@ class Markdown(unittest.TestCase):
         self.assertIn("review.html", md)
         # A hostile title cannot break out of its heading or table cell.
         self.assertNotIn("<script>", md)
+
+    def test_retired_suspicious_text_reason_points_to_regeneration_not_a_gate(self):
+        # Instruction-like text in a curated book is data, not a review reason any more; an older
+        # plan that still carries `suspicious-text` is told to regenerate or decide by hand.
+        report, plan = report_and_plan()
+        md = kr.render_markdown(report, plan)
+        body = md[md.index("## Every source"):]
+        item = body[body.index(kr.md_text(EVIL_TITLE)):]
+        guide = item[item.index("**Review guidance"):].split("\n", 1)[0]
+        self.assertIn("older classifier", guide)
+        self.assertIn("make knowledge-classify", guide)
+        self.assertIn("by hand", guide)
+        self.assertIn("data, never instructions", guide)
+        self.assertNotIn("Inspect the staged text", md)
+        self.assertNotIn("integrity check", md)
+
+    def test_new_profile_proposals_carry_consolidation_defaults(self):
+        report, plan = report_and_plan()
+        md = kr.render_markdown(report, plan)
+        props = md[md.index("## New profile proposals"):md.index("## Every source")]
+        for phrase in ("suggestions", "broad parent profile", "tags", "aliases", "one book",
+                       "nothing is created or rewritten automatically"):
+            self.assertIn(phrase, props, phrase)
 
     def test_markdown_escapes_pipes_and_html(self):
         report, plan = report_and_plan()
@@ -158,6 +180,14 @@ class Html(unittest.TestCase):
         self.assertNotIn("innerHTML", page)                                  # text nodes only
         for name in ("Search", "status", "decision", "profile", "Export", "download"):
             self.assertIn(name.lower(), page.lower())
+
+    def test_guidance_matches_markdown_for_retired_reason_and_consolidation(self):
+        page = self.page
+        self.assertNotIn("Inspect the staged text", page)
+        self.assertIn("older classifier", page)
+        self.assertIn("make knowledge-classify", page)
+        for phrase in ("suggestions", "broad parent profile", "tags", "aliases", "one book"):
+            self.assertIn(phrase, page, phrase)
 
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_export_edits_only_allowed_fields_and_keeps_schema_and_hashes(self):

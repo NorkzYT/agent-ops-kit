@@ -297,5 +297,55 @@ class LegacyRiskLabelTest(tka.ApplyFixture):
         self.assertNotIn("high-risk", p.stdout.lower())
 
 
+
+class RetiredSuspiciousTextTest(tka.ApplyFixture):
+    """Plans written while prompt-injection-like book text was a review reason: a ``review`` item that
+    still carries ``suspicious-text`` is stale (fail closed). APPROVE_ALL / SKIP_ERRORS never decide it;
+    the operator regenerates the plan or decides it by hand, and a hand decision applies as written."""
+
+    def stale_plan(self, reasons=("suspicious-text",), **extra):
+        items = [
+            self.item("edu/Strategy Book"),
+            self.item("edu/Two Files", decision="review", status="needs-review", profile="beta",
+                      proposed_profile="beta", review_reasons=list(reasons)),
+        ]
+        return self.plan(items, [], **extra)
+
+    def test_resolve_marks_suspicious_text_review_items_stale(self):
+        for reasons in (("suspicious-text",), ("low-confidence", "suspicious-text")):
+            plan = kp.load_plan(self.stale_plan(reasons, name="st-" + str(len(reasons))))
+            for kw in ({}, {"approve_all": True}, {"skip_errors": True}, {"approve_all": True, "skip_errors": True}):
+                res = kp.resolve_plan(plan, kp.existing_profiles(self.seeds), **kw)
+                row = next(r for r in res.items if r["source"] == "edu/Two Files")
+                self.assertEqual((row["state"], row["decision"]), (kp.PENDING_STALE, "review"), (reasons, kw))
+                self.assertFalse(res.changes, (reasons, kw))
+            self.assertEqual(plan["items"][1]["review_reasons"], list(reasons), "resolve_plan rewrote the reasons")
+        self.assertEqual(kp.retired_reasons(["suspicious-text", "low-confidence", "model-risk:x"]),
+                         ["suspicious-text", "model-risk:x"])
+
+    def test_dry_run_names_the_retired_reason_and_the_two_ways_forward(self):
+        p = self.run_apply(self.stale_plan(), "--dry-run", "--approve-all")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("pending stale 1", p.stdout)
+        self.assertIn("suspicious-text", p.stdout)
+        self.assertIn("make knowledge-classify", p.stdout)
+        self.assertIn("by hand", p.stdout)
+        self.assertNotIn("edu/Two Files -> beta", p.stdout)
+        self.assert_nothing_written()
+
+    def test_apply_refuses_until_regenerated_or_decided(self):
+        p = self.run_apply(self.stale_plan(), "--approve", "--approve-all", "--skip-errors", "--no-learn")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("stale", p.stderr)
+        self.assertNotIn("Two Files", self.manifest("beta"))
+        self.assert_nothing_written()
+
+    def test_hand_decided_suspicious_text_item_applies(self):
+        items = [self.item("edu/Two Files", decision="assign", status="needs-review", profile="beta",
+                           proposed_profile="beta", review_reasons=["suspicious-text"])]
+        p = self.run_apply(self.plan(items), "--approve", "--no-learn")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("edu/Two Files", self.manifest("beta"))
+
 if __name__ == "__main__":
     unittest.main()
