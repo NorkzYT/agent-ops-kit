@@ -9,6 +9,11 @@ fail=0
 ok()  { echo "  ok   $*"; }
 bad() { echo "  FAIL $*"; fail=1; }
 
+# Drop inherited settings hermes-profile.sh reads. Run from a Hermes session,
+# an exported HERMES_HOME/HERMES_BIN would beat the temp env file and point the
+# run at the operator's real profiles.
+unset HERMES_HOME HERMES_BIN PROFILES_DIR KNOWLEDGE_SYNC_MODE $(compgen -v PROFILE_)
+
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 home="$tmp/home"; mkdir -p "$home/.local/bin"
 
