@@ -366,6 +366,31 @@ class KnowledgeLearnTest(unittest.TestCase):
         self.assertRegex(r.stdout, r"beta\s+no-knowledge")
         self.assert_books_untouched()
 
+    def test_all_skips_hermes_internal_profiles_but_explicit_name_still_works(self):
+        # A stray ``skills`` profile (Hermes' own skills dir name) with raw files
+        # is not a book-backed domain profile: --all / NAME=all must skip it.
+        (self.profiles / "skills" / "knowledge").mkdir(parents=True)
+        (self.profiles / "skills" / "knowledge" / "ref.md").write_text("# ref\n")
+        (self.profiles / "knowledge" / "knowledge").mkdir(parents=True)
+        (self.profiles / "knowledge" / "knowledge" / "ref.md").write_text("# ref\n")
+        names = kl.book_backed_profiles()
+        self.assertIn("alpha", names)
+        self.assertNotIn("skills", names)
+        self.assertNotIn("knowledge", names)
+        for argv in (["--status", "--json", "--all"], ["--status", "--json", "all"], ["--status", "--json"]):
+            out = subprocess.run([sys.executable, str(SCRIPT), *argv], capture_output=True, text=True, check=True)
+            got = [x["profile"] for x in json.loads(out.stdout)]
+            self.assertIn("alpha", got)
+            self.assertNotIn("skills", got)
+        r = subprocess.run([sys.executable, str(SCRIPT), "all", "--dry-run"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotRegex(r.stdout, r"(?m)^\s*skills\b")
+        # Named explicitly, the profile is handled like any other.
+        self.assertEqual(kl.readiness("skills")["status"], "needs-learn")
+        res, _ = self.learn("skills")
+        self.assertEqual(res["learned"], 1)
+        self.assertEqual([c["argv"][c["argv"].index("-p") + 1] for c in self.call_list()], ["skills"])
+
 
 if __name__ == "__main__":
     unittest.main()

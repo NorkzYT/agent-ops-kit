@@ -69,6 +69,10 @@ DEFAULT_MAX_ATTEMPTS = 3     # failed attempts before a unit is blocked (--retry
 WRAP_UP = 120                # --run-budget ends WRAP_UP s (or 25%) before the hard kill, so the agent saves first
 KILL_GRACE = 15
 PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+# Hermes-internal directory names that can show up as stray profiles (e.g. a
+# ``hermes -p skills`` run). Never book-backed domains, so ``--all`` skips them;
+# naming one explicitly still works.
+INTERNAL_PROFILES = frozenset({"skills", SKILL_CATEGORY})
 
 _print_lock = threading.Lock()
 _live: set = set()            # running Hermes processes (killed on Ctrl-C/SIGTERM)
@@ -104,7 +108,10 @@ def skill_name(profile: str) -> str:
 
 
 def book_backed_profiles() -> List[str]:
-    """Repo profiles with a book list, plus installed profiles with raw knowledge."""
+    """Repo profiles with a book list, plus installed profiles with raw knowledge.
+
+    Hermes-internal names (INTERNAL_PROFILES) are not domain profiles and are skipped.
+    """
     names = set()
     if SEEDS.is_dir():
         for d in SEEDS.iterdir():
@@ -113,7 +120,8 @@ def book_backed_profiles() -> List[str]:
     root = profiles_root()
     if root.is_dir():
         for d in root.iterdir():
-            if d.is_dir() and PROFILE_RE.match(d.name) and knowledge_files(d / "knowledge"):
+            if (d.is_dir() and PROFILE_RE.match(d.name) and d.name not in INTERNAL_PROFILES
+                    and knowledge_files(d / "knowledge")):
                 names.add(d.name)
     return sorted(names)
 
