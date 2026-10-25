@@ -1,0 +1,116 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/AI Security Engineering",
+      "source_id": "6543c85603dba88d",
+      "source_sha256": "6543c85603dba88dab35a2b70240070d04c5ecf20855b34ebea7e79453c321a6",
+      "tags": [
+        "ai-security",
+        "llm-security",
+        "threat-modeling",
+        "red-teaming",
+        "prompt-injection",
+        "secure-design",
+        "defense-in-depth",
+        "access-control"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Blue Team Handbook Incident Response",
+      "source_id": "4d45f6eb4e58be11",
+      "source_sha256": "4d45f6eb4e58be11aabd2563ab95e42889a59a9d77d8d1720bf7bd6074658d51",
+      "tags": [
+        "blue-team-security",
+        "incident-response",
+        "soc-operations",
+        "threat-detection",
+        "threat-hunting",
+        "edr",
+        "digital-forensics",
+        "mitre-attck"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Blue Team Handbook SOC, SIEM, and Threat Hunting (for Raymond Rhine) Early Release Raw Unedited",
+      "source_id": "8cca0fb20cb9fafb",
+      "source_sha256": "8cca0fb20cb9fafbb499cf9ec4d68ddaea9f03f19375963ac5bc4193c7c83004",
+      "tags": [
+        "blue-team-security",
+        "soc-operations",
+        "siem",
+        "threat-hunting",
+        "incident-response",
+        "security-monitoring",
+        "vulnerability-management"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Learning Cloud Security",
+      "source_id": "7e46e1d48e91af32",
+      "source_sha256": "7e46e1d48e91af32fdb3c58da8c933ce2439c73a2f823e61774ed8a2ac0bcb70",
+      "tags": [
+        "cloud-security",
+        "security-architecture",
+        "cloud-data-security",
+        "security-operations",
+        "governance-risk-compliance",
+        "ccsp"
+      ]
+    }
+  ],
+  "created_by_plan": "6d42b5dcecf56837",
+  "profile": "blue-team-security",
+  "profile_spec": {
+    "boundaries": [
+      "Focus on defense, monitoring, response, and remediation in authorized systems.",
+      "Treat all alerts and indicators as hypotheses requiring validation and evidence preservation.",
+      "Prioritize safe containment, continuity considerations, clear escalation, and documented recovery actions.",
+      "Do not provide instructions for unauthorized access or offensive activity; redirect adversarial testing to red-team.",
+      "Keep incident guidance scoped to approved organizational assets and legal reporting obligations."
+    ],
+    "in_scope": [
+      "Designing and operating security monitoring, alert triage, and SOC processes.",
+      "Incident preparation, identification, containment, eradication, recovery, and post-incident improvement.",
+      "Threat hunting, detection engineering, log analysis, endpoint and network telemetry.",
+      "Defensive use of MITRE ATT&CK, indicators of compromise, playbooks, and threat intelligence."
+    ],
+    "out_of_scope": [
+      "Authorized adversarial emulation, exploit development, and penetration-testing tradecraft belong to red-team.",
+      "General software architecture, code quality, testing, and delivery process belong to software-engineering.",
+      "Business risk prioritization and competitive planning belong to strategy."
+    ],
+    "overlap": [
+      "red-team",
+      "software-engineering",
+      "strategy",
+      "business"
+    ],
+    "parent": "none",
+    "purpose": "Defensive cybersecurity operations, including detection engineering, incident response, threat hunting, and security monitoring for authorized environments."
+  },
+  "version": 1
+}

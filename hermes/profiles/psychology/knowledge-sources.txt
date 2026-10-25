@@ -1,0 +1,9 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# Created by knowledge-apply from an approved plan; shared books live in the canonical store
+# and are referenced from knowledge/refs/ (see knowledge-assignments.json).
+edu/Man and His Symbols — Jung
+edu/Modern Man in Search of a Soul — Jung
+edu/Psychological Types — Jung
+edu/Red Book - Liber novus - by Carl Jung
+edu/The red book - Liber novus  a reader's edition
+edu/Two Essays on Analytical Psychology — Jung

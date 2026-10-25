@@ -6,3 +6,5 @@ edu/Scorecard Marketing - The four-step playbook for getting better leads and bi
 edu/$100M Leads - How to Get Strangers To Want To Buy Your Stuff
 edu/The Creative Act - A Way of Being
 edu/The Four - The Hidden DNA of Amazon, Apple, Facebook and Google
+edu/Answer Engine Optimization
+edu/Generative Engine Optimization with Python

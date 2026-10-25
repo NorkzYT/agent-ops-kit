@@ -1,0 +1,45 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/From Models to Money",
+      "source_id": "3b4b3ce14b75a2cb",
+      "source_sha256": "3b4b3ce14b75a2cb9565524a065eb022d4f14d5fe3732019fca9cd6d5e202859",
+      "tags": [
+        "ai-strategy",
+        "ai-adoption",
+        "pilot-validation",
+        "production-governance",
+        "portfolio-management",
+        "decision-analysis",
+        "organizational-change",
+        "operating-models"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Probabilistic Product (for . .)",
+      "source_id": "073cb362dfed46d8",
+      "source_sha256": "073cb362dfed46d83a6baba917b12d757bed78727aa56dfacf6a2e36e764e1cb",
+      "tags": [
+        "ai-strategy",
+        "product-strategy",
+        "competitive-positioning",
+        "business-models",
+        "ai-native-products"
+      ]
+    }
+  ],
+  "profile": "strategy",
+  "version": 1
+}

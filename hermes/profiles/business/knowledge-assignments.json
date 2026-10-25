@@ -1,0 +1,84 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T20:17:48",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "e4f3a3b2f407ae3e",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Amazon Selling Operations",
+      "source_id": "d0946a0d7eda345e",
+      "source_sha256": "d0946a0d7eda345ea3c853038445e3c3ebfbdd5802c376b80b907495ada6b7c4",
+      "tags": [
+        "amazon-fba",
+        "amazon-fbm",
+        "ecommerce-operations",
+        "inventory-control",
+        "product-sourcing",
+        "seller-account-compliance",
+        "business-recordkeeping"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Deep Work - Rules for Focused Success in a Distracted World",
+      "source_id": "73ccc6352ca8a4d6",
+      "source_sha256": "73ccc6352ca8a4d6abd4a88254378a0c9007dd354def3294484a22d5d34e067f",
+      "tags": [
+        "deep-work",
+        "productivity",
+        "focus",
+        "attention-management",
+        "work-habits",
+        "knowledge-work"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The AI-Driven, Composable Enterprise (for . .)",
+      "source_id": "0699c58fb6805a47",
+      "source_sha256": "0699c58fb6805a4716861370100228487d7754b55cb3f4225a0874372a35983d",
+      "tags": [
+        "enterprise-transformation",
+        "ai-strategy",
+        "operations",
+        "process-mining",
+        "business-automation",
+        "digital-transformation",
+        "organizational-design"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Agentic Enterprise",
+      "source_id": "061471bae30d1dca",
+      "source_sha256": "061471bae30d1dca8b43163e8d6d141112b35fac0359484c69bc282d78743caf",
+      "tags": [
+        "enterprise-ai",
+        "agentic-ai",
+        "ai-adoption",
+        "operating-models",
+        "automation",
+        "organizational-change"
+      ]
+    }
+  ],
+  "profile": "business",
+  "version": 1
+}

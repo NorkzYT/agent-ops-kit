@@ -6,3 +6,7 @@ edu/Rich Dad’s CASHFLOW Quadrant - Rich Dad’s Guide to Financial Freedom
 edu/The 4-Hour Workweek - Ferris, Timothy
 edu/The Diary of a CEO - The 33 Laws of Business and Life - Steven Bartlett
 edu/Poor Charlie's Almanack The Wit and Wisdom of Charles T. Munger, Expanded Third Edition
+edu/Deep Work - Rules for Focused Success in a Distracted World
+edu/The Agentic Enterprise
+edu/The AI-Driven, Composable Enterprise (for . .)
+edu/Amazon Selling Operations
