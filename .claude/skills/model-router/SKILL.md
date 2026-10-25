@@ -1,6 +1,6 @@
 ---
 name: model-router
-description: Complexity-based model routing for OpenClaw agents. Opus is the default; triage tasks into Simple/Medium/Complex to downshift simple work to Sonnet and to pick the right process weight.
+description: Complexity-based model routing for coding agents. Opus is the default; triage tasks into Simple/Medium/Complex to downshift simple work to Sonnet and to pick the right process weight.
 ---
 
 # Model Router — Complexity-Based Routing
@@ -49,7 +49,7 @@ Run the full autopilot pipeline for higher assurance. If the session is currentl
 - High regression risk (core business logic, auth, data layer)
 - Benefits from specialist review (security, performance, type system)
 
-**How to escalate from a smaller model in OpenClaw:**
+**How to escalate from a smaller model:**
 
 ```
 Use the autopilot-opus subagent (Task tool with subagent_type=autopilot-opus) for this task: <description>

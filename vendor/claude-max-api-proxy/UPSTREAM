@@ -1,0 +1,11 @@
+# Vendored copy of claude-max-api-proxy (MIT, see LICENSE). This tree is
+# committed to agent-ops-kit so the proxy keeps building even if upstream
+# disappears. Managed by scripts/claude-max-proxy/sync-upstream.sh
+# (make claude-proxy-update); do not edit by hand.
+url=https://github.com/mattschwen/claude-max-api-proxy.git
+ref=main
+commit=0cb11aeaf171bc7d33ed6ac55ef773c2e063fbba
+commit_date=2026-07-31T15:37:58-06:00
+commit_subject=docs: colorize README signal matrix
+synced=2026-09-13T02:39:21Z
+excluded=.git .github

@@ -1,0 +1,122 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Daybreak — Nietzsche",
+      "source_id": "8b8c63360cce6839",
+      "source_sha256": "8b8c63360cce6839ab1fa0616d664b1cbd65389ca401d7ca952955e1a9c6ddff",
+      "tags": [
+        "ethics",
+        "moral-philosophy",
+        "continental-philosophy",
+        "nietzsche",
+        "kant",
+        "moral-psychology"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Florentine Histories — Machiavelli",
+      "source_id": "a9db0b6342cb8f8a",
+      "source_sha256": "a9db0b6342cb8f8ad7b0605aa89a8b395a2eed3117cac56eced61cc487c50bfc",
+      "tags": [
+        "machiavelli",
+        "political-philosophy",
+        "history",
+        "statecraft",
+        "civic-republicanism",
+        "power-dynamics",
+        "renaissance"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Human, All Too Human — Nietzsche",
+      "source_id": "07f9839d00659085",
+      "source_sha256": "07f9839d006590855e4558db4f85b9d1cc1778f9086009285b4eb8680b6567b8",
+      "tags": [
+        "nietzsche",
+        "continental-philosophy",
+        "ethics",
+        "moral-psychology",
+        "religion",
+        "culture",
+        "aphorisms"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/On the Genealogy of Morals and Ecce Homo — Nietzsche",
+      "source_id": "11ad0878317951da",
+      "source_sha256": "11ad0878317951da34cca9e9f667518a1d4e68be2dfb6de828f37a8f05a4d44c",
+      "tags": [
+        "ethics",
+        "continental-philosophy",
+        "nietzsche",
+        "moral-psychology",
+        "existentialism",
+        "self-mastery"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Gay Science — Nietzsche",
+      "source_id": "cc8bada5b83c478d",
+      "source_sha256": "cc8bada5b83c478d79aa6cb3a010c7afe3f3a5eff45a98fa64eb9668e0a30851",
+      "tags": [
+        "nietzsche",
+        "continental-philosophy",
+        "existentialism",
+        "nihilism",
+        "ethics",
+        "philosophy-of-life"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Portable Nietzsche",
+      "source_id": "9bf7b06ae64bd047",
+      "source_sha256": "9bf7b06ae64bd047b2d06dc75b9a53cb1df5e5622f2e29a57baccee92663c518",
+      "tags": [
+        "nietzsche",
+        "continental-philosophy",
+        "ethics",
+        "epistemology",
+        "aphorisms",
+        "cultural-criticism"
+      ]
+    }
+  ],
+  "profile": "philosophy",
+  "version": 1
+}

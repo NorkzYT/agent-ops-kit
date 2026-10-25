@@ -1,15 +1,15 @@
 ---
 name: session-hygiene
-description: Context rot prevention for OpenClaw agents. Track turn count, write progress checkpoints, suggest session splits before quality degrades.
+description: Context rot prevention for coding agents. Track turn count, write progress checkpoints, suggest session splits before quality degrades.
 ---
 
 # Session Hygiene — Context Rot Prevention
 
-Use this skill passively throughout every session. It prevents the quality degradation that occurs after ~30 coding turns in a single OpenClaw session.
+Use this skill passively throughout every session. It prevents the quality degradation that occurs after ~30 coding turns in a single agent session.
 
 ## Why Sessions Degrade
 
-Even with OpenClaw's `safeguard` compaction mode:
+Even with automatic context compaction:
 
 - Summarization loses nuance at high turn counts
 - Tool call results accumulate and dilute key context

@@ -1,0 +1,74 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/AI-Assisted Statistics for Data Scientists 50+ Essential Concepts Using R and Python",
+      "source_id": "290a678d936b1b7f",
+      "source_sha256": "290a678d936b1b7f1ea95247d929f7ed7a1cf248816b68d10bab44692428ac32",
+      "tags": [
+        "data-science",
+        "applied-statistics",
+        "exploratory-data-analysis",
+        "r",
+        "python",
+        "data-frames",
+        "machine-learning-foundations"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Simulation Models for Data Science (for Raymond Rhine)",
+      "source_id": "984d4576e3f92f06",
+      "source_sha256": "984d4576e3f92f06c2e5e36a488a72b66cc78f5fd196d1046b8539d0b1a5b927",
+      "tags": [
+        "simulation",
+        "data-science",
+        "system-dynamics",
+        "modeling",
+        "ai-assisted-development",
+        "mathematical-modeling"
+      ]
+    }
+  ],
+  "created_by_plan": "6d42b5dcecf56837",
+  "profile": "data-science",
+  "profile_spec": {
+    "boundaries": [
+      "Focus on sound analytical methods, assumptions, uncertainty, reproducibility, and clear interpretation.",
+      "Distinguish correlation from causation and identify limits of observational data.",
+      "Do not present model outputs as guaranteed predictions or decisions without validation.",
+      "Encourage privacy-aware, lawful, and bias-conscious handling of data.",
+      "Separate prototype analysis from production engineering concerns owned by software-engineering."
+    ],
+    "in_scope": [
+      "Statistical inference, probability, estimation, and hypothesis testing.",
+      "Exploratory data analysis, data cleaning, visualization, and feature preparation.",
+      "Machine learning concepts, model evaluation, and predictive analytics.",
+      "Analytical workflows in R, Python, SQL, notebooks, and tabular data tools."
+    ],
+    "out_of_scope": [
+      "Software architecture, code review, production reliability, and service design belong to software-engineering.",
+      "Business strategy, competitive positioning, and pricing decisions belong to strategy.",
+      "Operational finance, market analysis, and business planning belong to business.",
+      "Marketing channel strategy and funnel operations belong to marketing."
+    ],
+    "overlap": [
+      "software-engineering",
+      "business",
+      "strategy"
+    ],
+    "parent": "software-engineering",
+    "purpose": "Own applied statistics, data analysis, experimentation, machine learning foundations, and data workflows using analytical programming tools."
+  },
+  "version": 1
+}

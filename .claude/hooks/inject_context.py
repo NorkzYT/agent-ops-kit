@@ -68,29 +68,25 @@ CONTEXT_TRIGGERS = {
 
     # Browser and automation prompts
     "scrape": [
-        "For scraping tasks, read `.claude/skills/openclaw-browser/LOGIN_PATTERNS.md`.",
-        "Read `.claude/skills/openclaw-browser/DOWNLOAD_PATTERNS.md` for HAR capture.",
-        "Follow browser automation rules in `.claude/templates/AGENTS.md`.",
+        "For scraping tasks, read `.claude/skills/browser-automation/SKILL.md`.",
+        "Browser work runs through Hermes browser tools; follow the login and read-only rules there.",
     ],
     "browser": [
-        "For browser tasks, read `.claude/skills/openclaw-browser/LOGIN_PATTERNS.md`.",
-        "Follow browser automation rules in `.claude/templates/AGENTS.md`.",
+        "For browser tasks, read `.claude/skills/browser-automation/SKILL.md`.",
     ],
     "verify": [
-        "For data verification, follow the pattern in `.claude/templates/AGENTS.md` (Data Verification Pattern).",
-        "Read `.claude/skills/openclaw-browser/LOGIN_PATTERNS.md` for authentication.",
+        "For data verification, compare stored data against the live page with the browser tools; read `.claude/skills/browser-automation/SKILL.md`.",
     ],
     "har": [
-        "For HAR capture, read `.claude/skills/openclaw-browser/DOWNLOAD_PATTERNS.md`.",
+        "For API discovery, capture network traffic with the browser tools and document endpoints in context.md (see hermes/skills/autonomous-engineering).",
     ],
     "autonomous": [
-        "Autonomous mode docs: `.claude/templates/AGENTS.md` (Autonomous Task Execution).",
+        "Autonomous mode docs: `hermes/skills/autonomous-engineering/SKILL.md`.",
         "Report results via Discord. Persist session state to context files.",
         "Git policy: feature branches only. NEVER include Co-Authored-By lines -- commits must appear as the user's own.",
     ],
     "extension": [
-        "For extension testing, read `.claude/skills/openclaw-browser/EXTENSION_TESTING.md`.",
-        "Extensions require headed mode (not headless).",
+        "For extension testing, run a headed browser session (browser.headed: true in Hermes) and load the unpacked extension.",
     ],
 }
 

@@ -1,0 +1,71 @@
+{
+  "name": "claude-max-api-proxy",
+  "version": "1.5.0",
+  "description": "Local OpenAI-compatible gateway for Claude Code CLI, Gemini CLI, and explicit external providers.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "claude-max-api": "dist/server/standalone.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "ci": "npm run build && npm test",
+    "dev": "tsc --watch",
+    "start": "node dist/server/standalone.js",
+    "test": "find dist -name '*.test.js' -print0 | xargs -0 node --test",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "claude",
+    "anthropic",
+    "claude-code",
+    "claude-max",
+    "openai-compatible",
+    "gemini",
+    "multi-provider",
+    "api-server",
+    "oauth",
+    "clawdbot",
+    "llm",
+    "ai"
+  ],
+  "author": "Matt Schwen",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mattschwen/claude-max-api-proxy.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mattschwen/claude-max-api-proxy/issues"
+  },
+  "homepage": "https://github.com/mattschwen/claude-max-api-proxy#readme",
+  "dependencies": {
+    "express": "^5.2.1",
+    "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^26.1.2",
+    "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "clawdbot": ">=2026.1.0"
+  },
+  "peerDependenciesMeta": {
+    "clawdbot": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "assets",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ]
+}

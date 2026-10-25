@@ -1,0 +1,10 @@
+# Library paths (relative to BOOKS_ROOT, default /mnt/books) whose content is
+# private: `make knowledge-classify` never sends their text, file names or
+# metadata to a cloud model. They are classified by the local (loopback Ollama)
+# model when one is configured, otherwise skipped and marked needs_review.
+# Other library books go to CLIProxyAPI even when their text looks private
+# (book-library exemption, docs/knowledge-classify.md); list a book here to
+# keep it local.
+# A folder line covers everything below it. Example:
+# personal
+# edu/My Journal 2024

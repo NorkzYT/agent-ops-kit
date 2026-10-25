@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# commit-msg-no-coauthors (managed by add_openclaw_agent.sh)
+# commit-msg-no-coauthors (agent-ops-kit; install with: cp .claude/templates/git-hooks/commit-msg-no-coauthors.sh .git/hooks/commit-msg)
 set -euo pipefail
 
 # Blocks AI co-author trailers to keep commits authored solely by the user.

@@ -45,7 +45,7 @@ Fix -> Build -> Test -> Confirm -> Deploy -> Verify CI -> Next Issue
 
 | Agent | Lifecycle Role |
 |-------|----------------|
-| `autopilot` | Runs full lifecycle (step 6: build/test/confirm via openclaw-local-workflow.sh) |
+| `autopilot` | Runs full lifecycle (step 6: build/test/confirm via local-workflow.sh) |
 | `autopilot` | Deploys on feature branch (step 8b: commit/push/CI monitor) |
 | `closer` | Verifies lifecycle passed (step 3b: reads workflow-report.local.json) |
 
@@ -53,7 +53,7 @@ Fix -> Build -> Test -> Confirm -> Deploy -> Verify CI -> Next Issue
 
 | Script | Purpose |
 |--------|---------|
-| `.claude/scripts/openclaw-local-workflow.sh` | Runs build -> run -> test -> confirm from TOOLS.md |
+| `.claude/scripts/local-workflow.sh` | Runs build -> run -> test -> confirm from TOOLS.md |
 | `.claude/bootstrap/analyze_repo.sh` | Auto-detects BUILD/TEST/RUN/CONFIRM commands -> TOOLS.md |
 
 ### Issue Lifecycle Skill
@@ -146,27 +146,12 @@ After frontmatter, include:
 
 To check installed agents: `ls .claude/agents/`
 
-## Ralph Loop Integration
+## Execution via Hermes Delegation
 
-Agents can run inside Ralph loops for guaranteed task completion.
+Complex work is delegated to specialist profiles and tracked on the shared Kanban board rather than run inline:
 
-### Recommended Execution
-
-Use `/ship` for fire-and-forget execution:
 ```
-/ship "Build a REST API with tests"
+hermes kanban create "Build a REST API with tests" --assignee coder
 ```
 
-### How It Works
-
-1. `/ship` creates a Ralph loop with `TASK_COMPLETE` promise
-2. Autopilot executes the full pipeline (including lifecycle verification)
-3. Closer verifies DoD + lifecycle and outputs `<promise>TASK_COMPLETE</promise>` when done
-4. Loop continues if promise not output
-
-### Agent Responsibilities in Ralph Loops
-
-- **autopilot**: Check `.claude/ralph-loop.local.md` at start; run full lifecycle; aware of iteration count
-- **closer**: Final gate; verifies lifecycle passed; outputs completion promise when DoD met
-
-See `.claude/hooks/CLAUDE.md` for full Ralph loop documentation.
+The assigned profile (e.g. `coder`) runs the full pipeline — plan → implement → verify → commit → report — with the `closer` agent as the final completion gate. The `delegate_task` tool hands a scoped unit of work to a specialist profile and returns its result. See `docs/hermes.md` for the Hermes stack.

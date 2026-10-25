@@ -1,6 +1,0 @@
-{
-  "name": "workflow-enforcer-example",
-  "version": "0.1.0",
-  "description": "Example OpenClaw plugin skeleton for local workflow report checks",
-  "main": "./index.ts"
-}

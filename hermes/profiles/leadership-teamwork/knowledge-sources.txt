@@ -1,0 +1,16 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Extreme Ownership - How U.S. Navy SEALs Lead and Win
+edu/Teamwork 101 - What Every Leader Needs to Know
+edu/The Five Dysfunctions of a Team - A Leadership Fable
+edu/Collaborative Intelligence - Thinking with People Who Think Differently
+edu/Crucial Conversations Tools for Talking When Stakes Are High, Second Edition
+edu/No rules rules - Netflix and the culture of reinvention
+edu/Hidden Potential - The Science of Achieving Greater Things
+edu/Working Hard, Hardly Working - How to achieve more, stress less and feel fulfilled THE #1 SUNDAY TIMES BESTSELLER
+edu/The Culture Code - The Secrets of Highly Successful Groups
+edu/The Human Side of Enterprise
+edu/Articulating Design Decisions (for . .)
+edu/Drive - the surprising truth about what motivates us
+edu/The Operator’s Manual for Engineering Leadership (for . .)

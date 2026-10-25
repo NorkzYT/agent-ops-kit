@@ -1,0 +1,51 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
+# Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
+edu/Software Engineering at Google Lessons - Learned from Programming Over Time
+edu/The Tao of Microservices
+edu/The Great Mental Models, Volume 3 Systems and Mathematics-
+edu/Advanced SQL
+edu/Agentic Reliability Engineering (for Raymond Rhine)
+edu/Agent Memory - Building Stateful AI Agents That Remember, Adapt, and Work Across Time
+edu/AI-Driven API Design (for . .)
+edu/AI-Native Software Engineering
+edu/AI-Ready Data Blueprints. From Raw Data to AI-Driven Innovation
+edu/A Philosophy of Software Design, 2nd Edition
+edu/Building the Next Generation of AI Infrastructure (for . .)
+edu/Certified Kubernetes Administrator (CKA) Study Guide (for . .)
+edu/Claude Code Up and Running (for jac monn)
+edu/Clean Code Cookbook
+edu/CompTIA Linux+ Study Guide
+edu/Designing Data-Intensive Applications
+edu/Designing for AI (for Duc Ka)
+edu/Domain-Driven Design Quickly [a summary of Eric Evans' Domain-Driven Design]
+edu/Full Stack Testing
+edu/Generative AI on Kubernetes (for . .)
+edu/Hands-On RAG for Production
+edu/Hands-on Small Language Models
+edu/Harness Engineering for AI Agents
+edu/Laws of Software Engineering
+edu/Learning Microsoft Azure (for Raymond Rhine)
+edu/Learning n8n (for Raymond Rhine)
+edu/Learning Serverless Security (for . .)
+edu/Multimodal, Real-Time AI Agent Systems
+edu/Observability Engineering
+edu/Redefining Data Engineering with AI (for Duc Ka)
+edu/Refactoring Improving the Design of Existing Code (Addison-Wesley Signature Series (Fowler))
+edu/Regenerative Software (for Raymond Rhine)
+edu/Rust for Machine Learning Learn AI Fundamentals and Build a Neural Network from Scratch (early release)
+edu/Scalable AI Systems
+edu/Skills for AI Agents (for memsa memsa)
+edu/The Art of Unit Testing, Third Edition - With Examples in JavaScript
+edu/The C4 Model - Visualizing Software Architecture
+edu/The Context Engineering Handbook
+edu/The Effective Software Engineer (for Raymond Rhine)
+edu/The Effective Software Engineer How ICs at Every Level Can Leverage AI, Prioritize High-Value Work, and Lead Beyond Their Role
+edu/The Homelab Handbook (for Raymond Rhine)
+edu/The Pragmatic Programmer From Journeyman to Master
+edu/The Software Engineer Guidebook Navigating senior, tech lead, and staff engineer positions at tech companies and startups
+edu/Tidy Together (for Raymond Rhine)
+edu/Understanding Distributed Systems
+edu/Video Generation with AI
+edu/Vision Language Models
+edu/Web Performance Engineering in the Age of AI Mastering Speed and Quality for AI-Generated Applications

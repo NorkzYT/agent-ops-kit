@@ -1,6 +1,6 @@
 ---
 name: autopilot-workflow
-description: Universal task execution pipeline for OpenClaw agents. Mandatory for all coding tasks from any channel or cron. Ensures triage, planning, verification, testing, and reporting.
+description: Universal task execution pipeline for coding agents. Mandatory for all coding tasks from any channel or cron. Ensures triage, planning, verification, testing, and reporting.
 ---
 
 # Autopilot Workflow — Universal Task Execution Pipeline

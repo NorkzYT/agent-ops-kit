@@ -1,0 +1,55 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Code Breaker - Jennifer Doudna, Gene Editing, and the Future of the Human Race",
+      "source_id": "524d49e54bfa7fd1",
+      "source_sha256": "524d49e54bfa7fd1cd66b71a71dba90956950a5dc3e54ca5f7a399005d81c739",
+      "tags": [
+        "genomics",
+        "crispr",
+        "gene-editing",
+        "molecular-biology",
+        "biotechnology",
+        "science-biography",
+        "bioethics"
+      ]
+    }
+  ],
+  "created_by_plan": "6d42b5dcecf56837",
+  "profile": "life-sciences",
+  "profile_spec": {
+    "boundaries": [
+      "Distinguish established evidence from preliminary findings and speculation.",
+      "Present gene-editing and biotechnology topics with appropriate ethical, safety, and regulatory context.",
+      "Do not substitute general scientific information for individualized medical diagnosis or treatment.",
+      "Keep scientific claims traceable to credible evidence and communicate uncertainty clearly."
+    ],
+    "in_scope": [
+      "Genetics, genomics, gene editing, and molecular biology.",
+      "Biotechnology research, companies, scientific discovery, and laboratory methods at a conceptual level.",
+      "Biological systems including cells, microbes, evolution, ecology, and neuroscience.",
+      "Ethical and societal questions arising from biotechnology and life-science research."
+    ],
+    "out_of_scope": [
+      "Personal training, nutrition, sleep, recovery, and body-composition guidance belong to health-fitness.",
+      "Traditional plant identification, herbal preparations, and traditional medicinal uses belong to herbalism.",
+      "Business operations, finance, and market analysis belong to business.",
+      "Company competition, pricing, and business-model choices belong to strategy."
+    ],
+    "overlap": [
+      "health-fitness",
+      "herbalism",
+      "business",
+      "strategy"
+    ],
+    "parent": "none",
+    "purpose": "Covers biology, medicine-adjacent life science, biotechnology, genetics, and evidence-based interpretation of living systems."
+  },
+  "version": 1
+}

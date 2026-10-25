@@ -1,0 +1,28 @@
+{
+  "campaign": "<slug>",
+  "assets": [
+    {
+      "id": "img_hero",
+      "type": "image",
+      "path": "public/<slug>/hero.png",
+      "source": "user-supplied screenshot",
+      "license": "original",
+      "commercialUse": true,
+      "rightsHolder": "campaign owner",
+      "acquiredFrom": "provided by user on <date>",
+      "notes": "Product screenshot owned by the campaign owner."
+    },
+    {
+      "id": "aud_bed",
+      "type": "audio",
+      "path": "public/<slug>/bed.wav",
+      "source": "generated",
+      "generator": "scripts/generate-tone.mjs",
+      "license": "generated-original",
+      "commercialUse": true,
+      "rightsHolder": "campaign owner",
+      "acquiredFrom": "generated locally",
+      "notes": "Original synthesised tone. No third-party samples."
+    }
+  ]
+}

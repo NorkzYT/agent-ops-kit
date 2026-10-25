@@ -4,9 +4,8 @@ Fill in the 4 sections. Then paste the block below into Claude Code.
 
 (Replace <...> placeholders with real text; remove unused sections.)
 
-> **Ralph loops are automatically enabled.** When you use the autopilot subagent,
-> it will iterate automatically until the Definition of Done is fully met.
-> The task completes when autopilot outputs `<promise>TASK_COMPLETE</promise>`.
+> When you use the autopilot subagent, it runs the full pipeline (plan → implement →
+> verify → review → close) and works until the Definition of Done is met.
 
 ```text
 Use the autopilot subagent.
@@ -72,14 +71,16 @@ When in doubt, put more into **DETAILS**. Autopilot is strongest when it has the
 
 ---
 
-## How automatic completion works
+## How the pipeline works
 
 1. **You paste** the task template with `Use the autopilot subagent.`
-2. **Autopilot starts** and automatically creates a Ralph loop (if not already active)
-3. **Work proceeds** through the pipeline: plan -> implement -> verify -> review
-4. **Iteration continues** automatically if verification fails or DoD is not met
-5. **Task completes** when closer confirms DoD and outputs `<promise>TASK_COMPLETE</promise>`
+2. **Autopilot triages** the task and routes it to the right process tier.
+3. **Work proceeds** through the pipeline: plan -> implement -> verify -> review.
+4. **Autopilot keeps working** if verification fails or the DoD is not yet met.
+5. **Task completes** when the DoD is satisfied — for complex work the `closer` confirms it and produces the PR-ready summary.
 
-Default settings: 30 max iterations, TASK_COMPLETE promise.
+For larger, long-running efforts, delegate to a specialist profile and track it on the shared Kanban board:
 
-To manually control iterations, use `/ralph-loop` or `/ship` commands instead.
+```
+hermes kanban create "<task>" --assignee coder
+```

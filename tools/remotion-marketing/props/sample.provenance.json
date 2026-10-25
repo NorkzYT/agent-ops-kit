@@ -1,0 +1,17 @@
+{
+  "campaign": "sample-demo",
+  "assets": [
+    {
+      "id": "aud_tone",
+      "type": "audio",
+      "path": "public/audio/sample-tone.wav",
+      "source": "generated",
+      "generator": "ffmpeg lavfi sine synthesis via scripts/generate-tone.mjs",
+      "license": "generated-original",
+      "commercialUse": true,
+      "rightsHolder": "campaign owner",
+      "acquiredFrom": "generated locally",
+      "notes": "Original sine-pad tone. No third-party samples, melodies or recordings are used."
+    }
+  ]
+}

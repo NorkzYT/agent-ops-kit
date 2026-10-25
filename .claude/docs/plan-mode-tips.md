@@ -71,4 +71,3 @@ User: [Selects "Yes, clear context and bypass permissions"]
 ## Related
 
 - See `.claude/docs/session-state.md` for the three-file pattern
-- See `.claude/docs/ralph-pattern.md` for multi-session workflows

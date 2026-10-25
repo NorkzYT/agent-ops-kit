@@ -10,6 +10,15 @@
 4. **Always verify:** Run repo checks (tests/lint/build) or provide explicit manual steps.
 5. **No network or destructive commands** unless explicitly approved by the user.
 
+## Quality Principles to Apply
+
+• Modularity  
+• Abstraction & Encapsulation  
+• Separation of Concerns  
+• SOLID (Single-responsibility, Open/Closed, Liskov, Interface-segregation, Dependency-inversion)  
+• DRY (Don’t Repeat Yourself)  
+• KISS (Keep It Simple, Stupid)
+
 ## Model Calibration (Claude 4.6+)
 
 Current models follow instructions literally, so calm, plain wording works best — `ALL-CAPS`, "CRITICAL", and "YOU MUST" now *overtrigger* (overthinking, over-caution, over-delegation). When writing prompts or acting:
@@ -35,10 +44,8 @@ Instead of embedding full docs, load on-demand:
 | Hook documentation | Read `.claude/hooks/CLAUDE.md` |
 | Session state | Read `.claude/docs/session-state.md` |
 | Sentinel zones | Read `.claude/docs/sentinel-zones.md` |
-| OpenClaw integration | Read `.claude/docs/openclaw-integration.md` |
-| Browser login patterns | Read `.claude/skills/openclaw-browser/LOGIN_PATTERNS.md` |
-| Extension testing | Read `.claude/skills/openclaw-browser/EXTENSION_TESTING.md` |
-| Ralph pattern | Read `.claude/docs/ralph-pattern.md` |
+| Browser verification | Read `.claude/skills/browser-automation/SKILL.md` |
+| Hermes stack (Discord, Honcho, proxies) | Read `docs/hermes.md` |
 
 ## Hierarchical Context Architecture
 
@@ -61,42 +68,15 @@ Instead of embedding full docs, load on-demand:
         └── tasks.md       # Granular checklist
 ```
 
-## High-Success Execution (Ralph Loops)
+## Execution Model (Hermes Delegation + Kanban)
 
-For guaranteed task completion, use **Ralph loops** as the default execution mode.
-
-### Multi-Session Ralph (Primary — no context rot)
-
-Fresh `claude -p` session per iteration. Each reads a PRD + progress file, does ONE task, commits, exits.
-
-**Recommended**: Use `/ship` for fire-and-forget execution:
-```
-/ship "Build a REST API with tests"
-```
-
-Or explicitly control iterations:
-```
-/afk-ralph 20 "Build REST API with auth"
-/ralph-once                  # Single iteration, human review
-/ralph-status                # Check progress
-/cancel-ralph                # Stop loop
-```
-
-### Session Ralph (Secondary — quick in-session iteration)
-
-Hook-based loop in the same session. Useful for quick 1-2 iteration fixes.
+Complex work is delegated to specialist profiles rather than run inline. Create a task on the shared Kanban board and assign it to the profile that fits:
 
 ```
-/ralph-loop 10 TESTS_PASS "Make all tests pass"
+hermes kanban create "Build a REST API with tests" --assignee coder
 ```
 
-### Completion Promise Protocol
-
-- Multi-Session: `<promise>COMPLETE</promise>` in stdout exits the loop
-- Session: `<promise>TASK_COMPLETE</promise>` fulfills the hook
-- The closer agent is the final gate for Session Ralph
-
-See `.claude/docs/ralph-pattern.md` for the full reference (decision matrix, PRD writing guide, troubleshooting).
+The `coder` profile picks up the task and runs the full pipeline: plan → implement → verify → commit → report. For finer control, the `delegate_task` tool hands a scoped unit of work to a specialist profile and returns its result. The `closer` agent is the final gate for completion.
 
 ## Default Agents
 
@@ -150,10 +130,10 @@ For code handling input/auth/data:
 - Spawn `threat-modeling-expert` for architecture-level concerns
 - Check `.claude/hooks/guard_bash.py` for blocked patterns
 
-## Timed Follow-Up Promises (OpenClaw / Discord)
+## Timed Follow-Up Promises (Discord)
 
 - Do not promise delayed follow-ups in natural language unless a real scheduler job is created.
-- In OpenClaw Discord/chat flows, use `/recheckin <delay> <task>` before saying "I'll check back in X".
+- In Discord flows Hermes owns the scheduler: create the job with `hermes cron create` before saying "I'll check back in X".
 - The same reply must include the cron job ID (or explicitly state the CLI did not return one).
 - If scheduling fails, do not promise a delayed callback. Ask the user to ping again or continue monitoring now.
 

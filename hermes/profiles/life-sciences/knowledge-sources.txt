@@ -1,0 +1,4 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# Created by knowledge-apply from an approved plan; shared books live in the canonical store
+# and are referenced from knowledge/refs/ (see knowledge-assignments.json).
+edu/The Code Breaker - Jennifer Doudna, Gene Editing, and the Future of the Human Race

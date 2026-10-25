@@ -1,0 +1,65 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Articulating Design Decisions (for . .)",
+      "source_id": "d9117e5466527cf8",
+      "source_sha256": "d9117e5466527cf85346d21e7a69438962cb2294c8af75aba9bc17c44d6dc493",
+      "tags": [
+        "design-leadership",
+        "stakeholder-management",
+        "cross-functional-teams",
+        "feedback",
+        "decision-communication",
+        "product-collaboration"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Drive - the surprising truth about what motivates us",
+      "source_id": "c9df2b8379842fe4",
+      "source_sha256": "c9df2b8379842fe4a96baf432c7a04e5ef2286f9f82b2ac68db6b027d9de342d",
+      "tags": [
+        "employee-motivation",
+        "organizational-culture",
+        "management",
+        "team-engagement",
+        "intrinsic-motivation",
+        "incentive-design"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Operator’s Manual for Engineering Leadership (for . .)",
+      "source_id": "93540d3fcb255547",
+      "source_sha256": "93540d3fcb2555474f28afc7c7fde3bf3892e0dfc01d9b8224a1ae29f06e7799",
+      "tags": [
+        "engineering-leadership",
+        "team-design",
+        "delegation",
+        "distributed-leadership",
+        "decision-making",
+        "organizational-design",
+        "engineering-culture",
+        "operating-models"
+      ]
+    }
+  ],
+  "profile": "leadership-teamwork",
+  "version": 1
+}

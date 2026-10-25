@@ -1,0 +1,87 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Carnegie, Dale - How To Win Friends and Influence People",
+      "source_id": "1154387c1bf3ade9",
+      "source_sha256": "1154387c1bf3ade9066c9b1b9e50234a1eb4694645aff3452a5de99b33dbfd30",
+      "tags": [
+        "communication",
+        "persuasion",
+        "influence",
+        "human-relations",
+        "conflict-management",
+        "relationship-building",
+        "public-speaking"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Dark Psychology and Manipulation_ 3 in 1_ Improve your life by Speed Reading People and Analyze Body Language, Influence Human Behavior Through Nlp, Mind Control Methods and Dark Psychology Secrets",
+      "source_id": "546e97d45d18c5d7",
+      "source_sha256": "546e97d45d18c5d73b16eb30edff9ed5815062198d26a0ee13929e35a250e0df",
+      "tags": [
+        "body-language",
+        "behavior-profiling",
+        "persuasion",
+        "influence",
+        "manipulation-awareness",
+        "interpersonal-communication"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Behavior Operations Manual - Neuro-Cognitive Intelligence - Chase Hughes",
+      "source_id": "aae7fb8c0e3f15e1",
+      "source_sha256": "aae7fb8c0e3f15e188245c1d6e29c9aa4f384e62ca60ab6934bf709552853985",
+      "tags": [
+        "behavior-profiling",
+        "cognitive-biases",
+        "rapport-building",
+        "elicitation",
+        "interviewing",
+        "communication-tactics",
+        "cognitive-load",
+        "social-psychology"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The ellipsis manual - analysis and engineering of human behavior - Chase Hughes",
+      "source_id": "aa8aa5e8310083ae",
+      "source_sha256": "aa8aa5e8310083aee2209d104c7b99178847b1f16f68589dff0af1ea72bf416e",
+      "tags": [
+        "behavioral-profiling",
+        "deception-detection",
+        "body-language",
+        "nonverbal-cues",
+        "interviewing",
+        "interrogation",
+        "human-behavior-analysis",
+        "chase-hughes"
+      ]
+    }
+  ],
+  "profile": "negotiation-communication",
+  "version": 1
+}
