@@ -306,8 +306,8 @@ def profiles_root(home: Path) -> Path:
 
 def readiness(home: Path, allow: List[str]) -> List[Tuple[str, Any]]:
     sp = specialists_module()
-    names = allow or [s.name for s in sp.REGISTRY]
     root = profiles_root(home)
+    names = allow or [*(s.name for s in sp.REGISTRY), *sp.dynamic_specialists(root)]
     return [(n, sp.knowledge_readiness(n, root)) for n in names]
 
 

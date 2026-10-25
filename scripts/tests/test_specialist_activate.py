@@ -273,6 +273,19 @@ class ActivateTest(unittest.TestCase):
         self.assertIn("ready 1", r.stdout)
         self.assertIs(self.settings()["specialist_require_ready"], True)
 
+    def test_readiness_includes_installed_dynamic_profiles(self):
+        self.gateway()
+        self.ready_profile("psychology")
+        (self.home / "profiles" / "psychology" / "SOUL.md").write_text("Purpose: minds and behavior\n")
+        r = self.run_cmd("status")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"ready\s+psychology")
+        self.settings_store({"privacy_routing": True, "specialist_profiles": ["strategy"]})
+        r = self.run_cmd("status")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("psychology", r.stdout)
+        self.assertEqual(self.writes(), [])
+
     def test_read_back_mismatch_fails(self):
         # A hermes that accepts the write but stores something else.
         stub = self.bin / "hermes"
