@@ -16,7 +16,8 @@ as its instructions, creates a `knowledge/` folder, and writes its `.env`.
 Talk to it with `marketing chat` or `hermes -p marketing chat`.
 
 Shipped profiles: `coder`, `marketing`, `strategy`, `security`, `research`,
-`windows-operator`. Start a new one by copying `hermes/profiles/_template`.
+`windows-operator`, and the workflow lanes `mac-worker`, `windows-worker` and
+`reviewer` (see [discord-kanban-workflow.md](discord-kanban-workflow.md)). Start a new one by copying `hermes/profiles/_template`.
 
 ## Give it knowledge from books
 
@@ -69,6 +70,12 @@ hermes kanban create "Positioning and messaging matrix"    --assignee marketing 
 hermes kanban create "Review pricing and positioning"      --assignee strategy  --parent t_yyy
 hermes kanban watch
 ```
+
+Engineering work for the Mac or Windows worker follows one standard graph: the
+coordinator writes and pushes an exact SHA, the workers test it and return
+evidence, failures loop back as fix rounds, then review, report card and Discord
+report; see
+[discord-kanban-workflow.md](discord-kanban-workflow.md).
 
 Recipes with role prompts kept from the earlier CrewAI crews are in
 `hermes/teams/`: `coding-team.md` (plan, implement, review) and

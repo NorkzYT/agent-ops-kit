@@ -121,11 +121,41 @@ aux_fallback_chain() {
   printf '[{provider: custom, model: "%s", base_url: "%s"}]' "$AUX_FALLBACK_MODEL" "$AUX_BASE_URL"
 }
 AUX_FALLBACK_CHAIN="$(aux_fallback_chain)"; export AUX_FALLBACK_CHAIN
+# Compression route. AUX_COMPRESSION_ROUTE=cliproxy (default): CLIProxyAPI,
+# AUX_COMPRESSION_MODEL (gpt-5.6-terra) then AUX_COMPRESSION_FALLBACK_MODEL
+# (gpt-5.6-luna, `none` = no fallback) on the same proxy. The key stays in .env
+# (${CLIPROXY_API_KEY} / key_env). The model-router plugin's aux guard refuses
+# #privacy/#private payloads on this route. AUX_COMPRESSION_ROUTE=aux: the
+# title-generation route above (AUX_BASE_URL or the main provider).
+AUX_COMPRESSION_ROUTE="$(getenv AUX_COMPRESSION_ROUTE cliproxy)"
+case "$AUX_COMPRESSION_ROUTE" in
+  cliproxy|aux) ;;
+  *) warn "AUX_COMPRESSION_ROUTE=$AUX_COMPRESSION_ROUTE is not cliproxy or aux; using cliproxy"
+     AUX_COMPRESSION_ROUTE=cliproxy ;;
+esac
+if [[ "$AUX_COMPRESSION_ROUTE" == "cliproxy" ]]; then
+  AUX_COMPRESSION_PROVIDER=custom; AUX_COMPRESSION_BASE_URL="$CLIPROXY_BASE_URL"
+  AUX_COMPRESSION_API_KEY='${CLIPROXY_API_KEY}'
+  AUX_COMPRESSION_MODEL="$(getenv AUX_COMPRESSION_MODEL gpt-5.6-terra)"
+  aux_comp_fb="$(getenv AUX_COMPRESSION_FALLBACK_MODEL gpt-5.6-luna)"
+  if [[ "$aux_comp_fb" != "none" && "$aux_comp_fb" != "$AUX_COMPRESSION_MODEL" ]]; then
+    AUX_COMPRESSION_FALLBACK_CHAIN="$(printf '[{provider: custom, model: "%s", base_url: "%s", key_env: CLIPROXY_API_KEY}]' \
+      "$aux_comp_fb" "$CLIPROXY_BASE_URL")"
+  else
+    AUX_COMPRESSION_FALLBACK_CHAIN="[]"
+  fi
+else
+  AUX_COMPRESSION_PROVIDER="$AUX_PROVIDER"; AUX_COMPRESSION_MODEL="$AUX_MODEL"
+  AUX_COMPRESSION_BASE_URL="$AUX_BASE_URL"; AUX_COMPRESSION_API_KEY=""
+  AUX_COMPRESSION_FALLBACK_CHAIN="$AUX_FALLBACK_CHAIN"
+fi
+export AUX_COMPRESSION_ROUTE AUX_COMPRESSION_PROVIDER AUX_COMPRESSION_MODEL AUX_COMPRESSION_BASE_URL \
+  AUX_COMPRESSION_API_KEY AUX_COMPRESSION_FALLBACK_CHAIN
 # Compression: never high effort. A local route turns thinking off with a
 # top-level reasoning_effort none in extra_body (Ollama ignores the `reasoning`
 # object the reasoning_effort key renders, and that object would override it)
 # and gets wait budgets sized for local prefill (config.yaml.tmpl, compression).
-if [[ -n "$AUX_BASE_URL" ]]; then
+if [[ "$AUX_COMPRESSION_ROUTE" == "aux" && -n "$AUX_BASE_URL" ]]; then
   AUX_COMPRESSION_EFFORT='""'; AUX_COMPRESSION_EXTRA_BODY='{reasoning_effort: none}'
   AUX_COMPRESSION_TIMEOUT=600; COMPRESSION_IDLE_SECONDS=420; COMPRESSION_CEILING_SECONDS=900
 else
@@ -147,11 +177,16 @@ MODEL_ROUTER_PRIVACY="$(getenv MODEL_ROUTER_PRIVACY true)"; export MODEL_ROUTER_
 # Balanced-routing knobs (same preserve-explicit-value rule):
 #   - MODEL_ROUTER_EFFORT: rewrite reasoning-effort fields already present on
 #     managed orchestrator requests per task (never above the config ceiling).
+#   - MODEL_ROUTER_CODING_EFFORT: per-task Claude effort on managed coding
+#     requests (medium/high/xhigh; max only with #max/#astra).
+#   - MODEL_ROUTER_CODING_EFFORT_CEILING: low|medium|high|xhigh|max (default max).
 #   - MODEL_ROUTER_ASTRA: task (default; leading standalone #max/#astra line in
 #     the current user task authorizes gpt-6-astra) | always (legacy) | never.
 #   - MODEL_ROUTER_TASK_TTL: seconds a session's current-task state (and its
 #     Astra authorization) stays live without a substantive follow-up.
 MODEL_ROUTER_EFFORT="$(getenv MODEL_ROUTER_EFFORT true)"; export MODEL_ROUTER_EFFORT
+MODEL_ROUTER_CODING_EFFORT="$(getenv MODEL_ROUTER_CODING_EFFORT true)"; export MODEL_ROUTER_CODING_EFFORT
+MODEL_ROUTER_CODING_EFFORT_CEILING="$(getenv MODEL_ROUTER_CODING_EFFORT_CEILING max)"; export MODEL_ROUTER_CODING_EFFORT_CEILING
 MODEL_ROUTER_ASTRA="$(getenv MODEL_ROUTER_ASTRA task)"; export MODEL_ROUTER_ASTRA
 MODEL_ROUTER_TASK_TTL="$(getenv MODEL_ROUTER_TASK_TTL 1800)"; export MODEL_ROUTER_TASK_TTL
 
@@ -160,9 +195,11 @@ MODEL_ROUTER_TASK_TTL="$(getenv MODEL_ROUTER_TASK_TTL 1800)"; export MODEL_ROUTE
 # already in $HERMES_HOME/config.yaml (what `make specialist-install` wrote), so
 # --force never resets a live setting; only a fresh install gets the default.
 #   MODEL_ROUTER_SPECIALISTS                   true|false        (default false)
-#   MODEL_ROUTER_SPECIALIST_MAX                0-6               (default 4)
+#   MODEL_ROUTER_SPECIALIST_MAX                0-15              (default 4)
 #   MODEL_ROUTER_SPECIALIST_REQUIRE_READY      true|false        (default false)
 #   MODEL_ROUTER_SPECIALIST_CLASSIFIER         none|local|cliproxy (default none)
+#   MODEL_ROUTER_SPECIALIST_MODE               ai|hybrid|keywords (default ai: the classifier selects;
+#                                              deterministic code enforces privacy/allowlist/readiness/caps)
 #   MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT seconds, total    (default 10, max 25)
 #   MODEL_ROUTER_SPECIALIST_PROFILES           a,b allowlist     (default all)
 SETTINGS_KEY="plugins.entries.model-router.settings"
@@ -194,10 +231,12 @@ router_knob() {
   else raw="$def"; src="default"; fi
   case "$kind" in
     bool) val="$(norm_bool "$raw")" || { warn "$var=$raw ($src) is not a boolean; using $def"; val="$def"; src="default"; } ;;
-    int) [[ "$raw" =~ ^[0-9]+$ ]] && (( 10#$raw <= 6 )) && val="$((10#$raw))" || { warn "$var=$raw ($src) is not 0-6; using $def"; val="$def"; src="default"; } ;;
+    int) [[ "$raw" =~ ^[0-9]+$ ]] && (( 10#$raw <= 15 )) && val="$((10#$raw))" || { warn "$var=$raw ($src) is not 0-15; using $def"; val="$def"; src="default"; } ;;
     seconds) [[ "$raw" =~ ^[0-9]+([.][0-9]+)?$ ]] && val="$raw" || { warn "$var=$raw ($src) is not a number; using $def"; val="$def"; src="default"; } ;;
     classifier) raw="${raw,,}"; [[ -z "$raw" || "$raw" == "null" ]] && raw=none
                 [[ "$raw" == none || "$raw" == local || "$raw" == cliproxy ]] && val="$raw" || { warn "$var=$raw ($src) is not none|local|cliproxy; using $def"; val="$def"; src="default"; } ;;
+    mode) raw="${raw,,}"; [[ -z "$raw" || "$raw" == "null" ]] && raw="$def"
+          [[ "$raw" == ai || "$raw" == hybrid || "$raw" == keywords ]] && val="$raw" || { warn "$var=$raw ($src) is not ai|hybrid|keywords; using $def"; val="$def"; src="default"; } ;;
     list) [[ "${raw// /}" == all ]] && raw=""; val="$(yaml_list "$raw")" ;;
   esac
   printf -v "$var" '%s' "$val"; export "${var?}"
@@ -207,6 +246,7 @@ router_knob MODEL_ROUTER_SPECIALISTS specialist_routing false bool
 router_knob MODEL_ROUTER_SPECIALIST_MAX specialist_max_profiles 4 int
 router_knob MODEL_ROUTER_SPECIALIST_REQUIRE_READY specialist_require_ready false bool
 router_knob MODEL_ROUTER_SPECIALIST_CLASSIFIER specialist_classifier none classifier
+router_knob MODEL_ROUTER_SPECIALIST_MODE specialist_selection_mode ai mode
 router_knob MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT specialist_classifier_timeout 10 seconds
 router_knob MODEL_ROUTER_SPECIALIST_PROFILES specialist_profiles "" list
 # Legacy privacy terms/paths follow the same rule, so --force never wipes them.
@@ -215,7 +255,10 @@ router_knob MODEL_ROUTER_PRIVATE_TERMS private_terms "" list
 router_knob MODEL_ROUTER_PRIVATE_PATHS private_paths "" list
 log "specialist_routing=$MODEL_ROUTER_SPECIALISTS ($MODEL_ROUTER_SPECIALISTS_SOURCE)" \
     "max=$MODEL_ROUTER_SPECIALIST_MAX ($MODEL_ROUTER_SPECIALIST_MAX_SOURCE)" \
-    "classifier=$MODEL_ROUTER_SPECIALIST_CLASSIFIER ($MODEL_ROUTER_SPECIALIST_CLASSIFIER_SOURCE)"
+    "classifier=$MODEL_ROUTER_SPECIALIST_CLASSIFIER ($MODEL_ROUTER_SPECIALIST_CLASSIFIER_SOURCE)" \
+    "mode=$MODEL_ROUTER_SPECIALIST_MODE ($MODEL_ROUTER_SPECIALIST_MODE_SOURCE)"
+[[ "$MODEL_ROUTER_SPECIALISTS" == "true" && "$MODEL_ROUTER_SPECIALIST_MODE" == "ai" && "$MODEL_ROUTER_SPECIALIST_CLASSIFIER" == "none" ]] && \
+  warn "specialist_selection_mode=ai with specialist_classifier=none selects no specialist (fail-closed); set MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy or local"
 [[ "$MODEL_ROUTER_PRIVACY" == "false" ]] && \
   warn "MODEL_ROUTER_PRIVACY=false: private data is NOT kept local in ordinary turns (docs/model-routing.md)"
 

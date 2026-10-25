@@ -1,5 +1,8 @@
 # Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
 # A path may be a folder or a file. Stage them with: make knowledge-stage NAME=<profile>
 # Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
-books-in-text/alex-hormozi
+edu/$100M Leads - How to Get Strangers To Want To Buy Your Stuff
+edu/$100M Money Models_ How To Make Money
+edu/$100M Offers - How to Make Offers So Good People Feel Stupid Saying No
+edu/100M Offers Made Easy - Create Your Own Irresistible Offers by Turning ChatGPT into Alex Hormozi
 edu/Scorecard Marketing - The four-step playbook for getting better leads and bigger profits

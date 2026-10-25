@@ -195,7 +195,8 @@ if [[ "$inventory_only" -eq 0 ]]; then
     log "refreshing '$p' (log: $logs/$p.log)"
     snap "$kroot/$p" "$logs/$p.k0"
     rc=0
-    BOOKS_ROOT="$books" KNOWLEDGE_ROOT="$kroot" KNOWLEDGE_MANIFEST="$pdir_root/$p/knowledge-sources.txt" \
+    BOOKS_ROOT="$books" KNOWLEDGE_ROOT="$kroot" PROFILES_DIR="$pdir_root" \
+      KNOWLEDGE_MANIFEST="$pdir_root/$p/knowledge-sources.txt" \
       bash "$ROOT/scripts/knowledge-stage.sh" "$p" > "$logs/$p.log" 2>&1 || rc=$?
     snap "$kroot/$p" "$logs/$p.k1"
     staged="$(changed "$logs/$p.k0" "$logs/$p.k1")"

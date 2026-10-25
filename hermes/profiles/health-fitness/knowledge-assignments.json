@@ -1,0 +1,24 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Atomic Habits - An Easy and Proven Way to Build Good Habits and Break Bad Ones",
+      "source_id": "8bd0ddc92f4ae618",
+      "source_sha256": "8bd0ddc92f4ae618d6a80dd353907dc6bf3f31b20c3def8de0d41ecfea46e2e6",
+      "tags": [
+        "habit-tracking",
+        "behavior-change",
+        "routine-design",
+        "goal-adherence",
+        "self-improvement"
+      ]
+    }
+  ],
+  "profile": "health-fitness",
+  "version": 1
+}

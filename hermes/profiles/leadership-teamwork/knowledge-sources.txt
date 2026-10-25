@@ -11,3 +11,6 @@ edu/Hidden Potential - The Science of Achieving Greater Things
 edu/Working Hard, Hardly Working - How to achieve more, stress less and feel fulfilled THE #1 SUNDAY TIMES BESTSELLER
 edu/The Culture Code - The Secrets of Highly Successful Groups
 edu/The Human Side of Enterprise
+edu/Articulating Design Decisions (for . .)
+edu/Drive - the surprising truth about what motivates us
+edu/The Operator’s Manual for Engineering Leadership (for . .)

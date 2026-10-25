@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Dry-run the specialist-router pilot for one task. Offline; nothing is dispatched.
 
-Prints the routing trace as JSON: selected profiles, reason labels, high-risk
-and advisory flags, execution mode (kanban | short), knowledge readiness, and
+Prints the routing trace as JSON: selected profiles, reason labels, advisory
+flags, execution mode (kanban | short), knowledge readiness, and
 what was dropped and why, then a one-screen summary of the same trace. Neither
 contains the task text (only a 16-hex hash). Readiness is stat-only: it lists
 file names under each profile's knowledge/ and skills/ folders and reads
@@ -16,9 +16,12 @@ Usage:
 Options:
   --profiles-root DIR   profiles dir (default $HERMES_HOME/profiles or ~/.hermes/profiles)
   --max N               route cap (default 4, max 6)
-  --allow a,b           allowlist of profiles (default: all book-backed + local-engineer)
+  --allow a,b           allowlist of profiles (default: all book-backed)
   --require-ready       drop profiles whose /learn knowledge skill is missing
   --plan                also print the note the orchestrator would receive
+  --mode MODE           keywords (default here: offline, deterministic) | hybrid | ai.
+                        This script never calls a model, so ai/hybrid show the gate and
+                        select nothing; the live AI probe is make specialist-classify-probe.
 """
 
 from __future__ import annotations
@@ -57,7 +60,7 @@ Usage:
   python3 scripts/specialist-route.py [--plan] [--profiles-root DIR] "task text"
 
 Output: the JSON trace, then a summary: selected profiles with execution mode,
-knowledge readiness, reasons and HIGH-RISK/advisory flags; dropped profiles and
+knowledge readiness, reasons and advisory flags; dropped profiles and
 why; the task source (typed, or attachment-derived for a bare uploaded file).
 
 Related:
@@ -77,8 +80,7 @@ def summary(trace: dict) -> str:
         lines.append(f"selected {len(routes)}/{trace.get('max_profiles')}:")
         for r in routes:
             k = r["knowledge"]
-            flags = ["HIGH-RISK advisory-only" if r.get("high_risk") else
-                     "advisory" if r.get("advisory_only") else "implementer"]
+            flags = ["advisory" if r.get("advisory_only") else "implementer"]
             if r.get("local_only"):
                 flags.append("local-only")
             lines.append(f"  {r['profile']:<26} {r['execution']:<6} knowledge {k['status']}"
@@ -91,6 +93,8 @@ def summary(trace: dict) -> str:
     if trace.get("unknown_allowed"):
         lines.append(f"unknown allowlist names ignored: {','.join(trace['unknown_allowed'])}")
     lines.append(f"profiles root {trace.get('profiles_root')}")
+    lines.append(f"mode {trace.get('selection_mode')} (offline dry-run); live mode {trace.get('live_selection_mode', '-')}"
+                 f"; AI selection with the live classifier: make specialist-classify-probe TASK=\"...\"")
     return "\n".join(lines)
 
 
@@ -102,6 +106,8 @@ def main(argv=None) -> int:
     ap.add_argument("--allow", default=os.environ.get("ALLOW", ""))
     ap.add_argument("--require-ready", action="store_true")
     ap.add_argument("--plan", action="store_true")
+    ap.add_argument("--mode", default=os.environ.get("MODE", "") or "keywords",
+                    help="keywords (default, offline) | hybrid | ai (no model here: shows the gate only)")
     args = ap.parse_args(argv)
 
     text = args.task if args.task is not None else os.environ.get("TASK", "")
@@ -120,9 +126,16 @@ def main(argv=None) -> int:
         allowed=known, unknown=unknown,
         require_ready=args.require_ready or cfg.specialist_require_ready,
         profiles_root=Path(args.profiles_root).expanduser() if args.profiles_root else None,
+        selection_mode=sp.selection_mode(args.mode), classifier=cfg.specialist_classifier,
     )
     trace = sp.route_text(text, settings)
     trace["profiles_root"] = str(settings.profiles_root or sp.default_profiles_root())
+    trace["live_selection_mode"] = cfg.specialist_selection_mode
+    trace["note"] = ("offline dry-run: no model is called here. "
+                     + (f"Mode {settings.selection_mode} selects nothing without a classifier; "
+                        if settings.selection_mode != "keywords" else "keyword rules only; ")
+                     + f"the live router runs in mode {cfg.specialist_selection_mode}. "
+                     "Live AI selection: make specialist-classify-probe TASK=\"...\"")
     print(json.dumps(trace, indent=2, sort_keys=True))
     print(summary(trace))
     if args.plan:

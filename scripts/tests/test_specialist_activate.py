@@ -213,7 +213,7 @@ class ActivateTest(unittest.TestCase):
         self.assertIs(s["privacy_routing"], True)          # other keys untouched
         self.assertTrue(self.plugin_matches())
         self.assertEqual(len(self.backups()), 1)
-        self.assertIn("verified        : 5 settings read back", r.stdout)
+        self.assertIn("verified        : 6 settings read back", r.stdout)
         self.assertNotIn("gateway restart", "\n".join(self.calls()))
         self.assertIn("not restarted", r.stdout)
 
@@ -232,11 +232,11 @@ class ActivateTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.settings()["specialist_max_profiles"], 2)
         self.assertEqual(self.settings()["specialist_profiles"], ["strategy"])
-        r = self.run_cmd("install", "--max", "5", "--profiles", "all", "--classifier", "local")
+        r = self.run_cmd("install", "--max", "15", "--profiles", "all", "--classifier", "local")
         self.assertEqual(r.returncode, 0, r.stderr)
         s = self.settings()
         self.assertEqual((s["specialist_max_profiles"], s["specialist_profiles"],
-                          s["specialist_classifier"]), (5, [], "local"))
+                          s["specialist_classifier"]), (15, [], "local"))
         r = self.run_cmd("install", "--classifier", "cliproxy")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.settings()["specialist_classifier"], "cliproxy")
@@ -244,10 +244,11 @@ class ActivateTest(unittest.TestCase):
         self.assertIn("never runs for #privacy turns", r.stdout + r.stderr)
 
     def test_install_rejects_bad_input_before_writing(self):
-        for args in (("--max", "7"), ("--profiles", "strategy,bogus"), ("--classifier", "cloud")):
+        for args in (("--max", "16"), ("--max", "-1"), ("--profiles", "strategy,bogus"), ("--classifier", "cloud")):
             r = self.run_cmd("install", *args)
             self.assertEqual(r.returncode, 1, args)
             self.assertIn("error:", r.stderr)
+        self.assertIn("--max must be 0-15", self.run_cmd("install", "--max", "16").stderr)
         self.assertEqual(self.writes(), [])
 
     def test_install_refuses_without_plugin_enabled_or_config(self):
@@ -271,6 +272,19 @@ class ActivateTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("ready 1", r.stdout)
         self.assertIs(self.settings()["specialist_require_ready"], True)
+
+    def test_readiness_includes_installed_dynamic_profiles(self):
+        self.gateway()
+        self.ready_profile("psychology")
+        (self.home / "profiles" / "psychology" / "SOUL.md").write_text("Purpose: minds and behavior\n")
+        r = self.run_cmd("status")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertRegex(r.stdout, r"ready\s+psychology")
+        self.settings_store({"privacy_routing": True, "specialist_profiles": ["strategy"]})
+        r = self.run_cmd("status")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("psychology", r.stdout)
+        self.assertEqual(self.writes(), [])
 
     def test_read_back_mismatch_fails(self):
         # A hermes that accepts the write but stores something else.

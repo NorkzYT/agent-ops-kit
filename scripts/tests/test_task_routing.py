@@ -188,14 +188,15 @@ class TestPolicyTiers(unittest.TestCase):
         out = route(r, coding, session_id="cod", base_url=CODE_URL)
         self.assertEqual(out["request"]["model"], "fable")
 
-    def test_coding_effort_fields_never_touched(self):
+    def test_routine_coding_runs_medium_effort_without_mutation(self):
         r = make_router()
         coding = {"model": "opus", "reasoning_effort": "high", "messages": [
             {"role": "user", "content": "quick question: what does the Makefile doctor target do?"}]}
         out = route(r, coding, session_id="cod2", base_url=CODE_URL)
-        # model stays opus (routine) -> no rewrite dict at all, effort untouched
-        self.assertIsNone(out)
-        self.assertEqual(coding["reasoning_effort"], "high")
+        # model stays opus (routine); coding effort is routed to medium
+        self.assertEqual(out["request"]["model"], "opus")
+        self.assertEqual(out["request"]["reasoning_effort"], "medium")
+        self.assertEqual(coding["reasoning_effort"], "high", "original request must not be mutated")
 
 
 class TestAstraAuthorization(unittest.TestCase):
@@ -867,7 +868,8 @@ class TestForcedCodingControl(unittest.TestCase):
     of task shape. Honored on the coding-family seam (claude-max-proxy); on the
     orchestrator/GPT seam the provider cannot be switched, so it is refused with
     a typed response rather than faked with a GPT alias. Privacy stays higher
-    priority; effort is left to the coding proxy; no state bleeds to later tasks."""
+    priority; effort follows the task body (TestCodingEffort); no state bleeds
+    to later tasks."""
 
     HARD = ("refactor the ingest architecture and migrate the schema; "
             "there is a deadlock risk")
@@ -918,14 +920,15 @@ class TestForcedCodingControl(unittest.TestCase):
                     session_id="rs", rid="a3")
         self.assertEqual(out["request"]["model"], "fable")
 
-    def test_coding_forced_effort_untouched_and_no_mutation(self):
+    def test_coding_forced_effort_follows_task_body_and_no_mutation(self):
         import copy
         req = {"model": "opus", "reasoning_effort": "high", "temperature": 0.2,
                "messages": [{"role": "user", "content": "#fable\ntiny task"}]}
         snap = copy.deepcopy(req)
         out = route(make_router(), req, base_url=CODE_URL, session_id="fc3", rid="a4")
         self.assertEqual(out["request"]["model"], "fable")
-        self.assertEqual(out["request"]["reasoning_effort"], "high", "coding effort must be untouched")
+        self.assertEqual(out["request"]["reasoning_effort"], "medium",
+                         "#fable forces the model; effort still follows the task body")
         self.assertEqual(out["request"]["temperature"], 0.2)
         self.assertEqual(req, snap, "original request must not be mutated")
 
@@ -1039,6 +1042,177 @@ class TestForcedCodingWireFormat(unittest.TestCase):
         text = wire_discord(f"#fable\n{HARD_TASK}", sender=None)
         task = task_intent.extract_current_user_task(chat_req(("user", text)))
         self.assertEqual(task.forced_coding, "fable")
+
+
+class TestCodingEffort(unittest.TestCase):
+    """Task-based Claude effort on the coding seam (claude-max-proxy): medium for
+    routine/ordinary code, high for complex code, xhigh only for unusually hard
+    debugging/architecture, max only with an explicit #max/#astra line. The GPT
+    seam, privacy routing and local (Ollama) models are unaffected."""
+
+    ROUTINE = "fix the typo in the README heading"
+    COMPLEX = ("migrate the schema and refactor the loader; the backfill must not lose rows, "
+               "must stay idempotent and must be resumable")
+    HARD_DEBUG = ("root-cause the intermittent failures in the ingest worker: there is a race "
+                  "condition between flush and reconnect, and the queue architecture may need a redesign")
+
+    def _coding(self, text, **extra):
+        req = {"model": "opus", "messages": [{"role": "user", "content": text}]}
+        req.setdefault("reasoning_effort", "high")  # what Hermes emits today
+        req.update(extra)
+        return req
+
+    # ---- policy table ------------------------------------------------------
+    def test_policy_table(self):
+        ce = complexity.coding_effort
+        self.assertEqual(ce("routine", "low", ("status-query",)), "medium")
+        self.assertEqual(ce("medium", "medium", ("exec",)), "medium")
+        self.assertEqual(ce("elevated", "medium", ("kw:refactor",)), "medium")
+        self.assertEqual(ce("high", "medium", ("kw:arch", "kw:migration")), "high")
+        self.assertEqual(ce("high", "high", ("kw:migration", "kw:refactor", "constraints")), "high")
+        self.assertEqual(ce("high", "high", ("kw:arch", "code", "len>1.2k")), "high",
+                         "one keyword plus length/code is not unusually hard")
+        self.assertEqual(ce("high", "high", ("kw:debug", "kw:concurrency")), "xhigh")
+        self.assertEqual(ce("high", "high", ("kw:arch", "tag:hard")), "xhigh")
+        self.assertEqual(ce("max", "high", ("auth:max",)), "max")
+        self.assertEqual(ce("high", "high", ("kw:debug", "kw:arch"), ceiling="high"), "high")
+        self.assertEqual(ce("max", "high", ("auth:max",), ceiling="xhigh"), "xhigh")
+
+    # ---- coding seam ------------------------------------------------------
+    def test_routine_complex_and_hard_coding(self):
+        r = make_router()
+        cases = ((self.ROUTINE, "opus", "medium"), (self.COMPLEX, "fable", "high"),
+                 (self.HARD_DEBUG, "fable", "xhigh"))
+        for i, (text, model, effort) in enumerate(cases):
+            out = route(r, self._coding(text), session_id=f"ce{i}", rid=f"ce{i}", base_url=CODE_URL)
+            self.assertEqual((out["request"]["model"], out["request"]["reasoning_effort"]),
+                             (model, effort), text)
+
+    def test_xhigh_exceeds_orchestrator_ceiling_but_respects_coding_ceiling(self):
+        out = route(make_router(), self._coding(self.HARD_DEBUG), base_url=CODE_URL, session_id="cc1")
+        self.assertEqual(out["request"]["reasoning_effort"], "xhigh")
+        out = route(make_router(coding_effort_ceiling="high"), self._coding(self.HARD_DEBUG),
+                    base_url=CODE_URL, session_id="cc2")
+        self.assertEqual(out["request"]["reasoning_effort"], "high")
+
+    def test_max_only_with_explicit_authorization(self):
+        r = make_router()
+        out = route(r, self._coding(f"#max\n{self.HARD_DEBUG}"), base_url=CODE_URL, session_id="cm1")
+        self.assertEqual(out["request"]["reasoning_effort"], "max")
+        for i, text in enumerate((f"#deep #max {self.HARD_DEBUG}", f"> #max\n{self.HARD_DEBUG}")):
+            out = route(r, self._coding(text), base_url=CODE_URL, session_id=f"cm{i + 2}")
+            self.assertNotEqual(out["request"]["reasoning_effort"], "max", text)
+        out = route(make_router(astra_policy="never"), self._coding(f"#max\n{self.HARD_DEBUG}"),
+                    base_url=CODE_URL, session_id="cm9")
+        self.assertNotEqual(out["request"]["reasoning_effort"], "max")
+
+    def test_forced_fable_keeps_task_based_effort_and_never_max(self):
+        r = make_router()
+        out = route(r, self._coding(f"#fable\n{self.HARD_DEBUG}"), base_url=CODE_URL, session_id="cf1")
+        self.assertEqual((out["request"]["model"], out["request"]["reasoning_effort"]), ("fable", "xhigh"))
+        out = route(r, self._coding(f"#opus\n{self.ROUTINE}"), base_url=CODE_URL, session_id="cf2")
+        self.assertEqual((out["request"]["model"], out["request"]["reasoning_effort"]), ("opus", "medium"))
+
+    def test_both_transport_shapes_rewritten_consistently(self):
+        req = self._coding(self.ROUTINE, extra_body={"reasoning": {"enabled": True, "effort": "high"}})
+        out = route(make_router(), req, base_url=CODE_URL, session_id="sh1")
+        self.assertEqual(out["request"]["reasoning_effort"], "medium")
+        self.assertEqual(out["request"]["extra_body"]["reasoning"]["effort"], "medium")
+        self.assertEqual(req["extra_body"]["reasoning"]["effort"], "high", "no mutation")
+        out = route(make_router(), responses_req(self.HARD_DEBUG, model="opus",
+                                                 reasoning={"effort": "high"}),
+                    base_url=CODE_URL, api_mode="codex_responses", session_id="sh2")
+        self.assertEqual(out["request"]["reasoning"]["effort"], "xhigh")
+
+    def test_missing_field_is_set_but_disabled_reasoning_never_reenabled(self):
+        req = {"model": "opus", "messages": [{"role": "user", "content": self.ROUTINE}]}
+        out = route(make_router(), req, base_url=CODE_URL, session_id="mf1")
+        self.assertEqual(out["request"]["reasoning_effort"], "medium")
+        self.assertNotIn("reasoning_effort", req)
+        for extra in ({"reasoning_effort": "none"},
+                      {"extra_body": {"reasoning": {"enabled": False, "effort": "none"}}}):
+            req = {"model": "opus", "messages": [{"role": "user", "content": self.ROUTINE}], **extra}
+            self.assertIsNone(route(make_router(), req, base_url=CODE_URL, session_id="mf2"), extra)
+
+    def test_knob_off_preserves_previous_behavior(self):
+        r = make_router(coding_effort_routing=False)
+        self.assertIsNone(route(r, self._coding(self.ROUTINE), base_url=CODE_URL, session_id="ko1"))
+        out = route(r, self._coding(self.HARD_DEBUG), base_url=CODE_URL, session_id="ko2")
+        self.assertEqual((out["request"]["model"], out["request"]["reasoning_effort"]), ("fable", "high"))
+
+    # ---- isolation: GPT seam, local models, privacy -----------------------
+    def test_gpt_seam_effort_unchanged(self):
+        r = make_router()
+        out = route(r, chat_req(("user", self.HARD_DEBUG), reasoning_effort="high"), session_id="g1")
+        self.assertEqual((out["request"]["model"], out["request"]["reasoning_effort"]),
+                         ("gpt-5.6-sol", "high"), "the orchestrator never gets xhigh")
+        out = route(r, chat_req(("user", "list the open tasks"), reasoning_effort="high"), session_id="g2")
+        self.assertEqual(out["request"]["reasoning_effort"], "low")
+        out = route(make_router(coding_effort_routing=False),
+                    chat_req(("user", "list the open tasks"), reasoning_effort="high"), session_id="g3")
+        self.assertEqual(out["request"]["reasoning_effort"], "low", "coding knob never affects the GPT seam")
+
+    def test_local_models_untouched(self):
+        for model in ("qwen3.8:27b", "qwen3.6:27b"):
+            req = {"model": model, "reasoning_effort": "high",
+                   "messages": [{"role": "user", "content": self.HARD_DEBUG}]}
+            self.assertIsNone(route(make_router(), req, base_url="http://127.0.0.1:11434/v1",
+                                    session_id="lo"), model)
+
+    def test_private_coding_still_never_reaches_cloud(self):
+        r = make_router()
+        out = route(r, self._coding(f"#privacy\n{self.HARD_DEBUG}"), base_url=CODE_URL,
+                    session_id="pv", rid="pv1")
+        spy = _Spy()
+        resp = r.on_llm_execution(request=out["request"], next_call=spy, session_id="pv",
+                                  api_request_id="pv1", base_url=CODE_URL, model="fable")
+        self.assertEqual(spy.calls, 0)
+        self.assertTrue(getattr(resp, "_model_router_refusal", False))
+
+    def test_routed_effort_reaches_the_coding_provider(self):
+        r = make_router()
+        out = route(r, self._coding(self.ROUTINE), base_url=CODE_URL, session_id="rp", rid="rp1")
+        sent = []
+        r.on_llm_execution(request=out["request"], next_call=lambda q: sent.append(q) or _Spy()(q),
+                           session_id="rp", api_request_id="rp1", base_url=CODE_URL, model="opus")
+        self.assertEqual(sent[0]["reasoning_effort"], "medium")
+
+    # ---- observability ----------------------------------------------------
+    def test_effort_logged(self):
+        r = make_router()
+        with self.assertLogs("hermes.plugin.model_router", level="INFO") as cap:
+            route(r, self._coding(self.ROUTINE), base_url=CODE_URL, session_id="lg1", rid="l1")
+            route(r, self._coding(self.HARD_DEBUG), base_url=CODE_URL, session_id="lg2", rid="l2")
+            route(r, self._coding(f"#fable\n{self.ROUTINE}"), base_url=CODE_URL, session_id="lg3", rid="l3")
+            route(r, {"model": "opus", "messages": [{"role": "user", "content": self.ROUTINE}]},
+                  base_url=CODE_URL, session_id="lg4", rid="l4")
+        joined = "\n".join(cap.output)
+        self.assertIn("rid=l1 sid=", joined)
+        self.assertRegex(joined, r"rid=l1 .*family=coding tier=medium .*effort=high->medium .*outcome=rewritten")
+        self.assertRegex(joined, r"rid=l2 .*family=coding tier=high .*effort=high->xhigh")
+        self.assertRegex(joined, r"rid=l3 .*tier=force .*effort=high->medium .*reasons=force:fable")
+        self.assertRegex(joined, r"rid=l4 .*effort=unset->medium")
+        self.assertNotIn("README", joined, "task content never logged")
+
+    def test_settings_env_fallbacks(self):
+        old = {k: os.environ.get(k) for k in ("MODEL_ROUTER_CODING_EFFORT", "MODEL_ROUTER_CODING_EFFORT_CEILING")}
+        try:
+            for k in old:
+                os.environ.pop(k, None)
+            s = config_mod.load_settings(None)
+            self.assertEqual((s.coding_effort_routing, s.coding_effort_ceiling), (True, "max"))
+            os.environ["MODEL_ROUTER_CODING_EFFORT"] = "false"
+            os.environ["MODEL_ROUTER_CODING_EFFORT_CEILING"] = "XHIGH"
+            s = config_mod.load_settings(None)
+            self.assertEqual((s.coding_effort_routing, s.coding_effort_ceiling), (False, "xhigh"))
+            os.environ["MODEL_ROUTER_CODING_EFFORT_CEILING"] = "ultra"
+            self.assertEqual(config_mod.load_settings(None).coding_effort_ceiling, "max")
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
 
 if __name__ == "__main__":

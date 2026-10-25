@@ -45,6 +45,11 @@ def _seconds(raw: Any, default: float, cap: float = 25.0) -> float:
     return min(cap, value) if value > 0 else default
 
 
+def _coding_ceiling(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in ("low", "medium", "high", "xhigh", "max") else "max"
+
+
 def _astra_policy(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     return value if value in ("task", "always", "never") else "task"
@@ -59,6 +64,11 @@ class RouterSettings:
     # Rewrite the reasoning-effort fields already present on managed GPT
     # requests (never invented, never raised above what the request carried).
     effort_routing: bool = True
+    # Per-task reasoning effort for managed coding (claude-max-proxy) requests:
+    # medium routine, high complex, xhigh unusually hard debugging/architecture,
+    # max only with #max/#astra authorization; clamped to coding_effort_ceiling.
+    coding_effort_routing: bool = True
+    coding_effort_ceiling: str = "max"
     # Astra (max tier) policy: "task" = only a leading standalone #max/#astra
     # control line in the CURRENT user task authorizes it; "always" = legacy
     # behavior (any managed max-tier request allowed); "never" = hard off.
@@ -95,6 +105,11 @@ class RouterSettings:
     specialist_profiles: List[str] = field(default_factory=list)   # allowlist; empty = all
     specialist_require_ready: bool = False
     specialist_classifier: str = "none"                            # none | local (Ollama) | cliproxy
+    # ai: the classifier selects from the eligible installed catalog (no keyword scoring, no
+    # silent fallback; deterministic code still enforces privacy, allowlist, readiness, caps,
+    # dispatch mode). hybrid/keywords: opt-in, for debugging and
+    # backward compatibility. With specialist_classifier none, ai mode routes nothing.
+    specialist_selection_mode: str = "ai"                          # ai | hybrid | keywords
     specialist_classifier_timeout: float = 10.0                    # total seconds, both models
     # cliproxy classifier: CLIProxyAPI (OpenAI-compatible, ChatGPT subscription).
     # '' base URL = $CLIPROXY_BASE_URL or http://127.0.0.1:$CLIPROXY_PORT/v1;
@@ -105,6 +120,9 @@ class RouterSettings:
     specialist_classifier_key_env: str = "CLIPROXY_API_KEY"
     specialist_orchestrators: List[str] = field(default_factory=lambda: ["default"])
     specialist_profiles_root: str = ""                             # '' = $HERMES_HOME/profiles
+    # Repo hermes/profiles (knowledge-assignments.json specs of created profiles); optional.
+    # Without it a dynamic profile's purpose comes from its installed SOUL.md.
+    specialist_seeds_root: str = ""
 
 
     def local_model(self, role: str) -> str:
@@ -129,12 +147,18 @@ class RouterSettings:
 
 
 CLASSIFIERS = ("none", "local", "cliproxy")
+SELECTION_MODES = ("ai", "hybrid", "keywords")
 CLASSIFIER_EFFORTS = ("minimal", "low", "medium", "high")
 
 
 def _classifier(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     return value if value in CLASSIFIERS else "none"
+
+
+def _selection_mode(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in SELECTION_MODES else "ai"
 
 
 def _effort(raw: Any) -> str:
@@ -159,6 +183,8 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         complexity_routing=_truthy(val("complexity_routing", "MODEL_ROUTER_COMPLEXITY", None), True),
         privacy_routing=_truthy(val("privacy_routing", "MODEL_ROUTER_PRIVACY", None), True),
         effort_routing=_truthy(val("effort_routing", "MODEL_ROUTER_EFFORT", None), True),
+        coding_effort_routing=_truthy(val("coding_effort_routing", "MODEL_ROUTER_CODING_EFFORT", None), True),
+        coding_effort_ceiling=_coding_ceiling(val("coding_effort_ceiling", "MODEL_ROUTER_CODING_EFFORT_CEILING", "max")),
         astra_policy=_astra_policy(val("astra_policy", "MODEL_ROUTER_ASTRA", "task")),
         task_ttl=float(val("task_ttl_seconds", "MODEL_ROUTER_TASK_TTL", 1800.0) or 1800.0),
         ollama_base_url=str(val("ollama_base_url", "OLLAMA_BASE_URL", "") or "").rstrip("/"),
@@ -177,6 +203,7 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         specialist_profiles=_split(val("specialist_profiles", "MODEL_ROUTER_SPECIALIST_PROFILES", [])),
         specialist_require_ready=_truthy(val("specialist_require_ready", "MODEL_ROUTER_SPECIALIST_REQUIRE_READY", None), False),
         specialist_classifier=_classifier(val("specialist_classifier", "MODEL_ROUTER_SPECIALIST_CLASSIFIER", "none")),
+        specialist_selection_mode=_selection_mode(val("specialist_selection_mode", "MODEL_ROUTER_SPECIALIST_MODE", "ai")),
         specialist_classifier_timeout=_seconds(val("specialist_classifier_timeout",
                                                    "MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT", 10.0), 10.0),
         specialist_classifier_model=str(val("specialist_classifier_model", "MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL",
@@ -190,4 +217,5 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
                                               "CLIPROXY_API_KEY") or "CLIPROXY_API_KEY").strip(),
         specialist_orchestrators=_split(val("specialist_orchestrators", "MODEL_ROUTER_SPECIALIST_ORCHESTRATORS", ["default"])) or ["default"],
         specialist_profiles_root=str(val("specialist_profiles_root", "MODEL_ROUTER_SPECIALIST_PROFILES_ROOT", "") or ""),
+        specialist_seeds_root=str(val("specialist_seeds_root", "MODEL_ROUTER_SPECIALIST_SEEDS_ROOT", "") or ""),
     )

@@ -1,0 +1,7 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# Created by knowledge-apply from an approved plan; shared books live in the canonical store
+# and are referenced from knowledge/refs/ (see knowledge-assignments.json).
+edu/AI Security Engineering
+edu/Blue Team Handbook Incident Response
+edu/Blue Team Handbook SOC, SIEM, and Threat Hunting (for Raymond Rhine) Early Release Raw Unedited
+edu/Learning Cloud Security

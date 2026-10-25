@@ -1,0 +1,27 @@
+{
+  "_comment": [
+    "Profile taxonomy for make knowledge-classify: deterministic consolidation of overlapping",
+    "new-profile proposals into one broad family per run. Nothing here creates a profile; a",
+    "canonical family that already exists as a profile is assigned (for review), otherwise one",
+    "proposal per family is written to the plan. A proposed name also folds into an existing",
+    "profile or a family when it is a dash-separated child of it (psychology-cognitive ->",
+    "psychology, red-team-web-apps -> red-team). Override the file with KNOWLEDGE_TAXONOMY=<path>.",
+    "parent: the existing profile the family sits under ('none' or omitted when it is top-level);",
+    "tags: subtopics every member of the family inherits as plan tags."
+  ],
+  "families": {
+    "psychology": {
+      "aliases": ["depth-psychology", "psychology-mental-health", "psychology-personality",
+                  "psychology-psychotherapy", "psychology-social", "psychology-developmental", "psychology-clinical", "psychoanalysis"],
+      "tags": ["psychology"],
+      "parent": "none"
+    },
+    "blue-team-security": {
+      "aliases": ["blue-team", "blue-team-incident-response", "blue-team-security-operations",
+                  "blue-team-detection-engineering", "blue-team-threat-hunting", "incident-response",
+                  "security-operations", "defensive-security"],
+      "tags": ["defensive-security"],
+      "parent": "security"
+    }
+  }
+}

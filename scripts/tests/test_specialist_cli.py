@@ -94,9 +94,14 @@ class SpecialistRouteCliTest(unittest.TestCase):
         summary = proc.stdout[end:]
         self.assertEqual({r["profile"] for r in trace["routes"]}, {"marketing", "security-reviewer"})
         line = next(ln for ln in summary.splitlines() if "security-reviewer" in ln)
-        for want in ("short", "knowledge no-knowledge", "kw:review", "HIGH-RISK", "advisory"):
+        for want in ("knowledge no-knowledge", "kw:review", "advisory"):
             self.assertIn(want, line)
-        self.assertIn("advisory", next(ln for ln in summary.splitlines() if " marketing " in ln))
+        self.assertNotIn("HIGH-RISK", proc.stdout)
+        self.assertNotIn("high_risk", proc.stdout)
+        mk = next(ln for ln in summary.splitlines() if " marketing " in ln)
+        self.assertIn("advisory", mk)
+        # Same tier, same execution mode: no risk-based override for security-reviewer.
+        self.assertEqual(line.split()[1], mk.split()[1])
 
     def test_summary_explains_no_route(self):
         proc = self.run_cli("Rename the doc to final please.")

@@ -58,8 +58,10 @@ DEFAULTS: Dict[str, Any] = {
     "specialist_max_profiles": 4,
     "specialist_require_ready": False,
     "specialist_classifier": "none",
+    "specialist_selection_mode": "ai",
     "specialist_profiles": [],
 }
+MODES = ("ai", "hybrid", "keywords")
 KEYS = ("specialist_routing",) + tuple(DEFAULTS)
 OLLAMA_KEYS = ("ollama_base_url", "ollama_model")
 # Set in the gateway process and the agent/tool processes it spawns.
@@ -304,8 +306,8 @@ def profiles_root(home: Path) -> Path:
 
 def readiness(home: Path, allow: List[str]) -> List[Tuple[str, Any]]:
     sp = specialists_module()
-    names = allow or [s.name for s in sp.REGISTRY]
     root = profiles_root(home)
+    names = allow or [*(s.name for s in sp.REGISTRY), *sp.dynamic_specialists(root)]
     return [(n, sp.knowledge_readiness(n, root)) for n in names]
 
 
@@ -404,11 +406,16 @@ def desired(args, current: Dict[str, Any], enable: bool) -> Dict[str, Any]:
         if args.classifier not in ("none", "local", "cliproxy"):
             raise Fail("--classifier must be none, local or cliproxy")
         want["specialist_classifier"] = args.classifier
+    if args.mode is not None:
+        if args.mode not in MODES:
+            raise Fail("--mode must be ai, hybrid or keywords")
+        want["specialist_selection_mode"] = args.mode
     if args.profiles is not None:
         names = [] if args.profiles.strip() in ("", "all") else args.profiles.split(",")
-        known, unknown = sp.split_allowed(names)
+        dynamic = sp.dynamic_specialists(profiles_root(hermes_home()))
+        known, unknown = sp.split_allowed(names, extra_known=dynamic)
         if unknown:
-            raise Fail(f"unknown profiles: {', '.join(unknown)} (known: {', '.join(sp.BY_NAME)})")
+            raise Fail(f"unknown profiles: {', '.join(unknown)} (known: {', '.join([*sp.BY_NAME, *dynamic])})")
         want["specialist_profiles"] = list(known)
     for key, default in DEFAULTS.items():
         # null reads as the default (hermes config set stores none as null).
@@ -443,6 +450,9 @@ def apply(args, enable: bool, label: str) -> int:
         if want["specialist_classifier"] == "local" and len(read_settings(h, OLLAMA_KEYS)) < 2:
             warn("classifier local needs ollama_base_url and ollama_model in the plugin settings; "
                  "until then it never suggests anything")
+        if want.get("specialist_selection_mode", "ai") == "ai" and want["specialist_classifier"] == "none":
+            warn("selection mode ai with classifier none selects no specialist (fail-closed): set "
+                 "CLASSIFIER=cliproxy (or local), or MODE=hybrid/keywords for deterministic routing")
         if want["specialist_classifier"] == "cliproxy":
             warn("classifier cliproxy sends public turns that reach the classifier (typed task plus "
                  "verified attachments) to CLIProxyAPI; it needs CLIPROXY_API_KEY in the gateway "
@@ -561,11 +571,12 @@ def enable(args) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Install, enable and check the specialist-router pilot")
     ap.add_argument("command", choices=("status", "install", "enable", "disable"))
-    ap.add_argument("--max", type=int, default=None, help="specialist_max_profiles (0-6)")
+    ap.add_argument("--max", type=int, default=None, help="specialist_max_profiles (0-15; the plugin's HARD_MAX_PROFILES)")
     rr = ap.add_mutually_exclusive_group()
     rr.add_argument("--require-ready", dest="require_ready", action="store_true", default=None)
     rr.add_argument("--no-require-ready", dest="require_ready", action="store_false")
     ap.add_argument("--classifier", default=None, help="none | local | cliproxy")
+    ap.add_argument("--mode", default=None, help="specialist_selection_mode: ai (default) | hybrid | keywords")
     ap.add_argument("--profiles", default=None, help="allowlist a,b,c (all = every profile)")
     ap.add_argument("--dry-run", action="store_true", help="show the plan, write nothing")
     ap.add_argument("--yes", action="store_true", help="enable: restart without asking")

@@ -5,7 +5,8 @@ Registers two middleware callbacks with Hermes:
   * ``llm_request``   — deterministic rewrite of model and reasoning effort
     from the CURRENT user task only (luna/terra/sol for the orchestrator,
     gpt-6-astra only with explicit per-task authorization; opus/fable for
-    delegated coding, effort untouched there).
+    delegated coding with task-based Claude effort medium/high/xhigh, max
+    only when authorized).
   * ``llm_execution`` — fail-closed privacy guard plus the Astra budget seam.
     A request whose current user turn carries a sender-authored ``#privacy``
     marker never reaches a cloud provider: it is answered by a local Ollama
@@ -20,6 +21,11 @@ hook adds a deterministic specialist-routing note to the orchestrator's
 current turn, and ``/route-specialists <task>`` prints a dry-run trace. See
 ``docs/specialist-routing.md``.
 
+At load it also extends Hermes' auxiliary pre-egress guard (``aux_guard``):
+CLIProxyAPI / claude-max-proxy count as cloud even on loopback, and a
+``#privacy`` / ``#private`` payload is never sent to them (compression,
+title generation).
+
 See ``docs/model-routing.md`` in the kit for configuration and readiness.
 """
 
@@ -27,6 +33,7 @@ from __future__ import annotations
 
 import logging
 
+from . import aux_guard
 from .router import Router
 from .router_config import load_settings
 from .specialist_hook import SpecialistHook
@@ -39,6 +46,7 @@ def register(ctx) -> None:
     router = Router(settings)
     ctx.register_middleware("llm_request", router.on_llm_request)
     ctx.register_middleware("llm_execution", router.on_llm_execution)
+    aux_guard.install(aux_guard.proxy_urls(settings))
     profile = str(getattr(ctx, "profile_name", "") or "default")
     specialists = SpecialistHook(settings, profile_name=profile)
     if specialists.active:
@@ -52,12 +60,13 @@ def register(ctx) -> None:
         logger.warning("model_router: private_terms/private_paths are ignored by request routing; "
                        "only a #privacy marker in the current turn keeps a request local")
     logger.info(
-        "model_router registered (privacy=%s complexity=%s local=%s specialists=%s) "
-        "local_models=routine:%s,fallback:%s,agent:%s classifier=%s",
+        "model_router registered (privacy=%s complexity=%s local=%s specialists=%s mode=%s) "
+        "local_models=routine:%s,fallback:%s,agent:%s classifier=%s coding_effort=%s",
         settings.privacy_routing,
         settings.complexity_routing,
         "configured" if (settings.ollama_base_url and settings.local_chain("routine")) else "unset",
         "on" if specialists.active else "off",
+        specialists.settings.selection_mode,
         settings.local_model("routine") or "-",
         settings.local_model("fallback") or "-",
         settings.local_model("agent") or "-",
@@ -65,6 +74,7 @@ def register(ctx) -> None:
          if settings.specialist_classifier == "cliproxy" else settings.specialist_classifier)
         if specialists.classifier_ready or settings.specialist_classifier == "none"
         else f"{settings.specialist_classifier}-unavailable",
+        f"auto/{settings.coding_effort_ceiling}" if settings.coding_effort_routing else "off",
     )
 
 

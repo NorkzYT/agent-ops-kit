@@ -1,0 +1,922 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/A Philosophy of Software Design, 2nd Edition",
+      "source_id": "f48f42823ff51ec0",
+      "source_sha256": "f48f42823ff51ec0edc10f4f6fef3bc970f62c728fd3c82eea2deb893772d180",
+      "tags": [
+        "software-design",
+        "system-complexity",
+        "code-review",
+        "object-oriented-design",
+        "design-principles",
+        "maintainability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/AI-Driven API Design (for . .)",
+      "source_id": "ade91360a5b18aa6",
+      "source_sha256": "ade91360a5b18aa6d194d987c2d20d618e5e336b4b4acc99705181f92ba2f935",
+      "tags": [
+        "api-design",
+        "api-architecture",
+        "ai-assisted-development",
+        "domain-driven-design",
+        "service-generation",
+        "deployment",
+        "testing",
+        "llm-workflows"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/AI-Native Software Engineering",
+      "source_id": "738a67feecdf1993",
+      "source_sha256": "738a67feecdf199305b2fa35f4044748a40517fb1b2565dcd3c5b0fb4f1e25c0",
+      "tags": [
+        "ai-engineering",
+        "context-engineering",
+        "llm-agents",
+        "developer-tools",
+        "engineering-practices",
+        "agent-memory"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/AI-Ready Data Blueprints. From Raw Data to AI-Driven Innovation",
+      "source_id": "cb9dd983f2c2804d",
+      "source_sha256": "cb9dd983f2c2804db51a01f0231debd7fe9dc6f6dab58a47b78deee876d95051",
+      "tags": [
+        "ai-architecture",
+        "data-platforms",
+        "genai-systems",
+        "knowledge-graphs",
+        "event-driven-architecture",
+        "lakehouse",
+        "semantic-search",
+        "data-governance"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Advanced SQL",
+      "source_id": "3d1b9395be46e9ea",
+      "source_sha256": "3d1b9395be46e9ea6b41141b47d9d7d4ba1554341ea4d8eb1d90d4d299384cd4",
+      "tags": [
+        "sql",
+        "databases",
+        "data-modeling",
+        "query-optimization",
+        "stored-procedures",
+        "data-platforms",
+        "analytics",
+        "graph-databases"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Agent Memory - Building Stateful AI Agents That Remember, Adapt, and Work Across Time",
+      "source_id": "83a76d9bd8b5f352",
+      "source_sha256": "83a76d9bd8b5f3528339a585600e992217caf8f8493761fca9189aaba6144223",
+      "tags": [
+        "ai-agents",
+        "agent-memory",
+        "software-architecture",
+        "context-management",
+        "mcp",
+        "data-connectors",
+        "idempotency",
+        "observability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Agentic Reliability Engineering (for Raymond Rhine)",
+      "source_id": "0d75e09210d4b353",
+      "source_sha256": "0d75e09210d4b353714389debe94399ff344ee516ff92f1371de88f94124d075",
+      "tags": [
+        "sre",
+        "reliability-engineering",
+        "agentic-ai",
+        "observability",
+        "incident-management",
+        "automation-governance",
+        "service-operations"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Building the Next Generation of AI Infrastructure (for . .)",
+      "source_id": "bad591d0b0b06997",
+      "source_sha256": "bad591d0b0b0699798f2d52c3696120cf40c7dcdc92d7bef0f4666ca7ace9626",
+      "tags": [
+        "ai-infrastructure",
+        "mlops",
+        "platform-engineering",
+        "cloud-architecture",
+        "data-governance",
+        "compliance",
+        "security",
+        "sustainability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Certified Kubernetes Administrator (CKA) Study Guide (for . .)",
+      "source_id": "567196394227abf2",
+      "source_sha256": "567196394227abf2fa04011c93b4cdb14dab35353b8e730abbce7b4e0d59d6c4",
+      "tags": [
+        "kubernetes",
+        "cloud-native",
+        "devops",
+        "platform-engineering",
+        "container-orchestration",
+        "cluster-operations",
+        "rbac",
+        "reliability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Claude Code Up and Running (for jac monn)",
+      "source_id": "21e0c5bd1ee57e86",
+      "source_sha256": "21e0c5bd1ee57e863c3414617e3f461b284f46580bd7f69b8f01bb433c81de5c",
+      "tags": [
+        "ai-assisted-development",
+        "agentic-coding",
+        "developer-tools",
+        "cli-workflows",
+        "software-engineering-process",
+        "claude-code"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Clean Code Cookbook",
+      "source_id": "3f5679bafa4c9dc9",
+      "source_sha256": "3f5679bafa4c9dc9f5d0d9846f0997955fe543828820f05f357cbd6e205d79de",
+      "tags": [
+        "clean-code",
+        "refactoring",
+        "code-quality",
+        "code-smells",
+        "software-design",
+        "design-patterns",
+        "readability",
+        "maintainability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/CompTIA Linux+ Study Guide",
+      "source_id": "1afc7d7263477f5b",
+      "source_sha256": "1afc7d7263477f5b5006b8b95589a7600ea66de05b7552a67b27865d426cc83c",
+      "tags": [
+        "linux",
+        "systems-administration",
+        "devops",
+        "containers",
+        "automation",
+        "infrastructure-as-code",
+        "troubleshooting",
+        "security-hardening"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Designing Data-Intensive Applications",
+      "source_id": "dc1051a75c57dffc",
+      "source_sha256": "dc1051a75c57dffc7897da2e16f8c29c64474bcae22fa0d5545134b82198fc6e",
+      "tags": [
+        "data-intensive-applications",
+        "distributed-systems",
+        "system-design",
+        "data-architecture",
+        "databases",
+        "cloud-computing",
+        "reliability-engineering",
+        "microservices"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Designing for AI (for Duc Ka)",
+      "source_id": "5407a1e8aadf0f07",
+      "source_sha256": "5407a1e8aadf0f07a78b8b56c6fa190446002f44eab098103c8028b7676f4a1a",
+      "tags": [
+        "ai-design",
+        "ai-product-development",
+        "ux-design",
+        "responsible-ai",
+        "ml-systems",
+        "design-research"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Domain-Driven Design Quickly [a summary of Eric Evans' Domain-Driven Design]",
+      "source_id": "e363116d3b3b5a92",
+      "source_sha256": "e363116d3b3b5a923c1597aea0533f5381d6167b7b6d0e040b8bea1ad71778ef",
+      "tags": [
+        "domain-driven-design",
+        "software-architecture",
+        "domain-modeling",
+        "agile-methods",
+        "refactoring",
+        "maintainability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Full Stack Testing",
+      "source_id": "fbbd23bdbb6c46ff",
+      "source_sha256": "fbbd23bdbb6c46ff0cd53d958c94d36d428eed909c09ace6605dfc3d04cd2650",
+      "tags": [
+        "software-testing",
+        "test-strategy",
+        "quality-assurance",
+        "exploratory-testing",
+        "shift-left",
+        "test-automation",
+        "ai-testing",
+        "reliability-engineering"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Generative AI on Kubernetes (for . .)",
+      "source_id": "f26434750407ebe0",
+      "source_sha256": "f26434750407ebe0063e3664c2d5bccdd302f3a1d0f62dad7bc0ee611a32cea3",
+      "tags": [
+        "kubernetes",
+        "generative-ai",
+        "llmops",
+        "mlops",
+        "model-serving",
+        "cloud-native",
+        "production-readiness",
+        "scalability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Hands-On RAG for Production",
+      "source_id": "c7465087907f57ec",
+      "source_sha256": "c7465087907f57ecb77caa36eb09a46e0696059c43b9134c8addb9c6699d6247",
+      "tags": [
+        "rag",
+        "llmops",
+        "ai-engineering",
+        "system-architecture",
+        "python",
+        "apis",
+        "evaluation",
+        "production-reliability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Hands-on Small Language Models",
+      "source_id": "643eb5b56f73a871",
+      "source_sha256": "643eb5b56f73a8712811f84444c2ce9cfc9cdea5306321850030cfb6d4730f6c",
+      "tags": [
+        "small-language-models",
+        "llm-deployment",
+        "machine-learning-engineering",
+        "docker",
+        "python",
+        "mcp",
+        "ollama",
+        "ai-infrastructure"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Harness Engineering for AI Agents",
+      "source_id": "0a658fffb1cd3bb6",
+      "source_sha256": "0a658fffb1cd3bb6fcacd6e48f0d63ee283ec148641a27643256710ddb9c1979",
+      "tags": [
+        "ai-agents",
+        "llm-systems",
+        "agent-harnesses",
+        "software-architecture",
+        "workflow-orchestration",
+        "state-management",
+        "tool-integration",
+        "context-engineering"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Laws of Software Engineering",
+      "source_id": "a1eb9da8d428adcc",
+      "source_sha256": "a1eb9da8d428adccadee42dba6b6676d90e7f9b9f81fc56204fce1f6f67075b2",
+      "tags": [
+        "software-architecture",
+        "distributed-systems",
+        "engineering-laws",
+        "complexity",
+        "system-design",
+        "mvp-iteration"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Learning Microsoft Azure (for Raymond Rhine)",
+      "source_id": "d4dfac2c83e6fd62",
+      "source_sha256": "d4dfac2c83e6fd62f7eaf046f94b6191d550159f7ab87a47eb324817e9ca6618",
+      "tags": [
+        "azure",
+        "cloud-computing",
+        "cloud-architecture",
+        "distributed-systems",
+        "deployment-models",
+        "scalability",
+        "ai-platforms"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Learning Serverless Security (for . .)",
+      "source_id": "344fd6ac9d39b5e6",
+      "source_sha256": "344fd6ac9d39b5e61b9d7d15904ba399cf8e839c28d624b6506f0decc4d3dbf4",
+      "tags": [
+        "serverless",
+        "cloud-security",
+        "application-security",
+        "faas",
+        "aws-lambda",
+        "cloud-architecture"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Learning n8n (for Raymond Rhine)",
+      "source_id": "fa9f754a84729239",
+      "source_sha256": "fa9f754a84729239427d9b0fde64bcf99e6ab5fca8920d6a4576a0b230f48f79",
+      "tags": [
+        "workflow-automation",
+        "n8n",
+        "ai-systems",
+        "no-code",
+        "integration-design",
+        "context-engineering",
+        "trust-calibration"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Multimodal, Real-Time AI Agent Systems",
+      "source_id": "303627f70bd723bc",
+      "source_sha256": "303627f70bd723bcb1a9abd5cb129c5a6f4c19d4cdee784ab5dd8de20f15c8b0",
+      "tags": [
+        "ai-agents",
+        "agent-architecture",
+        "multimodal-ai",
+        "real-time-systems",
+        "tool-calling",
+        "function-declarations",
+        "multi-agent-systems",
+        "llm-engineering"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Observability Engineering",
+      "source_id": "8ef6bccb65b69de8",
+      "source_sha256": "8ef6bccb65b69de89f67539f311986df07c265b0ac6106fb33aab3b665bd72f2",
+      "tags": [
+        "observability",
+        "site-reliability",
+        "telemetry",
+        "instrumentation",
+        "distributed-systems",
+        "ci-cd",
+        "production-engineering",
+        "llm-operations"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Redefining Data Engineering with AI (for Duc Ka)",
+      "source_id": "c777c5eaf2339f41",
+      "source_sha256": "c777c5eaf2339f41e5ca3a9b2b0d5eb7810d301d2de28f7708f3c2cd584ef438",
+      "tags": [
+        "data-engineering",
+        "data-platforms",
+        "ai-systems",
+        "data-governance",
+        "data-quality",
+        "data-observability",
+        "data-lineage",
+        "enterprise-architecture"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Refactoring Improving the Design of Existing Code (Addison-Wesley Signature Series (Fowler))",
+      "source_id": "482a4b5d42387923",
+      "source_sha256": "482a4b5d4238792320470053608e5315293da1fd43b04ca74b17efd33a636885",
+      "tags": [
+        "refactoring",
+        "code-quality",
+        "code-smells",
+        "software-design",
+        "legacy-modernization",
+        "javascript",
+        "engineering-practices"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Regenerative Software (for Raymond Rhine)",
+      "source_id": "8619f2832a7be539",
+      "source_sha256": "8619f2832a7be5395cc801e28606ebde00dcfd970b92c14c492f776f1cb2b0f3",
+      "tags": [
+        "software-architecture",
+        "system-design",
+        "maintainability",
+        "reliability-engineering",
+        "microservices",
+        "immutable-infrastructure",
+        "testing-evaluation",
+        "technical-strategy"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Rust for Machine Learning Learn AI Fundamentals and Build a Neural Network from Scratch (early release)",
+      "source_id": "92ff8c833f4ae4f2",
+      "source_sha256": "92ff8c833f4ae4f287c97b57be97b19cb666c56c3d414c6057a3abb6bb48d69e",
+      "tags": [
+        "rust",
+        "machine-learning",
+        "neural-networks",
+        "perceptrons",
+        "ai-fundamentals",
+        "implementation"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Scalable AI Systems",
+      "source_id": "70487c2e284b5f79",
+      "source_sha256": "70487c2e284b5f791a7744edd1d89e2775e684266b9a8050d7a635268aed0331",
+      "tags": [
+        "ai-engineering",
+        "llmops",
+        "mlops",
+        "agentic-systems",
+        "rag",
+        "testing",
+        "observability",
+        "system-reliability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Skills for AI Agents (for memsa memsa)",
+      "source_id": "24ba2741d47eb00f",
+      "source_sha256": "24ba2741d47eb00fa0fa1f3bfca519f1cef50c2924c2f42263f95ea1c2829038",
+      "tags": [
+        "ai-agents",
+        "llm-engineering",
+        "tool-calling",
+        "function-calling",
+        "structured-outputs",
+        "prompt-engineering",
+        "agent-architecture",
+        "workflow-automation"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Art of Unit Testing, Third Edition - With Examples in JavaScript",
+      "source_id": "3b44255580de65de",
+      "source_sha256": "3b44255580de65dec14a93f5e5b8d43e4ffa8ac2b8335790d013d547e933ece8",
+      "tags": [
+        "software-testing",
+        "unit-testing",
+        "test-driven-development",
+        "integration-testing",
+        "javascript",
+        "jest",
+        "test-design",
+        "code-quality"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The C4 Model - Visualizing Software Architecture",
+      "source_id": "281adef9e51d6c69",
+      "source_sha256": "281adef9e51d6c69283166d11d9bf96ebd341c2374a615f05a8b365c4bd0fee4",
+      "tags": [
+        "software-architecture",
+        "architecture-diagrams",
+        "c4-model",
+        "system-design",
+        "technical-documentation",
+        "deployment-architecture"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Context Engineering Handbook",
+      "source_id": "60449f3979f64e61",
+      "source_sha256": "60449f3979f64e610a5511fccc441eb48c8eafe829fc65beaa8672e8188c6bd2",
+      "tags": [
+        "llm-engineering",
+        "context-engineering",
+        "prompt-engineering",
+        "ai-agents",
+        "embeddings",
+        "attention-mechanisms",
+        "ai-application-design"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Effective Software Engineer (for Raymond Rhine)",
+      "source_id": "75c0ddcf092fab22",
+      "source_sha256": "75c0ddcf092fab223fe741377bb80a7dc99524c975b0be23b9b4b280ecd42e82",
+      "tags": [
+        "engineering-practice",
+        "developer-effectiveness",
+        "product-engineering",
+        "prioritization",
+        "software-delivery",
+        "reliability",
+        "cross-functional-collaboration"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Effective Software Engineer How ICs at Every Level Can Leverage AI, Prioritize High-Value Work, and Lead Beyond Their Role",
+      "source_id": "70fc738fd949e659",
+      "source_sha256": "70fc738fd949e659b3a987cfb1be867b7758e61df81815b686f4fd42ab4ae874",
+      "tags": [
+        "engineering-process",
+        "technical-leadership",
+        "developer-productivity",
+        "prioritization",
+        "software-delivery",
+        "ai-assisted-engineering",
+        "career-development",
+        "outcome-oriented-development"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Homelab Handbook (for Raymond Rhine)",
+      "source_id": "975f1c4f7f34ed07",
+      "source_sha256": "975f1c4f7f34ed070a9beecd7b20e95dc42515bcbc41354f162edaa357d495d4",
+      "tags": [
+        "homelab",
+        "self-hosting",
+        "infrastructure",
+        "kubernetes",
+        "devops",
+        "continuous-delivery",
+        "observability",
+        "site-reliability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Pragmatic Programmer From Journeyman to Master",
+      "source_id": "b61274004fdbb22c",
+      "source_sha256": "b61274004fdbb22c2de63d0c6fe365143a89faa8d131354124db335a64d3dddd",
+      "tags": [
+        "software-craftsmanship",
+        "programming-practices",
+        "code-quality",
+        "developer-productivity",
+        "professional-development",
+        "maintainability"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The Software Engineer Guidebook Navigating senior, tech lead, and staff engineer positions at tech companies and startups",
+      "source_id": "25b66c5d9e835750",
+      "source_sha256": "25b66c5d9e835750c7c503bddc748a27d6475916313a19b852aee493b3edaddc",
+      "tags": [
+        "engineering-careers",
+        "tech-leadership",
+        "staff-engineering",
+        "career-progression",
+        "performance-reviews",
+        "engineering-management"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Tidy Together (for Raymond Rhine)",
+      "source_id": "b487bb8c0457b3df",
+      "source_sha256": "b487bb8c0457b3df0116d15732bf8c7d9c6810cff0d36c07aaaebc3da043c140",
+      "tags": [
+        "refactoring",
+        "codebase-design",
+        "software-architecture",
+        "engineering-process",
+        "technical-leadership",
+        "team-collaboration",
+        "coupling-cohesion",
+        "legacy-modernization"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Understanding Distributed Systems",
+      "source_id": "bbdbee63d2026851",
+      "source_sha256": "bbdbee63d2026851d22b71d4a0a50c55695c098ec60286bf6f23ce7f213ddeb7",
+      "tags": [
+        "distributed-systems",
+        "software-architecture",
+        "networking",
+        "reliability",
+        "scalability",
+        "apis",
+        "protocols",
+        "security-engineering"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Video Generation with AI",
+      "source_id": "70ca7a629c8b70f5",
+      "source_sha256": "70ca7a629c8b70f520ba30bb2ea335291bb03bafe3d01cdd56d409885b46b79f",
+      "tags": [
+        "generative-ai",
+        "video-generation",
+        "machine-learning",
+        "ai-models",
+        "python",
+        "model-inference",
+        "media-pipelines"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Vision Language Models",
+      "source_id": "21400f3f4d5b9b08",
+      "source_sha256": "21400f3f4d5b9b085910a9a64c929dd3a91f552845eb73f79dde7a0d2a5cfa95",
+      "tags": [
+        "artificial-intelligence",
+        "machine-learning",
+        "vision-language-models",
+        "computer-vision",
+        "transformers",
+        "deep-learning",
+        "hugging-face",
+        "applied-ai"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Web Performance Engineering in the Age of AI Mastering Speed and Quality for AI-Generated Applications",
+      "source_id": "e01a17da6e34355a",
+      "source_sha256": "e01a17da6e34355acc6d9b18f906d1032ebb8f54bfa4aaa0843f8cfbf04aa0e7",
+      "tags": [
+        "web-performance",
+        "performance-engineering",
+        "core-web-vitals",
+        "frontend",
+        "observability",
+        "load-testing",
+        "ux-performance",
+        "ai-applications"
+      ]
+    }
+  ],
+  "profile": "software-engineering",
+  "version": 1
+}

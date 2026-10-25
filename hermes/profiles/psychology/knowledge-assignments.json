@@ -1,0 +1,153 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Man and His Symbols — Jung",
+      "source_id": "811dd32cd020a1fc",
+      "source_sha256": "811dd32cd020a1fc710e2503053aeb95f153f3707d3db0d7b7b58eb37bfbcca2",
+      "tags": [
+        "depth-psychology",
+        "jungian-psychology",
+        "dream-analysis",
+        "symbolism",
+        "archetypes",
+        "unconscious"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Modern Man in Search of a Soul — Jung",
+      "source_id": "c858c6905a7570df",
+      "source_sha256": "c858c6905a7570df5096e551a1a452971559a0f308808f0fb4d4ed707ef88859",
+      "tags": [
+        "psychology",
+        "analytical-psychology",
+        "jungian-psychology",
+        "dream-analysis",
+        "psychotherapy",
+        "unconscious",
+        "individuation"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Psychological Types — Jung",
+      "source_id": "50f0e4218739f2e7",
+      "source_sha256": "50f0e4218739f2e7a82f3385e72e13920535574bc01589a26572f5f02448efda",
+      "tags": [
+        "psychology",
+        "analytical-psychology",
+        "personality-typology",
+        "jungian-psychology",
+        "psychiatry"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Red Book - Liber novus - by Carl Jung",
+      "source_id": "7fea4524cba456c8",
+      "source_sha256": "7fea4524cba456c88be5e70493495357a392e7b6c7819e6961325f9343d0ee81",
+      "tags": [
+        "psychology",
+        "analytical-psychology",
+        "depth-psychology",
+        "dream-analysis",
+        "symbolism",
+        "individuation",
+        "consciousness"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/The red book - Liber novus  a reader's edition",
+      "source_id": "3941e8fec543ef00",
+      "source_sha256": "3941e8fec543ef005ab924e17e12d080388450c55e36091fa035ecb6429fb209",
+      "tags": [
+        "psychology",
+        "analytical-psychology",
+        "depth-psychology",
+        "dream-analysis",
+        "active-imagination",
+        "archetypes",
+        "symbolism",
+        "jung"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Two Essays on Analytical Psychology — Jung",
+      "source_id": "b98ca37e14c98cce",
+      "source_sha256": "b98ca37e14c98ccedf3cefd50c4536c0ad481209e41310b9d824f42d7f81665c",
+      "tags": [
+        "analytical-psychology",
+        "jungian-psychology",
+        "psychotherapy",
+        "depth-psychology",
+        "neurosis"
+      ]
+    }
+  ],
+  "created_by_plan": "6d42b5dcecf56837",
+  "profile": "psychology",
+  "profile_spec": {
+    "boundaries": [
+      "Distinguish established evidence from historical, theoretical, or speculative schools of psychology.",
+      "Do not present dream interpretation or symbolic analysis as diagnostic fact.",
+      "Encourage qualified clinical support for acute risk, severe impairment, or mental-health emergencies.",
+      "Avoid diagnosing individuals from limited descriptions.",
+      "Provide educational information rather than replacing individualized therapy or medical care."
+    ],
+    "in_scope": [
+      "Psychological theories of cognition, emotion, motivation, personality, and behavior.",
+      "Psychotherapy frameworks, counseling concepts, and mental-health literacy.",
+      "Depth psychology, dream interpretation, symbolism, and Jungian or psychoanalytic traditions.",
+      "Behavior change and interpersonal psychology outside business-specific negotiation or leadership practice."
+    ],
+    "out_of_scope": [
+      "Ethics, metaphysics, formal logic, and broad mental models belong to philosophy.",
+      "Business operations, markets, and financial analysis belong to business.",
+      "Team management, delegation, hiring, and workplace leadership belong to leadership-teamwork.",
+      "Business negotiation, sales calls, and conflict messaging belong to negotiation-communication.",
+      "Training, nutrition, sleep, and physical recovery belong to health-fitness."
+    ],
+    "overlap": [
+      "philosophy",
+      "negotiation-communication",
+      "leadership-teamwork",
+      "health-fitness"
+    ],
+    "parent": "none",
+    "purpose": "Specialize in human cognition, emotion, behavior, personality, mental health theory, and evidence-informed psychological practice."
+  },
+  "version": 1
+}

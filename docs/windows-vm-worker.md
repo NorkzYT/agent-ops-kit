@@ -369,8 +369,12 @@ problem. What is safe to ignore and what must be fixed:
 
 - Mention the worker bot in Discord: "Open BrowserStack App Live, launch the
   Velvet iPad build, capture the floor overview and the checkout screen."
-- Or assign from the host: `hermes kanban create "Capture App Store
-  screenshots: login, floor, checkout" --assignee windows-operator`.
+- The host's Kanban board does not reach the VM: it is single-host, and a card
+  assigned to `windows-operator` there runs the host's profile of that name.
+  Builds and tests on Windows go through the `windows-worker` lane, which
+  relays the coordinator's exact commit to the Windows machine's own Hermes over
+  the peer API for test-only validation (the worker never edits code); see
+  [discord-kanban-workflow.md](discord-kanban-workflow.md).
 
 The worker screenshots before and after each action and attaches evidence. It
 waits for you on logins and MFA.

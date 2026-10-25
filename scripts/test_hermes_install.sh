@@ -51,7 +51,9 @@ ck "config.yaml written"                 "[[ -f '$cfg' ]]"
 ck "config.yaml has no unrendered tokens" "! grep -q '__[A-Z0-9_]*__' '$cfg'"
 ck "orchestrator model = gpt-5.6-sol"     "grep -q 'default: gpt-5.6-sol' '$cfg'"
 ck "orchestrator reasoning effort = high" "grep -qE '^  reasoning_effort: high\$' '$cfg'"
-ck "title reasoning effort = high"        "[[ \$(grep -c 'reasoning_effort: high' '$cfg') -ge 2 ]]"
+ck "title reasoning effort = low"         "grep -A4 '^  title_generation:' '$cfg' | grep -qE '^    reasoning_effort: low\$'"
+ck "config schema version = 44"           "grep -qE '^_config_version: 44\$' '$cfg'"
+ck "kanban auto_decompose = true"         "grep -qE '^  auto_decompose: true\$' '$cfg'"
 ck "compression reasoning effort = low"   "grep -qE '^    reasoning_effort: low\$' '$cfg'"
 ck "orchestrator base_url = CLIProxyAPI"  "grep -q 'http://127.0.0.1:8317/v1' '$cfg'"
 ck "delegation base_url = claude-max"     "grep -q 'http://127.0.0.1:3456/v1' '$cfg'"
@@ -81,11 +83,14 @@ ck "default privacy_routing = true"       "grep -qE '^        privacy_routing: t
 # Balanced-routing knobs unset in .env must render their defaults: effort
 # rewrite on, Astra opt-in per task, 30-minute task state TTL.
 ck "default effort_routing = true"        "grep -qE '^        effort_routing: true\$' '$cfg2'"
+ck "default coding_effort_routing = true" "grep -qE '^        coding_effort_routing: true\$' '$cfg2'"
+ck "default coding_effort_ceiling = max"  "grep -qE '^        coding_effort_ceiling: max\$' '$cfg2'"
 ck "default astra_policy = task"          "grep -qE '^        astra_policy: task\$' '$cfg2'"
 ck "default task_ttl_seconds = 1800"      "grep -qE '^        task_ttl_seconds: 1800\$' '$cfg2'"
 # Specialist-router pilot is opt-in: unset renders off with the default cap.
 ck "default specialist_routing = false"   "grep -qE '^        specialist_routing: false\$' '$cfg2'"
 ck "default specialist_max_profiles = 4"  "grep -qE '^        specialist_max_profiles: 4\$' '$cfg2'"
+ck "default specialist_selection_mode = ai" "grep -qE '^        specialist_selection_mode: ai\$' '$cfg2'"
 
 # --- explicit-false scenario: MODEL_ROUTER_* set to false in .env must render
 # as false (the risky opt-out), NOT be silently forced back to true. This is the
@@ -98,10 +103,13 @@ cat >> "$envf3" <<EOF
 MODEL_ROUTER_COMPLEXITY=false
 MODEL_ROUTER_PRIVACY=false
 MODEL_ROUTER_EFFORT=false
+MODEL_ROUTER_CODING_EFFORT=false
+MODEL_ROUTER_CODING_EFFORT_CEILING=high
 MODEL_ROUTER_ASTRA=never
 MODEL_ROUTER_TASK_TTL=600
 MODEL_ROUTER_SPECIALISTS=true
 MODEL_ROUTER_SPECIALIST_MAX=2
+MODEL_ROUTER_SPECIALIST_MODE=hybrid
 EOF
 HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf3" \
   HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
@@ -112,10 +120,13 @@ ck "routing-off installer exits 0 (rc=$rc3)"  "[[ $rc3 -eq 0 ]]"
 ck "explicit complexity_routing = false"      "grep -qE '^        complexity_routing: false\$' '$cfg3'"
 ck "explicit privacy_routing = false"         "grep -qE '^        privacy_routing: false\$' '$cfg3'"
 ck "explicit effort_routing = false"          "grep -qE '^        effort_routing: false\$' '$cfg3'"
+ck "explicit coding_effort_routing = false" "grep -qE '^        coding_effort_routing: false\$' '$cfg3'"
+ck "explicit coding_effort_ceiling = high"  "grep -qE '^        coding_effort_ceiling: high\$' '$cfg3'"
 ck "explicit astra_policy = never"            "grep -qE '^        astra_policy: never\$' '$cfg3'"
 ck "explicit task_ttl_seconds = 600"          "grep -qE '^        task_ttl_seconds: 600\$' '$cfg3'"
 ck "explicit specialist_routing = true"       "grep -qE '^        specialist_routing: true\$' '$cfg3'"
 ck "explicit specialist_max_profiles = 2"     "grep -qE '^        specialist_max_profiles: 2\$' '$cfg3'"
+ck "explicit specialist_selection_mode = hybrid" "grep -qE '^        specialist_selection_mode: hybrid\$' '$cfg3'"
 ck "routing-off leaves no unrendered tokens"  "! grep -q '__[A-Z0-9_]*__' '$cfg3'"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

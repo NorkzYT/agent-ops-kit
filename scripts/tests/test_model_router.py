@@ -205,6 +205,16 @@ class TestNoContentClassification(unittest.TestCase):
             load_plugin().register(ctx)
         self.assertIn("private_terms/private_paths are ignored", "\n".join(logs.output))
 
+    def test_register_logs_coding_effort_state(self):
+        for settings, label in (({}, "coding_effort=auto/max"),
+                                ({"coding_effort_ceiling": "high"}, "coding_effort=auto/high"),
+                                ({"coding_effort_routing": False}, "coding_effort=off")):
+            ctx = SimpleNamespace(get_config=lambda k, d=None, s=settings: s.get(k, d), profile_name="default",
+                                  register_middleware=lambda *a: None, register_hook=lambda *a: None)
+            with self.assertLogs("hermes.plugin.model_router", level="INFO") as logs:
+                load_plugin().register(ctx)
+            self.assertIn(label, "\n".join(logs.output))
+
 
 class TestPrivateHistoryWithheld(unittest.TestCase):
     """A public request after a #privacy turn never replays that turn to the cloud."""

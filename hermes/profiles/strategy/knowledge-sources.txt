@@ -6,5 +6,10 @@ edu/The Four - The Hidden DNA of Amazon, Apple, Facebook and Google
 edu/Invent and Wander - The Collected Writings of Jeff Bezos, With an Introduction by Walter Isaacson
 edu/Steve Jobs by Walter Isaacson
 edu/Elon Musk by Walter Isaacson
-books-in-text/poor-charlies-almanack-the-wit-and-wisdom-of-charles
-books-in-text/the-great-mental-models
+edu/Poor Charlie's Almanack The Wit and Wisdom of Charles T. Munger, Expanded Third Edition
+edu/The Great Mental Models, Volume 1 General Thinking Concepts-
+edu/The Great Mental Models, Volume 2  Physics, Chemistry, and Biology-
+edu/The Great Mental Models, Volume 3 Systems and Mathematics-
+edu/The Great Mental Models, Volume 4  Economics and Art-
+edu/From Models to Money
+edu/The Probabilistic Product (for . .)

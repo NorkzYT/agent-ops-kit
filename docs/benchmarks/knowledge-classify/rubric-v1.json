@@ -1,0 +1,1413 @@
+{
+  "rubric_version": 1,
+  "name": "book-classification rubric v1 (operator-reviewed plan of 2026-10-23)",
+  "generated_from": {
+    "plan": "plan-classify-20261023-090324.json (gitignored staging report)",
+    "plan_generated": "2026-10-23T09:03:38",
+    "review": "operator book-ownership review + ChatGPT response of 2026-10-23 (supplied documents)",
+    "classifier_of_record": "cliproxy:gpt-5.6-luna (effort not set, proxy default)"
+  },
+  "scope": "The 58 sources the classifier actually classified. The 9 already-imported books are excluded (duplicate detection is a deterministic content check, not a model decision). Titles are the library folder names with personalised purchase watermarks removed; sources are matched to the library by content hash (source_id).",
+  "profiles": [
+    "business",
+    "health-fitness",
+    "herbalism",
+    "leadership-teamwork",
+    "marketing",
+    "martial-arts",
+    "negotiation-communication",
+    "offers-sales",
+    "philosophy",
+    "red-team",
+    "software-engineering",
+    "strategy",
+    "survival"
+  ],
+  "families": {
+    "security": [
+      "security",
+      "secur",
+      "cyber",
+      "appsec",
+      "infosec"
+    ],
+    "psychology": [
+      "psychology",
+      "psych",
+      "jung",
+      "analytical"
+    ],
+    "ai-engineering": [
+      "ai",
+      "ml",
+      "machine",
+      "learning",
+      "llm",
+      "context",
+      "generative",
+      "agent",
+      "agentic",
+      "model",
+      "language"
+    ],
+    "linux-ops": [
+      "linux",
+      "devops",
+      "sysadmin",
+      "infra",
+      "infrastructure",
+      "ops",
+      "platform",
+      "kubernetes",
+      "cloud",
+      "homelab",
+      "sre",
+      "systems"
+    ],
+    "biotech": [
+      "biotech",
+      "bio",
+      "genomics",
+      "genom",
+      "science",
+      "life",
+      "crispr"
+    ],
+    "data": [
+      "data",
+      "sql",
+      "analytics"
+    ]
+  },
+  "family_rule": "A proposed new-profile slug belongs to the first family (in listed order) with a keyword equal to, or a >=4-letter prefix of, one of its dash-separated parts; security is listed before linux-ops so cloud-security is security.",
+  "scoring": {
+    "exact": "existing: profile == primary; new: profile none and proposal family == family; either: one of the two.",
+    "lenient": "exact, or profile in acceptable, or (profile none and proposal family in acceptable_families).",
+    "subjective_choices": [
+      "psychology consolidates analytical-psychology (same family): both proposals score exact.",
+      "security books expect a consolidated security family (ai-security, cloud-security, cloud-application-security, security all map to it); red-team is lenient only; the existing security/security-reviewer profiles have no book list and are not classifier candidates.",
+      "AI context/media/ML books may score exact under one broad AI family; software-engineering stays exact or acceptable for the engineering-flavoured ones.",
+      "linux-systems-devops is an acceptable family for Linux/Kubernetes/cloud operations books; software-engineering remains acceptable.",
+      "biotech-science is conditional: the only exact answer is the biotech family and nothing is lenient.",
+      "suspicious-text is an integrity review of the production run, not a model score; the benchmark scores profile fit only.",
+      "Plan confidences below 0.85 form the low-confidence stratum; the Red Book reader's edition (0.72) is included there."
+    ]
+  },
+  "strata": [
+    "ai",
+    "ambiguous-existing",
+    "business-marketing",
+    "business-strategy",
+    "clear-existing",
+    "low-confidence",
+    "new-profile",
+    "psychology",
+    "security",
+    "suspicious-text"
+  ],
+  "sample_note": "sample: true marks the stratified subset (>= 30 sources covering every stratum) for runs that cannot afford all 58.",
+  "sources": [
+    {
+      "source": "Advanced SQL",
+      "source_id": "3d1b9395be46e9ea",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": "Technical SQL reference; only software-engineering fits."
+    },
+    {
+      "source": "AI-Native Software Engineering",
+      "source_id": "738a67feecdf1993",
+      "stratum": "suspicious-text",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": [
+          "suspicious-text"
+        ]
+      },
+      "notes": "Production flags suspicious-text deterministically (integrity check, independent of the model); the benchmark scores profile fit only. AI-native engineering may also go to a broad AI specialist."
+    },
+    {
+      "source": "AI Security Engineering",
+      "source_id": "6543c85603dba88d",
+      "stratum": "security",
+      "expected": {
+        "kind": "new",
+        "family": "security",
+        "acceptable": [
+          "red-team"
+        ],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "ai-security",
+        "confidence": 0.96,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:ai-security"
+        ]
+      },
+      "notes": "Review: compare existing security profiles first; none of them is a book-backed candidate, so a consolidated security family (ai-security / cloud-security / security) is expected; red-team is lenient only (offensive scope); an AI-engineering umbrella is acceptable."
+    },
+    {
+      "source": "Amazon Selling Guide Info",
+      "source_id": "c215ee8f28ee17fd",
+      "stratum": "business-marketing",
+      "expected": {
+        "kind": "existing",
+        "primary": "offers-sales",
+        "acceptable": [
+          "marketing",
+          "business"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "offers-sales",
+        "new_profile": "",
+        "confidence": 0.96,
+        "review_reasons": []
+      },
+      "notes": "Amazon selling guide: offers-sales primary; marketing or business are defensible."
+    },
+    {
+      "source": "Answer Engine Optimization",
+      "source_id": "ac44495ddd663e06",
+      "stratum": "business-marketing",
+      "expected": {
+        "kind": "existing",
+        "primary": "marketing",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "marketing",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": "Answer-engine optimisation is marketing."
+    },
+    {
+      "source": "A Philosophy of Software Design, 2nd Edition",
+      "source_id": "f48f42823ff51ec0",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Articulating Design Decisions",
+      "source_id": "d9117e5466527cf8",
+      "stratum": "ambiguous-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "leadership-teamwork",
+        "acceptable": [
+          "negotiation-communication",
+          "software-engineering"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "leadership-teamwork",
+        "new_profile": "",
+        "confidence": 0.84,
+        "review_reasons": []
+      },
+      "notes": "Design-decision communication: leadership-teamwork per plan; negotiation-communication or software-engineering defensible."
+    },
+    {
+      "source": "Atomic Habits - An Easy and Proven Way to Build Good Habits and Break Bad Ones",
+      "source_id": "8bd0ddc92f4ae618",
+      "stratum": "ambiguous-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "health-fitness",
+        "acceptable": [
+          "business",
+          "leadership-teamwork"
+        ],
+        "acceptable_families": [
+          "psychology"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "health-fitness",
+        "new_profile": "",
+        "confidence": 0.82,
+        "review_reasons": []
+      },
+      "notes": "Review: health-fitness defensible for habits; business/psychology acceptable (general behaviour change)."
+    },
+    {
+      "source": "Carnegie, Dale - How To Win Friends and Influence People",
+      "source_id": "1154387c1bf3ade9",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "negotiation-communication",
+        "acceptable": [
+          "leadership-teamwork"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "negotiation-communication",
+        "new_profile": "",
+        "confidence": 0.95,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Claude Code Up and Running",
+      "source_id": "21e0c5bd1ee57e86",
+      "stratum": "ai",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": "Claude Code guide: software-engineering, or a broad AI specialist."
+    },
+    {
+      "source": "Clean Code Cookbook",
+      "source_id": "3f5679bafa4c9dc9",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "CompTIA Linux+ Study Guide",
+      "source_id": "1afc7d7263477f5b",
+      "stratum": "new-profile",
+      "expected": {
+        "kind": "new",
+        "family": "linux-ops",
+        "acceptable": [
+          "software-engineering"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "linux-systems-devops",
+        "confidence": 0.98,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:linux-systems-devops"
+        ]
+      },
+      "notes": "Review: linux-systems-devops is a coherent specialisation; software-engineering acceptable until it exists."
+    },
+    {
+      "source": "Dark Psychology and Manipulation_ 3 in 1_ Improve your life by Speed Reading People and Analyze Body Language, Influence Human Behavior Through Nlp, Mind Control Methods and Dark Psychology Secrets",
+      "source_id": "546e97d45d18c5d7",
+      "stratum": "psychology",
+      "expected": {
+        "kind": "existing",
+        "primary": "negotiation-communication",
+        "acceptable": [],
+        "acceptable_families": [
+          "psychology"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "negotiation-communication",
+        "new_profile": "",
+        "confidence": 0.86,
+        "review_reasons": []
+      },
+      "notes": "Review: negotiation-communication closest existing owner; a psychology family is acceptable."
+    },
+    {
+      "source": "Daybreak — Nietzsche",
+      "source_id": "8b8c63360cce6839",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "philosophy",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Deep Work - Rules for Focused Success in a Distracted World",
+      "source_id": "73ccc6352ca8a4d6",
+      "stratum": "low-confidence",
+      "expected": {
+        "kind": "existing",
+        "primary": "business",
+        "acceptable": [
+          "leadership-teamwork",
+          "strategy"
+        ],
+        "acceptable_families": [
+          "psychology"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "business",
+        "new_profile": "",
+        "confidence": 0.82,
+        "review_reasons": []
+      },
+      "notes": "Plan confidence 0.82; business per plan; leadership/strategy/psychology acceptable."
+    },
+    {
+      "source": "Domain-Driven Design Quickly [a summary of Eric Evans' Domain-Driven Design]",
+      "source_id": "e363116d3b3b5a92",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Drive - the surprising truth about what motivates us",
+      "source_id": "c9df2b8379842fe4",
+      "stratum": "ambiguous-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "leadership-teamwork",
+        "acceptable": [
+          "business"
+        ],
+        "acceptable_families": [
+          "psychology"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "leadership-teamwork",
+        "new_profile": "",
+        "confidence": 0.96,
+        "review_reasons": []
+      },
+      "notes": "Motivation: leadership-teamwork; business or psychology acceptable."
+    },
+    {
+      "source": "Florentine Histories — Machiavelli",
+      "source_id": "a9db0b6342cb8f8a",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "philosophy",
+        "acceptable": [
+          "strategy"
+        ],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": "Machiavelli: philosophy (existing Machiavelli corpus); strategy acceptable."
+    },
+    {
+      "source": "From Models to Money",
+      "source_id": "3b4b3ce14b75a2cb",
+      "stratum": "business-strategy",
+      "expected": {
+        "kind": "existing",
+        "primary": "strategy",
+        "acceptable": [
+          "business",
+          "software-engineering"
+        ],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "strategy",
+        "new_profile": "",
+        "confidence": 0.86,
+        "review_reasons": []
+      },
+      "notes": "AI pilots to production: strategy; business/software-engineering/AI acceptable."
+    },
+    {
+      "source": "Full Stack Testing",
+      "source_id": "fbbd23bdbb6c46ff",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Generative AI on Kubernetes",
+      "source_id": "f26434750407ebe0",
+      "stratum": "ai",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": [
+          "ai-engineering",
+          "linux-ops"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": "Review: software-engineering today; linux-ops or AI acceptable."
+    },
+    {
+      "source": "Generative Engine Optimization with Python",
+      "source_id": "d85941ac7b7ebb19",
+      "stratum": "business-marketing",
+      "expected": {
+        "kind": "existing",
+        "primary": "marketing",
+        "acceptable": [
+          "software-engineering"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "marketing",
+        "new_profile": "",
+        "confidence": 0.96,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Hands-on Small Language Models",
+      "source_id": "643eb5b56f73a871",
+      "stratum": "ai",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.93,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Harness Engineering for AI Agents",
+      "source_id": "0a658fffb1cd3bb6",
+      "stratum": "ai",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.97,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Human, All Too Human — Nietzsche",
+      "source_id": "07f9839d00659085",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "philosophy",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Laws of Software Engineering",
+      "source_id": "a1eb9da8d428adcc",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Learning Cloud Security",
+      "source_id": "7e46e1d48e91af32",
+      "stratum": "security",
+      "expected": {
+        "kind": "new",
+        "family": "security",
+        "acceptable": [
+          "red-team"
+        ],
+        "acceptable_families": [
+          "linux-ops"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "cloud-security",
+        "confidence": 0.99,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:cloud-security"
+        ]
+      },
+      "notes": "Review: existing security or one consolidated cloud-security owner; red-team lenient only."
+    },
+    {
+      "source": "Learning Microsoft Azure",
+      "source_id": "d4dfac2c83e6fd62",
+      "stratum": "ambiguous-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": [
+          "linux-ops"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.97,
+        "review_reasons": []
+      },
+      "notes": "Review: software-engineering, or linux-ops with cloud operations in scope."
+    },
+    {
+      "source": "Learning Serverless Security",
+      "source_id": "344fd6ac9d39b5e6",
+      "stratum": "security",
+      "expected": {
+        "kind": "new",
+        "family": "security",
+        "acceptable": [
+          "red-team",
+          "software-engineering"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "cloud-application-security",
+        "confidence": 0.97,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:cloud-application-security"
+        ]
+      },
+      "notes": "Review: share the cloud-security owner, not a second niche; a separate cloud-application-security slug still maps to the security family."
+    },
+    {
+      "source": "Man and His Symbols — Jung",
+      "source_id": "811dd32cd020a1fc",
+      "stratum": "psychology",
+      "expected": {
+        "kind": "new",
+        "family": "psychology",
+        "acceptable": [
+          "philosophy"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "psychology",
+        "confidence": 0.97,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:psychology"
+        ]
+      },
+      "notes": "Review: one broad psychology profile for Jung; philosophy as thematic secondary (lenient)."
+    },
+    {
+      "source": "Modern Man in Search of a Soul — Jung",
+      "source_id": "c858c6905a7570df",
+      "stratum": "psychology",
+      "expected": {
+        "kind": "either",
+        "primary": "philosophy",
+        "family": "psychology",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.86,
+        "review_reasons": []
+      },
+      "notes": "Plan said philosophy; review prefers psychology if approved: either is exact."
+    },
+    {
+      "source": "On the Genealogy of Morals and Ecce Homo — Nietzsche",
+      "source_id": "11ad0878317951da",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "philosophy",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Psychological Types — Jung",
+      "source_id": "50f0e4218739f2e7",
+      "stratum": "psychology",
+      "expected": {
+        "kind": "new",
+        "family": "psychology",
+        "acceptable": [
+          "philosophy"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "psychology",
+        "confidence": 0.95,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:psychology"
+        ]
+      },
+      "notes": "Foundational psychology text; psychology family expected, philosophy lenient."
+    },
+    {
+      "source": "Red Book - Liber novus - by Carl Jung",
+      "source_id": "7fea4524cba456c8",
+      "stratum": "psychology",
+      "expected": {
+        "kind": "either",
+        "primary": "philosophy",
+        "family": "psychology",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.82,
+        "review_reasons": []
+      },
+      "notes": "Jung's Red Book: philosophy per plan, psychology per review: either is exact."
+    },
+    {
+      "source": "Redefining Data Engineering with AI",
+      "source_id": "c777c5eaf2339f41",
+      "stratum": "low-confidence",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [
+          "business"
+        ],
+        "acceptable_families": [
+          "ai-engineering",
+          "data"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.82,
+        "review_reasons": []
+      },
+      "notes": "Plan confidence 0.82."
+    },
+    {
+      "source": "Refactoring Improving the Design of Existing Code (Addison-Wesley Signature Series (Fowler))",
+      "source_id": "482a4b5d42387923",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Regenerative Software",
+      "source_id": "8619f2832a7be539",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Scalable AI Systems",
+      "source_id": "70487c2e284b5f79",
+      "stratum": "ai",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Simulation Models for Data Science",
+      "source_id": "984d4576e3f92f06",
+      "stratum": "ambiguous-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "business",
+        "acceptable": [
+          "software-engineering",
+          "strategy"
+        ],
+        "acceptable_families": [
+          "data"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "business",
+        "new_profile": "",
+        "confidence": 0.9,
+        "review_reasons": []
+      },
+      "notes": "Simulation models for data science: business per plan; software-engineering/strategy/data acceptable."
+    },
+    {
+      "source": "The Agentic Enterprise",
+      "source_id": "061471bae30d1dca",
+      "stratum": "low-confidence",
+      "expected": {
+        "kind": "existing",
+        "primary": "strategy",
+        "acceptable": [
+          "business",
+          "software-engineering"
+        ],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "strategy",
+        "new_profile": "",
+        "confidence": 0.78,
+        "review_reasons": []
+      },
+      "notes": "Plan confidence 0.78."
+    },
+    {
+      "source": "The Art of Unit Testing, Third Edition - With Examples in JavaScript",
+      "source_id": "3b44255580de65de",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "The Behavior Operations Manual - Neuro-Cognitive Intelligence - Chase Hughes",
+      "source_id": "aae7fb8c0e3f15e1",
+      "stratum": "psychology",
+      "expected": {
+        "kind": "existing",
+        "primary": "negotiation-communication",
+        "acceptable": [],
+        "acceptable_families": [
+          "psychology"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "negotiation-communication",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": "Behavioural influence manual: negotiation-communication; psychology family acceptable."
+    },
+    {
+      "source": "The Code Breaker - Jennifer Doudna, Gene Editing, and the Future of the Human Race",
+      "source_id": "524d49e54bfa7fd1",
+      "stratum": "new-profile",
+      "expected": {
+        "kind": "new",
+        "family": "biotech",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "biotech-science",
+        "confidence": 0.99,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:biotech-science"
+        ]
+      },
+      "notes": "Review: biotech-science only if the collection grows (conditional); no existing candidate fits, so only the biotech family is exact and nothing else is lenient."
+    },
+    {
+      "source": "The Context Engineering Handbook",
+      "source_id": "60449f3979f64e61",
+      "stratum": "ai",
+      "expected": {
+        "kind": "either",
+        "primary": "software-engineering",
+        "family": "ai-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "ai-context-engineering",
+        "confidence": 0.96,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:ai-context-engineering"
+        ]
+      },
+      "notes": "Review: a broader AI-engineering specialist or software-engineering: either is exact."
+    },
+    {
+      "source": "The Effective Software Engineer",
+      "source_id": "75c0ddcf092fab22",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [
+          "leadership-teamwork"
+        ],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "The ellipsis manual - analysis and engineering of human behavior - Chase Hughes",
+      "source_id": "aa8aa5e8310083ae",
+      "stratum": "psychology",
+      "expected": {
+        "kind": "existing",
+        "primary": "negotiation-communication",
+        "acceptable": [],
+        "acceptable_families": [
+          "psychology"
+        ]
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "negotiation-communication",
+        "new_profile": "",
+        "confidence": 0.9,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "The Gay Science — Nietzsche",
+      "source_id": "cc8bada5b83c478d",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "philosophy",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "The Homelab Handbook",
+      "source_id": "975f1c4f7f34ed07",
+      "stratum": "ambiguous-existing",
+      "expected": {
+        "kind": "either",
+        "primary": "software-engineering",
+        "family": "linux-ops",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.88,
+        "review_reasons": []
+      },
+      "notes": "Review: software-engineering acceptable, linux-ops fits better once it exists: either is exact."
+    },
+    {
+      "source": "The Portable Nietzsche",
+      "source_id": "9bf7b06ae64bd047",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "philosophy",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "The Pragmatic Programmer From Journeyman to Master",
+      "source_id": "b61274004fdbb22c",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "The Probabilistic Product",
+      "source_id": "073cb362dfed46d8",
+      "stratum": "business-strategy",
+      "expected": {
+        "kind": "existing",
+        "primary": "strategy",
+        "acceptable": [
+          "business",
+          "software-engineering"
+        ],
+        "acceptable_families": [
+          "ai-engineering"
+        ]
+      },
+      "sample": true,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "strategy",
+        "new_profile": "",
+        "confidence": 0.94,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "The red book - Liber novus a reader's edition",
+      "source_id": "3941e8fec543ef00",
+      "stratum": "low-confidence",
+      "expected": {
+        "kind": "either",
+        "primary": "philosophy",
+        "family": "psychology",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "philosophy",
+        "new_profile": "",
+        "confidence": 0.72,
+        "review_reasons": [
+          "low-confidence"
+        ]
+      },
+      "notes": "Plan confidence 0.72 (needs-review); duplicate-edition check is an operator task, not a model score."
+    },
+    {
+      "source": "The Software Engineer Guidebook Navigating senior, tech lead, and staff engineer positions at tech companies and startups",
+      "source_id": "25b66c5d9e835750",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [
+          "leadership-teamwork"
+        ],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.94,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Tidy Together",
+      "source_id": "b487bb8c0457b3df",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.99,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Two Essays on Analytical Psychology — Jung",
+      "source_id": "b98ca37e14c98cce",
+      "stratum": "psychology",
+      "expected": {
+        "kind": "new",
+        "family": "psychology",
+        "acceptable": [
+          "philosophy"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "analytical-psychology",
+        "confidence": 0.97,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:analytical-psychology"
+        ]
+      },
+      "notes": "Review: merge analytical-psychology into psychology; both slugs map to the psychology family, so either proposal is exact."
+    },
+    {
+      "source": "Understanding Distributed Systems",
+      "source_id": "bbdbee63d2026851",
+      "stratum": "clear-existing",
+      "expected": {
+        "kind": "existing",
+        "primary": "software-engineering",
+        "acceptable": [],
+        "acceptable_families": []
+      },
+      "sample": false,
+      "plan": {
+        "status": "proposed",
+        "proposed_profile": "software-engineering",
+        "new_profile": "",
+        "confidence": 0.98,
+        "review_reasons": []
+      },
+      "notes": ""
+    },
+    {
+      "source": "Video Generation with AI",
+      "source_id": "70ca7a629c8b70f5",
+      "stratum": "ai",
+      "expected": {
+        "kind": "new",
+        "family": "ai-engineering",
+        "acceptable": [
+          "software-engineering",
+          "marketing"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "generative-ai-media",
+        "confidence": 0.97,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:generative-ai-media"
+        ]
+      },
+      "notes": "Review: machine-learning-ai rather than a one-book media profile; both slugs map to the AI family."
+    },
+    {
+      "source": "Vision Language Models",
+      "source_id": "21400f3f4d5b9b08",
+      "stratum": "ai",
+      "expected": {
+        "kind": "new",
+        "family": "ai-engineering",
+        "acceptable": [
+          "software-engineering"
+        ],
+        "acceptable_families": []
+      },
+      "sample": true,
+      "plan": {
+        "status": "needs-review",
+        "proposed_profile": "",
+        "new_profile": "machine-learning-ai",
+        "confidence": 0.98,
+        "review_reasons": [
+          "no-profile",
+          "new-profile-proposal:machine-learning-ai"
+        ]
+      },
+      "notes": ""
+    }
+  ]
+}

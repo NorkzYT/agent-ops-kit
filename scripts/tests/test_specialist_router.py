@@ -55,14 +55,27 @@ def names(trace):
 
 
 class RegistryTest(unittest.TestCase):
-    def test_registry_covers_every_book_backed_profile_plus_local_engineer(self):
-        self.assertEqual(set(sp.BY_NAME), set(BOOK_BACKED) | {"local-engineer"})
+    def test_registry_is_exactly_the_book_backed_profiles(self):
+        self.assertEqual(set(sp.BY_NAME), set(BOOK_BACKED))
         for name in sp.BY_NAME:
             self.assertTrue((REPO / "hermes" / "profiles" / name / "SOUL.md").is_file(), name)
 
-    def test_high_risk_set(self):
-        self.assertEqual(set(sp.HIGH_RISK),
-                         {"health-fitness", "herbalism", "security-reviewer", "red-team"})
+    def test_no_local_or_implementer_specialist(self):
+        # local-engineer was removed: every specialist is advisory and cloud-backed;
+        # a #privacy turn stays on the local Ollama route without specialists.
+        self.assertNotIn("local-engineer", sp.BY_NAME)
+        self.assertFalse((REPO / "hermes" / "profiles" / "local-engineer").exists())
+        self.assertEqual([s.name for s in sp.REGISTRY if s.local or s.implementer], [])
+
+    def test_no_high_risk_label_anywhere(self):
+        # The high-risk filter/label was removed: no registry flag, no module constant, and the
+        # classifier pool excludes only local-only profiles (none today). Every profile stays.
+        self.assertFalse(hasattr(sp, "HIGH_RISK"))
+        self.assertFalse(hasattr(sp.REGISTRY[0], "high_risk"))
+        self.assertEqual(sp.CLASSIFIER_FORBIDDEN, frozenset())
+        self.assertEqual(len(sp.REGISTRY), 14)
+        for name in ("health-fitness", "herbalism", "security-reviewer", "red-team"):
+            self.assertIn(name, sp.BY_NAME)
 
     def test_each_profile_is_reachable(self):
         samples = {
@@ -80,7 +93,6 @@ class RegistryTest(unittest.TestCase):
             "survival": "Prepare an emergency kit and a water purification plan.",
             "martial-arts": "Drill guard passing and armbars for my bjj class.",
             "philosophy": "What do the stoics say about anger? Compare with Nietzsche.",
-            "local-engineer": "Implement the parser and add a regression test.",
         }
         self.assertEqual(set(samples), set(sp.BY_NAME))
         for profile, text in samples.items():
@@ -92,7 +104,8 @@ class MatchTest(unittest.TestCase):
         t = route("Help me design an irresistible offer and pricing for my course.")
         self.assertEqual(names(t), ["offers-sales"])
         r = t["routes"][0]
-        self.assertFalse(r["high_risk"])
+        self.assertNotIn("high_risk", r)
+        self.assertNotIn("constraint", r)
         self.assertTrue(r["advisory_only"])
         self.assertTrue(r["reasons"] and all(x.startswith("kw:") for x in r["reasons"]))
         self.assertEqual(r["knowledge"]["status"], "ready")
@@ -131,9 +144,11 @@ class MatchTest(unittest.TestCase):
                      "prioritise the roadmap, and propose a business model.")["routes"]
         self.assertEqual(deep[0]["profile"], "strategy")
         self.assertEqual(deep[0]["execution"], "kanban")
-        impl = route("Implement the parser and add a regression test.")["routes"][0]
-        self.assertEqual((impl["profile"], impl["execution"], impl["advisory_only"]),
-                         ("local-engineer", "kanban", False))
+        # Implementation is not routed to a specialist (coding goes through the
+        # coordinator's own coding path); pure implementation phrasing routes nothing.
+        impl = route("Implement the parser and add a regression test.")
+        self.assertEqual(impl["routes"], [])
+        self.assertEqual(impl["reason"], "no-match")
 
 
 class UnderSelectionRegressionTest(unittest.TestCase):
@@ -169,16 +184,17 @@ class UnderSelectionRegressionTest(unittest.TestCase):
         self.assertEqual(route("Rewrite this commit message to follow conventional commits.")["routes"], [])
         self.assertEqual(route("Reword the error message shown on a failed upload.")["routes"], [])
 
-    def test_auth_design_review_with_fixes_routes_security_engineering_and_local(self):
+    def test_auth_design_review_with_fixes_routes_security_and_engineering(self):
         t = route("Review the authentication design and implement fixes with tests")
-        self.assertEqual(set(names(t)), {"security-reviewer", "software-engineering", "local-engineer"})
+        self.assertEqual(set(names(t)), {"security-reviewer", "software-engineering"})
         sec = next(r for r in t["routes"] if r["profile"] == "security-reviewer")
-        # High-risk controls are untouched: advisory, short, skills-only, constrained.
-        self.assertTrue(sec["high_risk"])
-        self.assertEqual((sec["execution"], sec["toolsets"]), ("short", sp.ADVISORY_TOOLSETS))
-        self.assertEqual(sec["constraint"], sp.ADVISORY_CONSTRAINT)
-        impl = next(r for r in t["routes"] if r["profile"] == "local-engineer")
-        self.assertEqual(impl["execution"], "kanban")
+        eng = next(r for r in t["routes"] if r["profile"] == "software-engineering")
+        # No high-risk gating: security-reviewer runs like any other specialist (same tier-based
+        # execution mode as software-engineering), still advisory, no constraint label.
+        self.assertNotIn("high_risk", sec)
+        self.assertNotIn("constraint", sec)
+        self.assertEqual(sec["execution"], eng["execution"])
+        self.assertTrue(all(r["advisory_only"] for r in t["routes"]))
 
     def test_authentication_word_counts_as_security_evidence(self):
         t = route("Harden the authentication flow of the API.")
@@ -190,41 +206,61 @@ class UnderSelectionRegressionTest(unittest.TestCase):
     def test_private_auth_task_still_local_only(self):
         t = route("#privacy review the authentication design and implement fixes with tests")
         self.assertEqual(t["privacy"], "local-only")
-        self.assertEqual(names(t), ["local-engineer"])
+        self.assertEqual(names(t), [])
+        self.assertEqual(t["reason"], "all-dropped")
         dropped = {d["profile"] for d in t["dropped"] if d["reason"] == "privacy:local-only"}
         self.assertEqual(dropped, {"security-reviewer", "software-engineering"})
 
 
-class HighRiskTest(unittest.TestCase):
-    def test_high_risk_routes_are_advisory_short_and_constrained(self):
+class NoHighRiskGatingTest(unittest.TestCase):
+    FORMER = ("red-team", "security-reviewer", "health-fitness", "herbalism")
+
+    def test_former_high_risk_profiles_route_like_any_other(self):
         t = route("Scope a red team exercise and a security review for our app, build a "
                   "strength training plan with protein targets, and list herbs for tea. "
-                  "Compare options and trade-offs in a deep plan.")
-        hr = [r for r in t["routes"] if r["high_risk"]]
-        self.assertEqual({r["profile"] for r in hr},
-                         {"red-team", "security-reviewer", "health-fitness", "herbalism"})
-        for r in hr:
+                  "Compare options and trade-offs in a deep plan.", max_profiles=6)
+        self.assertTrue(set(self.FORMER) <= set(names(t)))
+        self.assertIn(t["tier"], ("elevated", "high"))
+        for r in t["routes"]:
             self.assertTrue(r["advisory_only"])
-            self.assertEqual(r["execution"], "short")  # even when the task is deep
-            self.assertEqual(r["toolsets"], sp.ADVISORY_TOOLSETS)
-            self.assertIn("no external actions", r["constraint"])
-        self.assertIn("HIGH-RISK", sp.render_plan(t))
+            self.assertNotIn("high_risk", r)
+            self.assertNotIn("constraint", r)
+            self.assertEqual(r["execution"], "kanban")   # deep task: tier decides, not a risk label
+            self.assertNotIn("toolsets", r)
+        plan = sp.render_plan(t)
+        self.assertNotIn("HIGH-RISK", plan)
+        self.assertNotIn("high-risk", plan.lower())
 
-    def test_classifier_cannot_add_high_risk_or_local(self):
+    def test_short_tasks_keep_the_skills_only_tool_scope(self):
+        t = route("What are traditional uses of chamomile?")
+        self.assertEqual(names(t), ["herbalism"])
+        r = t["routes"][0]
+        self.assertEqual((r["execution"], r["toolsets"]), ("short", sp.ADVISORY_TOOLSETS))
+        self.assertIn("-t skills", sp.render_plan(t))
+
+    def test_hybrid_classifier_may_add_former_high_risk_profiles_within_its_cap(self):
         seen = {}
 
         def fake(visible, pool):
             seen["pool"] = list(pool)
-            return ["red-team", "health-fitness", "local-engineer", "philosophy", "bogus"]
+            return ["red-team", "health-fitness", "philosophy", "bogus"]
 
         t = sp.route_text(
             "I keep going back and forth on what to do next with my life and the people "
             "around me, and I would like a structured way to think it through.",
             settings(classifier="local"), readiness=ready, classifier=fake)
         self.assertEqual(t["classifier"], "used")
-        self.assertEqual(names(t), ["philosophy"])
-        self.assertTrue(set(seen["pool"]).isdisjoint(set(sp.HIGH_RISK) | {"local-engineer"}))
-        self.assertTrue(all(d["reason"] == "classifier:not-eligible" for d in t["dropped"]))
+        self.assertTrue(set(self.FORMER) <= set(seen["pool"]))     # every profile is offered
+        self.assertEqual(names(t), ["red-team", "health-fitness"])  # MAX_CLASSIFIER_ADDITIONS still 2
+        reasons = {d["profile"]: d["reason"] for d in t["dropped"]}
+        self.assertEqual(reasons["philosophy"], "classifier:cap")
+        self.assertEqual(reasons["?"], "classifier:not-eligible")
+
+    def test_private_task_still_fails_closed(self):
+        t = route("#privacy scope a red team exercise and a security review for our app")
+        self.assertEqual(t["privacy"], "local-only")
+        self.assertEqual(names(t), [])
+        self.assertTrue(all(d["reason"] == "privacy:local-only" for d in t["dropped"]))
 
     def test_classifier_skipped_for_clear_or_short_tasks_and_errors_are_contained(self):
         calls = []
@@ -251,12 +287,14 @@ class PrivacyTest(unittest.TestCase):
         self.assertEqual(t["routes"], [])
         self.assertIn({"profile": "health-fitness", "reason": "privacy:local-only"}, t["dropped"])
 
-    def test_private_task_keeps_only_local_engineer(self):
+    def test_private_task_routes_local_only_with_no_cloud_specialist(self):
         t = route("#privacy negotiate my rent and implement a budget script with tests")
-        self.assertEqual(names(t), ["local-engineer"])
-        self.assertTrue(t["routes"][0]["local_only"])
+        self.assertEqual(t["privacy"], "local-only")
+        self.assertEqual(t["routes"], [])
+        self.assertEqual(t["reason"], "all-dropped")
         self.assertIn("negotiation-communication",
                       [d["profile"] for d in t["dropped"] if d["reason"] == "privacy:local-only"])
+        self.assertEqual(sp.render_plan(t), "")
 
     def test_content_is_never_classified_private(self):
         # Only #privacy/#private route local: credentials, #local and the old
@@ -417,7 +455,7 @@ class AsyncDelegationEnvelopeTest(unittest.TestCase):
         self.assertNotEqual(route(quoted).get("reason"), "runtime-envelope")
 
     def test_hook_returns_none_for_envelope(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(
                 session_id="s", user_message=async_envelope(self.HEADERS[0])))
@@ -603,7 +641,7 @@ class KanbanNotifierEnvelopeTest(unittest.TestCase):
                 self.assertEqual(task_intent.runtime_envelope(prose), "")
 
     def test_hook_returns_none_for_wake(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=KANBAN_LIVE))
             self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=PROCESS_ENVELOPES[0]))
@@ -999,7 +1037,7 @@ class AttachmentRelayTest(unittest.TestCase):
         self.assertEqual(seen, [])
 
     def test_hook_returns_none_for_relay(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(
                 session_id="s", user_message=self.wire([("m.txt", TRANSCRIPT_ROUTABLE_TAIL)], NEUTRAL_ASK)))
@@ -1013,7 +1051,7 @@ class AttachmentRelayTest(unittest.TestCase):
                                                        "Write a marketing campaign for the launch.")))
 
     def test_hook_log_marks_source_and_leaks_nothing(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         prompt = "Write a Zorblax marketing campaign for the launch.\n"
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)), \
                 self.assertLogs("hermes.plugin.model_router", "INFO") as logs:
@@ -1201,7 +1239,10 @@ class CapAndStateTest(unittest.TestCase):
         self.assertEqual(route(self.WIDE, max_profiles=0)["routes"], [])
 
     def test_clamp(self):
-        self.assertEqual(sp.clamp_max(99), sp.HARD_MAX_PROFILES)
+        self.assertEqual(sp.HARD_MAX_PROFILES, 15)
+        self.assertEqual(sp.clamp_max(99), 15)
+        self.assertEqual(sp.clamp_max(15), 15)
+        self.assertEqual(sp.clamp_max(7), 7)
         self.assertEqual(sp.clamp_max(-3), 0)
         self.assertEqual(sp.clamp_max("x"), sp.DEFAULT_MAX_PROFILES)
 
@@ -1218,7 +1259,7 @@ class CapAndStateTest(unittest.TestCase):
                          "public")
 
     def test_hook_privacy_is_per_turn_not_per_session(self):
-        cfg = config_mod.RouterSettings(specialist_routing=True)
+        cfg = config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid")
         h = hook_mod.SpecialistHook(cfg)
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(session_id="s1",
@@ -1392,7 +1433,7 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual(env.specialist_max_profiles, 2)
 
     def test_hook_behaviour(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             out = h.on_pre_llm_call(session_id="s", user_message=[
                 {"type": "text", "text": "Write a marketing campaign for the launch."}])

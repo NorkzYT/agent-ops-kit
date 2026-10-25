@@ -1,0 +1,5 @@
+# Books for this profile, one path per line, relative to BOOKS_ROOT (default /mnt/books).
+# Created by knowledge-apply from an approved plan; shared books live in the canonical store
+# and are referenced from knowledge/refs/ (see knowledge-assignments.json).
+edu/AI-Assisted Statistics for Data Scientists 50+ Essential Concepts Using R and Python
+edu/Simulation Models for Data Science (for Raymond Rhine)

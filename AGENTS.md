@@ -44,7 +44,9 @@ the Hermes templates and an offline render of `scripts/stack-init.sh`.
   keep them fast, no new dependencies.
 - **Hermes config:** every key in `hermes/config.yaml.tmpl` must exist in the
   Hermes docs. Secrets never go in `config.yaml`; they go in `~/.hermes/.env`
-  and are referenced as `${VAR}`.
+  and are referenced as `${VAR}`. Apply `.env` changes with
+  `make hermes-config-apply` (forced render, no restart), then
+  `make hermes-restart` from the operator's terminal (docs/install.md).
 - **Docs:** short, one path per task, commands in fenced blocks. `README.md` is
   the fast path; detail lives in `docs/`.
 - **Commits:** Conventional Commits (`feat(hermes): …`, `fix(compose): …`,
@@ -87,8 +89,11 @@ the job id. If scheduling fails, say so and ask to be pinged.
   effort is rewritten per task up to the `agent.reasoning_effort` ceiling
   (`high`); auxiliary entries keep their own `reasoning_effort`.
 - Coding subagents: Claude Max through claude-max-proxy (`HERMES_CODING_MODEL`,
-  Opus by default; Fable only for genuinely difficult engineering; effort
-  fields untouched — the proxy owns the Claude effort mapping). A leading
+  Opus by default; Fable only for genuinely difficult engineering). Claude
+  effort is set per task: routine→medium, complex→high, unusually hard
+  debugging/architecture→xhigh, `max` only with a leading `#max`/`#astra`
+  line; capped by `coding_effort_ceiling` (default `max`), not the orchestrator
+  ceiling; the proxy maps the label to the CLI thinking budget. A leading
   standalone `#opus`/`#fable` line forces that coding model for the request
   (coding-family seam only; refused on the orchestrator seam, never faked with a
   GPT alias; privacy takes precedence).
@@ -97,22 +102,33 @@ the job id. If scheduling fails, say so and ask to be pinged.
   `#privacy` (or the equivalent `#private`) never reaches a cloud provider —
   local Ollama or refuse. Only that marker counts (no content detection,
   `#local` inert, not sticky);
-  earlier marked turns are withheld from later public requests.
+  earlier marked turns are withheld from later public requests. Needs
+  `MODEL_ROUTER_PRIVACY=true`; `.env.example` currently ships the `false`
+  opt-out (main-loop guard off; the aux guard and specialist router still
+  keep marked turns off the cloud).
 - Local Ollama roles (one endpoint, `OLLAMA_*_MODEL`): routine `qwen3.5:27b`
-  (ordinary private turns, aux, specialist classifier), agent `qwen3.8:27b`
+  (ordinary private turns, local specialist classifier; titles only with
+  `AUX_BASE_URL`), agent `qwen3.8:27b`
   (difficult private turns, private coding, fallback agent), fallback
   `qwen3.6:27b` (one retry, then refuse). Private routing never falls back to
   cloud. `make local-route-status` / `local-route-readback` show the result.
 - Native fallback chains (non-private only): orchestrator CLIProxyAPI →
   claude-max-proxy → Ollama agent → Ollama fallback; delegation
   claude-max-proxy → Ollama agent → Ollama fallback.
+- Compression: CLIProxyAPI `gpt-5.6-terra`, fallback `gpt-5.6-luna`
+  (`AUX_COMPRESSION_*`; `AUX_COMPRESSION_ROUTE=aux` pins it to the title route).
+  The plugin's aux guard refuses `#privacy`/`#private` payloads to it.
+- Session titles: the main route (CLIProxyAPI, luna); no `AUX_*` title vars.
 - Honcho reasoning: CLIProxyAPI. Embeddings: local Ollama.
 - No vendor API keys anywhere in the stack.
 - Full reference: `docs/model-routing.md`. Verify: `make route-smoke`,
   `make test-router`.
-- Specialist routing (pilot, off by default): `specialist_routing` in the same
-  plugin suggests 0-4 book-backed profiles per current task; private tasks never
-  reach cloud-backed profiles; high-risk profiles are advisory only. Dry-run:
+- Specialist routing (pilot; plugin default off, `.env.example` on with the
+  `cliproxy` classifier, `gpt-5.6-terra`): `specialist_routing` in the same
+  plugin suggests 0-15 book-backed profiles per current task (15 is the hard
+  cap; verified attachment signals count before it); private tasks never
+  reach cloud-backed profiles; every profile is advisory, none is labelled
+  high-risk. Dry-run:
   `TASK="..." make specialist-route`; live decisions: `make specialist-logs`.
   A bare uploaded prompt file routes on its verified content
   (`attachment-derived`). Activation: `make specialist-status`,

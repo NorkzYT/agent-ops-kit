@@ -1,0 +1,46 @@
+{
+  "assignments": [
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Answer Engine Optimization",
+      "source_id": "ac44495ddd663e06",
+      "source_sha256": "ac44495ddd663e06084d494b221b031a27a4d2c5a9803330449d531e55feb854",
+      "tags": [
+        "aeo",
+        "geo",
+        "seo",
+        "search-marketing",
+        "content-strategy",
+        "ai-discovery",
+        "organic-acquisition"
+      ]
+    },
+    {
+      "assigned": "2026-10-24T14:35:03",
+      "chapters": [],
+      "mode": "canonical",
+      "plan_id": "6d42b5dcecf56837",
+      "purpose": "",
+      "secondary_reason": "",
+      "source": "edu/Generative Engine Optimization with Python",
+      "source_id": "d85941ac7b7ebb19",
+      "source_sha256": "d85941ac7b7ebb1916807805a060de5e4da1b3b0af7fd827e2b9769bea4616ad",
+      "tags": [
+        "generative-engine-optimization",
+        "ai-search",
+        "seo",
+        "brand-visibility",
+        "marketing-analytics",
+        "competitive-analysis",
+        "python-automation"
+      ]
+    }
+  ],
+  "profile": "marketing",
+  "version": 1
+}

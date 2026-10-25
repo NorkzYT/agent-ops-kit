@@ -264,13 +264,44 @@ class PdfTest(Base):
         self.assertEqual(by_source(rep)["scan.pdf"]["status"], "scanned")
 
     def test_mixed_pdf_is_partial_without_ocr(self):
-        make_pdf(self.src / "mixed.pdf", [[LONG_LINE], []])
+        make_pdf(self.src / "mixed.pdf", [[LONG_LINE], [], [LONG_LINE]])
         with mock.patch.object(doc2md, "tool", side_effect=lambda n: None if n == "tesseract" else shutil.which(n)):
             code, rep = run(["--source", str(self.src), "--dest", str(self.dst)])
         self.assertEqual(code, 0)
         r = by_source(rep)["mixed.pdf"]
         self.assertEqual(r["status"], "partial")
         self.assertIn("1 page(s) have no text layer", r["warnings"][0])
+
+    def test_edge_blank_and_sparse_title_pages_are_not_missing_text(self):
+        """Regression: a book PDF with a blank first/last page and short title/divider pages
+        (Florentine Histories: pages 1 and 406 blank, 17-18 ~22 chars) is complete, not partial."""
+        make_pdf(self.src / "book.pdf", [[], [LONG_LINE], ["Florentine Histories"], ["* * *"],
+                                         [LONG_LINE], [], []])
+        with mock.patch.object(doc2md, "tool", side_effect=lambda n: None if n == "tesseract" else shutil.which(n)):
+            code, rep = run(["--source", str(self.src), "--dest", str(self.dst)])
+        self.assertEqual(code, 0, rep)
+        r = by_source(rep)["book.pdf"]
+        self.assertEqual((r["status"], r["method"], r["pages"], r["warnings"]),
+                         ("converted", "pdftotext", 7, []), r)
+        text = (self.dst / "book.md").read_text()
+        for i in range(1, 8):
+            self.assertIn(f"<!-- page {i} -->", text)
+        self.assertIn("Florentine Histories", text)
+
+    def test_interior_blank_page_detected_when_ocr_disabled(self):
+        make_pdf(self.src / "gap.pdf", [[LONG_LINE], ["Part Two"], [], [LONG_LINE]])
+        _, rep = run(["--source", str(self.src), "--dest", str(self.dst), "--ocr", "never"])
+        r = by_source(rep)["gap.pdf"]
+        self.assertEqual(r["status"], "partial", r)
+        self.assertIn("1 page(s) have no text layer", r["warnings"][0])
+
+    def test_sparse_only_pdf_is_still_scanned(self):
+        """Every page under MIN_PAGE_CHARS (e.g. scans with only page numbers) stays scanned."""
+        make_pdf(self.src / "scan.pdf", [["1"], ["2"], ["3"]])
+        with mock.patch.object(doc2md, "tool", side_effect=lambda n: None if n == "tesseract" else shutil.which(n)):
+            code, rep = run(["--source", str(self.src), "--dest", str(self.dst)])
+        self.assertEqual(code, 3)
+        self.assertEqual(by_source(rep)["scan.pdf"]["status"], "scanned")
 
     @unittest.skipUnless(HAVE_PDFTOPPM, "pdftoppm not installed")
     def test_ocr_fallback_uses_tesseract(self):
@@ -280,13 +311,15 @@ class PdfTest(Base):
         stub = bindir / "tesseract"
         stub.write_text('#!/bin/sh\ntest -f "$1" || exit 1\necho "OCR stub text for $(basename "$1")"\n')
         stub.chmod(0o755)
-        make_pdf(self.src / "mixed.pdf", [[LONG_LINE], []])
+        make_pdf(self.src / "mixed.pdf", [[], [LONG_LINE], [], [LONG_LINE], []])
         with mock.patch.dict(os.environ, {"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}):
             _, rep = run(["--source", str(self.src), "--dest", str(self.dst)])
         r = by_source(rep)["mixed.pdf"]
         self.assertEqual((r["status"], r["method"], r["ocr_pages"]), ("converted", "pdftotext+ocr", 1), r)
         text = (self.dst / "mixed.md").read_text()
-        self.assertIn("OCR stub text for p2.png", text)
+        self.assertIn("OCR stub text for p3.png", text)
+        self.assertNotIn("p1.png", text)  # edge blank pages are not OCRed
+        self.assertNotIn("p5.png", text)
         self.assertIn(LONG_LINE, text)
 
     @unittest.skipUnless(HAVE_GS, "ghostscript not installed")

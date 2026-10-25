@@ -1,6 +1,10 @@
 # model-router plugin
 
-Two Hermes middleware behaviors in one bundled plugin:
+Two Hermes middleware behaviors in one bundled plugin, plus a load-time
+extension of Hermes' auxiliary egress guard (`aux_guard.py`: CLIProxyAPI and
+claude-max-proxy count as cloud even on loopback, and a `#privacy`/`#private`
+payload is never sent to them by compression or title generation; see
+`docs/model-routing.md`, Auxiliary pre-egress guard):
 
 - **Task-scoped routing** (`llm_request`) — deterministically classifies the
   CURRENT user task (never history, system prompts, or tool output) and
@@ -11,9 +15,13 @@ Two Hermes middleware behaviors in one bundled plugin:
     starts with a standalone `#max`/`#astra` control line (per-task, TTL-bound,
     never bleeding to the next task or session). The automatic ceiling is Sol.
   - delegated coding (claude-max-proxy): `opus` by default, `fable` only for
-    genuinely difficult engineering; effort fields are never touched here.
+    genuinely difficult engineering; Claude effort per task — `medium`
+    routine/ordinary, `high` complex, `xhigh` only for unusually hard
+    debugging/architecture, `max` only with a leading `#max`/`#astra` — capped
+    by `coding_effort_ceiling`, not the orchestrator ceiling.
   A **leading standalone `#opus`/`#fable`** line forces that coding model for the
-  request, overriding complexity (effort untouched, no state stored). Because the
+  request, overriding complexity (effort still follows the task body, never
+  `max`; no state stored). Because the
   middleware can rewrite the request body but not switch the bound
   provider/`base_url`, the force is honored only on a coding-family seam; on the
   orchestrator/GPT seam it is refused with a typed response at the execution seam
@@ -64,13 +72,13 @@ Two Hermes middleware behaviors in one bundled plugin:
   `ollama_base_url` is refused unsent.
 
 - **Specialist routing pilot** (`pre_llm_call` hook, off by default) —
-  `specialists.py` deterministically picks 0-4 book-backed profiles for the
+  `specialists.py` deterministically picks 0-15 book-backed profiles for the
   current genuine user task and appends a `<specialist-routing>` note to the
-  orchestrator's turn (privacy first, high-risk profiles advisory with the
-  `skills` toolset only, readiness from the installed profile's `/learn`
-  skill). With `specialist_classifier: cliproxy` a public task with no or
+  orchestrator's turn (privacy first, every profile advisory, `short` routes
+  with the `skills` toolset only, readiness from the installed profile's
+  `/learn` skill; no high-risk tier). With `specialist_classifier: cliproxy` a public task with no or
   only weak keyword matches, or with verified attachments, asks CLIProxyAPI
-  (`gpt-5.6-terra`, `medium` reasoning) for at most two non-high-risk
+  (`gpt-5.6-terra`, `medium` reasoning) for at most two
   additions, from the typed task plus the verified attached documents (PDF
   and DOCX text extracted locally, bounded; wire text, `#privacy` and routing
   notes withheld). `local` asks the routine local model instead. A
@@ -91,6 +99,8 @@ plugins:
         complexity_routing: true
         privacy_routing: true
         effort_routing: true           # per-task effort rewrite (gpt family)
+        coding_effort_routing: true    # per-task Claude effort (coding family)
+        coding_effort_ceiling: max     # low | medium | high | xhigh | max
         astra_policy: task             # task | always | never
         task_ttl_seconds: 1800         # per-session task-state TTL
         ollama_base_url: "http://127.0.0.1:11434/v1"   # host-reachable, local-only Ollama
@@ -113,7 +123,8 @@ plugins:
 Environment fallbacks (used when a setting is unset): `OLLAMA_BASE_URL`,
 `OLLAMA_CHAT_MODEL`, `OLLAMA_ROUTINE_MODEL`, `OLLAMA_FALLBACK_MODEL`,
 `OLLAMA_AGENT_MODEL`, `MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT`, `MODEL_ROUTER_COMPLEXITY`, `MODEL_ROUTER_PRIVACY`,
-`MODEL_ROUTER_EFFORT`, `MODEL_ROUTER_ASTRA`, `MODEL_ROUTER_TASK_TTL`,
+`MODEL_ROUTER_EFFORT`, `MODEL_ROUTER_CODING_EFFORT`,
+`MODEL_ROUTER_CODING_EFFORT_CEILING`, `MODEL_ROUTER_ASTRA`, `MODEL_ROUTER_TASK_TTL`,
 `MODEL_ROUTER_PRIVATE_TERMS`, `MODEL_ROUTER_PRIVATE_PATHS`.
 
 `complexity_routing` and `privacy_routing` both default to **true**. The kit's
@@ -127,3 +138,13 @@ Private routing is **active only** when a host-reachable Ollama chat endpoint is
 configured *and* the zero-egress canary passes. Until then the plugin still runs
 fail-closed: private requests are **refused** (never sent to cloud). See
 `docs/model-routing.md`.
+
+## Specialist selection mode
+
+`specialist_selection_mode` (`MODEL_ROUTER_SPECIALIST_MODE`): `ai` (default; the
+configured `specialist_classifier` selects up to `specialist_max_profiles`
+profiles from the eligible installed catalog, including profiles created by
+knowledge-apply; a model failure selects none), `hybrid` (keywords first,
+classifier for weak/no matches) or `keywords` (deterministic only). Privacy,
+allowlist, readiness, caps and dispatch mode are enforced in code in every
+mode; there is no high-risk label or filter. See `docs/specialist-routing.md`.

@@ -56,7 +56,7 @@ folders or files. With no paths, the whole source tree is converted.
 | Status | Meaning | What to tell the operator |
 |--------|---------|---------------------------|
 | `converted` | Markdown written | Output path |
-| `partial` | Written, but some PDF pages had no text and OCR was unavailable | Page count missing; install tesseract and rerun with `--force` |
+| `partial` | Written, but blank PDF pages between text pages had no text and OCR was unavailable (short title/divider pages and leading/trailing blank pages do not count) | Page count missing; install tesseract and rerun with `--force` |
 | `up-to-date` | Output is newer than the source | Nothing to do (`--force` rebuilds) |
 | `would-convert` | Dry run only | — |
 | `unsupported` | Not an EPUB or PDF (covers, `.opf`, `Thumbs.db`) | Ignored |

@@ -3,6 +3,8 @@
 # Text (.md/.txt) is copied; EPUB/PDF is converted to Markdown. Sources are never changed.
 edu/The 22 Immutable Laws of Marketing
 edu/Scorecard Marketing - The four-step playbook for getting better leads and bigger profits
-books-in-text/alex-hormozi/$100M Leads_ How to Get Strangers To Want To Buy Your Stuff -- Alex Hormozi -- 2023 -- 3e2b9ec2755af2da413fffbff7179dbe -- Anna’s Archive.txt
+edu/$100M Leads - How to Get Strangers To Want To Buy Your Stuff
 edu/The Creative Act - A Way of Being
 edu/The Four - The Hidden DNA of Amazon, Apple, Facebook and Google
+edu/Answer Engine Optimization
+edu/Generative Engine Optimization with Python

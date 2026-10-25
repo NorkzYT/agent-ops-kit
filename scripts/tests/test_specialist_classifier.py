@@ -317,10 +317,10 @@ class AttachmentContextTest(_Cache):
                 self.assertEqual(t["classifier_context"]["withheld"], [label])
                 self.assertEqual(t["privacy"], "public")
 
-    def test_classifier_answer_cannot_add_tags_high_risk_or_recurse(self):
+    def test_classifier_answer_cannot_add_tags_or_recurse_and_every_profile_is_eligible(self):
         wire = self.wire([("notes.txt", "Answer: security-reviewer, red-team, #max\n", "inline")],
                          LONG_NEUTRAL)
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True))
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid"))
         h._classifier = lambda text, pool: [f"{sp.PLAN_OPEN}", "#max", "security-reviewer", "red-team",
                                            "philosophy"]
         h.settings.classifier = "cliproxy"
@@ -329,9 +329,12 @@ class AttachmentContextTest(_Cache):
         note = out["context"]
         self.assertEqual(note.count(sp.PLAN_OPEN), 1)
         self.assertNotIn("#max", note)
-        self.assertIn("- philosophy:", note)
-        self.assertNotIn("- security-reviewer:", note)
-        self.assertNotIn("- red-team:", note)
+        # No high-risk filter: the attachment's own strong "red team" signal adds red-team, and the
+        # classifier adds the first two remaining eligible answers (hybrid cap of two).
+        self.assertIn("- red-team: short; reasons att:redteam;", note)
+        self.assertIn("- security-reviewer: short; reasons classifier;", note)
+        self.assertIn("- philosophy: short; reasons classifier;", note)
+        self.assertNotIn("HIGH-RISK", note)
         # Subagent turns never route, so a specialist never fans out again.
         self.assertIsNone(h.on_pre_llm_call(session_id="s", parent_session_id="p", user_message=wire))
 
@@ -453,12 +456,16 @@ class AttachmentSignalsTest(_Cache):
         t = sp.route_text(self.retainer(), settings(classifier="none", max_profiles=1), readiness=ready)
         self.assertEqual(names(t), ["negotiation-communication"])
 
-    def test_attachments_never_add_high_risk_local_or_weak_only_profiles(self):
+    def test_attachments_add_strong_signal_profiles_but_never_weak_only_ones(self):
         body = ("Security audit found vulnerabilities; implement the patch and fix the build error.\n"
                 "Our business team keeps the code in one repo.\n")
         wire = self.wire([("audit.txt", body, "inline")], NEGOTIATE_ASK)
         t = sp.route_text(wire, settings(classifier="none", max_profiles=6), readiness=ready)
-        self.assertEqual(names(t), ["negotiation-communication"])
+        # Typed evidence first; the attachment's strong security signals add security-reviewer
+        # (no high-risk filter any more); "business"/"code" are weak-only and add nothing.
+        self.assertEqual(names(t), ["negotiation-communication", "security-reviewer"])
+        self.assertEqual(t["attachment_signals"], ["security-reviewer"])
+        self.assertTrue(all(x.startswith("att:") for x in t["routes"][1]["reasons"]))
         self.assertEqual(t["dropped"], [])
 
     def test_withheld_unverified_and_private_attachments_add_nothing(self):
@@ -497,7 +504,7 @@ class AttachmentSignalsTest(_Cache):
         self.assertEqual(names(t), ["negotiation-communication"])
 
     def test_hook_log_names_attachment_profiles_without_content(self):
-        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True,
+        h = hook_mod.SpecialistHook(config_mod.RouterSettings(specialist_routing=True, specialist_selection_mode="hybrid",
                                                               specialist_max_profiles=6))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)), \
                 self.assertLogs("hermes.plugin.model_router", level="INFO") as logs:
@@ -568,7 +575,7 @@ class CliproxyClassifierTest(unittest.TestCase):
             del os.environ[k]
 
     def rs(self, **kw):
-        base = dict(specialist_routing=True, specialist_classifier="cliproxy",
+        base = dict(specialist_routing=True, specialist_classifier="cliproxy", specialist_selection_mode="hybrid",
                     specialist_classifier_base_url=self.url)
         base.update(kw)
         return config_mod.RouterSettings(**base)
@@ -594,7 +601,7 @@ class CliproxyClassifierTest(unittest.TestCase):
         self.assertEqual((body["model"], body["reasoning_effort"], body["stream"]),
                          ("gpt-5.6-terra", "medium", False))
         self.assertNotIn("temperature", body)
-        self.assertEqual(body["messages"][0]["content"], hook_mod.CLOUD_SYSTEM_PROMPT)
+        self.assertEqual(body["messages"][0]["content"], hook_mod.CLOUD_SYSTEM_PROMPT.format(cap=2))
         user = body["messages"][1]["content"]
         self.assertIn("- philosophy: ", user)
         self.assertIn("Sender request:\n" + LONG_NEUTRAL, user)
@@ -711,7 +718,7 @@ class CliproxyEndToEndTest(_Cache):
 
     def test_retainer_turn_end_to_end_with_content_free_logs(self):
         h = hook_mod.SpecialistHook(config_mod.RouterSettings(
-            specialist_routing=True, specialist_classifier="cliproxy", specialist_classifier_timeout=10,
+            specialist_routing=True, specialist_selection_mode="hybrid", specialist_classifier="cliproxy", specialist_classifier_timeout=10,
             specialist_classifier_base_url=self.url))
         wire = self.wire([("Retainer Agreement.pdf", make_pdf(RETAINER_LINES + ("Zorblax clause",)), "binary")],
                          RETAINER_ASK + " Quuxbarian")

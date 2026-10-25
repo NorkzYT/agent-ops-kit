@@ -11,4 +11,13 @@ edu/The Undiscovered Self - Carl Jung
 edu/Inner Engineering - A Yogi’s Guide to Joy
 edu/Studies in Alchemy Pearls of Wisdom, 1962 Saint Germain
 edu/The Occult Sciences 2014 Waite, Arthur Edward
-books-in-text/the-great-mental-models
+edu/The Great Mental Models, Volume 1 General Thinking Concepts-
+edu/The Great Mental Models, Volume 2  Physics, Chemistry, and Biology-
+edu/The Great Mental Models, Volume 3 Systems and Mathematics-
+edu/The Great Mental Models, Volume 4  Economics and Art-
+edu/Daybreak — Nietzsche
+edu/Florentine Histories — Machiavelli
+edu/Human, All Too Human — Nietzsche
+edu/On the Genealogy of Morals and Ecce Homo — Nietzsche
+edu/The Gay Science — Nietzsche
+edu/The Portable Nietzsche

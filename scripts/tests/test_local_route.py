@@ -478,21 +478,19 @@ class ClassifierGateTest(unittest.TestCase):
         self.assertEqual([r["profile"] for r in weak["routes"]], ["strategy", "philosophy"])
         self.assertNotIn("strategy", seen[1])  # the pool never repeats a deterministic match
 
-    def test_at_most_two_additions_and_never_high_risk(self):
+    def test_at_most_two_additions_from_the_whole_catalog(self):
         def greedy(visible, pool):
-            return ["security-reviewer", "red-team", "health-fitness", "herbalism", "local-engineer",
+            return ["security-reviewer", "red-team", "health-fitness", "herbalism",
                     "philosophy", "marketing", "business", "survival"]
 
         t = sp.route_text(NO_MATCH, settings(max_profiles=6), readiness=ready, classifier=greedy)
         added = [r["profile"] for r in t["routes"] if r["reasons"] == ["classifier"]]
-        self.assertEqual(added, ["philosophy", "marketing"])
-        self.assertTrue(set(added).isdisjoint(sp.CLASSIFIER_FORBIDDEN))
+        self.assertEqual(added, ["security-reviewer", "red-team"])   # no high-risk filter
         reasons = {d["profile"]: d["reason"] for d in t["dropped"]}
-        for name in ("security-reviewer", "red-team", "health-fitness", "herbalism", "local-engineer"):
-            self.assertEqual(reasons[name], "classifier:not-eligible")
-        self.assertEqual(reasons["business"], "classifier:cap")
+        for name in ("health-fitness", "herbalism", "philosophy", "marketing", "business", "survival"):
+            self.assertEqual(reasons[name], "classifier:cap")
         self.assertEqual(sp.MAX_CLASSIFIER_ADDITIONS, 2)
-        self.assertEqual(set(sp.HIGH_RISK), {"security-reviewer", "red-team", "health-fitness", "herbalism"})
+        self.assertFalse(hasattr(sp, "HIGH_RISK"))
 
     def test_private_task_never_reaches_classifier(self):
         called = []
@@ -546,7 +544,7 @@ class LocalClassifierTest(unittest.TestCase):
 
     def test_hook_logs_no_prompt_content(self):
         calls = []
-        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_classifier="local"))
+        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_selection_mode="hybrid", specialist_classifier="local"))
         h = hook_mod.SpecialistHook(s, backend_factory=FakeBackend({"qwen3.5:27b": "philosophy"}, calls))
         self.assertTrue(h.classifier_ready)
         secret_word = "Quuxbarian"
@@ -561,7 +559,7 @@ class LocalClassifierTest(unittest.TestCase):
 
     def test_hook_private_turn_never_calls_local_classifier(self):
         calls = []
-        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_classifier="local"))
+        s = config_mod.RouterSettings(**dict(ROLES, specialist_routing=True, specialist_selection_mode="hybrid", specialist_classifier="local"))
         h = hook_mod.SpecialistHook(s, backend_factory=FakeBackend({"qwen3.5:27b": "philosophy"}, calls))
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)):
             self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=f"#privacy {NO_MATCH}"))
@@ -609,6 +607,55 @@ def _config_get():
         config_get = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(config_get)
     return config_get
+
+
+def _local_route():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("local_route", REPO / "scripts" / "local-route.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+CLIPROXY = "http://127.0.0.1:8317/v1"
+
+
+def _nat(title, main=None):
+    """Minimal hermes-native-check output: main route + one auxiliary task."""
+    return {"main": main if main is not None else {"provider": "custom", "model": "gpt-5.6-luna",
+                                                   "base_url": CLIPROXY},
+            "fallback_providers": [], "delegation_fallback_providers": [],
+            "auxiliary": {"title_generation": dict(title, fallback_chain=[])},
+            "plugins_enabled": ["model-router"], "model_router": {}}
+
+
+class ReadbackInvariantTest(unittest.TestCase):
+    """Title generation intentionally follows the main CLIProxyAPI route."""
+
+    def setUp(self):
+        self.lr = _local_route()
+
+    def bad(self, nat):
+        return self.lr._invariants(nat, lb, CLIPROXY)
+
+    def test_auto_title_following_main_cliproxy_route_is_accepted(self):
+        # Hermes resolves an empty YAML model to the string "None".
+        for model in (None, "", "None"):
+            self.assertEqual(self.bad(_nat({"provider": "auto", "model": model, "base_url": ""})), [], model)
+        main = {"provider": "custom", "model": "gpt-5.6-luna", "base_url": CLIPROXY + "/"}
+        self.assertEqual(self.bad(_nat({"provider": "auto", "model": "None", "base_url": ""}, main)), [])
+
+    def test_auto_title_fails_when_main_is_not_the_configured_cliproxy(self):
+        for main in ({"provider": "custom", "model": "opus", "base_url": "http://127.0.0.1:3456/v1"},
+                     {"provider": "openrouter", "model": "x", "base_url": ""}, {}):
+            bad = self.bad(_nat({"provider": "auto", "model": "None", "base_url": ""}, main))
+            self.assertEqual(len(bad), 1, (main, bad))
+            self.assertIn("not the configured CLIProxyAPI", bad[0])
+
+    def test_auto_with_explicit_model_still_fails(self):
+        bad = self.bad(_nat({"provider": "auto", "model": "qwen3.5:27b", "base_url": ""}))
+        self.assertEqual(len(bad), 1, bad)
+        self.assertIn("resolves to the MAIN (cloud) provider", bad[0])
 
 
 class _InstallerFixture(unittest.TestCase):
@@ -680,17 +727,28 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.specialist_routing"), "true")
 
     def test_fresh_install_defaults_and_invalid_values(self):
-        r = self.install("MODEL_ROUTER_SPECIALISTS=maybe\nMODEL_ROUTER_SPECIALIST_MAX=9\n")
+        r = self.install("MODEL_ROUTER_SPECIALISTS=maybe\nMODEL_ROUTER_SPECIALIST_MAX=16\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = self.home / "config.yaml"
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_routing"), "false")
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_max_profiles"), "4")
         self.assertEqual(self.get(cfg, f"{SETTINGS}.specialist_classifier"), "none")
         self.assertIn("is not a boolean", r.stderr)
-        self.assertIn("is not 0-6", r.stderr)
+        self.assertIn("is not 0-15", r.stderr)
+
+    def test_render_pins_schema_version_kanban_and_title_effort(self):
+        r = self.install("", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = self.home / "config.yaml"
+        self.assertEqual(self.get(cfg, "_config_version"), "44")
+        self.assertEqual(self.get(cfg, "kanban.auto_decompose"), "true")
+        self.assertEqual(self.get(cfg, "auxiliary.title_generation.reasoning_effort"), "low")
+        self.assertEqual(self.get(cfg, "auxiliary.title_generation.provider"), "auto")
+        self.assertEqual(self.get(cfg, "agent.reasoning_effort"), "high")
 
     def test_local_roles_fallback_chains_and_aux_provider(self):
-        r = self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\nAUX_PROVIDER=auto\n", "--force")
+        r = self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\nAUX_PROVIDER=auto\n"
+                         "AUX_COMPRESSION_ROUTE=aux\n", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         text = (self.home / "config.yaml").read_text()
         self.assertNotRegex(text, r"__[A-Z0-9_]+__")
@@ -711,7 +769,7 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(self.home / "config.yaml", "compression.context_timeout_seconds"), "420")
         self.assertEqual(self.get(self.home / "config.yaml", "compression.context_total_ceiling_seconds"), "900")
         # Without a local aux endpoint provider stays auto (inherit main) with no chain.
-        self.install("", "--force")
+        self.install("AUX_COMPRESSION_ROUTE=aux\n", "--force")
         text = (self.home / "config.yaml").read_text()
         self.assertEqual(self.get(self.home / "config.yaml", "auxiliary.compression.provider"), "auto")
         self.assertIn("fallback_chain: []", text)
@@ -721,6 +779,48 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.privacy_routing"), "true")
         self.install("MODEL_ROUTER_PRIVACY=false\n", "--force")
         self.assertEqual(self.get(self.home / "config.yaml", f"{SETTINGS}.privacy_routing"), "false")
+
+    def test_compression_defaults_to_cliproxy_not_ollama(self):
+        """Even with title generation pinned to Ollama, compression renders
+        CLIProxyAPI gpt-5.6-terra with a gpt-5.6-luna fallback on the same proxy."""
+        r = self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        cfg = self.home / "config.yaml"
+        text = cfg.read_text()
+        self.assertNotRegex(text, r"__[A-Z0-9_]+__")
+        self.assertEqual(self.get(cfg, "auxiliary.title_generation.base_url"), "http://100.65.5.47:11434/v1")
+        get = lambda k: self.get(cfg, f"auxiliary.compression.{k}")
+        self.assertEqual((get("provider"), get("model"), get("base_url"), get("api_key")),
+                         ("custom", "gpt-5.6-terra", "http://127.0.0.1:8317/v1", "${CLIPROXY_API_KEY}"))
+        self.assertEqual((get("reasoning_effort"), get("timeout")), ("low", "120"))
+        comp = text.split("  compression:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertNotIn("11434", comp)
+        self.assertNotIn("qwen", comp)
+        self.assertIn("extra_body: {}", comp)
+        self.assertIn('fallback_chain: [{provider: custom, model: "gpt-5.6-luna", '
+                      'base_url: "http://127.0.0.1:8317/v1", key_env: CLIPROXY_API_KEY}]', comp)
+        self.assertNotIn("cptest", text)  # the key stays in .env
+        self.assertEqual(self.get(cfg, "compression.context_timeout_seconds"), "120")
+        self.assertEqual(self.get(cfg, "compression.context_total_ceiling_seconds"), "600")
+        # Same render with no Ollama aux at all.
+        self.install("", "--force")
+        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-5.6-terra")
+        self.assertEqual(self.get(cfg, "auxiliary.title_generation.provider"), "auto")
+
+    def test_compression_model_overrides_and_invalid_route(self):
+        cfg = self.home / "config.yaml"
+        r = self.install("AUX_COMPRESSION_MODEL=gpt-5.6-luna\n", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-5.6-luna")
+        comp = cfg.read_text().split("  compression:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("fallback_chain: []", comp)  # no duplicate of the primary
+        self.install("AUX_COMPRESSION_FALLBACK_MODEL=none\n", "--force")
+        comp = cfg.read_text().split("  compression:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("fallback_chain: []", comp)
+        r = self.install("AUX_COMPRESSION_ROUTE=ollama\n", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("AUX_COMPRESSION_ROUTE=ollama", r.stderr)
+        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-5.6-terra")
 
     def test_legacy_chat_model_keeps_single_model_installs_working(self):
         r = self.install("OLLAMA_CHAT_MODEL=llama3.1:8b\n", "--force")
@@ -812,6 +912,68 @@ print(json.dumps({"primary": strip(seen[0]), "stall_retry": strip(seen[1]),
 """
 
 
+# Runs in the Hermes venv: the rendered CLIProxyAPI compression route through
+# Hermes' own call_llm against a stub "CLIProxyAPI" on loopback. argv: config,
+# "guard"|"noguard" (install the model-router aux guard first), JSON list of
+# models the stub answers with 429 (a per-model usage limit).
+_CLIPROXY_COMPRESSION_WIRE = r"""
+import http.server, importlib.util, json, os, sys, tempfile, threading, yaml
+seen = []
+missing = set(json.loads(sys.argv[3]))
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        seen.append({"path": self.path, "model": body.get("model"), "auth": self.headers.get("Authorization"),
+                     "marker": "#privacy" in json.dumps(body.get("messages"))})
+        if body.get("model") in missing:
+            code, out = 429, {"error": {"message": "usage limit reached for this model",
+                                        "type": "rate_limit_error", "code": "rate_limit_exceeded"}}
+        else:
+            code, out = 200, {"id": "x", "object": "chat.completion", "created": 0, "model": body.get("model"),
+                              "choices": [{"index": 0, "finish_reason": "stop",
+                                           "message": {"role": "assistant", "content": "ok"}}]}
+        out = json.dumps(out).encode()
+        self.send_response(code); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
+    def log_message(self, *a): pass
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+url = f"http://127.0.0.1:{srv.server_port}/v1"
+cfg = yaml.safe_load(open(sys.argv[1]))
+aux = cfg["auxiliary"]["compression"]
+for route in [cfg["model"], aux] + aux["fallback_chain"]:
+    route["base_url"] = url
+home = tempfile.mkdtemp()
+yaml.safe_dump({k: cfg[k] for k in ("model", "auxiliary", "compression")}, open(f"{home}/config.yaml", "w"))
+os.environ.update(HERMES_HOME=home, CLIPROXY_API_KEY="cptest", CLIPROXY_BASE_URL=url)
+sys.path.insert(0, os.environ["HERMES_AGENT_DIR"])
+if sys.argv[2] == "guard":
+    pdir = os.environ["PLUGIN_DIR"]
+    spec = importlib.util.spec_from_file_location("model_router_wire", f"{pdir}/__init__.py",
+                                                  submodule_search_locations=[pdir])
+    mod = importlib.util.module_from_spec(spec); sys.modules["model_router_wire"] = mod
+    spec.loader.exec_module(mod)
+    from model_router_wire import aux_guard, router_config
+    assert aux_guard.install(aux_guard.proxy_urls(router_config.load_settings(lambda k, d=None: d)))
+from agent.auxiliary_client import call_llm
+from agent.aux_egress_guard import AuxCloudEgressRefused
+res = {}
+for name, text in (("public", "summarize: the build passed"),
+                   ("privacy", "[USER]: #privacy\nmy salary is 123"),
+                   ("private", "[USER]: #private notes")):
+    before = len(seen)
+    try:
+        call_llm(task="compression", messages=[{"role": "user", "content": text}])
+        res[name] = "sent"
+    except AuxCloudEgressRefused:
+        res[name] = "refused"
+    except Exception as exc:
+        res[name] = type(exc).__name__
+    res[name + "_requests"] = seen[before:]
+print(json.dumps(res))
+"""
+
+
 @unittest.skipUnless(VENV_PY.exists(), "Hermes venv not installed")
 class HermesNativeTest(_InstallerFixture):
     def native(self, config):
@@ -827,17 +989,22 @@ class HermesNativeTest(_InstallerFixture):
         nat = self.native(out)
         self.assertEqual([e["model"] for e in nat["fallback_providers"]], ["opus", "qwen3.8:27b", "qwen3.6:27b"])
         self.assertEqual([e["model"] for e in nat["delegation_fallback_providers"]], ["qwen3.8:27b", "qwen3.6:27b"])
-        for task in ("title_generation", "compression"):
-            aux = nat["auxiliary"][task]
-            self.assertEqual((aux["provider"], aux["model"], aux["base_url"]),
-                             ("custom", "qwen3.5:27b", "http://100.65.5.47:11434/v1"))
-            self.assertEqual([e["model"] for e in aux["fallback_chain"]], ["qwen3.6:27b"])
+        aux = nat["auxiliary"]["title_generation"]
+        self.assertEqual((aux["provider"], aux["model"], aux["base_url"]),
+                         ("custom", "qwen3.5:27b", "http://100.65.5.47:11434/v1"))
+        self.assertEqual([e["model"] for e in aux["fallback_chain"]], ["qwen3.6:27b"])
+        aux = nat["auxiliary"]["compression"]
+        self.assertEqual((aux["provider"], aux["model"], aux["base_url"]),
+                         ("custom", "gpt-5.6-terra", "http://127.0.0.1:8317/v1"))
+        self.assertEqual([(e["model"], e["base_url"]) for e in aux["fallback_chain"]],
+                         [("gpt-5.6-luna", "http://127.0.0.1:8317/v1")])
 
     def test_local_compression_wire_disables_thinking(self):
         """Ollama's /v1 honors only a top-level reasoning_effort; a `reasoning`
         object (what Hermes emits for the reasoning_effort key) overrides it."""
         out = self.tmp / "render.yaml"
-        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--render-only", str(out))
+        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\nAUX_COMPRESSION_ROUTE=aux\n",
+                     "--render-only", str(out))
         r = subprocess.run([str(VENV_PY), "-c", _COMPRESSION_WIRE, str(out)], capture_output=True, text=True,
                            timeout=120, env=dict(os.environ, HERMES_AGENT_DIR=str(AGENT_DIR)))
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
@@ -848,6 +1015,42 @@ class HermesNativeTest(_InstallerFixture):
         self.assertEqual(res["aux_timeout"], 600.0)
         self.assertEqual(res["budgets"], [420.0, 900.0])
 
+    def cliproxy_wire(self, mode, missing=()):
+        out = self.tmp / "render.yaml"
+        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--render-only", str(out))
+        r = subprocess.run([str(VENV_PY), "-c", _CLIPROXY_COMPRESSION_WIRE, str(out), mode, json.dumps(missing)],
+                           capture_output=True, text=True, timeout=180,
+                           env=dict(os.environ, HERMES_AGENT_DIR=str(AGENT_DIR),
+                                    PLUGIN_DIR=str(REPO / "hermes" / "plugins" / "model-router")))
+        self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+    def test_cliproxy_compression_wire_and_private_refusal(self):
+        """Compression reaches CLIProxyAPI as gpt-5.6-terra with the proxy key;
+        a #privacy/#private payload is refused before any byte is sent."""
+        res = self.cliproxy_wire("guard")
+        self.assertEqual(res["public"], "sent", res)
+        self.assertEqual([(q["model"], q["auth"]) for q in res["public_requests"]],
+                         [("gpt-5.6-terra", "Bearer cptest")])
+        for name in ("privacy", "private"):
+            self.assertEqual(res[name], "refused", res)
+            self.assertEqual(res[name + "_requests"], [], res)
+
+    def test_cliproxy_compression_falls_back_to_luna(self):
+        res = self.cliproxy_wire("guard", missing=["gpt-5.6-terra"])
+        self.assertEqual(res["public"], "sent", res)
+        chat = [q for q in res["public_requests"] if q["path"].endswith("/chat/completions")]
+        self.assertEqual([(q["model"], q["auth"]) for q in chat],
+                         [("gpt-5.6-terra", "Bearer cptest"), ("gpt-5.6-luna", "Bearer cptest")])
+        self.assertEqual((res["privacy"], res["privacy_requests"]), ("refused", []), res)
+
+    def test_core_guard_alone_leaks_loopback_cloud_proxy(self):
+        """Why the plugin extension is load-bearing: Hermes core treats the
+        loopback CLIProxyAPI as local and skips the privacy scan."""
+        res = self.cliproxy_wire("noguard")
+        self.assertEqual(res["privacy"], "sent", res)
+        self.assertTrue(res["privacy_requests"][0]["marker"], res)
+
     def test_auto_provider_with_local_base_url_resolves_to_main(self):
         """Why the installer never renders `auto` next to a local base_url."""
         out = self.tmp / "auto.yaml"
@@ -855,6 +1058,21 @@ class HermesNativeTest(_InstallerFixture):
                        "    base_url: http://100.65.5.47:11434/v1\n")
         aux = self.native(out)["auxiliary"]["compression"]
         self.assertEqual((aux["provider"], aux["base_url"]), ("auto", ""))
+
+    def test_readback_accepts_title_route_on_main_cliproxy(self):
+        cfg = self.home / "config.yaml"
+        self.install("", "--render-only", str(cfg))
+        nat = self.native(cfg)
+        self.assertEqual(nat["main"], {"provider": "custom", "model": "gpt-5.6-luna",
+                                       "base_url": "http://127.0.0.1:8317/v1"})
+        self.assertEqual((nat["auxiliary"]["title_generation"]["provider"],
+                          nat["auxiliary"]["title_generation"]["base_url"]), ("auto", ""))
+        env = dict(os.environ, HERMES_HOME=str(self.home), HERMES_AGENT_DIR=str(AGENT_DIR),
+                   ENV_FILE=str(self.tmp / "fixture.env"))
+        ok = subprocess.run([sys.executable, "scripts/local-route.py", "readback"], cwd=REPO, env=env,
+                            capture_output=True, text=True, timeout=300)
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+        self.assertIn("auxiliary.title_generation follows main gpt-5.6-luna @ 127.0.0.1:8317", ok.stdout)
 
     def test_readback_matches_render_and_flags_drift(self):
         cfg = self.home / "config.yaml"

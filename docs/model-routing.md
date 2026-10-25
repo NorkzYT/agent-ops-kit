@@ -79,7 +79,9 @@ Precedence when that line is exactly one tag: coding force (`#opus`/`#fable`)
 **Forced coding (`#opus` / `#fable`).** A leading standalone `#opus`/`#fable`
 line forces that exact coding model regardless of task shape, for **that request
 only** (no task state or authorization is stored, so it never bleeds into the
-next task). Reasoning effort is left untouched — the coding proxy owns it. The
+next task). The control names the model only: reasoning effort still follows
+the task body ([Reasoning effort](#reasoning-effort)) and never reaches `max`
+(that needs `#max`/`#astra`, which cannot share the control line). The
 control is resolved through the provenance-safe extractor, so a tag in memory,
 backfill, a reply quote, an attachment, a quote/fence, tool output or an older
 turn grants nothing; only a genuine leading tag in the current turn counts.
@@ -140,9 +142,29 @@ shapes are kept consistent (Chat Completions `reasoning_effort` /
 conflicting `high` rides along. Fields the request does not carry are never
 invented, and explicitly disabled reasoning is never re-enabled.
 
-**Coding requests are exempt:** claude-max-proxy reads `reasoning_effort` and
-owns the Claude CLI effort mapping; the plugin only ever selects `opus` vs
-`fable` there. **Auxiliary** title/compression calls keep their per-entry
+**Coding requests** (claude-max-proxy) get a task-based Claude effort with
+`coding_effort_routing` on (default), from the same current-task
+classification and independent of the model choice (`opus`/`fable`):
+
+| Current coding task | Effort | Proxy thinking budget |
+|---------------------|--------|-----------------------|
+| routine / ordinary code (status, small fixes, single-keyword or planning work) | `medium` | 10k |
+| complex code (Sol-tier: two hard categories, or one plus strong signals) | `high` | 32k |
+| unusually hard debugging/architecture: hard tier with strong signals, naming `debug`/`arch`/`concurrency` **and** a second hard category or an explicit `#deep`/`#hard` | `xhigh` | 48k |
+| leading standalone `#max`/`#astra` line (authorized, same TTL rules as Astra) | `max` | 64k |
+
+The coding effort is capped by `coding_effort_ceiling` (default `max`), not
+by `agent.reasoning_effort` — that orchestrator ceiling (`high`) would rule
+out `xhigh`. Every effort field the request carries is rewritten (Hermes'
+custom provider sends top-level `reasoning_effort`, which the proxy reads);
+a coding request with no reasoning field gets a top-level `reasoning_effort`
+so the proxy's `DEFAULT_THINKING_BUDGET` is not silently used instead;
+explicitly disabled reasoning (`none`, `enabled: false`) is never re-enabled.
+Only managed coding aliases (`opus`/`fable`) are touched: GPT/orchestrator
+effort, the private path (local answers always send `reasoning_effort:
+"none"`), and Ollama fallback hops (a non-managed model id) are unchanged.
+`MODEL_ROUTER_CODING_EFFORT=false` restores the previous behavior (configured
+effort passes through untouched). **Auxiliary** title/compression calls keep their per-entry
 `reasoning_effort` from native config (compression never runs at `high`; see
 [Auxiliary work](#auxiliary-work-title-generation-compression)).
 
@@ -155,7 +177,9 @@ Every managed routing decision is logged — including unchanged ones — as a
 single `model_router: route …` line carrying only opaque correlation ids
 (hashes of the session id and current-task text, plus the core
 `api_request_id`), the family, tier, authorization bit, `model old->new`,
-`effort old->new`, stable reason labels and an outcome
+`effort old->new` (coding requests too, e.g. `family=coding … effort=high->xhigh`;
+`unset->medium` when the request carried no field, `off` when reasoning was
+disabled), stable reason labels and an outcome
 (`rewritten` / `unchanged` / `no-candidate` / `refuse-scheduled` /
 `forced-coding` / `forced-coding-unroutable`). A forced-coding request carries
 the `force:opus` / `force:fable` reason label and is identified on both seams.
@@ -180,7 +204,9 @@ provider *attempt* (native fallback hops re-enter it with their own
 `call_role` to middleware, so fallback attempts are linked only via
 `turn_id`/`api_call_count`; and for streaming responses no served-model or
 usage evidence exists at this seam, so none is logged. View with
-`make router-logs`.
+`make router-logs`. The coding proxy confirms what it applied in its own
+`request.start` line (`reasoningSource`, `reasoningEffort`,
+`reasoningBudget`): `make claude-proxy-logs`.
 
 ## Local model roles
 
@@ -190,7 +216,7 @@ into the plugin settings and the native chains. No role relies on
 
 | Role | Default | `.env` | Plugin setting | Used by |
 |------|---------|--------|----------------|---------|
-| routine | `qwen3.5:27b` | `OLLAMA_ROUTINE_MODEL` | `ollama_routine_model` | ordinary private turns, title/compression (`AUX_MODEL` default), specialist classifier |
+| routine | `qwen3.5:27b` | `OLLAMA_ROUTINE_MODEL` | `ollama_routine_model` | ordinary private turns, title generation (`AUX_MODEL` default; compression too with `AUX_COMPRESSION_ROUTE=aux`), specialist classifier |
 | fallback | `qwen3.6:27b` | `OLLAMA_FALLBACK_MODEL` | `ollama_fallback_model` | one retry after a role-model failure; last hop of both native chains; aux `fallback_chain` |
 | agent | `qwen3.8:27b` | `OLLAMA_AGENT_MODEL` | `ollama_agent_model` | difficult private turns (high/max tier), private delegated coding, `#opus`/`#fable` when private, the native fallback agent |
 
@@ -273,6 +299,21 @@ Privacy routing is **enabled by default** (`MODEL_ROUTER_PRIVACY` defaults to
 deliberate, **risky opt-out** that disables the guard entirely; when enabled it
 stays fail-closed as described here.
 
+**Current `.env.example`: opt-out.** The shipped `.env.example` sets
+`MODEL_ROUTER_PRIVACY=false`, and an explicit `false` renders verbatim. With it:
+
+- a `#privacy`/`#private` turn follows the normal cloud route, and earlier
+  marked turns are not withheld from later requests;
+- the installer warns (`MODEL_ROUTER_PRIVACY=false: private data is NOT kept
+  local`), and `make local-route-status` / `local-route-readback` flag it;
+- still enforced, because they do not read this setting: the
+  [auxiliary guard](#auxiliary-pre-egress-guard--fail-closed) refuses a
+  compression payload carrying `#privacy`/`#private`, and the specialist router
+  never sends a marked turn to its classifier or to a cloud-backed profile.
+
+Set `MODEL_ROUTER_PRIVACY=true` and [apply it](install.md#change-a-setting)
+for the per-request local-or-refuse behavior below.
+
 Classification and local-routing errors remain fail-closed. Exceptions from a
 permitted downstream provider call propagate unchanged to normal provider error
 handling; they are not evidence of private content or an unavailable local model.
@@ -330,11 +371,11 @@ Limits (see [Honcho and private sessions](#honcho-and-private-sessions--known-li
 - Only the main-loop LLM call is guarded. Memory providers (Honcho) persist
   and reason over the transcript on their own route, so derived memories of a
   marked turn can come back in recalled context.
-- The auxiliary guard in Hermes core (title/compression) still uses its own
-  scanner (`#private`/`#local`, secrets) and does not recognize `#privacy`
-  (prefer `#private`, which both guards recognize).
-  Keep `AUX_BASE_URL` local so compression of a session that held a marked
-  turn stays on Ollama.
+- Title generation and compression are guarded by Hermes core's auxiliary
+  guard, which this plugin extends: CLIProxyAPI counts as cloud and a
+  `#privacy`/`#private` anywhere in the payload is refused (see
+  [Auxiliary pre-egress guard](#auxiliary-pre-egress-guard--fail-closed)). A
+  session that held a marked turn is therefore not compressed on CLIProxyAPI.
 - A `#privacy` sent as a mid-turn steer inside a tool result does not move an
   already-public turn local.
 
@@ -366,8 +407,19 @@ chain and response checks.
 ## Auxiliary work (title generation, compression)
 
 Cheap, high-volume helper calls (`auxiliary.title_generation` /
-`auxiliary.compression`), rendered from `AUX_BASE_URL` / `AUX_MODEL` /
-`AUX_FALLBACK_MODEL` / `AUX_PROVIDER`. Behavior on **Hermes 0.21.2**
+`auxiliary.compression`). Current defaults:
+
+- **Title generation** uses the main route: CLIProxyAPI with the orchestrator
+  model (`HERMES_MODEL`, `gpt-5.6-luna`). `.env.example` sets no `AUX_*` title
+  variables, so the installer renders `provider: auto` with
+  `reasoning_effort: low`. `make local-route-readback` accepts this route only
+  while the main model points at the configured CLIProxyAPI.
+- **Compression** uses CLIProxyAPI `gpt-5.6-terra`, then `gpt-5.6-luna`
+  ([below](#compression-on-cliproxyapi-default)).
+
+The installer still reads `AUX_BASE_URL` / `AUX_MODEL` / `AUX_FALLBACK_MODEL` /
+`AUX_PROVIDER` as an optional override that moves title generation to a local
+endpoint. Behavior on **Hermes 0.21.2**
 (`agent/auxiliary_client.py:_resolve_task_provider_model`):
 
 | `.env` | Rendered | Hermes resolves |
@@ -380,7 +432,7 @@ Cheap, high-volume helper calls (`auxiliary.title_generation` /
 the local model name. Ollama needs no key, so that layout silently leaves the
 aux calls on the cloud. The installer therefore renders `custom` whenever
 `AUX_BASE_URL` is set. `make local-route-readback` fails on the old layout. To keep
-title/compression off the cloud:
+title generation off the cloud (optional; not the shipped default):
 
 ```
 AUX_BASE_URL=http://127.0.0.1:11434/v1
@@ -388,14 +440,53 @@ AUX_BASE_URL=http://127.0.0.1:11434/v1
 # AUX_FALLBACK_MODEL=qwen3.6:27b default: OLLAMA_FALLBACK_MODEL
 ```
 
-**Compression on a local route** renders thinking off and prefill-sized
+### Compression on CLIProxyAPI (default)
+
+`AUX_COMPRESSION_ROUTE=cliproxy` (the default) renders compression on
+CLIProxyAPI, whatever `AUX_BASE_URL` says:
+
+```yaml
+compression:
+  provider: custom
+  model: gpt-5.6-terra                    # AUX_COMPRESSION_MODEL
+  base_url: http://127.0.0.1:8317/v1      # CLIPROXY_PORT
+  api_key: ${CLIPROXY_API_KEY}
+  reasoning_effort: low
+  extra_body: {}
+  timeout: 120
+  fallback_chain: [{provider: custom, model: "gpt-5.6-luna", base_url: "http://127.0.0.1:8317/v1", key_env: CLIPROXY_API_KEY}]
+```
+
+Terra is the routing policy's model for work that needs judgment (a summary
+must keep decisions, errors and file paths); luna, the everyday model, is the
+fallback. Hermes moves to luna when terra hits a usage/rate limit (429,
+verified) or returns an invalid response, and the compression stall retry
+pins it too. A 404 is not a fallback reason, and Hermes scopes a payment error
+to the whole proxy endpoint, so neither reaches luna. Wait budgets are the
+cloud ones (120 s / 600 s). `AUX_COMPRESSION_FALLBACK_MODEL=none` drops the
+fallback.
+
+| `.env` | Default | Effect |
+|--------|---------|--------|
+| `AUX_COMPRESSION_ROUTE` | `cliproxy` | `aux` follows the title-generation route (`AUX_BASE_URL` local Ollama, else the main provider) |
+| `AUX_COMPRESSION_MODEL` | `gpt-5.6-terra` | primary model on CLIProxyAPI |
+| `AUX_COMPRESSION_FALLBACK_MODEL` | `gpt-5.6-luna` | same-proxy fallback; `none` = no fallback |
+
+Private payloads never take this route: the model-router plugin's guard
+extension (below) refuses a payload carrying `#privacy`/`#private` before
+anything is sent. Verified by `test_cliproxy_compression_wire_and_private_refusal`
+and `test_cliproxy_compression_falls_back_to_luna` (Hermes' own `call_llm`
+against a stub proxy).
+
+**Compression on a local route** (`AUX_COMPRESSION_ROUTE=aux` with
+`AUX_BASE_URL` set) renders thinking off and prefill-sized
 budgets. Measured on the Tailscale Ollama (qwen3.5:27b, 64k context): prefill
 ~200 tok/s, decode ~12 tok/s, so the ~52.6k-token summary prompt Hermes builds
 (its input is capped at 160k chars; there is no aux-side chunking) streams
 nothing for 4+ minutes and the default 120 s no-progress window always fires.
 
-| Key | Local (`AUX_BASE_URL` set) | Inherited (cloud) |
-|-----|----------------------------|-------------------|
+| Key | Local (`aux` + `AUX_BASE_URL`) | Cloud (CLIProxyAPI or inherited) |
+|-----|--------------------------------|----------------------------------|
 | `auxiliary.compression.reasoning_effort` | `""` | `low` |
 | `auxiliary.compression.extra_body` | `{reasoning_effort: none}` | `{}` |
 | `auxiliary.compression.timeout` | `600` | `120` |
@@ -436,12 +527,54 @@ a failed auxiliary request may reach a **cloud** provider:
    **never** sent to a cloud provider — on the primary call or on fallback —
    regardless of `allow_cloud_fallback`. This guard is always on for the
    auxiliary path and does not depend on `MODEL_ROUTER_PRIVACY`. It lives in
-   Hermes core and has not adopted the plugin's `#privacy` policy: it does not
-   recognize `#privacy`, and it still matches content.
+   Hermes core and still matches content; `#privacy` comes from the plugin
+   extension below.
 
 Both checks fail closed: an unreadable config or a scanner error denies cloud
 egress. `AUX_PROVIDER=auto` with **no** local `AUX_BASE_URL` keeps its documented
 behavior — public traffic still follows the main provider + fallback policy.
+
+**Plugin extension (`aux_guard.py`).** Core's guard has two gaps for this
+stack: it treats every loopback URL as local, and a local endpoint skips the
+privacy scan — but CLIProxyAPI (`:8317`) and claude-max-proxy (`:3456`) listen
+on loopback and answer from cloud models; and its scanner does not know
+`#privacy`. When the model-router plugin loads, it wraps both checks in the
+loaded core module:
+
+- a CLIProxyAPI / claude-max-proxy URL (by port, proxy host name, or the
+  configured `CLIPROXY_BASE_URL` / `CLAUDE_MAX_PROXY_BASE_URL`) is never local,
+  so its payloads are scanned;
+- a standalone `#privacy` / `#private` token **anywhere** in the payload is
+  private (`privacy-marker`). Compression input is a serialized transcript, so
+  the sender provenance the request guard relies on is gone; any occurrence
+  counts, including a quoted or discussed marker.
+
+Errors fail closed (a locality error reads "not local", a scan error reads
+private). The refusal is core's `AuxCloudEgressRefused`; it covers the primary
+call, the main-model retry and the stall retry, which all go through
+`call_llm`. Log line at load: `model_router: aux privacy guard installed`.
+If core's guard module is missing the plugin logs `aux privacy guard
+unavailable` at ERROR; pin compression locally (`AUX_COMPRESSION_ROUTE=aux`)
+until it is back. `test_core_guard_alone_leaks_loopback_cloud_proxy` keeps the
+reason on record: without the extension a `#privacy` payload reaches the proxy.
+
+**Limitations.**
+
+- A refused compression is a summary failure to Hermes: no request is sent,
+  the summary cooldown is armed, and Hermes compacts with its deterministic
+  fallback summary instead of an LLM one. There is no local retry for that
+  call; set `AUX_COMPRESSION_ROUTE=aux` with a local `AUX_BASE_URL` if private
+  sessions must get LLM summaries.
+- The deterministic fallback summary quotes excerpts of the compacted turns,
+  including a marked turn's text (verified with a real `ContextCompressor`).
+  The request guard withholds only earlier *marked user turns*, not a
+  compaction summary, so a later public turn in that session can carry those
+  excerpts to the cloud. Summaries from the `aux` route (Ollama) have the same
+  gap in paraphrased form. Until the request guard also withholds marked
+  summaries, start a fresh session (`/new`) after private work in a long one.
+- The extension depends on the plugin being loaded in the process that
+  compresses (`make local-route-readback` fails when `model-router` is not in
+  `plugins.enabled`).
 
 > **`MODEL_ROUTER_PRIVACY=false` is unsafe.** It disables the main-loop privacy
 > guard entirely, so a `#privacy` turn (and its later history) can reach the
@@ -458,11 +591,17 @@ behavior — public traffic still follows the main provider + fallback policy.
 ## Specialist routing (pilot)
 
 The same plugin can suggest book-backed specialist profiles per task through a
-`pre_llm_call` hook. It is off by default (`specialist_routing`), uses the same
-current-task extraction and `#privacy` marker check, and only runs in the `default`
-profile. Its optional classifier is `cliproxy` (CLIProxyAPI, `gpt-5.6-terra` at
-`medium` effort, typed task plus verified attachments, public turns only) or
-`local` (the routine role below). See [specialist-routing.md](specialist-routing.md).
+`pre_llm_call` hook. The plugin default is off (`specialist_routing`); the shipped
+`.env.example` turns it on with `MODEL_ROUTER_SPECIALIST_MAX=6` (hard cap 15)
+and `MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy`. It uses the same
+current-task extraction and `#privacy`/`#private` marker check, and only runs in
+the `default` profile. Typed keywords and verified attachment text (PDF/DOCX
+extracted locally) add deterministic signals. For a public task with weak or no
+keyword matches, or with verified attachments, the hybrid classifier (CLIProxyAPI
+`gpt-5.6-terra` at `medium` effort, or `local`, the routine role below) may add
+at most two profiles. The cap applies once, to the combined list.
+Marked turns never reach either classifier. See
+[specialist-routing.md](specialist-routing.md).
 
 ## Configuration
 
@@ -476,6 +615,8 @@ and their `.env` fallbacks:
 | `complexity_routing` | `MODEL_ROUTER_COMPLEXITY` | enable the task-scoped model rewrite (default **true**) |
 | `privacy_routing` | `MODEL_ROUTER_PRIVACY` | the fail-closed `#privacy` guard, **enabled by default**; `MODEL_ROUTER_PRIVACY=false` is a deliberate, risky opt-out that disables it (and `#privacy`) entirely |
 | `effort_routing` | `MODEL_ROUTER_EFFORT` | per-task reasoning-effort rewrite for managed GPT requests (default **true**; never above the config ceiling) |
+| `coding_effort_routing` | `MODEL_ROUTER_CODING_EFFORT` | per-task Claude effort for managed coding requests (default **true**; see [Reasoning effort](#reasoning-effort)) |
+| `coding_effort_ceiling` | `MODEL_ROUTER_CODING_EFFORT_CEILING` | cap for the coding effort: `low`/`medium`/`high`/`xhigh`/`max` (default `max`; anything else loads as `max`) |
 | `astra_policy` | `MODEL_ROUTER_ASTRA` | `task` (default: leading standalone `#max`/`#astra` line authorizes), `always` (legacy allow), `never` |
 | `task_ttl_seconds` | `MODEL_ROUTER_TASK_TTL` | sliding TTL for per-session task state / authorization (default 1800) |
 | `ollama_base_url` | `OLLAMA_BASE_URL` | host-reachable **local** endpoint (a non-local URL is refused) |
@@ -483,7 +624,7 @@ and their `.env` fallbacks:
 | `ollama_routine_model` | `OLLAMA_ROUTINE_MODEL` | routine role (`qwen3.5:27b`) |
 | `ollama_fallback_model` | `OLLAMA_FALLBACK_MODEL` | fallback role (`qwen3.6:27b`); empty = no local fallback |
 | `ollama_agent_model` | `OLLAMA_AGENT_MODEL` | agent role (`qwen3.8:27b`) |
-| `specialist_*` | `MODEL_ROUTER_SPECIALIST*` | specialist router and hybrid classifier ([specialist-routing.md](specialist-routing.md)); presence-aware on `--force` |
+| `specialist_*` | `MODEL_ROUTER_SPECIALIST*` | specialist router, selection mode (`MODEL_ROUTER_SPECIALIST_MODE`, default `ai`: the classifier selects from the installed catalog; `hybrid`/`keywords` opt-in) and classifier ([specialist-routing.md](specialist-routing.md)); presence-aware on `--force` |
 | `private_terms` | `MODEL_ROUTER_PRIVATE_TERMS` | **ignored by request routing** (only `#privacy`); a warning is logged at load when set. Still read by knowledge-classify's offline gate (presence-aware on `--force`, never logged) |
 | `private_paths` | `MODEL_ROUTER_PRIVATE_PATHS` | same as `private_terms` |
 
@@ -515,6 +656,7 @@ Discord turn. Nothing below restarts the gateway except step 6.
    OLLAMA_AGENT_MODEL=qwen3.8:27b
    AUX_BASE_URL=http://100.65.5.47:11434/v1
    AUX_MODEL=qwen3.5:27b
+   # compression stays on CLIProxyAPI gpt-5.6-terra unless AUX_COMPRESSION_ROUTE=aux
    MODEL_ROUTER_PRIVACY=true
    MODEL_ROUTER_SPECIALISTS=true
    MODEL_ROUTER_SPECIALIST_MAX=4
@@ -543,7 +685,7 @@ Discord turn. Nothing below restarts the gateway except step 6.
    it replaces:
 
    ```bash
-   HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
+   make hermes-config-apply     # = HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
    make local-route-readback    # "live config matches the render; local-only invariants hold"
    ```
 
@@ -663,10 +805,10 @@ build:
 3. **Private specialists.** Today a private turn is answer-only (the local
    model gets no tools), so it cannot create a Kanban task or delegate. A
    private specialist needs: a tool-capable local path; profile variants whose
-   main, auxiliary and memory routes are all local (as `local-engineer` is
-   for the model); Kanban cards and delegation briefs that never reach a cloud
-   model or the shared board in clear text; and the gate in (1) for the
-   specialist's own memory.
+   main, auxiliary and memory routes are all local (no specialist profile is
+   local today, so a private turn routes none); Kanban cards and delegation
+   briefs that never reach a cloud model or the shared board in clear text;
+   and the gate in (1) for the specialist's own memory.
 4. **Aux guard.** The core auxiliary guard must recognize `#privacy`
    (it matches `#private`/`#local` and content today).
 
