@@ -132,7 +132,7 @@ gateway).
 
 ## Model names
 
-- CLIProxyAPI: whatever `make models` lists (for example `gpt-5.6-sol`). Set
+- CLIProxyAPI: whatever `make models` lists (for example `gpt-6.1-sol`). Set
   `HERMES_MODEL` and `HONCHO_MODEL`.
 - claude-max-proxy: `opus`, `sonnet`, `haiku`, `fable`, `best`, `default`, or
   an exact id from its `/v1/models`. Set `HERMES_CODING_MODEL`.

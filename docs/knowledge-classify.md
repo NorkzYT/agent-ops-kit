@@ -18,7 +18,7 @@ can be assigned without your approval.
 make knowledge-inventory                       # read-only: new, already imported, missing sources
 make knowledge-classify                        # DRY-RUN: proposals + plan + Markdown review + HTML workspace
 make knowledge-classify SOURCE='edu/Some Book' # one uncategorized book only
-make knowledge-classify MODEL=gpt-5.6-sol EFFORT=high     # another CLIProxyAPI model / reasoning effort
+make knowledge-classify MODEL=gpt-6.1-sol EFFORT=high     # another CLIProxyAPI model / reasoning effort
 # review: read <report>.review.md, or open <report>.review.html offline, edit decisions there and
 # export the revised plan (or edit plan-<report>.json directly); then one command applies it:
 make knowledge-apply PLAN=data/knowledge-staging/reports/plan-<report>.json DRY_RUN=1

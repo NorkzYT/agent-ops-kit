@@ -341,9 +341,9 @@ class TestComplexity(unittest.TestCase):
         self.assertEqual(complexity.resolve_model("routine", family="gpt"), "gpt-5.6-luna")
         self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-5.6-luna")
         self.assertEqual(complexity.resolve_model("elevated", family="gpt"), "gpt-6.1-terra")
-        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-5.6-sol")
+        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.1-sol")
         # Without explicit authorization the max tier clamps to the Sol ceiling.
-        self.assertEqual(complexity.resolve_model("max", family="gpt"), "gpt-5.6-sol")
+        self.assertEqual(complexity.resolve_model("max", family="gpt"), "gpt-6.1-sol")
         self.assertEqual(complexity.resolve_model("max", family="gpt", allow_max=True), "gpt-6-astra")
 
     def test_coding_tier_models(self):
@@ -355,9 +355,40 @@ class TestComplexity(unittest.TestCase):
         # astra gone -> step down to sol (authorized max degrades too)
         self.assertEqual(
             complexity.resolve_model("max", family="gpt", allow_max=True,
-                                     available=["gpt-6.1-terra", "gpt-5.6-luna", "gpt-5.6-sol"]),
+                                     available=["gpt-6.1-terra", "gpt-5.6-luna", "gpt-6.1-sol"]),
+            "gpt-6.1-sol",
+        )
+
+    def test_sol_prefers_6_1_over_5_6_when_both_live(self):
+        live = ["gpt-5.6-luna", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-6.1-sol", "gpt-6-astra"]
+        self.assertEqual(complexity.resolve_model("high", family="gpt", available=live), "gpt-6.1-sol")
+        self.assertEqual(complexity.resolve_model("max", family="gpt", available=live), "gpt-6.1-sol")
+
+    def test_sol_falls_back_to_5_6_only_when_6_1_absent(self):
+        # gpt-6.1-sol not advertised: same-tier fallback before leaving the tier.
+        live = ["gpt-5.6-luna", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-6-astra"]
+        self.assertEqual(complexity.resolve_model("high", family="gpt", available=live), "gpt-5.6-sol")
+        # Unauthorized max still clamps to Sol (the fallback), never Astra.
+        self.assertEqual(complexity.resolve_model("max", family="gpt", available=live), "gpt-5.6-sol")
+        # Authorized max degrades astra -> 6.1-sol -> 5.6-sol.
+        self.assertEqual(
+            complexity.resolve_model("max", family="gpt", allow_max=True,
+                                     available=["gpt-6.1-terra", "gpt-5.6-sol"]),
             "gpt-5.6-sol",
         )
+        # Neither Sol: the walk steps down to terra, as before.
+        self.assertEqual(
+            complexity.resolve_model("high", family="gpt", available=["gpt-6.1-terra", "gpt-5.6-luna"]),
+            "gpt-6.1-terra",
+        )
+        # Upward walk also honours the fallback (only Sol 5.6 live).
+        self.assertEqual(
+            complexity.resolve_model("routine", family="gpt", available=["gpt-5.6-sol"]),
+            "gpt-5.6-sol",
+        )
+        # Fallback is GPT-only and unused when the live set is unknown.
+        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.1-sol")
+        self.assertIsNone(complexity.resolve_model("high", family="coding", available=["gpt-5.6-sol"]))
 
     def test_degrade_never_upgrades(self):
         # only terra available; requesting high degrades DOWN to terra
@@ -384,7 +415,9 @@ class TestComplexity(unittest.TestCase):
         self.assertEqual(complexity.alias_to_tier("gpt-6.1-terra"), "elevated")
         self.assertEqual(complexity.alias_to_tier("gpt-5.6-terra"), "elevated")
         self.assertEqual(complexity.alias_to_tier("terra"), "elevated")
+        self.assertEqual(complexity.alias_to_tier("gpt-6.1-sol"), "high")
         self.assertEqual(complexity.alias_to_tier("gpt-5.6-sol"), "high")
+        self.assertEqual(complexity.alias_to_tier("sol"), "high")
         self.assertEqual(complexity.alias_to_tier("gpt-6-astra"), "max")
         self.assertEqual(complexity.alias_to_tier("fable"), "high")
         self.assertIsNone(complexity.alias_to_tier("some-unknown-model"))
@@ -765,7 +798,7 @@ class TestComplexityRewrite(unittest.TestCase):
             base_url="http://127.0.0.1:8317/v1",
         )
         self.assertIsNotNone(out)
-        self.assertIn(out["request"]["model"], ("gpt-5.6-sol", "gpt-6-astra"))
+        self.assertIn(out["request"]["model"], ("gpt-6.1-sol", "gpt-6-astra"))
 
     def test_coding_family_high_picks_fable(self):
         r = _router()

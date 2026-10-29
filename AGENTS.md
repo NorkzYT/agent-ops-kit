@@ -84,7 +84,9 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - Orchestrator: ChatGPT subscription through CLIProxyAPI (`HERMES_MODEL`,
   `gpt-5.6-luna` default). Task-scoped routing (current user task only, never
   history/tool output): status→luna low effort, ordinary work→luna medium,
-  ambiguous/planning→terra, genuinely hard→sol; `gpt-6-astra` only with a
+  ambiguous/planning→terra, genuinely hard or a leading standalone `#sol`
+  line→`gpt-6.1-sol` (`gpt-5.6-sol` only as fallback when 6.1 is not
+  advertised); `gpt-6-astra` only with a
   leading standalone `#max`/`#astra` line in the current task. Reasoning
   effort is rewritten per task up to the `agent.reasoning_effort` ceiling
   (`high`); auxiliary entries keep their own `reasoning_effort`.

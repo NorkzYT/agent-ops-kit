@@ -5,7 +5,9 @@ Pure and side-effect-free. Classification of the current user task lives in
 
   * ``gpt`` (orchestrator, CLIProxyAPI): status/lookup -> luna (low effort),
     ordinary execution -> luna (medium), ambiguous/multi-constraint planning ->
-    terra, genuinely hard work -> sol. ``gpt-6-astra`` is reachable ONLY with
+    terra, genuinely hard work (or a leading ``#sol`` control) -> sol
+    (``gpt-6.1-sol``, ``gpt-5.6-sol`` only when 6.1 is not advertised).
+    ``gpt-6-astra`` is reachable ONLY with
     explicit per-task authorization (``allow_max=True``): the automatic budget
     ceiling is Sol regardless of what the provider advertises.
   * ``coding`` (delegation, claude-max-proxy): opus by default, fable only for
@@ -30,15 +32,22 @@ from typing import Iterable, Optional, Sequence
 # Ordered low -> high. The index is the degrade walk order.
 TIERS = ("routine", "medium", "elevated", "high", "max")
 
-# Per OpenAI's GPT-5.6/6 line: Luna = fastest/lowest-cost, Terra = balanced
+# Per OpenAI's GPT-5.6/6.1 line: Luna = fastest/lowest-cost, Terra = balanced
 # intelligence/cost, Sol = flagship complex work, Astra (GPT-6) = hardest
 # end-to-end work (explicit opt-in only).
 GPT_TIER_MODELS = {
     "routine": "gpt-5.6-luna",
     "medium": "gpt-5.6-luna",
     "elevated": "gpt-6.1-terra",
-    "high": "gpt-5.6-sol",
+    "high": "gpt-6.1-sol",
     "max": "gpt-6-astra",
+}
+
+# Same-tier fallbacks, tried in order when a live ``/v1/models`` probe proves
+# the tier's primary model absent, before the walk leaves the tier. Never
+# consulted when the live set is unknown (the primary is trusted).
+GPT_TIER_FALLBACKS = {
+    "high": ("gpt-5.6-sol",),
 }
 
 # Coding family: opus is the default, fable the hard-engineering escalation.
@@ -81,7 +90,7 @@ _ALIAS_TO_TIER = {
     # gpt aliases
     "luna": "routine", "gpt-5.6-luna": "routine",
     "terra": "elevated", "gpt-6.1-terra": "elevated", "gpt-5.6-terra": "elevated",
-    "sol": "high", "gpt-5.6-sol": "high",
+    "sol": "high", "gpt-6.1-sol": "high", "gpt-5.6-sol": "high",
     "astra": "max", "gpt-6-astra": "max",
     # coding aliases
     "opus": "medium", "fable": "high",
@@ -173,19 +182,32 @@ def resolve_model(
     exists does it step up — and the ``max`` tier is excluded from that upward
     walk unless ``allow_max`` is set, so a missing lower model can never silently
     upgrade a request to Astra. Without ``allow_max`` the start tier itself is
-    also capped at ``high`` (the automatic Sol ceiling). Returns ``None`` when
-    nothing allowed is available (caller decides: keep, degrade, or refuse).
+    also capped at ``high`` (the automatic Sol ceiling). Within a tier the
+    primary model is tried before its ``GPT_TIER_FALLBACKS`` (gpt-6.1-sol, then
+    gpt-5.6-sol). Returns ``None`` when nothing allowed is available (caller
+    decides: keep, degrade, or refuse).
     """
-    table = CODING_TIER_MODELS if family == "coding" else GPT_TIER_MODELS
+    coding = family == "coding"
+    table = CODING_TIER_MODELS if coding else GPT_TIER_MODELS
     if tier not in TIERS:
         tier = "routine"
     if not allow_max and tier == "max":
         tier = "high"
     avail = _available_lower(available) if available is not None else None
     start = TIERS.index(tier)
+
+    def pick(t: str) -> Optional[str]:
+        if avail is None:
+            return table[t]
+        fallbacks = () if coding else GPT_TIER_FALLBACKS.get(t, ())
+        for candidate in (table[t],) + fallbacks:
+            if candidate.lower() in avail:
+                return candidate
+        return None
+
     for i in range(start, -1, -1):
-        candidate = table[TIERS[i]]
-        if avail is None or candidate.lower() in avail:
+        candidate = pick(TIERS[i])
+        if candidate:
             return candidate
     # Nothing at or below the requested tier is available: step up, but never
     # into the max tier without explicit authorization.
@@ -193,7 +215,7 @@ def resolve_model(
         for i in range(start + 1, len(TIERS)):
             if TIERS[i] == "max" and not allow_max:
                 continue
-            candidate = table[TIERS[i]]
-            if candidate.lower() in avail:
+            candidate = pick(TIERS[i])
+            if candidate:
                 return candidate
     return None

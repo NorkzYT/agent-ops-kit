@@ -67,7 +67,8 @@ All of this lives in the `model-router` plugin and `.env`; see
 [docs/model-routing.md](docs/model-routing.md).
 
 - **Orchestrator** (CLIProxyAPI, ChatGPT): per task, status→`gpt-5.6-luna`
-  low effort, ordinary work→luna, planning→`gpt-6.1-terra`, hard→`gpt-5.6-sol`;
+  low effort, ordinary work→luna, planning→`gpt-6.1-terra`, hard or a leading
+  `#sol` line→`gpt-6.1-sol` (`gpt-5.6-sol` only when 6.1 is not advertised);
   `gpt-6-astra` only with a leading `#max`/`#astra` line.
 - **Coding subagents** (claude-max-proxy, Claude Max): `opus`, `fable` for hard
   engineering; a leading `#opus`/`#fable` line forces one.

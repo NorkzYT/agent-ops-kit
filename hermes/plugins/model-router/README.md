@@ -11,7 +11,9 @@ payload is never sent to them by compression or title generation; see
   rewrites model **and** reasoning effort *within the request's family*:
   - orchestrator (CLIProxyAPI): status/lookup→`gpt-5.6-luna` (low effort),
     ordinary work→`gpt-5.6-luna` (medium), ambiguous/planning→`gpt-6.1-terra`,
-    genuinely hard→`gpt-5.6-sol`; `gpt-6-astra` ONLY when the current task
+    genuinely hard (or a leading standalone `#sol` line)→`gpt-6.1-sol`, with
+    `gpt-5.6-sol` only as fallback when a live probe lacks 6.1;
+    `gpt-6-astra` ONLY when the current task
     starts with a standalone `#max`/`#astra` control line (per-task, TTL-bound,
     never bleeding to the next task or session). The automatic ceiling is Sol.
   - delegated coding (claude-max-proxy): `opus` by default, `fable` only for

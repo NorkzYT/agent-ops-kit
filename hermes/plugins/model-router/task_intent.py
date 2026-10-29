@@ -26,6 +26,8 @@ Rules implemented here (all deterministic, no network, no LLM calls):
     the first non-empty line of the current task being exactly ``#max`` or
     ``#astra``. Inline ``#max`` / ``#deep`` / ``#hard`` only *hint* at a hard
     task (Sol at most); they never grant Astra.
+  * A leading standalone ``#sol`` line forces the hard (Sol) tier for that
+    task — ``gpt-6.1-sol`` on the orchestrator — without granting Astra.
   * A standalone ``#privacy`` (or ``#private``) line may sit above the control line (the
     privacy marker itself is checked in ``privacy_marker.py``).
   * Tags inside fenced code blocks or ``>``-quoted lines are inert.
@@ -37,7 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterator, List, Optional, Tuple
 
 # --------------------------------------------------------------------------- #
@@ -45,6 +47,10 @@ from typing import Any, Iterator, List, Optional, Tuple
 # --------------------------------------------------------------------------- #
 CONTROL_MAX = ("#max", "#astra")
 CONTROL_MIN = ("#quick", "#routine", "#cheap", "#simple", "#low")
+# Leading standalone Sol control: forces the hard tier (gpt-6.1-sol on the
+# orchestrator) regardless of task shape, never Astra. Inline/quoted ``#sol``
+# is inert. It ranks below #opus/#fable and #max/#astra, above routine force.
+CONTROL_SOL = ("#sol",)
 # Leading standalone coding-force controls: the first non-empty line of the
 # current task being exactly ``#opus`` or ``#fable`` forces that Claude coding
 # model regardless of task shape. Like ``#max`` these are LEADING STANDALONE
@@ -284,6 +290,7 @@ class CurrentTask:
     forced_routine: bool
     hard_hint: bool
     forced_coding: str = ""  # '' | 'opus' | 'fable' — leading #opus/#fable control
+    forced_sol: bool = False  # leading standalone #sol control
 
 
 @dataclass(frozen=True)
@@ -390,6 +397,7 @@ def task_from_sender_text(text: str) -> CurrentTask:
     authorized = False
     forced = False
     forced_coding = ""
+    forced_sol = False
     control_index: Optional[int] = None
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -399,11 +407,13 @@ def task_from_sender_text(text: str) -> CurrentTask:
         if low in ("#privacy", "#private"):
             continue  # the privacy marker may sit above the control line
         # Precedence on the single control line: coding force (#opus/#fable)
-        # first, then max authorization, then routine force.
+        # first, then max authorization, then Sol force, then routine force.
         if low in CONTROL_CODING:
             forced_coding, control_index = CONTROL_CODING[low], i
         elif low in CONTROL_MAX:
             authorized, control_index = True, i
+        elif low in CONTROL_SOL:
+            forced_sol, control_index = True, i
         elif low in CONTROL_MIN:
             forced, control_index = True, i
         break  # only the first non-empty line (after #privacy) can be a control line
@@ -414,7 +424,8 @@ def task_from_sender_text(text: str) -> CurrentTask:
     hard_hint = bool(_HARD_HINT_RE.search(visible))
     normalized = " ".join(text.split()).lower()
     task_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16] if normalized else ""
-    return CurrentTask(True, text, visible, task_hash, authorized, forced, hard_hint, forced_coding)
+    return CurrentTask(True, text, visible, task_hash, authorized, forced, hard_hint, forced_coding,
+                       forced_sol)
 
 
 # --------------------------------------------------------------------------- #
@@ -442,6 +453,14 @@ def classify(task: CurrentTask, prev_state: Any = None) -> Decision:
 
     if task.authorized_max:
         return Decision("max", "high", ("auth:max",), 99, authorized_max=True)
+    if task.forced_sol:
+        # The control picks the tier; effort still follows the task body (at
+        # least medium), so "#sol" + a quick lookup does not burn high effort.
+        # Substantive: continuations retain the Sol tier like any hard task.
+        body = classify(replace(task, forced_sol=False, forced_routine=False))
+        effort = body.effort if body.effort in ("medium", "high") else "medium"
+        reasons = ("force:sol",) + tuple(r for r in body.reasons if r.startswith(("kw:", "tag:")))
+        return Decision("high", effort, reasons, 99)
     if task.forced_routine:
         return Decision("routine", "low", ("forced:routine",), 0)
 

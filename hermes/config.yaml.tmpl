@@ -227,8 +227,9 @@ compression:
 
 # --------------------------------------------------------------- Plugins ---
 # model-router: task-scoped model + effort routing (luna/terra/sol for the
-# orchestrator, opus/fable for coding; gpt-6-astra ONLY with explicit per-task
-# authorization) + fail-closed privacy routing.
+# orchestrator, sol = gpt-6.1-sol with gpt-5.6-sol fallback, a leading #sol
+# line forces it; opus/fable for coding; gpt-6-astra ONLY with explicit
+# per-task authorization) + fail-closed privacy routing.
 # Knobs are rendered from MODEL_ROUTER_* in .env; explicit false/never values
 # are preserved. Privacy routing is ENABLED by default: a request whose current
 # user turn carries #privacy never reaches a cloud provider (local Ollama, or

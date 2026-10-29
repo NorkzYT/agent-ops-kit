@@ -12,7 +12,7 @@ Secrets stay in `.env`; only routing knobs live in `config.yaml`.
 
 | Role | Provider | Endpoint | Models |
 |------|----------|----------|--------|
-| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-5.6-sol`, `gpt-6-astra` |
+| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.1-sol` (fallback `gpt-5.6-sol`), `gpt-6-astra` |
 | Coding (delegation) | claude-max-proxy (Claude Max) | `:3456/v1` | `opus`, `sonnet`, `haiku`, `fable`, `default` |
 | Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` (or a Tailscale host) | routine `qwen3.5:27b`, fallback `qwen3.6:27b`, agent `qwen3.8:27b` ([Local model roles](#local-model-roles)) |
 
@@ -53,7 +53,7 @@ templates so a Hermes upgrade that changes them fails loudly.
 | status / lookup / report question | routine | `gpt-5.6-luna` | low | `opus` |
 | ordinary execution / delegation | medium | `gpt-5.6-luna` | medium | `opus` |
 | ambiguous / multi-constraint planning | elevated | `gpt-6.1-terra` | medium | `opus` |
-| genuinely hard (debug/architecture/security) | high | `gpt-5.6-sol` | medium–high | `fable` |
+| genuinely hard (debug/architecture/security), or leading `#sol` | high | `gpt-6.1-sol` | medium–high | `fable` |
 | explicitly authorized max | max | `gpt-6-astra` | high | `fable` |
 
 Sol requires **substantive** complexity (two distinct hard categories, or one
@@ -64,12 +64,18 @@ keyword routes to Terra at most.
 
 Only the **first non-empty line** of the sender-authored task is a control line.
 Precedence when that line is exactly one tag: coding force (`#opus`/`#fable`)
-→ max authorization (`#max`/`#astra`) → routine force (`#quick`/…).
+→ max authorization (`#max`/`#astra`) → Sol force (`#sol`) → routine force
+(`#quick`/…).
 
 - A **leading standalone** `#opus` or `#fable` line **forces the Claude coding
   model** for that request, overriding complexity (see *Forced coding* below).
 - A **leading standalone** `#max` or `#astra` line (the first non-empty line of
   the task, containing only the tag) authorizes `gpt-6-astra` for that task.
+- A **leading standalone** `#sol` line forces the hard tier for that task:
+  `gpt-6.1-sol` on the orchestrator (`fable` on the coding seam). It never
+  grants Astra; effort still follows the task body (at least `medium`, never
+  above the request ceiling); a `continue` turn keeps Sol like any hard task.
+  Inline/quoted/non-sender `#sol` is inert.
 - Inline `#max`, `#deep`, `#hard` are hard-work *hints* (Sol at most) — they no
   longer grant Astra, and they are ignored entirely inside quotes/code fences,
   tool output, or older turns. Inline/quoted `#opus`/`#fable` are inert (not even
