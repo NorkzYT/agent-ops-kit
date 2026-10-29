@@ -401,7 +401,7 @@ A refusal is a **final answer** (`finish_reason: stop`, typed by
 `_model_router_refusal` / `_model_router_refusal_reason`), never
 `content_filter`: Hermes answers an HTTP-200 `content_filter` with
 `handle_content_policy_refusal`, which activates the configured fallback chain
-(`gpt-5.6-luna -> opus`), so a refused private turn would restart on a cloud
+(`HERMES_MODEL` -> `opus`), so a refused private turn would restart on a cloud
 provider. An empty local answer is likewise a local failure (next local model,
 then refuse), because Hermes' empty-response ladder also ends in fallback.
 `TestHermesCoreSeam` runs the refusal through the installed Hermes middleware
@@ -416,7 +416,7 @@ Cheap, high-volume helper calls (`auxiliary.title_generation` /
 `auxiliary.compression`). Current defaults:
 
 - **Title generation** uses the main route: CLIProxyAPI with the orchestrator
-  model (`HERMES_MODEL`, `gpt-5.6-luna`). `.env.example` sets no `AUX_*` title
+  model (`HERMES_MODEL`, default `gpt-6.1-terra`). `.env.example` sets no `AUX_*` title
   variables, so the installer renders `provider: auto` with
   `reasoning_effort: low`. `make local-route-readback` accepts this route only
   while the main model points at the configured CLIProxyAPI.

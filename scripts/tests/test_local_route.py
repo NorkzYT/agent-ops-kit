@@ -573,7 +573,7 @@ FIXTURE_ENV = """CLIPROXY_PORT=8317
 CLIPROXY_API_KEY=cptest
 CLAUDE_MAX_PROXY_PORT=3456
 CLAUDE_MAX_PROXY_API_KEY=secrettoken123
-HERMES_MODEL=gpt-5.6-luna
+HERMES_MODEL=gpt-6.1-terra
 HERMES_CODING_MODEL=opus
 REPOS_DIR={tmp}/repos
 HERMES_HOME={home}
@@ -1063,7 +1063,7 @@ class HermesNativeTest(_InstallerFixture):
         cfg = self.home / "config.yaml"
         self.install("", "--render-only", str(cfg))
         nat = self.native(cfg)
-        self.assertEqual(nat["main"], {"provider": "custom", "model": "gpt-5.6-luna",
+        self.assertEqual(nat["main"], {"provider": "custom", "model": "gpt-6.1-terra",
                                        "base_url": "http://127.0.0.1:8317/v1"})
         self.assertEqual((nat["auxiliary"]["title_generation"]["provider"],
                           nat["auxiliary"]["title_generation"]["base_url"]), ("auto", ""))
@@ -1072,7 +1072,7 @@ class HermesNativeTest(_InstallerFixture):
         ok = subprocess.run([sys.executable, "scripts/local-route.py", "readback"], cwd=REPO, env=env,
                             capture_output=True, text=True, timeout=300)
         self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
-        self.assertIn("auxiliary.title_generation follows main gpt-5.6-luna @ 127.0.0.1:8317", ok.stdout)
+        self.assertIn("auxiliary.title_generation follows main gpt-6.1-terra @ 127.0.0.1:8317", ok.stdout)
 
     def test_readback_matches_render_and_flags_drift(self):
         cfg = self.home / "config.yaml"

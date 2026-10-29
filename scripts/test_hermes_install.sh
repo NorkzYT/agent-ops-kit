@@ -63,9 +63,10 @@ ck "hermes .env not left as placeholder"  "! grep -q '^CLAUDE_MAX_PROXY_API_KEY=
 ck "honcho.json written, rendered"        "[[ -f '$hj' ]] && ! grep -q '__[A-Z0-9_]*__' '$hj'"
 
 # --- default-model scenario: with HERMES_MODEL unset the installer must fall
-# back to the corrected routine-tier floor (gpt-5.6-luna), not sol. The fixture
-# above keeps proving an explicit HERMES_MODEL renders through; this proves the
-# install DEFAULT.
+# back to the Terra starting model (gpt-6.1-terra), not luna or sol. Luna stays
+# the per-task routine floor the router rewrites to; that is not the configured
+# default. The fixture above keeps proving an explicit HERMES_MODEL renders
+# through; this proves the install DEFAULT.
 hh2="$tmp/hermes-default"
 envf2="$tmp/fixture-default.env"
 grep -v '^HERMES_MODEL=' "$envf" | sed "s#^HERMES_HOME=.*#HERMES_HOME=$hh2#" > "$envf2"
@@ -75,7 +76,8 @@ HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf2" \
 rc2=$?
 cfg2="$hh2/config.yaml"
 ck "default installer exits 0 (rc=$rc2)"  "[[ $rc2 -eq 0 ]]"
-ck "default orchestrator model = luna"    "grep -q 'default: gpt-5.6-luna' '$cfg2'"
+ck "default orchestrator model = terra"   "grep -qE '^  default: gpt-6.1-terra\$' '$cfg2'"
+ck "default model is not luna"            "! grep -qE '^  default: gpt-5.6-luna' '$cfg2'"
 # Router knobs unset in .env must default to ON (privacy is fail-closed by
 # default; complexity rewrite on by default). Both fixtures above omit them.
 ck "default complexity_routing = true"    "grep -qE '^        complexity_routing: true\$' '$cfg2'"
