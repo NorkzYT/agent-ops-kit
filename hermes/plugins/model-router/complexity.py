@@ -4,7 +4,7 @@ Pure and side-effect-free. Classification of the current user task lives in
 ``task_intent``; this module owns the policy tables:
 
   * ``gpt`` (orchestrator, CLIProxyAPI): status/lookup -> luna (low effort),
-    ordinary execution -> luna (medium), ambiguous/multi-constraint planning ->
+    ordinary execution -> terra (medium), ambiguous/multi-constraint planning ->
     terra, genuinely hard work (or a leading ``#sol`` control) -> sol
     (``gpt-6.1-sol``, ``gpt-5.6-sol`` only when 6.1 is not advertised).
     ``gpt-6-astra`` is reachable ONLY with
@@ -37,7 +37,7 @@ TIERS = ("routine", "medium", "elevated", "high", "max")
 # end-to-end work (explicit opt-in only).
 GPT_TIER_MODELS = {
     "routine": "gpt-5.6-luna",
-    "medium": "gpt-5.6-luna",
+    "medium": "gpt-6.1-terra",
     "elevated": "gpt-6.1-terra",
     "high": "gpt-6.1-sol",
     "max": "gpt-6-astra",

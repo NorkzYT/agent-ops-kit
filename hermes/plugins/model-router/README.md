@@ -10,7 +10,7 @@ payload is never sent to them by compression or title generation; see
   CURRENT user task (never history, system prompts, or tool output) and
   rewrites model **and** reasoning effort *within the request's family*:
   - orchestrator (CLIProxyAPI): status/lookup→`gpt-5.6-luna` (low effort),
-    ordinary work→`gpt-5.6-luna` (medium), ambiguous/planning→`gpt-6.1-terra`,
+    ordinary work→`gpt-6.1-terra` (medium), ambiguous/planning→`gpt-6.1-terra`,
     genuinely hard (or a leading standalone `#sol` line)→`gpt-6.1-sol`, with
     `gpt-5.6-sol` only as fallback when a live probe lacks 6.1;
     `gpt-6-astra` ONLY when the current task

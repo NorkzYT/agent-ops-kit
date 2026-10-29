@@ -51,7 +51,7 @@ templates so a Hermes upgrade that changes them fails loudly.
 | Task shape | Tier | Orchestrator (GPT) | Effort | Coding |
 |------------|------|--------------------|--------|--------|
 | status / lookup / report question | routine | `gpt-5.6-luna` | low | `opus` |
-| ordinary execution / delegation | medium | `gpt-5.6-luna` | medium | `opus` |
+| ordinary execution / delegation | medium | `gpt-6.1-terra` | medium | `opus` |
 | ambiguous / multi-constraint planning | elevated | `gpt-6.1-terra` | medium | `opus` |
 | genuinely hard (debug/architecture/security), or leading `#sol` | high | `gpt-6.1-sol` | medium–high | `fable` |
 | explicitly authorized max | max | `gpt-6-astra` | high | `fable` |

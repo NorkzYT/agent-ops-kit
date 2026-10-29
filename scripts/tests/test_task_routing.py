@@ -166,10 +166,10 @@ class TestPolicyTiers(unittest.TestCase):
         # simple status -> luna
         out = route(r, chat_req(("user", "list the open tasks")), session_id="a")
         self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
-        # ordinary execution -> luna (medium)
-        out = route(r, chat_req(("user", "restart the gateway and post the log tail to discord")),
-                    session_id="b")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
+        # ordinary execution -> terra (medium; request arrives as luna and upgrades)
+        out = route(r, chat_req(("user", "restart the gateway and post the log tail to discord"),
+                                model="gpt-5.6-luna"), session_id="b")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra")
         # ambiguous / planning -> terra (request arrives as luna and upgrades)
         out = route(r, chat_req(("user", "compare the two rollout options and propose a plan"),
                                 model="gpt-5.6-luna"), session_id="c")
@@ -282,8 +282,9 @@ class TestContinuationAndState(unittest.TestCase):
         self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
 
     def test_continue_without_state_is_medium(self):
-        out = route(make_router(), chat_req(("user", "continue")), session_id="fresh")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
+        out = route(make_router(), chat_req(("user", "continue"), model="gpt-5.6-luna"),
+                    session_id="fresh")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra")
 
     def test_state_expires_on_ttl(self):
         clock = [0.0]
@@ -386,7 +387,7 @@ class TestWireFormatProvenance(unittest.TestCase):
             r = make_router()
             req = chat_req(("user", wrapped), model="gpt-6-astra")
             out = route(r, req)
-            self.assertEqual(out["request"]["model"], "gpt-5.6-luna",
+            self.assertEqual(out["request"]["model"], "gpt-6.1-terra",
                              "non-sender text must not grant or inflate")
 
     def test_max_inside_attached_file_grants_nothing(self):
@@ -469,8 +470,8 @@ class TestWireFormatProvenance(unittest.TestCase):
         text = wire_discord("(The user sent a message with no text content)")
         task = task_intent.extract_current_user_task(chat_req(("user", text)))
         self.assertFalse(task.found)
-        out = route(make_router(), chat_req(("user", text)))
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna",
+        out = route(make_router(), chat_req(("user", text), model="gpt-5.6-luna"))
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra",
                          "no current task -> conservative default, never max")
 
 
@@ -594,8 +595,9 @@ class TestAbsoluteLifetime(unittest.TestCase):
         out = route(r, chat_req(("user", "continue")), session_id="ce", rid="c2")
         self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
         clock[0] = 201.0  # past absolute deadline: continuation state is gone
-        out = route(r, chat_req(("user", "continue")), session_id="ce", rid="c3")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna",
+        out = route(r, chat_req(("user", "continue"), model="gpt-5.6-luna"),
+                    session_id="ce", rid="c3")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra",
                          "continuation must not outlive the absolute deadline")
 
 
@@ -661,10 +663,10 @@ class TestObservability(unittest.TestCase):
 
     def test_every_managed_decision_logged_even_unchanged(self):
         r = make_router()
-        req = chat_req(("user", "restart the gateway please"), model="gpt-5.6-luna")
+        req = chat_req(("user", "restart the gateway please"), model="gpt-6.1-terra")
         with self.assertLogs("hermes.plugin.model_router", level="INFO") as captured:
             out = route(r, req, session_id="log1", rid="ridA")
-        self.assertIsNone(out)  # luna medium -> luna: unchanged
+        self.assertIsNone(out)  # terra medium -> terra: unchanged
         joined = "\n".join(captured.output)
         self.assertIn("outcome=unchanged", joined)
         self.assertIn("rid=ridA", joined)
@@ -1290,7 +1292,7 @@ class TestSolControl(unittest.TestCase):
         self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
         out = route(r, chat_req(("user", "write the release notes file"), model="gpt-6.1-sol"),
                     session_id="c", rid="c3")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra")
 
     def test_tag_in_nonsender_context_is_inert(self):
         for wrapped in (

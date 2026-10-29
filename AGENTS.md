@@ -85,7 +85,7 @@ the job id. If scheduling fails, say so and ask to be pinged.
   `gpt-6.1-terra` default: the configured starting model in
   `model.default`, used as-is when the router leaves a request alone).
   Task-scoped routing rewrites each request per task (current user task only, never
-  history/tool output): status→luna low effort, ordinary work→luna medium,
+  history/tool output): status→luna low effort, ordinary work→terra medium,
   ambiguous/planning→terra, genuinely hard or a leading standalone `#sol`
   line→`gpt-6.1-sol` (`gpt-5.6-sol` only as fallback when 6.1 is not
   advertised); `gpt-6-astra` only with a

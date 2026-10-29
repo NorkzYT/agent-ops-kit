@@ -336,10 +336,10 @@ class TestComplexity(unittest.TestCase):
         self.assertEqual(complexity.score_request(req("#quick big architecture migration rewrite")).tier, "routine")
 
     def test_gpt_tier_models(self):
-        # Balanced policy: luna covers routine AND ordinary execution, terra is
-        # the ambiguous/planning tier, sol the hard tier, astra explicit-only.
+        # Balanced policy: luna covers routine only, terra covers ordinary
+        # execution and ambiguous/planning, sol the hard tier, astra explicit-only.
         self.assertEqual(complexity.resolve_model("routine", family="gpt"), "gpt-5.6-luna")
-        self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-5.6-luna")
+        self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-6.1-terra")
         self.assertEqual(complexity.resolve_model("elevated", family="gpt"), "gpt-6.1-terra")
         self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.1-sol")
         # Without explicit authorization the max tier clamps to the Sol ceiling.
