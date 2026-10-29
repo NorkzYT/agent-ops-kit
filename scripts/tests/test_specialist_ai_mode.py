@@ -138,7 +138,7 @@ class AiModeTest(unittest.TestCase):
         self.assertEqual(t["routes"], [])
         self.assertEqual(t["classifier"], "error:RuntimeError")
         self.assertEqual(t["reason"], "classifier-failed")
-        slow = Recorder([], {"model": "gpt-5.6-terra", "effort": "medium", "attempt": 1, "outcome": "unavailable:timeout"})
+        slow = Recorder([], {"model": "gpt-6.1-terra", "effort": "medium", "attempt": 1, "outcome": "unavailable:timeout"})
         t = sp.route_text(MARKETING + " Quuxbarian", settings(), readiness=ready, classifier=slow)
         self.assertEqual((t["routes"], t["reason"]), ([], "classifier-failed"))
         self.assertEqual(t["classifier_detail"]["outcome"], "unavailable:timeout")

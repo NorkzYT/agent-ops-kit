@@ -290,7 +290,7 @@ knowledge-refresh: ## After adding books: stage + sync every book-backed profile
 ##| overlapping new-profile proposals are folded into one broad family per run
 ##| (hermes/knowledge-taxonomy.json, KNOWLEDGE_TAXONOMY=<file>|off); rerun
 ##| the same command to get consolidated proposals.
-knowledge-classify: ## AI proposals + reviewed plan, Markdown review and offline HTML workspace for uncategorized books (dry-run). Then: knowledge-apply PLAN=<plan>. [MODEL=gpt-5.6-terra EFFORT=medium|high SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n] Legacy: APPLY=1, APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1]
+knowledge-classify: ## AI proposals + reviewed plan, Markdown review and offline HTML workspace for uncategorized books (dry-run). Then: knowledge-apply PLAN=<plan>. [MODEL=gpt-6.1-terra EFFORT=medium|high SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n] Legacy: APPLY=1, APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1]
 	@args=(); \
 	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
 	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \

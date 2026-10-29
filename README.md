@@ -67,16 +67,16 @@ All of this lives in the `model-router` plugin and `.env`; see
 [docs/model-routing.md](docs/model-routing.md).
 
 - **Orchestrator** (CLIProxyAPI, ChatGPT): per task, status→`gpt-5.6-luna`
-  low effort, ordinary work→luna, planning→`gpt-5.6-terra`, hard→`gpt-5.6-sol`;
+  low effort, ordinary work→luna, planning→`gpt-6.1-terra`, hard→`gpt-5.6-sol`;
   `gpt-6-astra` only with a leading `#max`/`#astra` line.
 - **Coding subagents** (claude-max-proxy, Claude Max): `opus`, `fable` for hard
   engineering; a leading `#opus`/`#fable` line forces one.
 - **Specialists**: the router names up to six book-backed profiles per task
   (`MODEL_ROUTER_SPECIALIST_MAX=6`, the hard cap). Keywords and verified
   attachment text (PDF/DOCX extracted locally) add deterministic signals; for
-  weak matches or attachments the classifier on CLIProxyAPI `gpt-5.6-terra`
+  weak matches or attachments the classifier on CLIProxyAPI `gpt-6.1-terra`
   (medium effort) may add up to two more, within the same cap.
-- **Compression**: CLIProxyAPI `gpt-5.6-terra`, falling back to `gpt-5.6-luna`.
+- **Compression**: CLIProxyAPI `gpt-6.1-terra`, falling back to `gpt-5.6-luna`.
 - **Session titles**: the main route (CLIProxyAPI, luna); no title variables
   are set in `.env.example`.
 - **Privacy**: `#privacy` or `#private` typed in the current turn keeps that

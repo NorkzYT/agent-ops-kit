@@ -19,7 +19,7 @@ ph = submodule("private_honcho")
 marker = submodule("privacy_marker")
 
 PUBLIC_ENV = {"HONCHO_PORT": "8000", "HONCHO_WORKSPACE": "agent-ops", "CLIPROXY_PORT": "8317",
-              "CLAUDE_MAX_PROXY_PORT": "3456", "HONCHO_MODEL": "gpt-5.6-terra"}
+              "CLAUDE_MAX_PROXY_PORT": "3456", "HONCHO_MODEL": "gpt-6.1-terra"}
 GOOD = {
     "PRIVATE_HONCHO_BASE_URL": "http://127.0.0.1:8100",
     "PRIVATE_HONCHO_WORKSPACE": "agent-ops-private",

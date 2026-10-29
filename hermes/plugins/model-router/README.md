@@ -10,7 +10,7 @@ payload is never sent to them by compression or title generation; see
   CURRENT user task (never history, system prompts, or tool output) and
   rewrites model **and** reasoning effort *within the request's family*:
   - orchestrator (CLIProxyAPI): status/lookup→`gpt-5.6-luna` (low effort),
-    ordinary work→`gpt-5.6-luna` (medium), ambiguous/planning→`gpt-5.6-terra`,
+    ordinary work→`gpt-5.6-luna` (medium), ambiguous/planning→`gpt-6.1-terra`,
     genuinely hard→`gpt-5.6-sol`; `gpt-6-astra` ONLY when the current task
     starts with a standalone `#max`/`#astra` control line (per-task, TTL-bound,
     never bleeding to the next task or session). The automatic ceiling is Sol.
@@ -78,7 +78,7 @@ payload is never sent to them by compression or title generation; see
   with the `skills` toolset only, readiness from the installed profile's
   `/learn` skill; no high-risk tier). With `specialist_classifier: cliproxy` a public task with no or
   only weak keyword matches, or with verified attachments, asks CLIProxyAPI
-  (`gpt-5.6-terra`, `medium` reasoning) for at most two
+  (`gpt-6.1-terra`, `medium` reasoning) for at most two
   additions, from the typed task plus the verified attached documents (PDF
   and DOCX text extracted locally, bounded; wire text, `#privacy` and routing
   notes withheld). `local` asks the routine local model instead. A
@@ -115,7 +115,7 @@ plugins:
         specialist_routing: false        # pilot; docs/specialist-routing.md
         specialist_max_profiles: 4
         specialist_require_ready: false
-        specialist_classifier: none      # none | local | cliproxy (gpt-5.6-terra, medium effort)
+        specialist_classifier: none      # none | local | cliproxy (gpt-6.1-terra, medium effort)
         specialist_classifier_timeout: 10  # seconds, both models, max 25
         specialist_profiles: []
 ```

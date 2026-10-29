@@ -115,7 +115,7 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - Native fallback chains (non-private only): orchestrator CLIProxyAPI →
   claude-max-proxy → Ollama agent → Ollama fallback; delegation
   claude-max-proxy → Ollama agent → Ollama fallback.
-- Compression: CLIProxyAPI `gpt-5.6-terra`, fallback `gpt-5.6-luna`
+- Compression: CLIProxyAPI `gpt-6.1-terra`, fallback `gpt-5.6-luna`
   (`AUX_COMPRESSION_*`; `AUX_COMPRESSION_ROUTE=aux` pins it to the title route).
   The plugin's aux guard refuses `#privacy`/`#private` payloads to it.
 - Session titles: the main route (CLIProxyAPI, luna); no `AUX_*` title vars.
@@ -124,7 +124,7 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - Full reference: `docs/model-routing.md`. Verify: `make route-smoke`,
   `make test-router`.
 - Specialist routing (pilot; plugin default off, `.env.example` on with the
-  `cliproxy` classifier, `gpt-5.6-terra`): `specialist_routing` in the same
+  `cliproxy` classifier, `gpt-6.1-terra`): `specialist_routing` in the same
   plugin suggests 0-15 book-backed profiles per current task (15 is the hard
   cap; verified attachment signals count before it); private tasks never
   reach cloud-backed profiles; every profile is advisory, none is labelled

@@ -34,7 +34,7 @@ def req(*user_texts, system=None, tool=None):
         msgs.append({"role": "user", "content": t})
     if tool:
         msgs.append({"role": "tool", "tool_call_id": "c1", "content": tool})
-    return {"model": "gpt-5.6-terra", "messages": msgs}
+    return {"model": "gpt-6.1-terra", "messages": msgs}
 
 
 # Synthetic test fixtures (NOT real secrets) --------------------------------- #
@@ -340,7 +340,7 @@ class TestComplexity(unittest.TestCase):
         # the ambiguous/planning tier, sol the hard tier, astra explicit-only.
         self.assertEqual(complexity.resolve_model("routine", family="gpt"), "gpt-5.6-luna")
         self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-5.6-luna")
-        self.assertEqual(complexity.resolve_model("elevated", family="gpt"), "gpt-5.6-terra")
+        self.assertEqual(complexity.resolve_model("elevated", family="gpt"), "gpt-6.1-terra")
         self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-5.6-sol")
         # Without explicit authorization the max tier clamps to the Sol ceiling.
         self.assertEqual(complexity.resolve_model("max", family="gpt"), "gpt-5.6-sol")
@@ -355,15 +355,15 @@ class TestComplexity(unittest.TestCase):
         # astra gone -> step down to sol (authorized max degrades too)
         self.assertEqual(
             complexity.resolve_model("max", family="gpt", allow_max=True,
-                                     available=["gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol"]),
+                                     available=["gpt-6.1-terra", "gpt-5.6-luna", "gpt-5.6-sol"]),
             "gpt-5.6-sol",
         )
 
     def test_degrade_never_upgrades(self):
         # only terra available; requesting high degrades DOWN to terra
         self.assertEqual(
-            complexity.resolve_model("high", family="gpt", available=["gpt-5.6-terra"]),
-            "gpt-5.6-terra",
+            complexity.resolve_model("high", family="gpt", available=["gpt-6.1-terra"]),
+            "gpt-6.1-terra",
         )
 
     def test_missing_lower_models_never_upshift_to_astra(self):
@@ -381,6 +381,7 @@ class TestComplexity(unittest.TestCase):
     def test_alias_to_tier(self):
         self.assertEqual(complexity.alias_to_tier("gpt-5.6-luna"), "routine")
         self.assertEqual(complexity.alias_to_tier("luna"), "routine")
+        self.assertEqual(complexity.alias_to_tier("gpt-6.1-terra"), "elevated")
         self.assertEqual(complexity.alias_to_tier("gpt-5.6-terra"), "elevated")
         self.assertEqual(complexity.alias_to_tier("terra"), "elevated")
         self.assertEqual(complexity.alias_to_tier("gpt-5.6-sol"), "high")
@@ -461,7 +462,7 @@ class TestPrivacyCanary(unittest.TestCase):
                                   base_url="http://127.0.0.1:8317/v1")
         self.assertEqual((spy.calls, resp.choices[0].message.content), (0, "LOCAL"))
         # The next turn in the SAME session has no marker: it goes downstream normally.
-        later = {"model": "gpt-5.6-terra", "messages": first["messages"] + [
+        later = {"model": "gpt-6.1-terra", "messages": first["messages"] + [
             {"role": "assistant", "content": f"LOCAL answer about {SSN}"},
             {"role": "user", "content": "now implement the parser"}]}
         resp = r.on_llm_execution(request=later, next_call=spy, session_id="turns",

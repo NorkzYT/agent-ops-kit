@@ -35,14 +35,14 @@ LONG_ARCH_TEXT = (
 ) * 120  # > 4k chars of architecture-flavored history/system text
 
 
-def chat_req(*msgs, model="gpt-5.6-terra", **extra):
+def chat_req(*msgs, model="gpt-6.1-terra", **extra):
     """msgs are (role, content) tuples."""
     request = {"model": model, "messages": [{"role": r, "content": c} for r, c in msgs]}
     request.update(extra)
     return request
 
 
-def responses_req(user_text, model="gpt-5.6-terra", **extra):
+def responses_req(user_text, model="gpt-6.1-terra", **extra):
     request = {
         "model": model,
         "instructions": "assist the operator",
@@ -88,7 +88,7 @@ class TestCurrentTaskExtraction(unittest.TestCase):
         self.assertFalse(task.authorized_max)
 
     def test_tool_and_assistant_content_excluded(self):
-        r = {"model": "gpt-5.6-terra", "messages": [
+        r = {"model": "gpt-6.1-terra", "messages": [
             {"role": "user", "content": "What is running?"},
             {"role": "assistant", "content": "#max let me escalate"},
             {"role": "tool", "tool_call_id": "c1", "content": "#max output from tool"},
@@ -99,16 +99,16 @@ class TestCurrentTaskExtraction(unittest.TestCase):
     def test_responses_shapes(self):
         r = responses_req("What is running?")
         self.assertEqual(task_intent.extract_current_user_task(r).text, "What is running?")
-        r2 = {"model": "gpt-5.6-terra", "instructions": "x", "input": "deploy the fix"}
+        r2 = {"model": "gpt-6.1-terra", "instructions": "x", "input": "deploy the fix"}
         self.assertEqual(task_intent.extract_current_user_task(r2).text, "deploy the fix")
-        r3 = {"model": "gpt-5.6-terra", "input": [
+        r3 = {"model": "gpt-6.1-terra", "input": [
             {"role": "user", "content": [{"type": "input_text", "text": "plan the migration"}]},
             {"type": "function_call_output", "call_id": "c", "output": "#max tool noise"},
         ]}
         self.assertEqual(task_intent.extract_current_user_task(r3).text, "plan the migration")
 
     def test_no_user_turn_is_conservative_medium(self):
-        r = {"model": "gpt-5.6-terra", "messages": [{"role": "system", "content": LONG_ARCH_TEXT}]}
+        r = {"model": "gpt-6.1-terra", "messages": [{"role": "system", "content": LONG_ARCH_TEXT}]}
         d = task_intent.classify(task_intent.extract_current_user_task(r))
         self.assertEqual(d.tier, "medium")
         self.assertFalse(d.authorized_max)
@@ -151,7 +151,7 @@ class TestOldBugRegressions(unittest.TestCase):
         self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
 
     def test_tool_result_max_tag_is_ignored(self):
-        r = {"model": "gpt-5.6-terra", "messages": [
+        r = {"model": "gpt-6.1-terra", "messages": [
             {"role": "user", "content": "What is running?"},
             {"role": "tool", "tool_call_id": "c1", "content": "log says #max #deep #hard"},
         ]}
@@ -173,7 +173,7 @@ class TestPolicyTiers(unittest.TestCase):
         # ambiguous / planning -> terra (request arrives as luna and upgrades)
         out = route(r, chat_req(("user", "compare the two rollout options and propose a plan"),
                                 model="gpt-5.6-luna"), session_id="c")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-terra")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra")
         # genuinely hard -> sol
         out = route(r, chat_req(("user", "refactor the ingest architecture and migrate the schema "
                                          "without downtime; watch for race conditions")),
@@ -248,7 +248,7 @@ class TestAstraAuthorization(unittest.TestCase):
         self.assertEqual(spy.calls, 1)
         never = make_router(astra_policy="never")
         out = route(never, chat_req(("user", "#max\ndo the thing")), session_id="p2")
-        self.assertNotEqual(out["request"]["model"] if out else "gpt-5.6-terra", "gpt-6-astra")
+        self.assertNotEqual(out["request"]["model"] if out else "gpt-6.1-terra", "gpt-6-astra")
 
     def test_no_silent_upshift_when_lower_models_missing(self):
         r = make_router(available_gpt_models=["gpt-6-astra"])
@@ -954,10 +954,10 @@ class TestForcedCodingControl(unittest.TestCase):
     # ---- orchestrator/GPT seam: refuse, never fake a GPT alias ------------
     def test_gpt_seam_not_faked_at_request_stage_and_refused_at_execution(self):
         r = make_router()
-        req = chat_req(("user", "#opus\nrefactor this module"), model="gpt-5.6-terra")
+        req = chat_req(("user", "#opus\nrefactor this module"), model="gpt-6.1-terra")
         out = route(r, req, session_id="g1s", rid="g1", base_url=GPT_URL)
         self.assertIsNone(out, "must not substitute a GPT alias for a forced coding model")
-        self.assertEqual(req["model"], "gpt-5.6-terra")
+        self.assertEqual(req["model"], "gpt-6.1-terra")
         spy = _Spy()
         resp = r.on_llm_execution(request=req, next_call=spy, session_id="g1s",
                                   api_request_id="g1", base_url=GPT_URL, model=req["model"])
@@ -1013,7 +1013,7 @@ class TestForcedCodingControl(unittest.TestCase):
         self.assertIn("outcome=forced-coding", joined)
         self.assertIn("reasons=force:opus", joined)
         with self.assertLogs("hermes.plugin.model_router", level="INFO") as cap2:
-            route(r, chat_req(("user", "#opus\nx"), model="gpt-5.6-terra"),
+            route(r, chat_req(("user", "#opus\nx"), model="gpt-6.1-terra"),
                   base_url=GPT_URL, session_id="lg2", rid="lg2r")
         self.assertIn("outcome=forced-coding-unroutable", "\n".join(cap2.output))
 

@@ -52,10 +52,10 @@ import knowledge_plan as kp  # noqa: E402  (content-hash source identity)
 
 RUBRIC_VERSION = 1
 CATALOG_VERSION = 1
-DEFAULT_MODELS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
+DEFAULT_MODELS = ("gpt-5.6-luna", "gpt-6.1-terra", "gpt-5.6-sol")
 DEFAULT_EFFORTS = ("medium", "high")
 BENCH_EFFORTS = ("medium", "high")            # no low effort in a benchmark
-BASELINE_CELL = "gpt-5.6-terra/medium"      # the classifier default (DEFAULT_MODEL/DEFAULT_EFFORT)
+BASELINE_CELL = "gpt-6.1-terra/medium"      # the classifier default (DEFAULT_MODEL/DEFAULT_EFFORT)
 KINDS = ("existing", "new", "either")
 UNKNOWN_RE = re.compile(r"not one of the listed profiles")
 

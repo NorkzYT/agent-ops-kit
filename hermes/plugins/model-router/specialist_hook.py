@@ -15,7 +15,7 @@ never in a subagent turn, so a specialist never fans out to other specialists.
 
 Classifiers (``specialist_classifier``): ``local`` asks the routine Ollama model;
 ``cliproxy`` asks CLIProxyAPI (``specialist_classifier_model``, default
-``gpt-5.6-terra``, at ``specialist_classifier_effort``, default ``medium``).
+``gpt-6.1-terra``, at ``specialist_classifier_effort``, default ``medium``).
 Either is reached only through ``specialists.route_text``, which never calls it
 for a ``#privacy`` turn; the cliproxy client also refuses any input carrying a
 privacy marker. Neither prompt nor answer is logged.

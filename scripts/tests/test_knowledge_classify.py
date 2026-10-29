@@ -940,31 +940,31 @@ class ClassifyE2E(unittest.TestCase):
         self.assertTrue((self.kroot / "alpha/It's Quoted/q.txt").is_file())
         self.assert_library_unchanged()
         # MODEL= and EFFORT= reach the script; EFFORT is validated there.
-        p = subprocess.run(["make", "-n", "-C", str(REPO), "knowledge-classify", "MODEL=gpt-5.6-terra", "EFFORT=high"],
+        p = subprocess.run(["make", "-n", "-C", str(REPO), "knowledge-classify", "MODEL=gpt-6.1-terra", "EFFORT=high"],
                            capture_output=True, text=True, env=self.env, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("--model", p.stdout)
         self.assertIn("--effort", p.stdout)
         self.cloud.requests.clear()
-        p = subprocess.run(mk + ["MODEL=gpt-5.6-terra", "EFFORT=high"], capture_output=True, text=True,
+        p = subprocess.run(mk + ["MODEL=gpt-6.1-terra", "EFFORT=high"], capture_output=True, text=True,
                            env=dict(self.env, SOURCE="edu/Strategy Book"), timeout=120)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         body = json.loads(self.cloud.requests[0]["body"])
-        self.assertEqual((body["model"], body["reasoning_effort"]), ("gpt-5.6-terra", "high"))
+        self.assertEqual((body["model"], body["reasoning_effort"]), ("gpt-6.1-terra", "high"))
 
 
 class Defaults(unittest.TestCase):
     def test_benchmarked_default_is_terra_at_medium_effort(self):
         # Set by the v1 benchmark (docs/benchmarks/knowledge-classify/results-v1-2026-10-23.md).
-        self.assertEqual((kc.DEFAULT_MODEL, kc.DEFAULT_EFFORT), ("gpt-5.6-terra", "medium"))
+        self.assertEqual((kc.DEFAULT_MODEL, kc.DEFAULT_EFFORT), ("gpt-6.1-terra", "medium"))
         env = {k: v for k, v in os.environ.items() if k not in ("KNOWLEDGE_CLASSIFY_MODEL", "KNOWLEDGE_CLASSIFY_EFFORT")}
         with mock.patch.dict(os.environ, env, clear=True):
             args = kc.build_parser().parse_args([])
-        self.assertEqual((args.model, args.effort), ("gpt-5.6-terra", "medium"))
+        self.assertEqual((args.model, args.effort), ("gpt-6.1-terra", "medium"))
         doc = (REPO / "docs" / "knowledge-classify.md").read_text()
-        self.assertIn("| `MODEL=` / `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-5.6-terra` |", doc)
+        self.assertIn("| `MODEL=` / `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-6.1-terra` |", doc)
         self.assertNotIn("gpt-5.6-luna", doc.split("## Tests")[0].split("### Choosing the model and effort")[0])
-        self.assertIn("MODEL=gpt-5.6-terra EFFORT=medium", (REPO / "Makefile").read_text())
+        self.assertIn("MODEL=gpt-6.1-terra EFFORT=medium", (REPO / "Makefile").read_text())
 
 
 class ParseVerdict(unittest.TestCase):

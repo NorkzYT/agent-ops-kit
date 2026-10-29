@@ -122,7 +122,7 @@ aux_fallback_chain() {
 }
 AUX_FALLBACK_CHAIN="$(aux_fallback_chain)"; export AUX_FALLBACK_CHAIN
 # Compression route. AUX_COMPRESSION_ROUTE=cliproxy (default): CLIProxyAPI,
-# AUX_COMPRESSION_MODEL (gpt-5.6-terra) then AUX_COMPRESSION_FALLBACK_MODEL
+# AUX_COMPRESSION_MODEL (gpt-6.1-terra) then AUX_COMPRESSION_FALLBACK_MODEL
 # (gpt-5.6-luna, `none` = no fallback) on the same proxy. The key stays in .env
 # (${CLIPROXY_API_KEY} / key_env). The model-router plugin's aux guard refuses
 # #privacy/#private payloads on this route. AUX_COMPRESSION_ROUTE=aux: the
@@ -136,7 +136,7 @@ esac
 if [[ "$AUX_COMPRESSION_ROUTE" == "cliproxy" ]]; then
   AUX_COMPRESSION_PROVIDER=custom; AUX_COMPRESSION_BASE_URL="$CLIPROXY_BASE_URL"
   AUX_COMPRESSION_API_KEY='${CLIPROXY_API_KEY}'
-  AUX_COMPRESSION_MODEL="$(getenv AUX_COMPRESSION_MODEL gpt-5.6-terra)"
+  AUX_COMPRESSION_MODEL="$(getenv AUX_COMPRESSION_MODEL gpt-6.1-terra)"
   aux_comp_fb="$(getenv AUX_COMPRESSION_FALLBACK_MODEL gpt-5.6-luna)"
   if [[ "$aux_comp_fb" != "none" && "$aux_comp_fb" != "$AUX_COMPRESSION_MODEL" ]]; then
     AUX_COMPRESSION_FALLBACK_CHAIN="$(printf '[{provider: custom, model: "%s", base_url: "%s", key_env: CLIPROXY_API_KEY}]' \

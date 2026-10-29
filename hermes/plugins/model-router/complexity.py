@@ -36,7 +36,7 @@ TIERS = ("routine", "medium", "elevated", "high", "max")
 GPT_TIER_MODELS = {
     "routine": "gpt-5.6-luna",
     "medium": "gpt-5.6-luna",
-    "elevated": "gpt-5.6-terra",
+    "elevated": "gpt-6.1-terra",
     "high": "gpt-5.6-sol",
     "max": "gpt-6-astra",
 }
@@ -80,7 +80,7 @@ CODING_XHIGH_LABELS = frozenset({"kw:debug", "kw:arch", "kw:concurrency"})
 _ALIAS_TO_TIER = {
     # gpt aliases
     "luna": "routine", "gpt-5.6-luna": "routine",
-    "terra": "elevated", "gpt-5.6-terra": "elevated",
+    "terra": "elevated", "gpt-6.1-terra": "elevated", "gpt-5.6-terra": "elevated",
     "sol": "high", "gpt-5.6-sol": "high",
     "astra": "max", "gpt-6-astra": "max",
     # coding aliases

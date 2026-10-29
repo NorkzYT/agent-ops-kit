@@ -115,8 +115,8 @@ The remaining sources (at most `LIMIT`, default 20, per run) go through:
    any other host is not trusted with private text.
 4. **Classify.** The model gets one OpenAI-compatible chat call. By default that
    is CLIProxyAPI at `http://127.0.0.1:${CLIPROXY_PORT}/v1` with
-   `gpt-5.6-terra` at reasoning effort `medium`, the benchmarked default
-   (Opus is not needed). Each
+   `gpt-6.1-terra` at reasoning effort `medium`, the default Terra model (the
+   v1 benchmark chose `gpt-5.6-terra/medium`; Opus is not needed). Each
    candidate profile is described by its purpose (the `You are …` line of its
    `SOUL.md`) and its current corpus: book-list size, staged file count and up
    to six book titles from its book list. It must return a single JSON object:
@@ -400,7 +400,7 @@ where needed.
 | `SECONDARY_REASON=` / `--secondary-reason` | — | — | Required with `SECONDARY`: the substantial, recurring, independent purpose |
 | `SOURCE=` / positional | — | all uncategorized | Limit the run to one source |
 | `CLASSIFIER=` / `--classifier` | `KNOWLEDGE_CLASSIFIER` | `cliproxy` | `cliproxy`, `local` (Ollama only) or `none` (stage and report, no model) |
-| `MODEL=` / `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-5.6-terra` | CLIProxyAPI model (benchmarked: see "Choosing the model and effort") |
+| `MODEL=` / `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-6.1-terra` | CLIProxyAPI model (v1 benchmark chose `gpt-5.6-terra`: see "Choosing the model and effort") |
 | `EFFORT=` / `--effort` | `KNOWLEDGE_CLASSIFY_EFFORT` | `medium` | CLIProxyAPI reasoning effort, sent as top-level `reasoning_effort` on every classification and spec-completion request (`medium` or `high`; `minimal`/`low` accepted for compatibility). Not sent to the local model, whose options are its own; the report says so (`effort_note`) |
 | `METADATA_ONLY=1` / `--metadata-only` | — | off | Never send an excerpt |
 | `--excerpt-chars` | `KNOWLEDGE_EXCERPT_CHARS` | 3000 | Excerpt size, 0–12000 |
@@ -437,8 +437,9 @@ production prompt and evidence against a versioned, operator-reviewed rubric
 a profile; results go under `OUT` (default: a timestamped folder in the
 gitignored staging area). See
 [benchmarks/knowledge-classify/README.md](benchmarks/knowledge-classify/README.md)
-for the rubric, the scoring and the latest results, which set the default
-above.
+for the rubric, the scoring and the latest results. The v1 results chose
+`gpt-5.6-terra/medium`; the default moved to `gpt-6.1-terra` with the kit's
+Terra default and has not been re-benchmarked yet.
 
 ## Reconcile legacy staged knowledge
 
