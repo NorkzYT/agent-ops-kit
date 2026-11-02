@@ -28,13 +28,13 @@ passive tools is accepted by name; everything else fails closed:
                                the supervising Hermes worker) and its descendants -> fine
   gone                         exited between scan and inspection (ENOENT/ESRCH)  -> fine
   editor / language-server /   known passive tools: editors, LSP servers, idle
-  dev-server / shell           interactive shells (no -c, no script), dev servers -> reported
+  dev-server / shell           shells with no args or only -i/-l/--login, dev servers -> reported
   git-readonly                 git status/log/diff/show/...                       -> reported
   git-mutation                 git commit/merge/rebase/checkout/reset/stash/...  -> blocked
   agent-writer                 another autonomous coding agent (hermes worker, claude,
                                codex, aider, ...) not in our chain                -> blocked
   unknown                      anything else: arbitrary python/node/scripts, a shell
-                               running a command, a tty-attached tool that is not a
+                               with any other argument (-c, -s, a script), a tty-attached tool that is not a
                                known editor, /proc unreadable, incomplete scan     -> blocked
 
 Uncommitted changes are resumed only with provenance. The protocol is preflight ->
@@ -101,6 +101,10 @@ PASSIVE_LANGUAGE_SERVERS = {"gopls", "pyright-langserver", "pylsp", "pyls", "jed
 PASSIVE_DEV_SERVERS = {"vite", "webpack-dev-server", "webpack", "next", "nuxt", "astro", "nodemon", "air", "esbuild",
                        "browser-sync", "live-server", "http-server", "serve", "parcel", "rollup", "tsc", "turbo", "swc"}
 INTERACTIVE_SHELLS = {"bash", "zsh", "sh", "dash", "fish", "ksh", "tcsh", "csh"}
+# The only shell arguments that still mean "idle prompt": no arguments at all, or these exact
+# interactive/login options. Anything else (-c, -s/--stdin, combined -lc/-sc, a script, ...)
+# may be running a command and is unknown.
+IDLE_SHELL_OPTIONS = {"-i", "-l", "--login", "--interactive"}
 SCRIPT_INTERPRETERS = {"node", "nodejs", "deno", "bun", "python", "python3", "ruby", "perl"}
 # Observations that are not writers; everything not listed here is "unknown" and blocks.
 NONBLOCKING_KINDS = {"self-chain", "own-descendant", "gone", "editor", "language-server", "dev-server", "shell",
@@ -752,9 +756,9 @@ def classify_cmdline(cmd: list) -> tuple:
         return "dev-server", False, f"dev server / watcher ({name})"
     if name in INTERACTIVE_SHELLS:
         args = cmd[1:]
-        if all(a.startswith("-") for a in args) and "-c" not in args:
+        if all(a in IDLE_SHELL_OPTIONS for a in args):
             return "shell", False, f"idle interactive shell ({name})"
-        return "unknown", True, f"shell running a command ({name} {' '.join(args)[:80]}): not a known passive tool"
+        return "unknown", True, f"shell with arguments ({name} {' '.join(args)[:80]}): not provably idle"
     return "unknown", True, f"{name or '?'}: not a known passive tool; treated as a possible writer"
 
 
@@ -1190,11 +1194,24 @@ def emit(result, as_json: bool = True) -> None:
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
 
 
+def cli_owner(task_id: str, explicit_pid: Optional[int] = None) -> dict:
+    """Lease owner for the lease-taking CLI commands. Without --owner-pid the anchor must be a
+    verified supervising worker: falling back to this short-lived CLI process would take a lease
+    that dies with it, so the next checkpoint could never renew it. Refuse that up front."""
+    owner = owner_from_env(task_id, explicit_pid)
+    if explicit_pid is None and owner["pid"] == os.getpid():
+        raise LeaseError(f"no verified supervising Hermes worker for card {task_id} in this process's ancestry "
+                         "(HERMES_KANBAN_SUPERVISED_WORKER_PID unset/unverified, or the worker's HERMES_KANBAN_TASK "
+                         "differs); refusing a lease owned by this short-lived CLI process. Run from the card's "
+                         "worker terminal or pass --owner-pid <long-lived pid that stands for this run>")
+    return owner
+
+
 def main(argv=None, git: GitRunner = default_git, scan_runner: ScanRunner = default_scan_runner) -> int:
     args = parser().parse_args(argv)
     try:
         if args.cmd == "preflight":
-            owner = owner_from_env(args.task, args.owner_pid)
+            owner = cli_owner(args.task, args.owner_pid)
             result = preflight(args.task, args.checkout, args.repo, args.branch, args.base, git=git,
                                scan_runner=scan_runner, owner=owner, require_clean=args.require_clean)
             emit(result)
@@ -1202,7 +1219,9 @@ def main(argv=None, git: GitRunner = default_git, scan_runner: ScanRunner = defa
         identity = None
         if args.cmd in ("checkpoint", "adopt", "release"):
             identity = repo_identity(args.checkout, git)
-            owner = owner_from_env(args.task, getattr(args, "owner_pid", None))  # refuses another card's terminal
+            explicit = getattr(args, "owner_pid", None)
+            # refuses another card's terminal; checkpoint also refuses a self-anchored owner
+            owner = cli_owner(args.task, explicit) if args.cmd == "checkpoint" else owner_from_env(args.task, explicit)
         if args.cmd == "checkpoint":
             emit(checkpoint(args.task, identity, git, owner=owner, scan_runner=scan_runner))
             return 0

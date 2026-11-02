@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """Narrow, no-restart rollout of the Discord->Kanban dev workflow files.
 
-Copies exactly two things from this checkout into an installed Hermes home:
+Copies exactly these tracked files from this checkout into an installed Hermes home:
 
-  hermes/skills/kanban-workflow/**   -> <home>/skills/agent-ops-kit/kanban-workflow/**
+  hermes/skills/kanban-workflow/{SKILL.md, scripts/browserstack.py,
+    scripts/workflow.py, scripts/repo_lease.py}
+                                     -> <home>/skills/agent-ops-kit/kanban-workflow/...
   hermes/profiles/coder/SOUL.md      -> <coder-home>/SOUL.md
+
+The skill files are a fixed allowlist, not a directory walk: an untracked or
+stray file under the skill directory is never copied.
 
 <coder-home> is --coder-home, else <home>/profiles/coder when that directory
 already exists; otherwise the SOUL is skipped. Nothing else is read or written:
 no config.yaml, .env, honcho.json, plugins, memories or the default SOUL.md.
 Files already in the destination that are not in the source list are left
-alone (no removal); bytecode (__pycache__, *.pyc) is never copied.
+alone (no removal).
 
 --plan (default) only inspects. --apply validates every destination first and
 writes nothing if any check fails; then each changed file gets a unique backup
@@ -39,8 +44,8 @@ REPO = Path(__file__).resolve().parents[1]
 SKILL_SRC = Path("hermes/skills/kanban-workflow")
 SKILL_DEST = ("skills", "agent-ops-kit", "kanban-workflow")
 CODER_SOUL_SRC = Path("hermes/profiles/coder/SOUL.md")
-BYTECODE_DIRS = {"__pycache__"}
-BYTECODE_SUFFIXES = (".pyc", ".pyo")
+# The tracked skill files this helper deploys. Anything else under SKILL_SRC is ignored.
+SKILL_FILES = ("SKILL.md", "scripts/browserstack.py", "scripts/workflow.py", "scripts/repo_lease.py")
 
 
 class Refused(Exception):
@@ -62,23 +67,19 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def source_items(repo: Path) -> list[Item]:
+def source_items(repo: Path, files: tuple[str, ...] = SKILL_FILES) -> list[Item]:
+    """One item per allowlisted skill file; a missing file fails at read time."""
     root = repo / SKILL_SRC
-    st = os.lstat(root)
-    if not stat.S_ISDIR(st.st_mode):
-        raise Refused(f"source {root} is not a directory")
     items = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in BYTECODE_DIRS)
-        for d in dirnames:
-            if os.path.islink(os.path.join(dirpath, d)):
-                raise Refused(f"source {os.path.join(dirpath, d)} is a symlink")
-        for name in sorted(filenames):
-            if name.endswith(BYTECODE_SUFFIXES):
-                continue
-            path = Path(dirpath, name)
-            rel = path.relative_to(root)
-            items.append(Item(path, SKILL_DEST + rel.parts))
+    for rel in files:
+        parts = Path(rel).parts
+        if not parts or Path(rel).is_absolute() or ".." in parts:
+            raise Refused(f"source list entry {rel!r} is not a plain relative path")
+        for i in range(len(parts)):  # the skill dir and every directory on the way: no symlinks
+            d = root.joinpath(*parts[:i])
+            if os.path.islink(d):
+                raise Refused(f"source {d} is a symlink")
+        items.append(Item(root.joinpath(*parts), SKILL_DEST + parts))
     return items
 
 

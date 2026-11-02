@@ -378,6 +378,10 @@ class ProcessClassificationTest(TempRepo):
             ("node", "/repo/node_modules/vite/bin/vite.js", "--port", "5173"): ("dev-server", False),
             ("node", "/repo/node_modules/.bin/next", "dev"): ("dev-server", False),
             ("-bash",): ("shell", False), ("zsh", "-l", "-i"): ("shell", False),
+            ("bash",): ("shell", False), ("bash", "-i"): ("shell", False), ("bash", "--login"): ("shell", False),
+            ("bash", "-s"): ("unknown", True), ("sh", "--stdin"): ("unknown", True),
+            ("bash", "-lc", "make deploy"): ("unknown", True), ("bash", "-sc", "x"): ("unknown", True),
+            ("bash", "-i", "./scripts/build.sh"): ("unknown", True), ("bash", "--rcfile", "/tmp/rc"): ("unknown", True),
             ("bash", "-c", "while true; do ./deploy.sh; done"): ("unknown", True),
             ("bash", "./scripts/build.sh"): ("unknown", True),
             ("git", "status", "--porcelain"): ("git-readonly", False), ("/usr/bin/git", "-C", "/x", "log", "-1"): ("git-readonly", False),
@@ -741,23 +745,60 @@ class PreflightTest(TempRepo):
         self.assertEqual(self.names(strict, False), ["dirty"])
         self.assertEqual(Path(self.co, "a.txt").read_text(), "2\n", "nothing is ever reset or stashed")
 
+    def test_cli_refuses_a_self_anchored_lease_early(self):
+        """No verified worker and no --owner-pid: preflight and checkpoint refuse before taking a
+        lease that would die with the CLI process."""
+        for argv in (["preflight", "--task", "t_1", "--checkout", self.co, "--repo", self.url, "--branch", "feat/x"],
+                     ["checkpoint", "--task", "t_1", "--checkout", self.co]):
+            with mock.patch("sys.stderr", new_callable=lambda: __import__("io").StringIO()) as err:
+                self.assertEqual(rl.main(argv, scan_runner=self.pass_scan), 2, argv)
+            self.assertIn("no verified supervising Hermes worker", err.getvalue())
+            self.assertIsNone(rl.read_lease(rl.repo_identity(self.co, rl.default_git)), argv)
+
+    def test_cli_under_a_verified_worker_takes_the_workers_lease(self):
+        """The genuine path: a worker process carrying HERMES_KANBAN_TASK runs the CLI with
+        HERMES_KANBAN_SUPERVISED_WORKER_PID pointing at itself; the lease is the worker's."""
+        child = (
+            "import os, sys, json, subprocess, importlib.util\n"
+            f"spec = importlib.util.spec_from_file_location('rl', {str(SCRIPT)!r}); rl = importlib.util.module_from_spec(spec); spec.loader.exec_module(rl)\n"
+            "scan = lambda argv: subprocess.CompletedProcess(argv, 0, 'PASS: No repository CWD matches found.\\n', '')\n"
+            f"code = rl.main(['preflight', '--task', 't_1', '--checkout', {self.co!r}, '--repo', {self.url!r}, '--branch', 'feat/x'], scan_runner=scan)\n"
+            f"code2 = rl.main(['checkpoint', '--task', 't_1', '--checkout', {self.co!r}], scan_runner=scan)\n"
+            f"lease = rl.read_lease(rl.repo_identity({self.co!r}, rl.default_git))\n"
+            "print('RESULT ' + json.dumps({'codes': [code, code2], 'owner': lease['owner']['pid'], 'parent': os.getppid()}))\n"
+        )
+        worker = (
+            "import os, sys, subprocess\n"
+            "env = {**os.environ, 'HERMES_KANBAN_SUPERVISED_WORKER_PID': str(os.getpid())}\n"
+            f"sys.stdout.write(subprocess.run([sys.executable, '-c', {child!r}], env=env, capture_output=True, text=True).stdout)\n"
+        )
+        out = subprocess.run([sys.executable, "-c", worker], env={**os.environ, "HERMES_KANBAN_TASK": "t_1"},
+                             capture_output=True, text=True, timeout=120)
+        line = next((ln for ln in out.stdout.splitlines() if ln.startswith("RESULT ")), None)
+        self.assertTrue(line, out.stdout + out.stderr)
+        got = json.loads(line[len("RESULT "):])
+        self.assertEqual(got["codes"], [0, 0], got)
+        self.assertEqual(got["owner"], got["parent"], "the lease is owned by the verified worker, not the CLI")
+
     def test_cli_round_trip(self):
         out = subprocess.run([sys.executable, str(SCRIPT), "status", "--checkout", self.co], capture_output=True, text=True,
                              env={**os.environ, "HERMES_WORKFLOW_STATE": str(self.state)})
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(json.loads(out.stdout)["scanner"], ["sudo", "-n", "/bin/true"])
+        owner_pid = str(os.getppid())  # explicit long-lived owner: no verified worker in a test run
         with mock.patch.object(rl, "default_scan_runner", self.pass_scan):
             with mock.patch("sys.stdout", new_callable=lambda: __import__("io").StringIO()) as buf:
-                code = rl.main(["preflight", "--task", "t_1", "--checkout", self.co, "--repo", self.url, "--branch", "feat/x"])
+                code = rl.main(["preflight", "--task", "t_1", "--checkout", self.co, "--repo", self.url, "--branch", "feat/x",
+                                "--owner-pid", owner_pid])
             self.assertEqual(code, 0, buf.getvalue())
             self.assertTrue(json.loads(buf.getvalue())["ok"])
         with mock.patch.dict(os.environ, {"HERMES_KANBAN_TASK": "t_zzz"}):
             with mock.patch("sys.stderr", new_callable=lambda: __import__("io").StringIO()) as err:
-                code = rl.main(["checkpoint", "--task", "t_1", "--checkout", self.co])
+                code = rl.main(["checkpoint", "--task", "t_1", "--checkout", self.co, "--owner-pid", owner_pid])
             self.assertEqual(code, 2)
             self.assertIn("belongs to card t_zzz", err.getvalue())
         with mock.patch("sys.stdout", new_callable=lambda: __import__("io").StringIO()) as buf:
-            self.assertEqual(rl.main(["release", "--task", "t_1", "--checkout", self.co]), 0)
+            self.assertEqual(rl.main(["release", "--task", "t_1", "--checkout", self.co, "--owner-pid", owner_pid]), 0)
         self.assertEqual(json.loads(buf.getvalue())["status"], "released")
 
 

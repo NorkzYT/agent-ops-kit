@@ -1036,7 +1036,7 @@ def checkout_preflight(task_id: str, h: dict, checkout: str, *, scan_runner=None
                        git: GitRunner = default_git) -> dict:
     """repo_lease preflight for a code card's designated checkout, owned by this run."""
     try:
-        owner = rl.owner_from_env(task_id)
+        owner = rl.cli_owner(task_id)  # refuses a lease owned by this short-lived process
         return rl.preflight(task_id, checkout, h.get("repo", ""), h.get("branch", ""), h.get("base", "main"),
                             git=git, scan_runner=scan_runner or rl.default_scan_runner, owner=owner,
                             require_clean=require_clean)
@@ -1104,7 +1104,7 @@ def checkout_command(cmd: str, task_id: str, repo_dir: str, manifest: str = "", 
         if identity["branch"] != h.get("branch", ""):
             raise WorkflowError(f"checkout is on '{identity['branch']}', the card's branch is '{h.get('branch')}'")
         if cmd == "checkpoint":
-            return 0, rl.checkpoint(task_id, identity, git, owner=rl.owner_from_env(task_id),
+            return 0, rl.checkpoint(task_id, identity, git, owner=rl.cli_owner(task_id),
                                     scan_runner=scan_runner or rl.default_scan_runner)
         if cmd == "adopt":
             return 0, rl.adopt_manifest(task_id, identity, git, manifest)

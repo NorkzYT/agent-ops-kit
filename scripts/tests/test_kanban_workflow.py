@@ -504,6 +504,11 @@ class CheckoutRepo(StateDirMixin):
         git("push", "origin", "main", cwd=self.co)
         self.fake = FakeHermes()
         wf.rl.register_scanner(self.co, ["sudo", "-n", "/bin/true"])
+        # Stand-in for the verified supervising worker (genuine path: test_repo_lease's
+        # test_cli_under_a_verified_worker_takes_the_workers_lease): a long-lived ancestor.
+        anchor = mock.patch.object(wf.rl, "anchor_pid", lambda explicit=None, task_id=None: int(explicit or os.getppid()))
+        anchor.start()
+        self.addCleanup(anchor.stop)
 
     def intake(self, *extra, repo=None, key="k"):
         return wf.intake(intake_args("--lane", "mac", "--lane", "windows", "--key", key, "--body", "full ask",
@@ -1840,6 +1845,14 @@ class DesignatedCheckoutLeaseTest(CheckoutRepo, unittest.TestCase):
         with self.assertRaises(wf.WorkflowError) as ctx:
             self.run_cmd("preflight", repo_dir=self.tmp)
         self.assertIn("designated checkout", str(ctx.exception))
+
+    def test_without_a_verified_worker_preflight_and_checkpoint_refuse_early(self):
+        with mock.patch.object(wf.rl, "anchor_pid", lambda explicit=None, task_id=None: os.getpid()):
+            for cmd in ("preflight", "checkpoint"):
+                with self.assertRaises(wf.WorkflowError) as ctx:
+                    self.run_cmd(cmd)
+                self.assertIn("no verified supervising Hermes worker", str(ctx.exception))
+        self.assertIsNone(wf.rl.read_lease(wf.rl.repo_identity(self.co, wf.rl.default_git)), "no lease was taken")
 
     def test_adopt_bootstraps_only_matching_provenance(self):
         Path(self.co, "a.txt").write_text("preserved work\n")

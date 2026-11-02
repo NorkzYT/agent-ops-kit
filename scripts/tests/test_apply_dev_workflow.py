@@ -30,11 +30,7 @@ spec.loader.exec_module(adw)
 
 
 def source_files() -> list[Path]:
-    out = []
-    for p in sorted(SKILL_SRC.rglob("*")):
-        if p.is_file() and "__pycache__" not in p.parts and p.suffix not in (".pyc", ".pyo"):
-            out.append(p.relative_to(SKILL_SRC))
-    return out
+    return [Path(rel) for rel in adw.SKILL_FILES]
 
 
 def snapshot(root: Path) -> dict[str, tuple]:
@@ -249,6 +245,59 @@ class RefusalTests(Base):
         self.assertEqual(rc, 1)
         self.assertIn("owned by uid", err.getvalue())
         self.assertFalse((self.home / "skills").exists())
+
+
+class SourceListTests(Base):
+    def fixture_repo(self) -> Path:
+        repo = Path(self.tmp.name) / "repo"
+        root = repo / adw.SKILL_SRC
+        for rel in adw.SKILL_FILES:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(f"tracked {rel}\n")
+        # Untracked stray content next to the tracked files: never deployed.
+        (root / "scripts" / "stray.py").write_text("import os; os.remove('x')\n")
+        (root / "notes").mkdir()
+        (root / "notes" / "draft.md").write_text("draft\n")
+        (root / "scripts" / "__pycache__").mkdir()
+        (root / "scripts" / "__pycache__" / "workflow.cpython-312.pyc").write_bytes(b"\0")
+        return repo
+
+    def test_allowlist_is_exactly_the_tracked_skill_files(self):
+        tracked = subprocess.run(["git", "-C", str(REPO), "ls-files", str(SKILL_SRC)], capture_output=True,
+                                 text=True, check=True).stdout.split()
+        self.assertEqual(sorted(str(Path(p).relative_to(SKILL_SRC.relative_to(REPO))) for p in tracked),
+                         sorted(adw.SKILL_FILES))
+
+    def test_stray_untracked_source_files_are_never_copied(self):
+        repo = self.fixture_repo()
+        out = io.StringIO()
+        with mock.patch.object(adw, "REPO", repo), redirect_stdout(out), redirect_stderr(io.StringIO()):
+            self.assertEqual(adw.main(["--apply", "--hermes-home", str(self.home)]), 0)
+        deployed = sorted(str(p.relative_to(self.skill())) for p in self.skill().rglob("*") if p.is_file())
+        self.assertEqual(deployed, sorted(adw.SKILL_FILES))
+        self.assertNotIn("stray", out.getvalue())
+        self.assertNotIn("draft", out.getvalue())
+
+    def test_missing_allowlisted_file_refuses_before_any_write(self):
+        repo = self.fixture_repo()
+        (repo / adw.SKILL_SRC / "scripts" / "repo_lease.py").unlink()
+        with mock.patch.object(adw, "REPO", repo), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(adw.main(["--apply", "--hermes-home", str(self.home)]), 1)
+        self.assertFalse((self.home / "skills").exists())
+
+    def test_injected_source_list_is_validated(self):
+        repo = self.fixture_repo()
+        self.assertEqual([i.parts for i in adw.source_items(repo, ("notes/draft.md",))],
+                         [adw.SKILL_DEST + ("notes", "draft.md")])
+        for bad in ("../../etc/passwd", "/etc/passwd", ""):
+            with self.assertRaises(adw.Refused, msg=bad):
+                adw.source_items(repo, (bad,))
+        real = Path(self.tmp.name) / "elsewhere"
+        real.mkdir()
+        (real / "x.py").write_text("x\n")
+        os.symlink(real, repo / adw.SKILL_SRC / "linked")
+        with self.assertRaises(adw.Refused):
+            adw.source_items(repo, ("linked/x.py",))
 
 
 class SourceTests(unittest.TestCase):

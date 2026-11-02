@@ -139,8 +139,9 @@ invocation (allowed by the scanner without any config change), the in-process
   writable, exit-code contract 0/1/2, unprivileged `/proc` fallback that marks
   other users' processes as unknown; classification per match: `self-chain`,
   `own-descendant`, `gone` (ENOENT/ESRCH), the explicit passive observations
-  `editor`, `language-server`, `dev-server`, `shell` (idle interactive shell: no
-  `-c`, no script) and `git-readonly` (documented name sets in `repo_lease.py`;
+  `editor`, `language-server`, `dev-server`, `shell` (idle shell: no arguments or
+  only `-i`/`-l`/`--login`/`--interactive`; `-c`, `-s`/`--stdin`, combined
+  `-lc`/`-sc`, a script or any other option is `unknown`) and `git-readonly` (documented name sets in `repo_lease.py`;
   `node`/`python` running a known script resolve to that script's name), and the
   blocking kinds `git-mutation`, `agent-writer` (by executable name only when
   outside our chain) and `unknown` (any other executable or script, including
@@ -149,9 +150,11 @@ invocation (allowed by the scanner without any config change), the in-process
   change (status, worktree sha256 and mode, index object and mode, rename origin;
   no contents; paths literal, a dotfile stays a dotfile) with `adopt` (explicit
   `{path: sha256}` provenance that must match byte for byte) and `verify` (known /
-  changed with the differing fields / unknown; a different branch, remote, root,
-  git dir or HEAD invalidates the manifest, so a foreign `git add`, chmod or
-  symlink swap on a recorded path is `changed`); the gated `checkpoint`: this run
+  changed with the differing fields / unknown; a different branch, remote, root
+  or git dir invalidates the manifest, but HEAD does not: a commit of some
+  recorded paths leaves the others resumable, and a foreign `git add`, chmod or
+  symlink swap on a recorded path is `changed`); only the checkpoint baseline is
+  bound to HEAD; the gated `checkpoint`: this run
   must hold the live lease (renewed, never taken), the writer scan must be clean,
   and a baseline written by a passing `preflight` under the same lease tenure at
   the same HEAD must exist; it adopts the baseline's (task-owned) entries plus what
@@ -173,7 +176,13 @@ invocation (allowed by the scanner without any config change), the in-process
   step 6 says unfinished work is not a blocker; `record-sha` rejects untracked
   files and, in a designated checkout, re-runs lease + writer + clean checks right
   before writing the record. The existing `--checkout` and named feature-merge
-  approval work is kept.
+  approval work is kept unchanged (a feature-to-feature merge still needs the
+  operator's exact, named approval; nothing here merged). `preflight` and
+  `checkpoint` (both `workflow.py` and the `repo_lease.py` CLI without
+  `--owner-pid`) refuse up front when no verified supervising worker is in the
+  ancestry, instead of taking a lease owned by the short-lived CLI process that
+  the next checkpoint could not renew; the library APIs with an explicit owner
+  are unchanged.
 - **Installer/template**: `approvals: {cron_mode, single_query_mode,
   unattended_mode}: deny` rendered explicitly (documented keys);
   `command_allowlist` read from the live config and preserved across `--force`;
@@ -210,7 +219,11 @@ invocation (allowed by the scanner without any config change), the in-process
   unblock or claim a card; those remain the worker's `kanban_*` tool calls, gated as
   before for delegate children and cron.
 - **No approval bypass.** Defaults stay deny; the only change is that a decision
-  the operator recorded permanently applies headlessly too. Hardline patterns and
+  the operator recorded permanently applies headlessly too. Implication: answering
+  "Always" to an interactive approval prompt adds that pattern key to
+  `command_allowlist`, and from then on headless (unattended) runs may run
+  commands matching it without asking; use "Once"/"Session" for anything that
+  should stay interactive, and prune `command_allowlist` to revoke. Hardline patterns and
   tirith findings are unaffected; `single_query_mode: approve`, yolo and scanner
   disabling are not used or recommended anywhere.
 - **Nothing destructive, ever.** No reset/stash/clean/rm in the checkout; leases,
@@ -336,7 +349,8 @@ metadata and can be deleted; nothing in any repository was changed by this work.
   with `unknown` until the operator adds it. Same-uid cooperative evidence
   throughout: lease, scan and checkpoint prove what was observed, not who wrote.
 - `checkpoint` after a commit needs a fresh passing `preflight` (the baseline is
-  bound to HEAD); the card text says so.
+  bound to HEAD; manifests are bound to root, git dir, remote and branch only, so
+  a partial commit keeps the remaining paths resumable); the card text says so.
 - Upstream Hermes may change `_unattended_deny`, the CLI denial list or the
   terminal env path; `hermes-runtime-patch.sh status` reports `conflict` and the
   three test files in the patches are the contract to rebase against.
