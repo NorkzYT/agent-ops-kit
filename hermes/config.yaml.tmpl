@@ -140,6 +140,19 @@ discord:
     replied_user: true
 group_sessions_per_user: true
 
+# -------------------------------------------------------------- Approvals ---
+# Dangerous-command policy, documented keys only (Hermes user-guide/security).
+# Kanban workers run as `hermes chat -q` and cron jobs headless: with deny they
+# refuse a flagged command instead of waiting for nobody. The one standing
+# exception is the operator's own "Always" answers: those pattern keys live in
+# command_allowlist, apply in headless runs too (runtime patch 0002), and are
+# kept verbatim across `hermes-install.sh --force`. No yolo, no approve mode.
+approvals:
+  cron_mode: deny
+  single_query_mode: deny
+  unattended_mode: deny
+command_allowlist: __COMMAND_ALLOWLIST__
+
 # ----------------------------------------------------------------- Kanban ---
 # Shared board for multi-profile teams (docs/profiles-and-teams.md).
 kanban:

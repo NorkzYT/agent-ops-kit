@@ -142,9 +142,25 @@ overrides) and then mirrored to the card as a `kanban-workflow` comment.
   dispatch; the peer replays the same run.
 - A failed card comment no longer loses the run: the ledger has it, `dispatch`
   and `wait` resume from it, and the next command mirrors it to the card.
-- Mutating commands refuse to run inside a `delegate_task` child (Hermes
-  refuses Kanban writes there), before any remote run starts. The prompts tell
-  relays and the coordinator to run them with their own terminal tool.
+- Mutating commands refuse to run inside a `delegate_task` child or a cron run
+  (Hermes refuses Kanban writes there), before any remote run starts. The prompts
+  tell relays and the coordinator to run them with their own terminal tool. That
+  terminal carries the card id (`$HERMES_KANBAN_TASK`) and the supervised-terminal
+  marker from runtime patch 0001 (`hermes/runtime-patches/README.md`); without the
+  patch every `hermes kanban comment/create/link` from a worker is refused.
+- Designated checkout (`--checkout`): `workflow.py preflight <code card> --repo-dir <checkout>`
+  takes a repository lease (`~/.hermes/kanban/workflow-runs/leases/<key>.json`,
+  owner = board, card, run, worker pid + start time), runs the registered
+  privileged CWD scanner and classifies each match by process ancestry, checks
+  remote, `index.lock`, branch, worktrees and uncommitted paths against the card's
+  manifest (`manifests/<card>.json`, hashes only). `checkpoint` records the card's
+  own uncommitted files; `release` gives the lease back. A dead owner (process
+  gone, or its pid reused) is recovered; an alive owner, even with a stale
+  heartbeat, is never taken over. `record-sha` repeats the lease and writer checks
+  and rejects untracked files. Bootstrap of pre-existing, operator-authorized
+  uncommitted work: `workflow.py adopt <code card> --repo-dir <checkout> --manifest <path: sha256 json>`
+  (every listed path must match byte for byte; nothing else is adopted).
+  Details and the threat boundary: `docs/hermes-autonomous-development.md`.
 - An approval stop is tied to the card and run: the blocker names both
   (`… (card t_…, run run_…)`). After you approve or deny on the worker and
   unblock, `dispatch` resumes that same run while it is live, else starts the
@@ -210,7 +226,18 @@ To point a lane at a named profile on a multiplexed worker gateway, pass
 ```bash
 make hermes-config-apply     # installs the kanban-workflow skill and the orchestrator SOUL.md; no restart
 for p in mac-worker windows-worker reviewer; do cp hermes/profiles/$p/SOUL.md ~/.hermes/profiles/$p/SOUL.md; done
+make hermes-runtime-patch-status   # the three runtime patches the workflow relies on (hermes/runtime-patches/README.md)
+make hermes-runtime-patch-apply    # when any is "applicable"
 make hermes-restart          # from your own terminal, never from inside Hermes
+```
+
+For a designated checkout, register its privileged CWD scanner once (the helper
+must be root-owned and take no arguments; the sudoers entry is exact):
+
+```bash
+python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py register-scanner \
+  /opt/repos/validate -- sudo -n /usr/local/libexec/hermes-validate-cwd-scan
+python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py status --checkout /opt/repos/validate
 ```
 
 Check without creating anything:
@@ -309,7 +336,13 @@ These hold on every card, in the remote task and in the profile prompts:
 | `terminal.backend is 'ssh', not 'local'` | relay still set up as an old SSH lane | step 2 with `PROFILE_PEER_*`, or `hermes -p mac-worker config set terminal.backend local` |
 | `… must run in the card's own worker terminal, not inside delegate_task` | a step ran in a delegate_task child | run it with the card worker's own terminal tool; nothing was started |
 | code card done, validation `peer-setup: code card … has no recorded SHA` | the coordinator completed without `record-sha` | run `record-sha` for that code card from its checkout, then unblock the validation cards |
-| `record-sha`: `push first` / `uncommitted tracked changes` / `checkout is on …` | not pushed, dirty or wrong branch | commit and push the card's branch, run it again |
+| `record-sha`: `push first` / `uncommitted or untracked paths` / `checkout is on …` | not pushed, dirty (incl. untracked files) or wrong branch | commit and push the card's branch (move files that are not the card's out of the checkout), run it again |
+| `preflight` exit 2 `lease held by task … (pid …, active)` | another run of the same request (or an alive stale run) holds the checkout | wait for it; if it is a dead card, `hermes kanban show <id>`; an alive process is never taken over |
+| `preflight` exit 2 `writers: pid N: agent-writer` / `git-mutation` | another autonomous agent or a git command is working in the checkout | let it finish or stop it yourself; the card retries `preflight` |
+| `preflight` exit 3 `scan incomplete` / `unknown` | the registered scanner failed, is missing, or the unprivileged fallback could not inspect other users' processes | `repo_lease.py register-scanner <checkout> -- sudo -n <root-owned helper>`; check `sudo -n <helper>` runs without a password |
+| `preflight` exit 2 `dirty: unknown dirty paths` | uncommitted files this card never recorded | if they are this card's: `checkpoint`; if they are authorized pre-existing work: `adopt --manifest`; otherwise the operator decides, never reset/stash |
+| `this terminal belongs to card t_…, not t_…` | a command named another card | run it for `$HERMES_KANBAN_TASK` only |
+| worker `hermes kanban comment …` says `delegate_task child contexts cannot mutate` | runtime patch 0001 not applied, or the command ran inside delegate_task | `make hermes-runtime-patch-status`; run from the worker's own terminal |
 | card `blocked: peer-run: …` | worker offline, gateway down, key mismatch (HTTP 401), or 3 unusable attempts | `hermes -p mac-worker peer dm mac`; on the worker, `hermes gateway status`; re-run step 2 for a new key; then `hermes kanban unblock <id>` |
 | round card `blocked: round N: … done without evidence` | a validation card was completed by hand | re-run that lane: unblock is not possible on `done`; start a new intake for the work with `--key <old key>-r2 --branch <same branch>` |
 | report card `blocked: review-gate: …` | the final SHA lacks evidence or an independent approval | `make workflow-gate ID=<report>` lists the failing check |
@@ -320,4 +353,5 @@ These hold on every card, in the remote task and in the profile prompts:
 Tests: `make test-kanban-workflow` (fake runner and temp git repositories, plus
 the real `hermes kanban` and `hermes peer` CLIs on a temporary board against a
 local fake peer gateway when Hermes is installed; never the live board or real
-peers).
+peers; and `test_repo_lease.py`: two processes racing for a lease, dead/reused
+owner recovery, writer classification, scanner contract, manifests, preflight).

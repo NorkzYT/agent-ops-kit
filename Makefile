@@ -32,7 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
+	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
 # is a section note (one paragraph per line), `##| text` lines just above a
@@ -126,6 +126,15 @@ hermes-config-apply: ## Apply .env changes: HERMES_SKIP_GATEWAY=1 bash scripts/h
 
 hermes-restart: ## Restart the Hermes gateway (Discord bot)
 	@hermes gateway restart
+
+hermes-runtime-patch-status: ## Per kit runtime patch (hermes/runtime-patches): applied | applicable | conflict in ~/.hermes/hermes-agent [SRC=<dir>]
+	@bash scripts/hermes-runtime-patch.sh status $(if $(SRC),--src "$(SRC)",)
+
+hermes-runtime-patch-apply: ## Apply the applicable kit runtime patches to the installed Hermes (working tree only, dirty targets refused); then make hermes-restart
+	@bash scripts/hermes-runtime-patch.sh apply $(if $(SRC),--src "$(SRC)",)
+
+test-hermes-runtime-patch: ## Run the runtime-patch helper tests (throwaway git checkout and fixture patches; never ~/.hermes)
+	@bash scripts/test_hermes_runtime_patch.sh
 
 hermes-logs: ## Tail Hermes gateway logs
 	@tail -n 200 -f "$${HERMES_HOME:-$$HOME/.hermes}/logs/gateway.log"
@@ -470,5 +479,6 @@ test-knowledge-apply: ## Run the reviewed-plan / knowledge-apply / bulk-approval
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'
 
-test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed)
+test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed) and the repo_lease tests (leases, writers, manifests)
 	@python3 -m unittest discover -s scripts/tests -p 'test_kanban_workflow.py'
+	@python3 -m unittest discover -s scripts/tests -p 'test_repo_lease.py'

@@ -262,6 +262,19 @@ log "specialist_routing=$MODEL_ROUTER_SPECIALISTS ($MODEL_ROUTER_SPECIALISTS_SOU
 [[ "$MODEL_ROUTER_PRIVACY" == "false" ]] && \
   warn "MODEL_ROUTER_PRIVACY=false: private data is NOT kept local in ordinary turns (docs/model-routing.md)"
 
+# Dangerous-command approvals the operator answered "Always" to live in the top-level
+# command_allowlist (pattern keys or command globs, docs: Hermes user-guide/security).
+# They are a standing decision: keep them verbatim across --force instead of wiping
+# them with the template. Entries holding a comma cannot round-trip through
+# config-get.py's a,b list form and are reported, never dropped silently.
+if [[ -f "$cfg" ]] && raw_allow="$(python3 "$ROOT/scripts/config-get.py" "$cfg" command_allowlist 2>/dev/null)"; then
+  COMMAND_ALLOWLIST="$(yaml_list "$raw_allow")"
+  [[ -n "$raw_allow" ]] && log "command_allowlist: keeping $(tr -cd ',' <<< "$raw_allow" | wc -c | tr -d ' ') + 1 live entr(ies)"
+else
+  COMMAND_ALLOWLIST="[]"
+fi
+export COMMAND_ALLOWLIST
+
 if [[ -n "$RENDER_ONLY" ]]; then
   render_template hermes/config.yaml.tmpl "$RENDER_ONLY"
   chmod 600 "$RENDER_ONLY"

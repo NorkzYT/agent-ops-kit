@@ -131,6 +131,27 @@ ck "explicit specialist_max_profiles = 2"     "grep -qE '^        specialist_max
 ck "explicit specialist_selection_mode = hybrid" "grep -qE '^        specialist_selection_mode: hybrid\$' '$cfg3'"
 ck "routing-off leaves no unrendered tokens"  "! grep -q '__[A-Z0-9_]*__' '$cfg3'"
 
+# --- approvals: documented deny defaults render; a fresh install has an empty
+# command_allowlist; a --force re-render keeps the operator's live "Always"
+# pattern keys instead of wiping them.
+ck "approvals single_query_mode = deny"   "grep -qE '^  single_query_mode: deny\$' '$cfg'"
+ck "approvals cron_mode = deny"           "grep -qE '^  cron_mode: deny\$' '$cfg'"
+ck "fresh command_allowlist is empty"     "grep -qE '^command_allowlist: \[\]\$' '$cfg'"
+ck "no yolo / approve mode rendered"      "! grep -qE '^ *[a-z_]*mode: approve\$|^ *yolo' '$cfg'"
+python3 - "$cfg" <<'PY'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r"^command_allowlist: \[\]$", "command_allowlist:\n  - script execution via -e/-c flag\n  - git push *", s, flags=re.M)
+open(p, "w").write(s)
+PY
+HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf" \
+  HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+  bash scripts/hermes-install.sh --force >"$tmp/out-force.log" 2>&1
+rc4=$?
+ck "--force installer exits 0 (rc=$rc4)"  "[[ $rc4 -eq 0 ]]"
+ck "--force keeps live allowlist entries" "grep -qF 'command_allowlist: [\"script execution via -e/-c flag\", \"git push *\"]' '$cfg'"
+ck "--force logged the kept entries"      "grep -q 'command_allowlist: keeping' '$tmp/out-force.log'"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || { echo '--- installer output ---'; cat "$tmp/out.log"; }
 [[ "$fail" -eq 0 ]]
