@@ -32,7 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch clean
+	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
 # is a section note (one paragraph per line), `##| text` lines just above a
@@ -124,6 +124,16 @@ hermes-install: ## Install Hermes on this host and wire it to Discord, Honcho, b
 hermes-config-apply: ## Apply .env changes: HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force; no gateway restart (then make hermes-restart)
 	@HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
 
+# Narrow rollout of the dev workflow: only the kanban-workflow skill files and the
+# coder profile SOUL.md (when that profile exists), with backups and atomic
+# replaces. No config.yaml/.env/honcho/plugins/memories; config keys go through
+# `hermes config set` separately (docs/hermes-autonomous-development.md).
+hermes-dev-workflow-plan: ## Show what the narrow dev-workflow rollout would copy (kanban-workflow skill + coder SOUL.md); writes nothing [CODER_HOME=<dir>]
+	@python3 scripts/apply-dev-workflow.py --plan $(if $(CODER_HOME),--coder-home "$(CODER_HOME)",)
+
+hermes-dev-workflow-apply: ## Copy the kanban-workflow skill + coder SOUL.md into ~/.hermes (backups, atomic, no config, no restart) [CODER_HOME=<dir>]
+	@python3 scripts/apply-dev-workflow.py --apply $(if $(CODER_HOME),--coder-home "$(CODER_HOME)",)
+
 hermes-restart: ## Restart the Hermes gateway (Discord bot)
 	@hermes gateway restart
 
@@ -132,6 +142,9 @@ hermes-runtime-patch-status: ## Per kit runtime patch (hermes/runtime-patches): 
 
 hermes-runtime-patch-apply: ## Apply the applicable kit runtime patches to the installed Hermes (working tree only, dirty targets refused); then make hermes-restart
 	@bash scripts/hermes-runtime-patch.sh apply $(if $(SRC),--src "$(SRC)",)
+
+test-apply-dev-workflow: ## Run the narrow dev-workflow rollout helper tests (temp Hermes homes; never ~/.hermes)
+	@python3 -m unittest discover -s scripts/tests -p 'test_apply_dev_workflow.py'
 
 test-hermes-runtime-patch: ## Run the runtime-patch helper tests (throwaway git checkout and fixture patches; never ~/.hermes)
 	@bash scripts/test_hermes_runtime_patch.sh

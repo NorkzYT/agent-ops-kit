@@ -14,7 +14,7 @@ live board.
 | Hermes runtime | `~/.hermes/hermes-agent` | v0.21.2 (2026.9.11), branch `feat/discord-channel-org`, base `9ebe5777`; first repair on branch `feat/kanban-supervised-terminal` (`e3e1cd8c`, `2092fedd`, `b6f839c7`, messages carry a `Co-Authored-By` trailer); the reviewed repair is the clean branch `feat/kanban-supervised-terminal-clean` (three commits from `9ebe5777`, same changes plus the review fixes, no trailers), the source of the kit's patches. The live checkout still sits on the first branch until the operator activates the clean one. |
 | Live config | `~/.hermes/config.yaml` | `approvals:` absent (defaults deny), `command_allowlist: [script execution via -e/-c flag]`, `kanban.dispatch_in_gateway: true`, `max_in_progress: 2`, `terminal.cwd: /opt/repos` |
 | Kit | `/opt/repos/claude-code-autopilot` (`NorkzYT/agent-ops-kit`) | branch `feat/default-terra-gpt-6.1` from `7edc0818` |
-| Workflow skill | `hermes/skills/kanban-workflow/scripts/workflow.py`, new `repo_lease.py`, `SKILL.md` 2.2.1 | installed copy under `~/.hermes/skills/agent-ops-kit/kanban-workflow/` (refreshed by `make hermes-config-apply`) |
+| Workflow skill | `hermes/skills/kanban-workflow/scripts/workflow.py`, new `repo_lease.py`, `SKILL.md` 2.2.1 | installed copy under `~/.hermes/skills/agent-ops-kit/kanban-workflow/` (refreshed by `make hermes-dev-workflow-apply`) |
 | Config template | `hermes/config.yaml.tmpl`, rendered by `scripts/hermes-install.sh` | now renders `approvals` (deny), `security.tirith_enabled: true` + `tirith_fail_open: false` (the installed tirith 0.4.2 at `~/.hermes/bin/tirith` answers `check`; the live config leaves Hermes' fail-open default, so an absent scanner would let commands run unscanned), and preserves `command_allowlist` on `--force` |
 | Runtime patches | `hermes/runtime-patches/*.patch`, `scripts/hermes-runtime-patch.sh` | three patches, see README there |
 | Approved CWD scanner | `/usr/local/libexec/hermes-validate-cwd-scan` (root, 0755), sudoers `NOPASSWD` exact, no arguments | fixed to `/opt/repos/validate`; exit 0 none / 1 matches / 2 incomplete; not modified |
@@ -267,10 +267,35 @@ Blockers found in review of the first pass and how they were closed:
 
 ## Rollout
 
-1. Review and push the kit branch; refresh the installed skill copies
-   (`make hermes-config-apply`, which also renders `approvals` and keeps the live
-   `command_allowlist`), copy `hermes/profiles/coder/SOUL.md` if that profile is
-   used for workers.
+1. Review and push the kit branch; refresh the installed skill copies and the
+   coder SOUL with the narrow helper (not `make hermes-config-apply`, which
+   re-renders `config.yaml`, `SOUL.md` and `honcho.json` from `.env`):
+   ```bash
+   make hermes-dev-workflow-plan    # paths, sha256, create/update/unchanged; writes nothing
+   make hermes-dev-workflow-apply   # = python3 scripts/apply-dev-workflow.py --apply
+   ```
+   It copies only `hermes/skills/kanban-workflow/**` (no bytecode) into
+   `~/.hermes/skills/agent-ops-kit/kanban-workflow/` and
+   `hermes/profiles/coder/SOUL.md` into `~/.hermes/profiles/coder/` when that
+   profile exists (`CODER_HOME=<dir below ~/.hermes>` to name another). Each
+   replaced file gets a `<name>.bak-<timestamp>-<random>` copy and an atomic
+   same-directory rename; files not in the source list are left in place. It
+   refuses (and writes nothing) on a symlink, special file, foreign owner or
+   world-writable directory/file anywhere from `~/.hermes` down. It never reads
+   or writes `config.yaml`, `.env`, `honcho.json`, plugins, memories or the
+   default `SOUL.md`, and restarts nothing.
+
+   The security/approval keys are a separate, explicit step through the
+   supported CLI (`hermes config get <key>` first records the old value); the
+   live `command_allowlist` is not touched:
+   ```bash
+   hermes config set approvals.cron_mode deny
+   hermes config set approvals.single_query_mode deny
+   hermes config set approvals.unattended_mode deny
+   hermes config set security.tirith_enabled true
+   hermes config set security.tirith_fail_open false
+   ```
+   For a separate coder profile, repeat with `hermes -p coder config set …`.
 2. Switch the runtime to the clean branch from the operator's own terminal:
    `git -C ~/.hermes/hermes-agent switch feat/kanban-supervised-terminal-clean`
    (the dirty, unrelated `agent/memory_manager.py` carries over untouched; the
@@ -291,8 +316,9 @@ Blockers found in review of the first pass and how they were closed:
 5. `make hermes-restart` from the operator's own terminal (not from inside Hermes).
 
 Rollback: `git -C ~/.hermes/hermes-agent switch feat/discord-channel-org` (or
-`git apply -R` each patch), `make hermes-config-apply` from the previous kit
-commit, restart. Leases/manifests under `~/.hermes/kanban/workflow-runs/` are
+`git apply -R` each patch), restore the `*.bak-<timestamp>-*` copies the helper
+reported (or `make hermes-dev-workflow-apply` from the previous kit commit),
+`hermes config set security.tirith_fail_open true` if needed, restart. Leases/manifests under `~/.hermes/kanban/workflow-runs/` are
 metadata and can be deleted; nothing in any repository was changed by this work.
 
 ## Remaining gates and gaps

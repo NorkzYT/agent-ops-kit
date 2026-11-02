@@ -224,12 +224,18 @@ To point a lane at a named profile on a multiplexed worker gateway, pass
 ### 3. Install the skill and prompts
 
 ```bash
-make hermes-config-apply     # installs the kanban-workflow skill and the orchestrator SOUL.md; no restart
+make hermes-dev-workflow-plan    # what the narrow helper would copy; writes nothing
+make hermes-dev-workflow-apply   # kanban-workflow skill + coder SOUL.md only; backups, no config, no restart
 for p in mac-worker windows-worker reviewer; do cp hermes/profiles/$p/SOUL.md ~/.hermes/profiles/$p/SOUL.md; done
 make hermes-runtime-patch-status   # the three runtime patches the workflow relies on (hermes/runtime-patches/README.md)
 make hermes-runtime-patch-apply    # when any is "applicable"
 make hermes-restart          # from your own terminal, never from inside Hermes
 ```
+
+The narrow helper leaves the orchestrator (default) `SOUL.md` and `config.yaml`
+alone; set the security/approval keys with `hermes config set` as listed in
+[the rollout](hermes-autonomous-development.md#rollout). `make hermes-config-apply`
+still re-renders everything from `.env` when that is what you want.
 
 For a designated checkout, register its privileged CWD scanner once (the helper
 must be root-owned and take no arguments; the sudoers entry is exact):
