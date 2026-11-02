@@ -4,6 +4,10 @@ platform peers, automatic fix/retest rounds, independent review, Discord report.
 
     workflow.py intake     --title T --body B --repo URL --lane mac --lane windows   # round 1 + report card
     workflow.py intake     --title T --body B --repo URL --lane mac --mobile ios     # iOS/iPad-first mobile run
+    workflow.py intake     ... --checkout /opt/repos/app                  # code in that existing checkout, not a clone
+    workflow.py preflight  <code_id> --repo-dir DIR     # --checkout card: lease + writer scan + provenance (0/2/3)
+    workflow.py checkpoint <code_id> --repo-dir DIR     # --checkout card: record this card's own dirty files
+    workflow.py release    <code_id> --repo-dir DIR     # --checkout card: give the lease back
     workflow.py record-sha <code_id> --repo-dir DIR [--notes N]   # code card: record the pushed exact SHA
     workflow.py dispatch   <validate_id>                          # validation card: start/resume the peer run
     workflow.py wait       <validate_id> [--timeout S]            # validation card: poll, record evidence
@@ -71,6 +75,7 @@ SCRIPT = Path(__file__).resolve()
 sys.dont_write_bytecode = True  # keep __pycache__ out of the installed skill dir
 sys.path.insert(0, str(SCRIPT.parent))
 import browserstack as bs  # noqa: E402
+import repo_lease as rl  # noqa: E402
 
 LANES = {"mac": "mac-worker", "windows": "windows-worker"}
 LANE_LABELS = {"mac-worker": "mac", "windows-worker": "win"}
@@ -103,6 +108,7 @@ PEER_TRANSPORT = "hermes-peer"
 RELAY_BACKEND = "local"  # the relay runs this script, thus on this host
 PEER_TARGET_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}(/[A-Za-z0-9][A-Za-z0-9_-]{0,63})?$")
 BRANCH_RE = re.compile(r"^(?!/)(?!.*(?:\.\.|//|@\{|\.lock$))[A-Za-z0-9._/-]{1,120}(?<![/.])$")
+CHECKOUT_RE = re.compile(r"^/[A-Za-z0-9._@+-]+(?:/[A-Za-z0-9._@+-]+)*$")
 REPO_URL_RE = re.compile(r"^(?:(?:https?|ssh|git|file)://\S+|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:\S+)$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -163,12 +169,27 @@ def card(run: Runner, task_id: str) -> dict:
     return hermes_json(run, ["kanban", "show", task_id, "--json"])
 
 
+SUPERVISED_MARKER = "HERMES_KANBAN_SUPERVISED_TERMINAL"  # set by Hermes on the worker's own terminal only
+
+
 def require_worker_context(action: str) -> None:
-    """Kanban refuses writes from delegate_task children; refuse before any side
-    effect (a remote run started there could never be recorded on the card)."""
-    if os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"):
-        raise WorkflowError(f"{action} must run in the card's own worker terminal, not inside delegate_task "
-                            "(Hermes refuses Kanban writes from delegate_task children)")
+    """Refuse before any side effect when this is not a place Hermes lets write to the board:
+    a delegate_task child's terminal, a cron run or any other fenced descendant. The card's
+    own worker terminal carries the fence too, plus the supervised-terminal identity
+    (HERMES_KANBAN_SUPERVISED_TERMINAL with HERMES_KANBAN_TASK); the orchestrator's Discord
+    terminal carries neither."""
+    fenced = bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
+    supervised = os.environ.get(SUPERVISED_MARKER) == "1" and bool(os.environ.get("HERMES_KANBAN_TASK"))
+    if fenced and not supervised:
+        raise WorkflowError(f"{action} must run in the card's own worker terminal, not inside delegate_task or a "
+                            "cron run (Hermes refuses Kanban writes from delegate_task children)")
+
+
+def own_card(task_id: str) -> None:
+    """A worker terminal acts for its own card only (``$HERMES_KANBAN_TASK``)."""
+    env_task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    if env_task and env_task != task_id:
+        raise WorkflowError(f"this terminal belongs to card {env_task}, not {task_id}")
 
 
 def redact(value):
@@ -228,7 +249,7 @@ class Ctx:
     FIELDS = (("key", "Key"), ("title", "Title"), ("repo", "Repo"), ("base", "Base"), ("branch", "Branch"),
               ("lanes", "Lanes"), ("coder", "Coder"), ("reviewer", "Reviewer"), ("orchestrator", "Orchestrator"),
               ("max_rounds", "Max-rounds"), ("max_runtime", "Max-runtime"), ("code_max_runtime", "Code-max-runtime"),
-              ("mobile", "Mobile"))
+              ("mobile", "Mobile"), ("checkout", "Checkout"))
 
     def __init__(self, **kw):
         for name, _ in self.FIELDS:
@@ -256,6 +277,8 @@ class Ctx:
         ctx = cls(**kw, lanes=lanes)
         if not (ctx.key and ctx.repo and ctx.branch and ctx.lanes and ctx.coder and ctx.reviewer):
             raise WorkflowError("card header is missing workflow settings (not a card from this workflow)")
+        if ctx.checkout and not CHECKOUT_RE.match(ctx.checkout):
+            raise WorkflowError(f"card header has an invalid checkout '{ctx.checkout}'")
         return ctx
 
 
@@ -271,18 +294,9 @@ def kind_of(show: dict, want: str) -> dict:
 
 def state_dir() -> Path:
     """Run ledger under the shared Kanban root, thus every profile on this host
-    (relay, coordinator, reviewer) reads the same files."""
-    override = os.environ.get("HERMES_WORKFLOW_STATE", "").strip()
-    if override:
-        return Path(override).expanduser()
-    db = os.environ.get("HERMES_KANBAN_DB", "").strip()
-    if db:
-        return Path(db).expanduser().parent / "kanban" / "workflow-runs"
-    root = os.environ.get("HERMES_KANBAN_HOME", "").strip() or os.environ.get("HERMES_HOME", "").strip()
-    root_path = Path(root).expanduser() if root else Path.home() / ".hermes"
-    if root_path.parent.name == "profiles":
-        root_path = root_path.parent.parent
-    return root_path / "kanban" / "workflow-runs"
+    (relay, coordinator, reviewer) reads the same files; leases and manifests
+    (repo_lease.py) live next to it."""
+    return rl.state_root()
 
 
 def ledger_path(task_id: str) -> Path:
@@ -448,6 +462,40 @@ def check_repo(repo: str) -> str:
     return repo
 
 
+def same_remote(a: str, b: str) -> bool:
+    norm = lambda url: url.strip().rstrip("/").removesuffix(".git")  # noqa: E731
+    return norm(a) == norm(b)
+
+
+def check_checkout(path: str, repo: str, git: GitRunner) -> str:
+    """`--checkout`: the operator's existing checkout on this host that every code card of
+    the request works in instead of a fresh clone (peers still check out by URL). It must
+    be the canonical absolute path of a git working tree whose origin is --repo."""
+    path = (path or "").strip()
+    if not path:
+        return ""
+    if not CHECKOUT_RE.match(path) or any(part in (".", "..") for part in path.split("/")):
+        raise WorkflowError(f"--checkout '{path}' must be a plain absolute path (no spaces, '.' or '..')")
+    real = str(Path(path).resolve())
+    if real != path:
+        raise WorkflowError(f"--checkout '{path}' is not canonical; pass the resolved path '{real}'")
+    work = str(Path("~/hermes-work").expanduser().resolve())
+    if path == work or path.startswith(work + "/"):
+        raise WorkflowError(f"--checkout '{path}' is a card's fresh checkout under {work}; omit --checkout for that")
+    if not Path(path).is_dir():
+        raise WorkflowError(f"--checkout '{path}' is not an existing directory on this host")
+    r = git(["rev-parse", "--show-toplevel"], path)
+    top = (r.stdout or "").strip() if r.returncode == 0 else ""
+    if not top or str(Path(top).resolve()) != path:
+        raise WorkflowError(f"--checkout '{path}' is not the top of a git working tree"
+                            + (f" (its top is '{top}')" if top else ""))
+    r = git(["remote", "get-url", "origin"], path)
+    origin = (r.stdout or "").strip() if r.returncode == 0 else ""
+    if not same_remote(origin, repo):
+        raise WorkflowError(f"--checkout '{path}' has origin '{redact(origin) or 'none'}', not --repo '{repo}'")
+    return path
+
+
 def default_branch(title: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:48].strip("-") or "work"
     return f"feat/{slug}"
@@ -579,9 +627,68 @@ Human gates (mandatory):
   outside this card's own checkout without the operator's approval.
 - Never send Discord messages yourself; the board notifies the requester."""
 
+PROTECTED_LIST = ", ".join(sorted(PROTECTED_BRANCHES))
+CODE_HUMAN_GATES = HUMAN_GATES.replace(
+    """- Never merge, deploy, release, publish, sign, or submit to the App Store or Play Store, and never
+  change production. Those need the operator's explicit approval.""",
+    f"""- Merge only one feature branch into another, and only with the operator's explicit approval
+  naming that source and that destination. Before each merge, check the checkout, the live tips of
+  both branches and the approval; leave conflicts for the operator and never force push. Without
+  that approval, do not merge.
+- Merges into main or another protected branch ({PROTECTED_LIST}),
+  deploys and releases each need their own separate explicit approval; a feature-to-feature
+  approval never covers them.
+- Never publish, sign, or submit to the App Store or Play Store, and never change production,
+  without the operator's explicit approval.""")
+
 
 def label(lane: str) -> str:
     return LANE_LABELS.get(lane, lane)
+
+
+def checkout_steps(ctx: Ctx) -> str:
+    """Step 1 of a code card: a fresh clone per card, or the operator's designated checkout."""
+    if not ctx.checkout:
+        return f"""\
+1. Work in a fresh checkout on this host: ~/hermes-work/{TASK_TOKEN}.
+   git clone {ctx.repo} there. Check out {ctx.branch} when the remote has it, else create it
+   from {ctx.base}. Never commit to {ctx.base} or main; never reuse another card's checkout."""
+    co = ctx.checkout
+    return f"""\
+1. Work only in the operator's designated existing checkout on this host: {co}.
+   Do not clone. It may hold the operator's own work: never run git reset, clean, stash,
+   restore, checkout -- <path>, rm or any command that discards changes in it.
+   Never commit to {ctx.base} or main. Before you edit anything, with your own terminal tool
+   (never inside delegate_task) run:
+   python3 {SCRIPT} preflight {TASK_TOKEN} --repo-dir {co}
+   It takes this run's lease on the checkout and checks: origin is {ctx.repo}; no index.lock;
+   the checkout is on {ctx.branch} and not diverged from origin/{ctx.branch}; {ctx.branch} is in no
+   other worktree; no competing writer (the registered privileged CWD scanner, classified by
+   process ancestry: your own shells, scripts and subagents, editors, idle shells and dev
+   servers are not writers; another autonomous agent, a git mutation in progress, or anything
+   it cannot inspect is); and that every uncommitted path is one this card recorded
+   (resume) or the tree is clean. Read its JSON:
+   - exit 0: proceed. The lease is yours; re-run preflight before each later edit round.
+   - exit 2 with a failing "branch" check and a clean tree: git -C {co} fetch origin, then
+     switch: git -C {co} switch {ctx.branch} if the local branch exists, else
+     git -C {co} switch --track origin/{ctx.branch} if the remote has it, else
+     git -C {co} switch -c {ctx.branch} origin/{ctx.base}; update only by
+     git -C {co} merge --ff-only origin/{ctx.branch}; then run preflight again. Note the
+     branch it was on in your summary.
+   - exit 2 "lease" held by another live run, "writers" naming a foreign agent or git
+     mutation, "diverged", "worktrees", "index.lock", or "dirty" with unknown paths: change
+     nothing. Wait and retry preflight a few times when the holder may finish (another card
+     of this request, a git command); otherwise kanban_block(reason="checkout: <the failing
+     check and its detail verbatim>"). Never remove a lease, a lock or a file to pass.
+   - exit 3 (unknown visibility: the scanner is missing, failed or incomplete): change
+     nothing and block with the detail; the operator registers or repairs the scanner.
+   After a coding subagent wrote files and after every edit of your own, before any other
+   step, record what this card owns so the next run can resume it:
+   python3 {SCRIPT} checkpoint {TASK_TOKEN} --repo-dir {co}
+   (hashes only, outside the repository; uncommitted work this card did not record is a
+   conflict for every later run). When the card ends (complete or block), run:
+   python3 {SCRIPT} release {TASK_TOKEN} --repo-dir {co}
+   Every later round of this request works in this same checkout and repeats these steps."""
 
 
 def code_body(ctx: Ctx, n: int, request: str, feedback: str) -> str:
@@ -589,7 +696,7 @@ def code_body(ctx: Ctx, n: int, request: str, feedback: str) -> str:
     if feedback:
         fix = (f"\nFix this round (from round {n - 1}; fix the cause, never weaken, skip or delete a test):\n"
                f"{defang(feedback)}\n")
-    work = f"~/hermes-work/{TASK_TOKEN}"
+    work = ctx.checkout or f"~/hermes-work/{TASK_TOKEN}"
     xcui = ("\n   Mobile: keep XCUITest UI tests that exercise the functions this request changes; the\n"
             "   BrowserStack stage runs that UI test target on real iPhones and iPads when it is active."
             if ctx.mobile else "")
@@ -603,24 +710,27 @@ Windows workers never edit code: they test the exact commit you push and send ev
 Failures come back to you as the next round, without the operator.
 
 Steps:
-1. Work in a fresh checkout on this host: {work}.
-   git clone {ctx.repo} there. Check out {ctx.branch} when the remote has it, else create it
-   from {ctx.base}. Never commit to {ctx.base} or main; never reuse another card's checkout.
+{checkout_steps(ctx)}
 2. Write the code with a Claude coding subagent: delegate_task(goal=<the request or the
    failures below, the checkout path, the acceptance criteria>). It runs Claude Opus. For hard
    debugging or broad architecture work, start the goal with a line holding only #fable to
    run Claude Fable. Do not hand coding to the Mac or Windows workers or to a local model.
 3. Read the full diff yourself. Run the host-side checks the repo has (lint, unit tests that run here).{xcui}
 4. Commit on {ctx.branch} (Conventional Commits, no Co-Authored-By trailer), then
-   git push origin {ctx.branch}. Never force push and never merge.
+   git push origin {ctx.branch}. Never force push. Never merge unless the merge gates below allow it.
 5. With your own terminal tool (never inside delegate_task) run:
    python3 {SCRIPT} record-sha {TASK_TOKEN} --repo-dir {work} --notes "<what changed; what each platform should check{hint}>"
    It checks the tree is clean and the remote branch is at HEAD, and records the exact SHA
    the validators test. Exit 0: kanban_complete(summary=<the "summary" it printed>,
    metadata=<the "metadata" object it printed>). Exit 2: fix what it names (commit, push), run it again.
-6. If you cannot finish, call kanban_block with the exact blocker.
+6. Unfinished work is not a blocker: a running delegate_task child is collected, a failing
+   test is fixed or retried, a flaky tool is retried. Block (kanban_block with the exact
+   check, command and output) only for a human decision (credentials, an approval named in
+   the gates below, production or destructive actions), a confirmed competing writer, or a
+   dependency on another card that cannot resolve from here. Never block for the mere
+   existence of uncommitted work this card made: checkpoint it, then continue or commit.
 
-{HUMAN_GATES}
+{CODE_HUMAN_GATES}
 {fix}
 {REQUEST_MARKER}
 {request}
@@ -704,6 +814,7 @@ NO_DEVICES = "the BrowserStack real-device stage did not run (disabled): nothing
 
 def review_body(ctx: Ctx, n: int, code_id: str, round_id: str, sha: str, request: str, devices: str = "") -> str:
     mobile = MOBILE_REVIEW.format(devices=devices or NO_DEVICES) if ctx.mobile else ""
+    scratch = (f"\n   Never read from or write to the coordinator's checkout {ctx.checkout}." if ctx.checkout else "")
     return f"""\
 {header_block([("Workflow", "review"), *ctx.header(), ("Round", n), ("Code", code_id),
                ("Round-card", round_id), ("Commit", sha)])}
@@ -714,7 +825,7 @@ Nothing reaches the operator as done until you approve this exact commit.
 1. Run: python3 {SCRIPT} status {TASK_TOKEN} --json
    It lists every round, the pushed SHAs and each lane's evidence (SHA tested, commands, exit
    codes, test counts, devices, artifacts, dirty-tree check) and peer run ids.
-2. Fetch {ctx.repo} into a scratch directory and read `git diff {ctx.base}...{sha}` in full.
+2. Fetch {ctx.repo} into a scratch directory and read `git diff {ctx.base}...{sha}` in full.{scratch}
 3. Check: the diff does what the request asks and nothing else; every lane tested exactly
    {sha}{mobile}; the tests are real and cover the change; no unapproved or unrelated files; no
    secrets; no production side effects (production config, data, release or store settings).
@@ -836,7 +947,7 @@ def read_request(args) -> str:
     return args.body or args.title
 
 
-def intake(args, run: Runner = default_runner) -> dict:
+def intake(args, run: Runner = default_runner, git: Optional[GitRunner] = None) -> dict:
     lanes = list(dict.fromkeys(lane_profile(lane) for lane in args.lane))
     if not lanes:
         raise WorkflowError("at least one --lane is required (mac, windows, or a lane with --peer)")
@@ -844,6 +955,7 @@ def intake(args, run: Runner = default_runner) -> dict:
     peers = peer_targets(lanes, args.peer)
     check_settings(args)
     repo = check_repo(args.repo)
+    checkout = check_checkout(args.checkout, repo, git or default_git)
     origin = discord_origin(args)
     base_key = idempotency_base(args.key, origin)
     request = read_request(args)
@@ -852,7 +964,7 @@ def intake(args, run: Runner = default_runner) -> dict:
     ctx = Ctx(key=base_key, title=title, repo=repo, base=args.base, branch=branch, lanes=peers,
               coder=args.coder, reviewer=args.reviewer, orchestrator=args.orchestrator,
               max_rounds=args.max_rounds, max_runtime=args.max_runtime, code_max_runtime=args.code_max_runtime,
-              mobile=args.mobile)
+              mobile=args.mobile, checkout=checkout)
 
     plan = {
         "key": base_key, "repo": repo, "base": args.base, "branch": branch, "max_rounds": ctx.max_rounds,
@@ -866,6 +978,8 @@ def intake(args, run: Runner = default_runner) -> dict:
         "reviewer": ctx.reviewer,
         "discord": origin,
     }
+    if checkout:
+        plan["checkout"] = checkout
     if ctx.mobile:
         plan["mobile"] = ctx.mobile
         plan["stages"] = mobile_plan()
@@ -910,21 +1024,46 @@ def code_sha(run: Runner, code_id: str) -> dict:
     return rec
 
 
+def checkout_preflight(task_id: str, h: dict, checkout: str, *, scan_runner=None, require_clean: bool = False,
+                       git: GitRunner = default_git) -> dict:
+    """repo_lease preflight for a code card's designated checkout, owned by this run."""
+    try:
+        owner = rl.owner_from_env(task_id)
+        return rl.preflight(task_id, checkout, h.get("repo", ""), h.get("branch", ""), h.get("base", "main"),
+                            git=git, scan_runner=scan_runner or rl.default_scan_runner, owner=owner,
+                            require_clean=require_clean)
+    except rl.LeaseError as exc:
+        raise WorkflowError(str(exc)) from exc
+
+
 def record_sha(task_id: str, repo_dir: str, notes: str, run: Runner = default_runner,
-               git: GitRunner = default_git) -> dict:
-    """Verify the checkout is committed and pushed, then record the exact SHA."""
+               git: GitRunner = default_git, scan_runner=None) -> dict:
+    """Verify the checkout is committed and pushed, then record the exact SHA. In a designated
+    checkout the lease, writer scan and clean-tree checks are re-validated right before the
+    record is written."""
     require_worker_context("record-sha")
+    own_card(task_id)
     show = card(run, task_id)
     h = kind_of(show, "code")
     branch, repo, n = h.get("branch", ""), h.get("repo", ""), int(h.get("round") or 1)
     cwd = str(Path(repo_dir).expanduser())
+    checkout = h.get("checkout", "")
+    if checkout and str(Path(cwd).resolve()) != checkout:
+        raise WorkflowError(f"this card works in the designated checkout {checkout}, not '{repo_dir}': "
+                            f"run record-sha with --repo-dir {checkout}")
     head = git_out(git, ["rev-parse", "HEAD"], cwd)
     current = git_out(git, ["rev-parse", "--abbrev-ref", "HEAD"], cwd)
     if current != branch:
         raise WorkflowError(f"checkout is on '{current}', the card's branch is '{branch}'")
-    dirty = git_out(git, ["status", "--porcelain", "--untracked-files=no"], cwd)
+    dirty = git_out(git, ["status", "--porcelain", "--untracked-files=all"], cwd)
     if dirty:
-        raise WorkflowError(f"uncommitted tracked changes; commit them first: {clip(dirty, 300)}")
+        raise WorkflowError("uncommitted or untracked paths; commit them (or move files that do not belong to this "
+                            f"card out of the checkout) first: {clip(dirty, 300)}")
+    if checkout:
+        pre = checkout_preflight(task_id, h, checkout, scan_runner=scan_runner, require_clean=True)
+        if not pre["ok"]:
+            failed = "; ".join(f"{c['check']}: {c['detail']}" for c in pre["checks"] if not c["ok"])
+            raise WorkflowError(f"the designated checkout is not safe to record from ({failed})")
     remote = git_out(git, ["ls-remote", repo, f"refs/heads/{branch}"], cwd).split()
     remote_sha = remote[0] if remote else ""
     if remote_sha != head:
@@ -935,6 +1074,35 @@ def record_sha(task_id: str, repo_dir: str, notes: str, run: Runner = default_ru
     return {"task": task_id, "summary": f"SHA_PUSHED {head[:12]} on {branch} (round {n})",
             "metadata": {"state": "SHA_PUSHED", "commit": head, "branch": branch, "round": n},
             "recorded_on_card": on_card}
+
+
+def checkout_command(cmd: str, task_id: str, repo_dir: str, manifest: str = "", run: Runner = default_runner,
+                     git: GitRunner = default_git, scan_runner=None) -> tuple:
+    """preflight | checkpoint | adopt | release for a code card's designated checkout.
+    Returns (exit code, result). The card header is the source of repo/branch/base/checkout."""
+    require_worker_context(cmd)
+    own_card(task_id)
+    h = kind_of(card(run, task_id), "code")
+    checkout = h.get("checkout", "")
+    if not checkout:
+        raise WorkflowError(f"{task_id} works in a fresh clone, not a designated checkout; {cmd} applies to --checkout cards")
+    if str(Path(repo_dir).expanduser().resolve()) != checkout:
+        raise WorkflowError(f"this card works in the designated checkout {checkout}, not '{repo_dir}'")
+    try:
+        if cmd == "preflight":
+            result = checkout_preflight(task_id, h, checkout, scan_runner=scan_runner, git=git)
+            return result["exit"], result
+        identity = rl.repo_identity(checkout, git)
+        if identity["branch"] != h.get("branch", ""):
+            raise WorkflowError(f"checkout is on '{identity['branch']}', the card's branch is '{h.get('branch')}'")
+        if cmd == "checkpoint":
+            return 0, rl.checkpoint(task_id, identity, git)
+        if cmd == "adopt":
+            return 0, rl.adopt_manifest(task_id, identity, git, manifest)
+        result = rl.release_lease(identity, rl.owner_from_env(task_id))
+        return (0 if result["status"] in ("released", "none") else 2), result
+    except rl.LeaseError as exc:
+        raise WorkflowError(str(exc)) from exc
 
 
 # -------------------------------------------------------- validation lanes ---
@@ -2032,6 +2200,9 @@ def parser() -> argparse.ArgumentParser:
     i.add_argument("--lane", action="append", default=[],
                    help="validation lane: mac, windows, or a lane profile with --peer (repeatable)")
     i.add_argument("--repo", default="", help="clone URL every card checks out (never a local path)")
+    i.add_argument("--checkout", default="",
+                   help="the operator's existing checkout on this host (absolute path, origin == --repo) the "
+                        "code cards work in instead of a fresh clone; peers still use --repo")
     i.add_argument("--base", default="main", help="base branch the feature branch starts from")
     i.add_argument("--branch", default="", help="feature branch the coordinator writes (default: feat/<title>)")
     i.add_argument("--coder", default=os.environ.get("HERMES_WORKFLOW_CODER", "default"),
@@ -2056,6 +2227,16 @@ def parser() -> argparse.ArgumentParser:
     r.add_argument("task_id")
     r.add_argument("--repo-dir", default=".", help="the card's checkout")
     r.add_argument("--notes", default="", help="what changed and what each platform should check")
+    for name, text in (("preflight", "code card (--checkout): lease, competing-writer scan, branch and dirty-tree "
+                                     "provenance checks before editing; exit 0 ok, 2 conflict, 3 unknown"),
+                       ("checkpoint", "code card (--checkout): record this card's own uncommitted files for resume"),
+                       ("adopt", "code card (--checkout): bootstrap the manifest from an authorized {path: sha256} file"),
+                       ("release", "code card (--checkout): release this run's lease on the checkout")):
+        c = sub.add_parser(name, help=text)
+        c.add_argument("task_id")
+        c.add_argument("--repo-dir", required=True, help="the designated checkout")
+        if name == "adopt":
+            c.add_argument("--manifest", required=True)
 
     d = sub.add_parser("dispatch", help="validation card: start or resume the peer run for the exact SHA")
     d.add_argument("task_id")
@@ -2087,11 +2268,15 @@ def main(argv=None, run: Runner = default_runner, git: GitRunner = default_git) 
     args = parser().parse_args(argv)
     try:
         if args.cmd == "intake":
-            emit(intake(args, run))
+            emit(intake(args, run, git))
             return 0
         if args.cmd == "record-sha":
             emit(record_sha(args.task_id, args.repo_dir, args.notes, run, git))
             return 0
+        if args.cmd in ("preflight", "checkpoint", "adopt", "release"):
+            code, result = checkout_command(args.cmd, args.task_id, args.repo_dir, getattr(args, "manifest", ""), run, git)
+            emit(result)
+            return code
         if args.cmd == "dispatch":
             emit(dispatch(args.task_id, run))
             return 0

@@ -39,7 +39,7 @@ Then execute each step in the same turn. Never print a header and stop.
 - Never commit to `main`.
 
 ## Team
-When dispatched from Kanban: `kanban_show` on start, `kanban_heartbeat` during long runs, `kanban_request_review` when a reviewer is named, `kanban_complete` with the report above.
+When dispatched from Kanban: `kanban_show` on start, `kanban_heartbeat` during long runs, `kanban_request_review` when a reviewer is named, `kanban_complete` with the report above. Unfinished work is not a blocker: collect a running `delegate_task` child, retry a transient failure, fix a failing test, then finish. `kanban_block` is for a human decision (credentials, approvals, production or destructive actions), a confirmed competing writer, or a dependency on another card that cannot resolve from here. A refused board call is not terminal: read its error and fix the cause. A card that already has its review or validation child does not need `kanban_request_review` on itself.
 
 ## Report template
 ```

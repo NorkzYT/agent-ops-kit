@@ -1,7 +1,7 @@
 ---
 name: kanban-workflow
 description: Standard engineering path for Discord work the Mac/Windows workers must build or test — the coordinator writes and pushes an exact SHA (Claude Opus/Fable), peers test it and return evidence, automatic fix/retest rounds, independent review, final Discord report
-version: 2.1.0
+version: 2.2.0
 metadata:
   hermes:
     tags: [kanban, discord, workers, review, workflow]
@@ -55,6 +55,7 @@ terminal(command="python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts
 
 - `--repo`: the clone URL (`git -C <path> remote get-url origin`). Never a local path: the workers cannot reach it.
 - `--branch`: the feature branch the coordinator writes (default `feat/<title>`); reuse the existing branch to continue earlier work.
+- `--checkout`: only when the operator names an existing checkout on this host for the code (e.g. `/opt/repos/validate`). Canonical absolute path to the top of a git working tree whose origin is `--repo`; intake refuses anything else. Every code card then works in that checkout instead of a fresh clone and runs `preflight` before editing: it takes a repository lease for this run (owner: board, card, run, worker process), checks remote, `index.lock`, branch (protected, diverged, in another worktree), classifies every process the registered privileged CWD scanner reports by ancestry (the coordinator's own shells, scripts and subagents, editors, idle shells and dev servers are not writers; another autonomous agent, a git mutation in progress, or anything it cannot inspect is), and accepts uncommitted paths only when this card recorded them with `checkpoint` (hashes outside the repo). `record-sha` repeats the lease and writer checks and rejects untracked files. Nothing is ever reset, stashed or cleaned. Peers still validate the exact SHA from `--repo`. Omit it for the default fresh clone per card. One-time per checkout: `python3 <script dir>/repo_lease.py register-scanner /opt/repos/validate -- sudo -n /usr/local/libexec/hermes-validate-cwd-scan` (the helper must be root-owned; without a registration the unprivileged `/proc` fallback runs and fails closed when other users' processes are not inspectable).
 - `--lane`: `mac`, `windows`, or a lane profile with `--peer <lane>=<peer>`. Repeat per lane.
 - `--mobile ios`: iOS/iPad apps (`!work ios`). Use with `--lane mac` only. The Mac validates the exact SHA in a detached worktree of its clone under `/Users/norkz/Documents` on an iPhone and an iPad simulator. When both pass and the operator activated BrowserStack, `advance` opens `[devices N]` (the Mac runs the XCUITest suite on real devices on BrowserStack) and `[devices-round N]` (pass → review, fail → next fix round). BrowserStack is disabled until then (`skipped: disabled`); a partial activation blocks the round. The Windows lane is deferred until the Windows worker is repaired, thus the script refuses `--lane windows` here. Runbook: `docs/mobile-validation.md`.
 - `--max-rounds`: fix/retest rounds before the loop stops for the operator (default 5).
@@ -80,7 +81,10 @@ when review passes." The board does the rest:
 
 ## Rules
 
-- Run workflow commands with the terminal tool of the card's own worker, never inside `delegate_task` (Hermes refuses Kanban writes there; the script refuses to start).
+- Run workflow commands with the terminal tool of the card's own worker, never inside `delegate_task` or a cron run (Hermes refuses Kanban writes there; the script refuses to start). The worker's own terminal carries the card id as `$HERMES_KANBAN_TASK` together with `HERMES_KANBAN_SUPERVISED_TERMINAL=1` (runtime patch 0001); it may record progress on its own card and build the cards it creates, never finish, block or review a card from the shell: those are your `kanban_*` tool calls.
+- Unfinished work is never a reason to block or to stop: collect a running `delegate_task` child, retry a transient failure, fix a failing test, `checkpoint` uncommitted work you made and continue. Block only for a human decision (credentials, an approval named in the gates, production or destructive actions), a confirmed competing writer from `preflight`, or a dependency on another card that cannot resolve from here. A refused board call is not terminal: read its error and fix the cause.
+- In a designated checkout: `preflight` before you edit (exit 0 proceed; 2 fix the named check or block with its detail verbatim; 3 unknown visibility, block), `checkpoint` after every write, `release` when the card ends. Never remove a lease, a lock or a file to make a check pass; never run `git reset`, `clean`, `stash`, `restore` or `rm` there.
+- Local test databases and development services: use only the exact invocation the operator approved (e.g. `PGPASSFILE=<path> MATCHING_TEST_DATABASE_URL=postgresql://<user>@127.0.0.1:<port>/<db>?sslmode=disable go test ./...`); never read a password file or a container's environment to build a connection string, never ask for `single_query_mode: approve`, yolo or a disabled scanner. A command the scanner flags gets a different, approved form or a block naming the exact command.
 - Never merge, deploy, release, sign, submit to a store or sign in on the operator's behalf. The report lists what needs the operator's approval.
 - Never unblock a `human-approval:` card yourself; the operator does it after finishing the step.
 - Status at any time: `python3 <script> status <any card id>` (every round, SHA, lane state, peer run id); gate: `python3 <script> gate <report id>`; one remote poll: `python3 <script> wait <validation id> --timeout 0`.

@@ -262,6 +262,29 @@ class IntakeTest(StateDirMixin, unittest.TestCase):
             self.assertIn(text, body)
         self.assertTrue(body.rstrip().endswith(f"{wf.REQUEST_MARKER}\nfull ask"))
 
+    def test_code_card_merges_only_with_named_feature_to_feature_approval(self):
+        fake = FakeHermes()
+        graph(fake)
+        body = fake.body("t_1")
+        self.assertNotIn("never merge.", body)
+        self.assertNotIn("- Never merge, deploy", body)
+        for text in ("Never merge unless the merge gates below allow it",
+                     "Merge only one feature branch into another, and only with the operator's explicit approval\n"
+                     "  naming that source and that destination",
+                     "Without\n  that approval, do not merge.",
+                     "leave conflicts for the operator and never force push",
+                     "Merges into main or another protected branch (develop, main, master, production, release)",
+                     "deploys and releases each need their own separate explicit approval",
+                     "a feature-to-feature\n  approval never covers them",
+                     "never change production,\n  without the operator's explicit approval",
+                     "kanban_block(reason=\"human-approval: <what you hit>\")",
+                     "Never run destructive commands", "Never send Discord messages yourself",
+                     "Never commit to main or main"):
+            self.assertIn(text, body)
+        for card in ("t_2", "t_3", "t_5"):  # validators and the report keep the blanket no-merge gate
+            self.assertIn("- Never merge, deploy, release, publish, sign", fake.body(card))
+            self.assertNotIn("Merge only one feature branch", fake.body(card))
+
     def test_validation_cards_are_test_only_relays(self):
         fake = FakeHermes()
         graph(fake)
@@ -424,7 +447,7 @@ class RecordShaTest(StateDirMixin, unittest.TestCase):
             self.record()
         self.git("push", "origin", "feat/build-the-ipad-app", cwd=self.work)
         Path(self.work, "a.txt").write_text("dirty\n")
-        with self.assertRaisesRegex(wf.WorkflowError, "uncommitted tracked changes"):
+        with self.assertRaisesRegex(wf.WorkflowError, "uncommitted or untracked paths"):
             self.record()
         self.git("checkout", "a.txt", cwd=self.work)
         self.git("checkout", "main", cwd=self.work)
@@ -449,6 +472,175 @@ class RecordShaTest(StateDirMixin, unittest.TestCase):
     def test_only_code_cards(self):
         with self.assertRaisesRegex(wf.WorkflowError, "not a code card"):
             wf.record_sha("t_2", self.work, "", self.fake)
+
+
+PASS_SCAN = "PASS: Inspected 1 process directories.\nPASS: No repository CWD matches found.\n"
+
+
+def passing_scan(argv):
+    return done(0, PASS_SCAN)
+
+
+class CheckoutRepo(StateDirMixin):
+    """A bare remote, the operator's clone of it (the designated checkout), a fake board and,
+    in the temp state dir, a registered scanner (`/bin/true` stands in for the root helper)."""
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = str(Path(tempfile.mkdtemp(prefix="kanban-workflow-co-")).resolve())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.remote = os.path.join(self.tmp, "remote.git")
+        self.url = f"file://{self.remote}"
+        self.co = os.path.join(self.tmp, "validate")
+        git = lambda *a, cwd=self.tmp: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)  # noqa: E731
+        self.git = git
+        git("init", "--bare", "-b", "main", self.remote)
+        git("clone", self.url, self.co)  # origin is the clone URL the operator passes as --repo
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+            git("config", k, v, cwd=self.co)
+        Path(self.co, "a.txt").write_text("1\n")
+        git("add", "a.txt", cwd=self.co)
+        git("commit", "-m", "chore: init", cwd=self.co)
+        git("push", "origin", "main", cwd=self.co)
+        self.fake = FakeHermes()
+        wf.rl.register_scanner(self.co, ["sudo", "-n", "/bin/true"])
+
+    def intake(self, *extra, repo=None, key="k"):
+        return wf.intake(intake_args("--lane", "mac", "--lane", "windows", "--key", key, "--body", "full ask",
+                                     *extra, repo=repo or self.url), self.fake)
+
+
+class CheckoutTest(CheckoutRepo, unittest.TestCase):
+    """`--checkout`: the code cards work in the operator's designated existing checkout
+    instead of a fresh clone; the default stays a fresh clone per card."""
+
+    def test_default_is_a_fresh_clone_per_card(self):
+        plan = self.intake()
+        body = self.fake.body("t_1")
+        self.assertNotIn("checkout", plan)
+        self.assertNotIn("checkout", wf.card_header(body))
+        for text in ("1. Work in a fresh checkout on this host: ~/hermes-work/$HERMES_KANBAN_TASK.",
+                     f"git clone {self.url} there", "never reuse another card's checkout",
+                     "--repo-dir ~/hermes-work/$HERMES_KANBAN_TASK --notes"):
+            self.assertIn(text, body)
+        self.assertNotIn("designated", body)
+
+    def test_code_card_works_in_the_designated_checkout(self):
+        plan = self.intake("--checkout", self.co)
+        self.assertEqual(plan["checkout"], self.co)
+        body = self.fake.body("t_1")
+        self.assertEqual(wf.card_header(body)["checkout"], self.co)
+        self.assertNotIn("git clone", body)
+        self.assertNotIn("hermes-work", body)
+        co = self.co
+        for text in (f"Work only in the operator's designated existing checkout on this host: {co}.",
+                     "Do not clone.", "never run git reset, clean, stash,\n   restore",
+                     f"python3 {wf.SCRIPT} preflight $HERMES_KANBAN_TASK --repo-dir {co}",
+                     f"python3 {wf.SCRIPT} checkpoint $HERMES_KANBAN_TASK --repo-dir {co}",
+                     f"python3 {wf.SCRIPT} release $HERMES_KANBAN_TASK --repo-dir {co}",
+                     f"origin is {self.url}; no index.lock", "classified by\n   process ancestry",
+                     "editors, idle shells and dev\n   servers are not writers",
+                     f"git -C {co} switch -c feat/build-the-ipad-app origin/main",
+                     f"git -C {co} merge --ff-only origin/feat/build-the-ipad-app",
+                     "Never remove a lease, a lock or a file to pass",
+                     "exit 3 (unknown visibility", 'kanban_block(reason="checkout: <the failing\n     check and its detail verbatim>")',
+                     "Unfinished work is not a blocker", "Never block for the mere\n   existence of uncommitted work",
+                     "Every later round of this request works in this same checkout",
+                     f"record-sha $HERMES_KANBAN_TASK --repo-dir {co} --notes",
+                     "Never commit to main or main", "Never force push"):
+            self.assertIn(text, body)
+        for gone in ("find /proc", "-lname", "status --porcelain prints nothing"):
+            self.assertNotIn(gone, body)
+        self.assertTrue(body.rstrip().endswith(f"{wf.REQUEST_MARKER}\nfull ask"))
+        for tid in ("t_2", "t_3"):  # the peers still check out the exact SHA by URL
+            self.assertEqual(wf.card_header(self.fake.body(tid))["repo"], self.url)
+            self.assertNotIn(co, self.fake.body(tid))
+        dry = wf.intake(intake_args("--lane", "mac", "--key", "k2", "--checkout", co, "--dry-run",
+                                    repo=self.url + "/"), FakeHermes())
+        self.assertEqual(dry["checkout"], co)
+
+    def test_later_rounds_and_the_review_keep_the_checkout(self):
+        self.intake("--checkout", self.co)
+        push(self.fake)
+        for tid, verdict in (("t_2", "pass"), ("t_3", "fail")):
+            self.assertEqual(validate(self.fake, tid, evidence(verdict))[0], 0)
+        nxt = wf.advance("t_4", self.fake)[1]["metadata"]["next"]
+        self.fake.finish("t_4")
+        body = self.fake.body(nxt["code"])
+        self.assertEqual(wf.card_header(body)["checkout"], self.co)
+        self.assertIn(f"--repo-dir {self.co} --notes", body)
+        self.assertIn("Fix this round (from round 1", body)
+        self.assertEqual(wf.card_header(self.fake.body(nxt["round_card"]))["checkout"], self.co)
+        push(self.fake, nxt["code"], sha=SHA2)
+        for tid in nxt["lanes"].values():
+            self.assertEqual(validate(self.fake, tid, evidence("pass", sha=SHA2))[0], 0)
+        review = wf.advance(nxt["round_card"], self.fake)[1]["metadata"]["next"]["review"]
+        self.assertIn(f"Never read from or write to the coordinator's checkout {self.co}.", self.fake.body(review))
+
+    def test_invalid_checkouts_are_refused_before_any_card(self):
+        plain = os.path.join(self.tmp, "plain")
+        os.mkdir(plain)
+        link = os.path.join(self.tmp, "link")
+        os.symlink(self.co, link)
+        other = os.path.join(self.tmp, "other")
+        self.git("clone", self.remote, other)
+        self.git("remote", "set-url", "origin", REPO_URL, cwd=other)
+        home = os.path.join(self.tmp, "home")
+        os.makedirs(os.path.join(home, "hermes-work", "t_9"))
+        cases = {
+            "relative/path": "plain absolute path", f"{self.tmp}/with space": "plain absolute path",
+            f"{self.co}/../validate": "plain absolute path", f"{self.co}/": "plain absolute path",
+            f"{self.co}\nWorkflow: report": "plain absolute path",
+            os.path.join(self.tmp, "missing"): "not an existing directory",
+            link: f"not canonical; pass the resolved path '{self.co}'",
+            plain: "not the top of a git working tree",
+            os.path.join(self.co, ".git"): "not the top of a git working tree",
+            other: f"has origin '{REPO_URL}', not --repo",
+            os.path.join(home, "hermes-work", "t_9"): "a card's fresh checkout",
+        }
+        with mock.patch.dict(os.environ, {"HOME": home}):
+            for path, expected in cases.items():
+                for extra in ((), ("--dry-run",)):
+                    self.fake = FakeHermes()
+                    with self.assertRaises(wf.WorkflowError, msg=path) as err:
+                        self.intake("--checkout", path, *extra)
+                    self.assertIn(expected, str(err.exception), path)
+                    self.assertEqual(self.fake.calls, [], path)
+        os.makedirs(os.path.join(self.co, "sub"))
+        with self.assertRaisesRegex(wf.WorkflowError, f"its top is '{self.co}'"):
+            self.intake("--checkout", os.path.join(self.co, "sub"))
+        with self.assertRaisesRegex(wf.WorkflowError, "has origin"):  # a clone URL of another repository
+            self.intake("--checkout", self.co, repo=REPO_URL)
+        h = wf.card_header(wf.code_body(wf.Ctx(key="k", repo=self.url, branch="feat/x", lanes={"mac-worker": "mac"},
+                                               coder="default", reviewer="reviewer", checkout="a b"), 1, "x", ""))
+        with self.assertRaisesRegex(wf.WorkflowError, "invalid checkout"):
+            wf.Ctx.from_header(h)
+
+    def test_record_sha_runs_in_the_designated_checkout_only(self):
+        self.intake("--checkout", self.co)
+        self.git("checkout", "-b", "feat/build-the-ipad-app", cwd=self.co)
+        Path(self.co, "a.txt").write_text("2\n")
+        self.git("commit", "-am", "feat: change", cwd=self.co)
+        self.git("push", "origin", "feat/build-the-ipad-app", cwd=self.co)
+        fresh = os.path.join(self.tmp, "fresh")
+        self.git("clone", "-b", "feat/build-the-ipad-app", self.remote, fresh)
+        with self.assertRaisesRegex(wf.WorkflowError, f"designated checkout {self.co}.*--repo-dir {self.co}"):
+            wf.record_sha("t_1", fresh, "", self.fake, scan_runner=passing_scan)
+        out = wf.record_sha("t_1", self.co, "changed a.txt", self.fake, scan_runner=passing_scan)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.co, capture_output=True, text=True).stdout.strip()
+        self.assertEqual(out["metadata"]["commit"], head)
+        self.assertEqual(wf.code_sha(self.fake, "t_1")["sha"], head)
+
+    def test_cli_passes_the_checkout(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = wf.main(["intake", "--title", "Build the iPad app", "--repo", self.url, "--lane", "mac",
+                            "--key", "k", "--checkout", self.co, "--dry-run"], self.fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.getvalue())["checkout"], self.co)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(wf.main(["intake", "--title", "t", "--repo", self.url, "--lane", "mac", "--key", "k",
+                                      "--checkout", "relative", "--dry-run"], self.fake), 2)
+        self.assertIn("--checkout 'relative'", err.getvalue())
 
 
 class DispatchTest(StateDirMixin, unittest.TestCase):
@@ -1549,3 +1741,135 @@ class RealPeerTest(StateDirMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkerContextTest(StateDirMixin, unittest.TestCase):
+    """Where workflow commands may write: the card's own worker terminal (fence + supervised
+    identity from Hermes), the orchestrator's Discord terminal (neither); never a delegate_task
+    child or cron run (fence only)."""
+
+    def test_fenced_descendant_without_supervision_is_refused(self):
+        with mock.patch.dict(os.environ, {"HERMES_DELEGATED_CHILD_CONTEXT": "1"}):
+            with self.assertRaises(wf.WorkflowError) as ctx:
+                wf.require_worker_context("record-sha")
+            self.assertIn("not inside delegate_task or a cron run", str(ctx.exception))
+        with mock.patch.dict(os.environ, {"HERMES_DELEGATED_CHILD_CONTEXT": "1", wf.SUPERVISED_MARKER: "1"}):
+            os.environ.pop("HERMES_KANBAN_TASK", None)
+            with self.assertRaises(wf.WorkflowError):
+                wf.require_worker_context("advance")
+
+    def test_supervised_worker_terminal_and_orchestrator_terminal_may_write(self):
+        with mock.patch.dict(os.environ, {"HERMES_DELEGATED_CHILD_CONTEXT": "1", wf.SUPERVISED_MARKER: "1",
+                                          "HERMES_KANBAN_TASK": "t_1"}):
+            wf.require_worker_context("record-sha")
+            wf.own_card("t_1")
+            with self.assertRaises(wf.WorkflowError) as ctx:
+                wf.own_card("t_2")
+            self.assertIn("belongs to card t_1", str(ctx.exception))
+        for key in ("HERMES_DELEGATED_CHILD_CONTEXT", wf.SUPERVISED_MARKER, "HERMES_KANBAN_TASK"):
+            os.environ.pop(key, None)
+        wf.require_worker_context("intake")
+        wf.own_card("t_anything")
+
+
+class DesignatedCheckoutLeaseTest(CheckoutRepo, unittest.TestCase):
+    """preflight / checkpoint / release on a --checkout code card, and record-sha's
+    revalidation (lease, writers, clean tree incl. untracked) right before it records."""
+
+    def setUp(self):
+        super().setUp()
+        self.intake("--checkout", self.co)
+        self.branch = "feat/build-the-ipad-app"
+        self.git("switch", "-c", self.branch, cwd=self.co)
+        self.git("push", "-u", "origin", self.branch, cwd=self.co)
+
+    def run_cmd(self, cmd, task="t_1", repo_dir=None, **kw):
+        return wf.checkout_command(cmd, task, repo_dir or self.co, run=self.fake, scan_runner=passing_scan, **kw)
+
+    def test_preflight_checkpoint_release_round_trip(self):
+        code, result = self.run_cmd("preflight")
+        self.assertEqual((code, result["ok"], result["lease"]["status"]), (0, True, "acquired"), result["checks"])
+        self.assertEqual(result["lease"]["owner"]["task"], "t_1")
+        Path(self.co, "a.txt").write_text("edited by the subagent\n")
+        Path(self.co, "new.swift").write_text("let x = 1\n")
+        code, result = self.run_cmd("preflight")
+        self.assertEqual((code, result["ok"]), (2, False))
+        self.assertIn("unknown dirty paths", next(c["detail"] for c in result["checks"] if c["check"] == "dirty"))
+        code, manifest = self.run_cmd("checkpoint")
+        self.assertEqual((code, sorted(manifest["entries"])), (0, ["a.txt", "new.swift"]))
+        code, result = self.run_cmd("preflight")
+        self.assertEqual((code, result["lease"]["status"]), (0, "renewed"))
+        self.assertIn("2 task-owned path(s) resume", next(c["detail"] for c in result["checks"] if c["check"] == "dirty"))
+        self.assertEqual(Path(self.co, "a.txt").read_text(), "edited by the subagent\n")
+        code, result = self.run_cmd("release")
+        self.assertEqual((code, result["status"]), (0, "released"))
+        with self.assertRaises(wf.WorkflowError):  # another code card of the same request must say so
+            self.run_cmd("checkpoint", task="t_4")
+        with self.assertRaises(wf.WorkflowError) as ctx:
+            self.run_cmd("preflight", repo_dir=self.tmp)
+        self.assertIn("designated checkout", str(ctx.exception))
+
+    def test_adopt_bootstraps_only_matching_provenance(self):
+        Path(self.co, "a.txt").write_text("preserved work\n")
+        src = Path(self.tmp, "preserved.json")
+        src.write_text(json.dumps({"a.txt": wf.rl.hash_worktree_path(self.co, "a.txt")}))
+        code, adopted = self.run_cmd("adopt", manifest=str(src))
+        self.assertEqual((code, list(adopted["entries"])), (0, ["a.txt"]))
+        self.assertTrue(self.run_cmd("preflight")[1]["ok"])
+        Path(self.co, "a.txt").write_text("someone else edited\n")
+        self.assertEqual(self.run_cmd("preflight")[0], 2)
+
+    def test_record_sha_rejects_untracked_and_revalidates_the_lease(self):
+        Path(self.co, "scratch.log").write_text("x")
+        with self.assertRaises(wf.WorkflowError) as ctx:
+            wf.record_sha("t_1", self.co, "notes", self.fake, scan_runner=passing_scan)
+        self.assertIn("untracked", str(ctx.exception))
+        self.assertIn("scratch.log", str(ctx.exception))
+        Path(self.co, "scratch.log").unlink()
+        Path(self.co, "a.txt").write_text("done\n")
+        self.git("commit", "-am", "feat: done", cwd=self.co)
+        self.git("push", "origin", self.branch, cwd=self.co)
+        sleeper = subprocess.Popen(["sleep", "60"], stdin=subprocess.DEVNULL)
+        self.addCleanup(lambda: (sleeper.kill(), sleeper.wait()))
+        ident = wf.rl.repo_identity(self.co, wf.rl.default_git)
+        holder = {"board": "default", "task": "t_other", "run_id": "1", "pid": sleeper.pid,
+                  "pid_start": wf.rl.proc_start_ticks(sleeper.pid), "host": wf.rl.socket.gethostname()}
+        wf.rl.acquire_lease(ident, holder)
+        with self.assertRaises(wf.WorkflowError) as ctx:
+            wf.record_sha("t_1", self.co, "notes", self.fake, scan_runner=passing_scan)
+        self.assertIn("lease", str(ctx.exception))
+        self.assertEqual(wf.records(self.fake.shows["t_1"], "code-sha"), [])
+        wf.rl.release_lease(ident, holder)
+        foreign = subprocess.Popen(["sleep", "60"], stdin=subprocess.DEVNULL, cwd=self.co)
+        self.addCleanup(lambda: (foreign.kill(), foreign.wait()))
+        bindir = Path(self.tmp, "bin"); bindir.mkdir()
+        (bindir / "aider").symlink_to(shutil.which("sleep"))
+        agent = subprocess.Popen([str(bindir / "aider"), "60"], stdin=subprocess.DEVNULL, cwd=self.co)
+        self.addCleanup(lambda: (agent.kill(), agent.wait()))
+        hits = lambda argv: done(1, f"MATCH: PID={agent.pid} CWD={self.co}\nBLOCKED: 1 matching processes.\n")  # noqa: E731
+        with mock.patch.object(wf.rl, "ancestors", lambda pid, limit=64: []):  # the agent is nobody's child here
+            with self.assertRaises(wf.WorkflowError) as ctx:
+                wf.record_sha("t_1", self.co, "notes", self.fake, scan_runner=hits)
+        self.assertIn("agent-writer", str(ctx.exception))
+        result = wf.record_sha("t_1", self.co, "notes", self.fake, scan_runner=passing_scan)
+        self.assertEqual(result["metadata"]["state"], "SHA_PUSHED")
+        self.assertEqual(result["metadata"]["commit"], self.git("rev-parse", "HEAD", cwd=self.co).stdout.decode().strip())
+
+    def test_cli_subcommands(self):
+        with mock.patch.object(wf.rl, "default_scan_runner", passing_scan):
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                self.assertEqual(wf.main(["preflight", "t_1", "--repo-dir", self.co], self.fake), 0)
+            self.assertTrue(json.loads(buf.getvalue())["ok"])
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                self.assertEqual(wf.main(["checkpoint", "t_1", "--repo-dir", self.co], self.fake), 0)
+            self.assertEqual(json.loads(buf.getvalue())["entries"], {})
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                self.assertEqual(wf.main(["release", "t_1", "--repo-dir", self.co], self.fake), 0)
+            self.assertEqual(json.loads(buf.getvalue())["status"], "released")
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(wf.main(["preflight", "t_2", "--repo-dir", self.co], self.fake), 2)
+            self.assertIn("not a code card", err.getvalue())
+            with mock.patch.dict(os.environ, {"HERMES_DELEGATED_CHILD_CONTEXT": "1"}):
+                with contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(wf.main(["preflight", "t_1", "--repo-dir", self.co], self.fake), 2)
+                self.assertIn("not inside delegate_task", err.getvalue())
