@@ -10,8 +10,6 @@ consulted it, so a Kanban worker (`hermes chat -q`) kept denying commands the
 operator had approved for good (e.g. `python3 -c`). Permanent entries now apply
 there too; session-only approvals, the hardline floor and the tirith scan are
 unchanged.
-
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 ---
  .../tools/test_single_query_approval_mode.py  | 66 ++++++++++++++++++-
  tools/approval.py                             | 15 +++++

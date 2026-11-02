@@ -153,6 +153,15 @@ approvals:
   unattended_mode: deny
 command_allowlist: __COMMAND_ALLOWLIST__
 
+# Pre-exec command scanner (tirith, installed by Hermes under $HERMES_HOME/bin).
+# It is a gate, not advice: when the binary is missing, crashes or times out the
+# command is refused (fail closed) instead of running unscanned. Hermes' own
+# default is fail-open; the kit's workers run headless, so nothing would notice
+# an absent scanner. No bypass, no yolo.
+security:
+  tirith_enabled: true
+  tirith_fail_open: false
+
 # ----------------------------------------------------------------- Kanban ---
 # Shared board for multi-profile teams (docs/profiles-and-teams.md).
 kanban:

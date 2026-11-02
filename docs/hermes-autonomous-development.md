@@ -11,11 +11,11 @@ live board.
 
 | Component | Path | Version / state at audit |
 |-----------|------|--------------------------|
-| Hermes runtime | `~/.hermes/hermes-agent` | v0.21.2 (2026.9.11), branch `feat/discord-channel-org`, base `9ebe5777`; repair on branch `feat/kanban-supervised-terminal` (`e3e1cd8c`, `2092fedd`, `b6f839c7`) |
+| Hermes runtime | `~/.hermes/hermes-agent` | v0.21.2 (2026.9.11), branch `feat/discord-channel-org`, base `9ebe5777`; first repair on branch `feat/kanban-supervised-terminal` (`e3e1cd8c`, `2092fedd`, `b6f839c7`, messages carry a `Co-Authored-By` trailer); the reviewed repair is the clean branch `feat/kanban-supervised-terminal-clean` (three commits from `9ebe5777`, same changes plus the review fixes, no trailers), the source of the kit's patches. The live checkout still sits on the first branch until the operator activates the clean one. |
 | Live config | `~/.hermes/config.yaml` | `approvals:` absent (defaults deny), `command_allowlist: [script execution via -e/-c flag]`, `kanban.dispatch_in_gateway: true`, `max_in_progress: 2`, `terminal.cwd: /opt/repos` |
 | Kit | `/opt/repos/claude-code-autopilot` (`NorkzYT/agent-ops-kit`) | branch `feat/default-terra-gpt-6.1` from `7edc0818` |
-| Workflow skill | `hermes/skills/kanban-workflow/scripts/workflow.py`, new `repo_lease.py`, `SKILL.md` 2.2.0 | installed copy under `~/.hermes/skills/agent-ops-kit/kanban-workflow/` (refreshed by `make hermes-config-apply`) |
-| Config template | `hermes/config.yaml.tmpl`, rendered by `scripts/hermes-install.sh` | now renders `approvals` (deny) and preserves `command_allowlist` on `--force` |
+| Workflow skill | `hermes/skills/kanban-workflow/scripts/workflow.py`, new `repo_lease.py`, `SKILL.md` 2.2.1 | installed copy under `~/.hermes/skills/agent-ops-kit/kanban-workflow/` (refreshed by `make hermes-config-apply`) |
+| Config template | `hermes/config.yaml.tmpl`, rendered by `scripts/hermes-install.sh` | now renders `approvals` (deny), `security.tirith_enabled: true` + `tirith_fail_open: false` (the installed tirith 0.4.2 at `~/.hermes/bin/tirith` answers `check`; the live config leaves Hermes' fail-open default, so an absent scanner would let commands run unscanned), and preserves `command_allowlist` on `--force` |
 | Runtime patches | `hermes/runtime-patches/*.patch`, `scripts/hermes-runtime-patch.sh` | three patches, see README there |
 | Approved CWD scanner | `/usr/local/libexec/hermes-validate-cwd-scan` (root, 0755), sudoers `NOPASSWD` exact, no arguments | fixed to `/opt/repos/validate`; exit 0 none / 1 matches / 2 incomplete; not modified |
 | Approved test DB form | `PGPASSFILE=~/.config/hermes-test-db/pgpass MATCHING_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55443/matching_test?sslmode=disable` | passes the approval scanner as is (`hermes approvals test` verdict: allow) |
@@ -88,21 +88,34 @@ invocation (allowed by the scanner without any config change), the in-process
    `supervised_terminal_identity()` verifies marker, ids and that the worker pid is
    an ancestor. The CLI (`_delegated_child_cli_denial`) lets such a terminal run
    `comment`, `attach`, `heartbeat`, `notify-subscribe` on its own card or cards it
-   created, `create` (tagged `creator_task_id`), and `link` when one endpoint is
-   owned/created; the board must show the task `running` under that worker pid and
-   run. Everything else (`complete`, `block`, `request-review`, `unblock`, `claim`,
-   boards, …) and every foreign card stays denied. The DB fence opens only inside
-   `kanban_db.supervised_terminal_mutation()`, which re-verifies the identity; the
-   connection is then read-write without ever initializing or migrating.
+   created, `create` (tagged `creator_task_id`), and `link` when both endpoints are
+   owned/created, or when a card it created becomes a new parent of a card its own
+   card already gates (the request's report card: `open_next_round`,
+   `open_device_stage` and the review hand-off in `workflow.py` need exactly this
+   shape); a foreign card's graph is never changed otherwise. The board must show
+   the task `running` under that worker pid and run, the run id is mandatory and
+   its `task_runs` row must be `running`. Everything else (`complete`, `block`,
+   `request-review`, `unblock`, `claim`, boards, …) and every foreign card stays
+   denied. The DB fence opens only inside `kanban_db.supervised_terminal_mutation()`,
+   which records a `SupervisedTerminalGrant` (task, run, worker pid, 120 s expiry);
+   `write_txn` re-verifies that grant against the task and run rows inside every
+   write transaction, so a task that was blocked, reclaimed or re-run between the
+   CLI precheck and the write is denied at the write, and the grant never covers
+   board metadata. The connection is read-write without ever initializing or
+   migrating.
 2. **Headless approvals honour permanent pattern keys** (`tools/approval.py`):
    `_unattended_deny` skips the pattern block when the key is in the permanent
    `command_allowlist` (legacy aliases included); session-only approvals, the
    hardline floor and the tirith scan are unchanged. No `approve`/yolo anywhere.
 3. **Stop guard** (`agent/kanban_stop.py`): a terminal `kanban_*` call counts only
-   when its result is not an error; `kanban_request_review`/`kanban_request_changes`
-   are terminal; the nudge tells the worker to continue (collect a running delegate
-   child, retry transient failures, block only for human decisions, confirmed
-   conflicts or unresolvable dependencies; a refused board call is not terminal).
+   when its result arrived and is not an error (`{"error"}`, `{"ok": false}`,
+   `{"success": false}`, `Error:` text; a call with no result is pending, not
+   terminal, since it changed nothing on the board); `kanban_request_review`/
+   `kanban_request_changes` are terminal; the nudge tells the worker to continue
+   (collect a running delegate child, retry transient failures, block only for
+   human decisions, confirmed conflicts or unresolvable dependencies; a refused
+   board call is not terminal) and to finish a card that already has its review or
+   validation child with `kanban_complete`, never a second review request.
 
 ### Kit
 
@@ -111,21 +124,46 @@ invocation (allowed by the scanner without any config change), the in-process
   under `~/.hermes/kanban/workflow-runs/leases/<sha256(gitdir)>.json` (0600 in a
   0700 dir, exclusive create via `link`, atomic replace, `O_NOFOLLOW`, symlink
   refusal) owned by board/task/run + anchor pid and its kernel start time;
-  acquire/renew/recover/release with bounded recovery (dead or pid-reused owner
-  only; an alive owner with a stale heartbeat is a conflict; another host is
-  "not decidable"); scanner registry (`cwd-scanners.json`) accepting only
+  acquire/renew/recover/release serialized by a per-repository `flock` on a
+  private, symlink-refusing lock file whose inode is re-checked after locking
+  (concurrent recovery of a dead owner's lease has exactly one winner; renew and
+  release read and write under the same lock), bounded recovery (dead or
+  pid-reused owner only; an alive owner with a stale heartbeat is a conflict;
+  another host is "not decidable"); `same_owner` compares task, board, host, pid
+  and pid start time, never the run id alone; the anchor (`anchor_pid`) is the
+  supervising worker only when it is an ancestor whose own environment carries
+  `HERMES_KANBAN_TASK=<task>`, else this process (a shared `hermes gateway`
+  ancestor can never make foreign workers "own descendants"), and the self chain
+  ends at that anchor; scanner registry (`cwd-scanners.json`) accepting only
   `sudo -n /abs/helper` or `/abs/helper` that is root-owned and not group/world
   writable, exit-code contract 0/1/2, unprivileged `/proc` fallback that marks
   other users' processes as unknown; classification per match: `self-chain`,
-  `own-descendant`, `git-mutation` (blocking), `agent-writer` (blocking; by
-  executable name only when outside our chain), `interactive`, `service`, `gone`
-  (ENOENT/ESRCH) and `unknown` (EACCES/EPERM or incomplete scan; blocking);
-  manifests of the card's dirty paths (status, worktree sha256, index oid; no
-  contents) with `checkpoint`, `adopt` (explicit `{path: sha256}` provenance that
-  must match byte for byte) and `verify` (known / changed / unknown; a different
-  branch, remote or git dir invalidates the manifest); `preflight` combining
-  remote, `index.lock`, protected/wrong/diverged branch, other worktrees, lease,
-  writers and dirty provenance into exit 0 / 2 / 3.
+  `own-descendant`, `gone` (ENOENT/ESRCH), the explicit passive observations
+  `editor`, `language-server`, `dev-server`, `shell` (idle interactive shell: no
+  `-c`, no script) and `git-readonly` (documented name sets in `repo_lease.py`;
+  `node`/`python` running a known script resolve to that script's name), and the
+  blocking kinds `git-mutation`, `agent-writer` (by executable name only when
+  outside our chain) and `unknown` (any other executable or script, including
+  arbitrary python/node tasks and tty-attached tools, EACCES/EPERM, incomplete
+  scan); manifests of the card's dirty paths with the full identity of each
+  change (status, worktree sha256 and mode, index object and mode, rename origin;
+  no contents; paths literal, a dotfile stays a dotfile) with `adopt` (explicit
+  `{path: sha256}` provenance that must match byte for byte) and `verify` (known /
+  changed with the differing fields / unknown; a different branch, remote, root,
+  git dir or HEAD invalidates the manifest, so a foreign `git add`, chmod or
+  symlink swap on a recorded path is `changed`); the gated `checkpoint`: this run
+  must hold the live lease (renewed, never taken), the writer scan must be clean,
+  and a baseline written by a passing `preflight` under the same lease tenure at
+  the same HEAD must exist; it adopts the baseline's (task-owned) entries plus what
+  changed or appeared since, reports that evidence (`kept`,
+  `changed_since_baseline`, `new_since_baseline`, `dropped`, scanner, lease
+  tenure) and refreshes the baseline. A dirty path that was never the task's
+  cannot pass `preflight`, gets no baseline and is never laundered by
+  `checkpoint`; `adopt` drops the baseline (next checkpoint needs a passing
+  preflight). Limit, stated in the output: same-uid cooperative evidence that the
+  lease was held and no competing writer was observed, not proof of who wrote the
+  bytes. `preflight` combines remote, `index.lock`, protected/wrong/diverged
+  branch, other worktrees, lease, writers and dirty provenance into exit 0 / 2 / 3.
 - **`workflow.py`**: `require_worker_context` accepts the supervised worker
   terminal and still refuses fenced descendants; `own_card` binds commands to
   `$HERMES_KANBAN_TASK`; new subcommands `preflight`, `checkpoint`, `adopt`,
@@ -138,14 +176,26 @@ invocation (allowed by the scanner without any config change), the in-process
   approval work is kept.
 - **Installer/template**: `approvals: {cron_mode, single_query_mode,
   unattended_mode}: deny` rendered explicitly (documented keys);
-  `command_allowlist` read from the live config and preserved across `--force`.
+  `command_allowlist` read from the live config and preserved across `--force`;
+  `security: {tirith_enabled: true, tirith_fail_open: false}` so a missing,
+  crashed or timed-out scanner refuses the command instead of running it unscanned
+  (Hermes' default is fail-open; `tools/tirith_security.py` reads both keys). No
+  bypass or yolo anywhere. The approved test-DB command form is unchanged and was
+  only re-read, not executed.
 - **Runtime patch tracking**: `hermes/runtime-patches/` + `scripts/hermes-runtime-patch.sh
   status|check|apply` (working tree only, dirty targets refused, unrelated dirty
   files ignored, idempotent) + `make hermes-runtime-patch-status|apply`.
 - **Prompts/docs**: `SKILL.md` rules (supervised terminal, no block for unfinished
   work, preflight/checkpoint/release, approved test-DB form only), coder profile
-  `SOUL.md` team section, runbook `docs/discord-kanban-workflow.md` (recovery,
-  setup, troubleshooting), this document.
+  `SOUL.md` team section; the coder `SOUL.md` no longer says "one bounded retry"
+  or "no network calls that change external state": verification is diagnosed and
+  fixed until it passes within the task's budget (an unchanged command is retried
+  once, only for a transient failure), pushing the task's own feature branch is
+  authorized, merges/deploys/secrets/production are not; the code card text and
+  the stop nudge say the same and honour a pre-created review or validation child
+  (complete releases it; no duplicate review request on the same card); runbook
+  `docs/discord-kanban-workflow.md` (recovery, setup, troubleshooting), this
+  document.
 
 ## Threat boundaries
 
@@ -197,14 +247,36 @@ Kit (`/opt/repos/claude-code-autopilot`):
 | `scripts/tests/test_makefile.py` | 22 OK |
 | Live, read-only: real scanner via `repo_lease.run_scan` + `classify_scan` on `/opt/repos/validate` | complete, 510 process dirs, 0 matches, ok |
 
+## Review fixes (second pass)
+
+Blockers found in review of the first pass and how they were closed:
+
+| Finding | Fix | Regression |
+|---------|-----|------------|
+| `classify_process` called every unknown background process `service` and every tty-attached process `interactive` (non-blocking) | explicit passive name sets only; everything else `unknown` and blocking | `test_only_explicit_passive_tools_are_non_blocking`, preflight exit 3 on a plain `sleep` |
+| anchor fell back to the nearest `hermes` ancestor (the gateway), so foreign workers read as own descendants | anchor must be an ancestor whose environ carries the task; else self; self chain ends at the anchor | `test_anchor_requires_a_verified_worker_identity`, `test_self_chain_stops_at_the_anchor…` |
+| stale-lease recovery read/rename race; renew/release unlocked; `same_owner` trusted the run id alone | per-repo `flock` with inode re-check around acquire/renew/release/checkpoint; owner = task+board+host+pid+pid_start | `test_concurrent_stale_recovery_has_exactly_one_winner` (4 real processes), `test_same_owner_needs_the_process_identity…` |
+| `verify_dirty` compared the worktree hash only; `lstrip("./")` mangled dotfiles | full entry identity (status, content, mode, index oid/mode, origin), HEAD/root binding, literal paths | `test_foreign_stage_mode_and_symlink_changes…`, `…keeps_paths_literal` |
+| `checkpoint` adopted any dirty path with no gate | lease + writer scan + preflight baseline gate; changed-path evidence; adopt drops the baseline | `test_checkpoint_is_gated_and_never_launders_foreign_dirty_files` |
+| coder SOUL: "one retry then report", "no network state changes" | diagnose/fix within budget, bounded retry for transient only, authorized branch pushes | prompt/SOUL assertions in `test_kanban_workflow.py` |
+| tirith installed but fail-open by default | template renders `security.tirith_fail_open: false` | `test_hermes_install.sh` |
+| CLI `link` with one endpoint in scope could rewire a foreign card's graph | both endpoints in scope, or created parent of a card the own card already gates | `test_worker_terminal_records_on_its_own_card_and_builds_its_cards_only` |
+| grant checked the env marker only, not the board at write time; run id optional | `SupervisedTerminalGrant` re-verified in `write_txn` (status, pid, run, run row, expiry); run id mandatory | `test_grant_is_reverified_at_the_write_boundary`, missing/ended run cases in the CLI test |
+| stop guard counted a terminal call with no result as success | pending is not terminal; `ok: false`/`success: false` are errors | `test_pending_terminal_call_without_result_does_not_count`, `test_error_markers_are_not_terminal` |
+| runtime commits carried `Co-Authored-By` | clean branch `feat/kanban-supervised-terminal-clean` rebuilt from `9ebe5777`, original refs untouched, patches regenerated from it | `hermes-runtime-patch.sh status --src <clean worktree>`: 3 × applied |
+
 ## Rollout
 
 1. Review and push the kit branch; refresh the installed skill copies
    (`make hermes-config-apply`, which also renders `approvals` and keeps the live
    `command_allowlist`), copy `hermes/profiles/coder/SOUL.md` if that profile is
    used for workers.
-2. `make hermes-runtime-patch-status` → all three `applied` on this host (the
-   runtime branch already carries the commits) or `applicable` after a reinstall →
+2. Switch the runtime to the clean branch from the operator's own terminal:
+   `git -C ~/.hermes/hermes-agent switch feat/kanban-supervised-terminal-clean`
+   (the dirty, unrelated `agent/memory_manager.py` carries over untouched; the
+   first branch stays as a ref). Then `make hermes-runtime-patch-status` → all
+   three `applied` (on the old branch 0001 and 0003 report `conflict`, which is
+   the expected answer until the switch), or `applicable` after a reinstall →
    `make hermes-runtime-patch-apply`.
 3. Register the scanner once:
    `python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py register-scanner /opt/repos/validate -- sudo -n /usr/local/libexec/hermes-validate-cwd-scan`.
@@ -229,13 +301,16 @@ metadata and can be deleted; nothing in any repository was changed by this work.
   gateway restart) is the operator's/parent's step; nothing live was changed.
 - The supervised-terminal grant is Linux-only (`/proc` ancestry); on the Mac
   worker it is simply never granted (unchanged behaviour there).
-- `adopt` keys on worktree content hashes; renames and mode-only changes appear as
-  unknown paths and need a `checkpoint` from the owning card.
-- `agent-writer` classification is by executable name (`hermes`, `claude`,
-  `codex`, `aider`, `gemini`, `cursor-agent`, `copilot`, `goose`, `opencode`) only
-  when the process is outside our chain; an unknown agent binary with no tty is
-  reported as `service`, not blocked. The lease, `index.lock` and git-mutation
-  checks still catch the writes that matter.
+- `adopt` keys on worktree content hashes (the operator's manifest form); the
+  adopted entries then carry the full identity, so later mode/stage changes are
+  detected. A rename appears as its new path with `origin` recorded.
+- Passive classification is by name (`PASSIVE_EDITORS`, `PASSIVE_LANGUAGE_SERVERS`,
+  `PASSIVE_DEV_SERVERS`, idle shells, `READONLY_GIT`). A writer that names itself
+  `nvim` passes as an editor; a legitimate tool that is not listed blocks the card
+  with `unknown` until the operator adds it. Same-uid cooperative evidence
+  throughout: lease, scan and checkpoint prove what was observed, not who wrote.
+- `checkpoint` after a commit needs a fresh passing `preflight` (the baseline is
+  bound to HEAD); the card text says so.
 - Upstream Hermes may change `_unattended_deny`, the CLI denial list or the
   terminal env path; `hermes-runtime-patch.sh status` reports `conflict` and the
   three test files in the patches are the contract to rebase against.

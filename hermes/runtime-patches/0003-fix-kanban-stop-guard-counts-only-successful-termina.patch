@@ -13,14 +13,19 @@ work, a running delegate child or a transient failure is continued/retried, not
 blocked; blocking is for human decisions, confirmed conflicts and unresolvable
 dependencies.
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Only a successful terminal call counts: a call whose result never arrived
+(interrupted, never executed) is pending, not terminal, and `{"ok": false}` /
+`{"success": false}` results are errors like `{"error": ...}` and `Error:` text.
+The nudge honours a pre-created review or validation child: kanban_request_review
+only when a reviewer is named and the card has no such child yet; otherwise the
+card is finished with kanban_complete, never a duplicate review request.
 ---
- agent/kanban_stop.py            | 81 ++++++++++++++++++++++++++++-----
- tests/agent/test_kanban_stop.py | 48 +++++++++++++++++++
- 2 files changed, 117 insertions(+), 12 deletions(-)
+ agent/kanban_stop.py            | 84 ++++++++++++++++++++++++++++-----
+ tests/agent/test_kanban_stop.py | 64 +++++++++++++++++++++++++
+ 2 files changed, 136 insertions(+), 12 deletions(-)
 
 diff --git a/agent/kanban_stop.py b/agent/kanban_stop.py
-index 5f4669bdb8..70b55b4f8d 100644
+index 5f4669bdb8..4215dbbbe1 100644
 --- a/agent/kanban_stop.py
 +++ b/agent/kanban_stop.py
 @@ -10,7 +10,12 @@ import os
@@ -63,19 +68,21 @@ index 5f4669bdb8..70b55b4f8d 100644
 +        except ValueError:
 +            payload = None
 +        if isinstance(payload, dict):
-+            return bool(payload.get("error"))
++            return bool(payload.get("error")) or payload.get("ok") is False or payload.get("success") is False
 +    return text.lower().startswith("error")
 +
 +
  def session_called_kanban_terminal(messages: Iterable[dict] | None) -> bool:
 -    """True if this conversation already invoked a terminal kanban tool."""
-+    """True if this conversation already invoked a terminal kanban tool that did not fail.
++    """True if this conversation already invoked a terminal kanban tool whose result arrived
++    and was not an error.
 +
-+    A ``kanban_complete`` refused by the board (open parents, wrong run, hallucinated card
-+    ids) is not a terminal state: counting it would let the worker exit on rc=0 and be
-+    recorded as a protocol violation. A call whose result has not arrived yet still counts."""
-+    terminal_calls: dict[str, bool] = {}  # tool_call_id -> succeeded (None result == pending)
-+    pending_unnamed = False
++    Only a successful terminal call ends the turn legitimately. A ``kanban_complete`` refused
++    by the board (open parents, wrong run, hallucinated card ids) left the task running, and a
++    call with no result at all (interrupted, never executed) changed nothing either: counting
++    either would let the worker exit on rc=0 and be recorded as a protocol violation."""
++    terminal_calls: dict[str, bool] = {}  # tool_call_id -> result arrived and succeeded
++    succeeded_unnamed = False
      for msg in filter(lambda m: isinstance(m, dict), messages or ()):
          role = msg.get("role")
 -        if role == "assistant" and any(
@@ -90,9 +97,7 @@ index 5f4669bdb8..70b55b4f8d 100644
 +                if _tool_call_name(tc) in _TERMINAL_KANBAN_TOOLS:
 +                    call_id = _tool_call_id(tc)
 +                    if call_id:
-+                        terminal_calls.setdefault(call_id, True)
-+                    else:
-+                        pending_unnamed = True
++                        terminal_calls.setdefault(call_id, False)  # pending until its result arrives
 +        elif role == "tool":
 +            call_id = str(msg.get("tool_call_id") or "")
 +            is_terminal = call_id in terminal_calls or str(msg.get("name") or "") in _TERMINAL_KANBAN_TOOLS
@@ -102,12 +107,12 @@ index 5f4669bdb8..70b55b4f8d 100644
 +            if call_id:
 +                terminal_calls[call_id] = not failed
 +            elif not failed:
-+                pending_unnamed = True
-+    return pending_unnamed or any(terminal_calls.values())
++                succeeded_unnamed = True
++    return succeeded_unnamed or any(terminal_calls.values())
  
  
  def build_kanban_stop_nudge(
-@@ -68,9 +117,17 @@ def build_kanban_stop_nudge(
+@@ -68,9 +117,20 @@ def build_kanban_stop_nudge(
          "causes a protocol violation (clean exit with no "
          "`kanban_complete` / `kanban_block`).\n\n"
          "Do this immediately in your next response — do not narrate intent:\n"
@@ -120,8 +125,11 @@ index 5f4669bdb8..70b55b4f8d 100644
 +        "card is a `kanban_block(reason=\"dependency: <card id>\")` only when it can "
 +        "never resolve from here.\n"
 +        "2. Finish the remaining deliverable (write the required file(s) now).\n"
-+        "3. Call `kanban_complete(summary=..., artifacts=[...])` when the work is done "
-+        "(`kanban_request_review` when a reviewer is named), OR `kanban_block(reason=...)` "
++        "3. Call `kanban_complete(summary=..., artifacts=[...])` when the work is done. "
++        "Use `kanban_request_review` only when a reviewer is named AND this card has no "
++        "review or validation child yet; a card whose review/validation child already "
++        "exists is finished with `kanban_complete` (completing releases that child), never "
++        "with a second review request. OR call `kanban_block(reason=...)` "
 +        "only for a genuine human decision (credentials, approvals, destructive or "
 +        "production actions) or a confirmed conflict. A refused board call is not "
 +        "terminal: read its error and fix the cause.\n\n"
@@ -129,10 +137,10 @@ index 5f4669bdb8..70b55b4f8d 100644
          "protocol violations will block this task and require manual intervention.]"
      )
 diff --git a/tests/agent/test_kanban_stop.py b/tests/agent/test_kanban_stop.py
-index dbe371dd84..84c2f9f118 100644
+index dbe371dd84..7759898b5f 100644
 --- a/tests/agent/test_kanban_stop.py
 +++ b/tests/agent/test_kanban_stop.py
-@@ -88,3 +88,51 @@ def test_no_nudge_after_kanban_complete(clear_kanban_env):
+@@ -88,3 +88,67 @@ def test_no_nudge_after_kanban_complete(clear_kanban_env):
  
  
  
@@ -170,11 +178,25 @@ index dbe371dd84..84c2f9f118 100644
 +    assert build_kanban_stop_nudge(messages=_terminal_exchange("kanban_request_review", '{"error": "no"}')) is not None
 +
 +
-+def test_pending_terminal_call_without_result_still_counts(clear_kanban_env):
++def test_pending_terminal_call_without_result_does_not_count(clear_kanban_env):
++    """Only a successful terminal call ends the turn: a call whose result never arrived
++    (interrupted, never executed) changed nothing on the board, so the guard still fires."""
 +    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
 +    messages = [{"role": "assistant", "content": "", "tool_calls": [
 +        {"id": "9", "type": "function", "function": {"name": "kanban_complete", "arguments": "{}"}}]}]
-+    assert session_called_kanban_terminal(messages) is True
++    assert session_called_kanban_terminal(messages) is False
++    assert build_kanban_stop_nudge(messages=messages) is not None
++    assert session_called_kanban_terminal(messages + [
++        {"role": "tool", "name": "kanban_complete", "tool_call_id": "9", "content": '{"ok": true}'}]) is True
++
++
++def test_error_markers_are_not_terminal(clear_kanban_env):
++    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
++    for result in ('{"error": "refused"}', '{"ok": false, "reason": "open parents"}', '{"success": false}',
++                   "Error: claim expired", "error: no such task"):
++        assert session_called_kanban_terminal(_terminal_exchange("kanban_complete", result)) is False, result
++    for result in ('{"ok": true}', '{"status": "done"}', "Completed t_abc"):
++        assert session_called_kanban_terminal(_terminal_exchange("kanban_complete", result)) is True, result
 +
 +
 +def test_nudge_tells_the_worker_to_continue_not_block(clear_kanban_env):
@@ -184,3 +206,5 @@ index dbe371dd84..84c2f9f118 100644
 +    assert "delegate_task child is collected" in nudge
 +    assert "A refused board call is not terminal" in nudge
 +    assert "kanban_request_review" in nudge
++    assert "no review or validation child yet" in nudge
++    assert "completing releases that child" in nudge
