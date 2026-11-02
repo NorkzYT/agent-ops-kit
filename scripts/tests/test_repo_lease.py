@@ -108,6 +108,22 @@ class TempRepo(TempState):
         return {"board": "default", "task": task, "run_id": run, "pid": pid or os.getpid(),
                 "pid_start": rl.proc_start_ticks(pid or os.getpid()), "host": rl.socket.gethostname()}
 
+    PASS_SCAN = "PASS: Inspected 1 process directories.\nPASS: No repository CWD matches found.\n"
+
+    def passing_runner(self):
+        return scan_runner(0, self.PASS_SCAN)
+
+    def baseline(self, task="t_1", **kw):
+        """A passing preflight by this run: takes the lease and records the edit-round baseline."""
+        rl.register_scanner(self.co, ["sudo", "-n", "/bin/true"])
+        result = rl.preflight(task, self.co, self.url, self.identity()["branch"], "main", git=rl.default_git,
+                              scan_runner=self.passing_runner(), owner=self.owner(task=task), **kw)
+        self.assertTrue(result["ok"], result["checks"])
+        return result
+
+    def checkpoint(self, task="t_1"):
+        return rl.checkpoint(task, self.identity(), rl.default_git, owner=self.owner(task=task), scan_runner=self.passing_runner())
+
 
 # ----------------------------------------------------------------- lease ---
 
@@ -158,6 +174,58 @@ class LeaseTest(TempRepo):
         result = rl.acquire_lease(ident, self.owner(task="t_new", run="9"))
         self.assertEqual(result["status"], "recovered", result)
         self.assertFalse(list(rl.leases_dir().glob("*.stale.*")))
+
+    def test_same_owner_needs_the_process_identity_not_the_run_id_alone(self):
+        ident = self.identity()
+        rl.acquire_lease(ident, self.owner())
+        copied = {**self.owner(), "pid": os.getpid() + 1}          # same run id, another process
+        self.assertEqual(rl.acquire_lease(ident, copied)["status"], "conflict")
+        reused = {**self.owner(), "pid_start": (rl.proc_start_ticks(os.getpid()) or 0) + 1}  # pid reused
+        self.assertEqual(rl.acquire_lease(ident, reused)["status"], "conflict")
+        self.assertEqual(rl.release_lease(ident, copied)["status"], "conflict")
+        self.assertEqual(rl.release_lease(ident, {**self.owner(), "host": "elsewhere"})["status"], "conflict")
+        self.assertEqual(rl.acquire_lease(ident, self.owner())["status"], "renewed")
+        self.assertEqual(rl.acquire_lease(ident, self.owner(), renew_only=True)["status"], "renewed")
+        self.assertEqual(rl.release_lease(ident, self.owner())["status"], "released")
+        self.assertEqual(rl.acquire_lease(ident, self.owner(), renew_only=True)["status"], "none")
+        self.assertIsNone(rl.read_lease(ident), "renew_only never takes a lease")
+
+    def test_concurrent_stale_recovery_has_exactly_one_winner(self):
+        """Four processes find the same dead-owner lease at once: one recovers it, the others
+        see that live recoverer and conflict; the lease never flips between two recoverers."""
+        ident = self.identity()
+        dead = self.spawn(["sleep", "60"])
+        holder = self.owner(task="t_dead", run="1", pid=dead.pid)
+        rl.acquire_lease(ident, holder)
+        dead.kill(); dead.wait()
+        start = time.time() + 1.0
+        code = (
+            "import sys, time, json, os, importlib.util\n"
+            f"spec = importlib.util.spec_from_file_location('rl', {str(SCRIPT)!r}); rl = importlib.util.module_from_spec(spec); spec.loader.exec_module(rl)\n"
+            f"ident = json.loads({json.dumps(ident)!r})\n"
+            "task = sys.argv[1]\n"
+            "owner = {'board': 'default', 'task': task, 'run_id': '9', 'pid': os.getpid(), 'pid_start': rl.proc_start_ticks(os.getpid()), 'host': rl.socket.gethostname()}\n"
+            f"while time.time() < {start}: pass\n"
+            "res = [rl.acquire_lease(ident, owner)['status'] for _ in range(10)]\n"
+            "time.sleep(1.5)\n"
+            "print(json.dumps({'task': task, 'statuses': sorted(set(res)), 'holder': rl.read_lease(ident)['owner']['task']}))\n"
+        )
+        procs = [subprocess.Popen([sys.executable, "-c", code, f"t_rec{i}"], env={**os.environ}, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True) for i in range(4)]
+        outs = []
+        for p in procs:
+            stdout, stderr = p.communicate(timeout=60)
+            self.assertTrue(stdout.strip(), stderr)
+            outs.append(json.loads(stdout))
+        statuses = {o["task"]: o["statuses"] for o in outs}
+        winners = [t for t, st in statuses.items() if "recovered" in st]
+        self.assertEqual(len(winners), 1, statuses)
+        self.assertEqual(statuses[winners[0]], ["recovered", "renewed"], statuses)
+        for t, st in statuses.items():
+            if t != winners[0]:
+                self.assertEqual(st, ["conflict"], statuses)
+        self.assertEqual({o["holder"] for o in outs}, {winners[0]}, "every racer saw the same final holder")
+        self.assertFalse(list(rl.leases_dir().glob(".tmp-*")))
 
     def test_owner_on_another_host_is_not_decidable(self):
         ident = self.identity()
@@ -214,21 +282,60 @@ class LeaseTest(TempRepo):
 # ------------------------------------------------------------- processes ---
 
 class ProcessClassificationTest(TempRepo):
-    def test_self_chain_and_own_descendants_are_not_writers(self):
+    def test_self_chain_stops_at_the_anchor_and_own_descendants_are_not_writers(self):
         child = self.spawn(["sleep", "60"], cwd=self.co)
+        time.sleep(0.2)
+        parent = os.getppid()
         rows = rl.classify_scan({"status": "complete", "matches": [
-            {"pid": os.getpid(), "cwd": self.co}, {"pid": os.getppid(), "cwd": self.co}, {"pid": child.pid, "cwd": self.co}],
-            "scanner": "x"})
+            {"pid": os.getpid(), "cwd": self.co}, {"pid": parent, "cwd": self.co}, {"pid": child.pid, "cwd": self.co}],
+            "scanner": "x"}, anchors=[parent])
         kinds = {r["pid"]: r["kind"] for r in rows["processes"]}
         self.assertEqual(kinds[os.getpid()], "self-chain")
-        self.assertEqual(kinds[os.getppid()], "self-chain")
+        self.assertEqual(kinds[parent], "self-chain")
         self.assertEqual(kinds[child.pid], "own-descendant")
         self.assertTrue(rows["ok"])
+        # The chain ends at the anchor: a shared ancestor above it (gateway, terminal) is not "us",
+        # and without an anchor among our ancestors nothing but this process is.
+        self.assertEqual(rl.self_chain(os.getpid(), [parent]), {parent})
+        self.assertEqual(rl.self_chain(os.getpid(), []), set())
+        grand = rl.proc_parent(parent)
+        if grand and grand > 1:
+            self.assertEqual(rl.self_chain(os.getpid(), [grand]), {parent, grand})
+            row = rl.classify_process(grand, os.getpid(), anchors=[parent], self_chain=rl.self_chain(os.getpid(), [parent]))
+            self.assertNotEqual(row["kind"], "self-chain")
+        rows = rl.classify_scan({"status": "complete", "matches": [{"pid": parent, "cwd": self.co}], "scanner": "x"})
+        self.assertNotEqual(rows["processes"][0]["kind"], "self-chain", "no anchor: the parent is a foreign process")
 
     def test_descendant_of_the_worker_anchor_is_ours_even_from_another_shell(self):
         child = self.spawn(["sleep", "60"], cwd=self.co)
+        time.sleep(0.2)
         row = rl.classify_process(child.pid, self_pid=10 ** 6, anchors=[os.getpid()], self_chain=set())
         self.assertEqual(row["kind"], "own-descendant")
+
+    def test_anchor_requires_a_verified_worker_identity(self):
+        """The anchor is a supervising worker only when it is an ancestor AND its own environment
+        carries this task; a `hermes` ancestor without it (the gateway) or a sibling never is.
+        Without a verified worker the anchor is this process itself."""
+        self.assertEqual(rl.anchor_pid(task_id="t_1"), os.getpid())
+        self.assertEqual(rl.anchor_pid(4242), 4242)
+        probe = (
+            "import os, sys, json, importlib.util\n"
+            f"spec = importlib.util.spec_from_file_location('rl', {str(SCRIPT)!r}); rl = importlib.util.module_from_spec(spec); spec.loader.exec_module(rl)\n"
+            "print(json.dumps({'anchor': rl.anchor_pid(task_id='t_1'), 'self': os.getpid(), 'parent': os.getppid()}))\n"
+        )
+        parent_code = (
+            "import os, sys, subprocess\n"
+            "env = {**os.environ, 'HERMES_KANBAN_SUPERVISED_WORKER_PID': str(os.getpid())}\n"
+            f"sys.stdout.write(subprocess.run([sys.executable, '-c', {probe!r}], env=env, capture_output=True, text=True).stdout)\n"
+        )
+        for env_task, expect in (("t_1", "parent"), ("t_other", "self"), (None, "self")):
+            env = {k: v for k, v in os.environ.items() if k != "HERMES_KANBAN_TASK"}
+            if env_task:
+                env["HERMES_KANBAN_TASK"] = env_task
+            out = subprocess.run([sys.executable, "-c", parent_code], env=env, capture_output=True, text=True, timeout=60)
+            self.assertTrue(out.stdout.strip(), out.stderr)
+            got = json.loads(out.stdout)
+            self.assertEqual(got["anchor"], got[expect], (env_task, got))
 
     def test_foreign_agent_and_mutating_git_block(self):
         bindir = self.tmp / "bin"
@@ -242,19 +349,54 @@ class ProcessClassificationTest(TempRepo):
         git = self.spawn(["git", "commit", "--allow-empty"], cwd=self.co,
                          env={**os.environ, "GIT_EDITOR": str(editor), "GIT_TERMINAL_PROMPT": "0"})
         node = self.spawn([str(bindir / "node"), "60"], cwd=self.co)
+        (bindir / "nvim").symlink_to(shutil.which("sleep"))
+        editor_proc = self.spawn([str(bindir / "nvim"), "60"], cwd=self.co)
+        plain = self.spawn(["sleep", "60"], cwd=self.co)
         time.sleep(0.5)
         rows = {p.pid: rl.classify_process(p.pid, self_pid=10 ** 6, anchors=[], self_chain=set())
-                for p in (agent, git, node)}
+                for p in (agent, git, node, editor_proc, plain)}
         self.assertEqual((rows[agent.pid]["kind"], rows[agent.pid]["blocking"]), ("agent-writer", True))
         self.assertEqual((rows[git.pid]["kind"], rows[git.pid]["blocking"]), ("git-mutation", True))
         self.assertIn("git commit", rows[git.pid]["detail"])
-        self.assertEqual((rows[node.pid]["kind"], rows[node.pid]["blocking"]), ("service", False))
-        with mock.patch.object(rl, "proc_has_tty", return_value=True):
-            row = rl.classify_process(node.pid, self_pid=10 ** 6, anchors=[], self_chain=set())
-        self.assertEqual((row["kind"], row["blocking"]), ("interactive", False))
+        # An arbitrary background program is not a service to wave through: unknown, blocks.
+        self.assertEqual((rows[node.pid]["kind"], rows[node.pid]["blocking"]), ("unknown", True))
+        self.assertEqual((rows[plain.pid]["kind"], rows[plain.pid]["blocking"]), ("unknown", True))
+        self.assertEqual((rows[editor_proc.pid]["kind"], rows[editor_proc.pid]["blocking"]), ("editor", False))
         self.assertIsNone(rl._git_mutation(["git", "-C", self.co, "status", "--porcelain"]))
         self.assertIsNone(rl._git_mutation(["/usr/bin/git", "log", "--oneline"]))
         self.assertEqual(rl._git_mutation(["git", "-c", "x=y", "rebase", "main"]), "rebase")
+
+    def test_only_explicit_passive_tools_are_non_blocking(self):
+        """Classification by command line alone (no tty heuristics): a small documented set of
+        editors, language servers, dev servers, idle shells and read-only git are observations;
+        every other executable or script, including arbitrary python/node, is unknown and blocks."""
+        cases = {
+            ("nvim", "main.go"): ("editor", False), ("/usr/bin/vim", "x"): ("editor", False),
+            ("/usr/share/code/code", "--type=renderer"): ("editor", False),
+            ("gopls", "serve"): ("language-server", False), ("node", "/x/node_modules/.bin/typescript-language-server", "--stdio"): ("language-server", False),
+            ("node", "/x/node_modules/typescript-language-server/lib/cli.mjs", "--stdio"): ("unknown", True),
+            ("node", "/repo/node_modules/vite/bin/vite.js", "--port", "5173"): ("dev-server", False),
+            ("node", "/repo/node_modules/.bin/next", "dev"): ("dev-server", False),
+            ("-bash",): ("shell", False), ("zsh", "-l", "-i"): ("shell", False),
+            ("bash", "-c", "while true; do ./deploy.sh; done"): ("unknown", True),
+            ("bash", "./scripts/build.sh"): ("unknown", True),
+            ("git", "status", "--porcelain"): ("git-readonly", False), ("/usr/bin/git", "-C", "/x", "log", "-1"): ("git-readonly", False),
+            ("git", "rebase", "main"): ("git-mutation", True), ("git", "push", "origin", "x"): ("git-mutation", True),
+            ("git", "gc"): ("unknown", True), ("git",): ("unknown", True),
+            ("python3", "tools/codemod.py"): ("unknown", True), ("python3.12", "-c", "open('a','w')"): ("unknown", True),
+            ("node", "scripts/write-files.js"): ("unknown", True), ("node",): ("unknown", True),
+            ("/opt/bin/some-tool", "--watch"): ("unknown", True), ("sleep", "60"): ("unknown", True),
+            ("claude", "--dangerously-skip-permissions"): ("agent-writer", True),
+            ("python3", "-m", "hermes_cli.main", "chat", "-q", "x"): ("agent-writer", True),
+            ("nvim-agent-writer-lookalike",): ("unknown", True),
+        }
+        for cmd, want in cases.items():
+            kind, blocking, _ = rl.classify_cmdline(list(cmd))
+            self.assertEqual((kind, blocking), want, cmd)
+            self.assertEqual(kind in rl.NONBLOCKING_KINDS, not blocking, cmd)
+        self.assertEqual(rl.program_name(["node", "/repo/node_modules/vite/bin/vite.js"]), "vite")
+        self.assertEqual(rl.program_name(["python3", "-u", "/x/serve.py"]), "serve")
+        self.assertEqual(rl.program_name(["python3", "-c", "print(1)"]), "python3 -c")
 
     def test_gone_and_unknown_are_distinct(self):
         gone = self.spawn(["sleep", "60"]); gone.kill(); gone.wait()
@@ -279,7 +421,8 @@ class ProcessClassificationTest(TempRepo):
 
     def test_anchor_pid_prefers_a_verified_supervised_worker(self):
         with mock.patch.dict(os.environ, {"HERMES_KANBAN_SUPERVISED_WORKER_PID": str(os.getppid())}):
-            self.assertEqual(rl.anchor_pid(), os.getppid())
+            self.assertEqual(rl.anchor_pid(), os.getppid())                 # no task known: ancestry alone
+            self.assertEqual(rl.anchor_pid(task_id="t_1"), os.getpid())     # parent env has no such task: not verified
         with mock.patch.dict(os.environ, {"HERMES_KANBAN_SUPERVISED_WORKER_PID": "999999999"}):
             self.assertNotEqual(rl.anchor_pid(), 999999999)  # not an ancestor: ignored
         self.assertEqual(rl.anchor_pid(4242), 4242)
@@ -334,15 +477,20 @@ class ManifestTest(TempRepo):
     def test_checkpoint_resume_changed_unknown(self):
         ident = self.identity()
         self.assertTrue(rl.verify_dirty("t_1", ident, rl.default_git)["clean"])
+        self.baseline()                                            # clean tree: empty baseline under our lease
         Path(self.co, "a.txt").write_text("2\n")                  # unstaged
         Path(self.co, "new.go").write_text("package x\n")         # untracked
         Path(self.co, "staged.txt").write_text("s\n"); self.g("add", "staged.txt")
         before = rl.verify_dirty("t_1", ident, rl.default_git)
         self.assertEqual((before["ok"], sorted(before["unknown"])), (False, ["a.txt", "new.go", "staged.txt"]))
-        manifest = rl.checkpoint("t_1", ident, rl.default_git)
+        manifest = self.checkpoint()
         self.assertEqual(sorted(manifest["entries"]), ["a.txt", "new.go", "staged.txt"])
+        self.assertEqual(sorted(manifest["evidence"]["new_since_baseline"]), ["a.txt", "new.go", "staged.txt"])
         self.assertEqual(manifest["entries"]["staged.txt"]["status"], "A ")
         self.assertTrue(manifest["entries"]["staged.txt"]["index_oid"])
+        self.assertEqual(manifest["entries"]["staged.txt"]["index_mode"], "100644")
+        self.assertEqual(manifest["entries"]["new.go"]["worktree_mode"], "100644")
+        self.assertIsNone(manifest["entries"]["new.go"]["index_oid"])
         text = rl.manifest_path("t_1").read_text()
         self.assertNotIn("package x", text)                        # hashes only, never contents
         self.assertEqual(oct(rl.manifest_path("t_1").stat().st_mode & 0o777), "0o600")
@@ -352,16 +500,117 @@ class ManifestTest(TempRepo):
         Path(self.co, "other.txt").write_text("?\n")
         drift = rl.verify_dirty("t_1", ident, rl.default_git)
         self.assertEqual((drift["ok"], drift["changed"], drift["unknown"]), (False, ["a.txt"], ["other.txt"]))
+        self.assertEqual(drift["changed_fields"], {"a.txt": ["worktree_sha256"]})
         self.assertFalse(rl.verify_dirty("t_2", ident, rl.default_git)["ok"])  # another task owns nothing here
         # Same files on another branch are no longer provably this task's.
         self.g("stash", "-u"); self.g("switch", "-c", "feat/y"); self.g("stash", "pop")
         moved = rl.verify_dirty("t_1", self.identity(), rl.default_git)
         self.assertFalse(moved["ok"]); self.assertEqual(moved["known"], [])
 
-    def test_adopt_requires_exact_provenance(self):
+    def test_foreign_stage_mode_and_symlink_changes_on_recorded_paths_are_detected(self):
+        ident = self.identity()
+        self.baseline()
+        Path(self.co, "a.txt").write_text("2\n")
+        Path(self.co, "tool.sh").write_text("#!/bin/sh\n")
+        Path(self.co, "link.txt").write_text("same bytes\n")
+        self.checkpoint()
+        self.assertTrue(rl.verify_dirty("t_1", ident, rl.default_git)["ok"])
+        # Someone stages the recorded unstaged edit: same bytes in the tree, different change.
+        self.g("add", "a.txt")
+        v = rl.verify_dirty("t_1", ident, rl.default_git)
+        self.assertEqual((v["ok"], v["changed"]), (False, ["a.txt"]))
+        self.assertEqual(set(v["changed_fields"]["a.txt"]), {"status", "index_oid"})
+        self.g("restore", "--staged", "a.txt")
+        self.assertTrue(rl.verify_dirty("t_1", ident, rl.default_git)["ok"])
+        # Mode-only change on a recorded untracked file.
+        Path(self.co, "tool.sh").chmod(0o755)
+        v = rl.verify_dirty("t_1", ident, rl.default_git)
+        self.assertEqual((v["changed"], v["changed_fields"]["tool.sh"]), (["tool.sh"], ["worktree_mode"]))
+        Path(self.co, "tool.sh").chmod(0o644)
+        # A recorded regular file swapped for a symlink.
+        Path(self.co, "target.txt").write_text("same bytes\n")
+        Path(self.co, "link.txt").unlink(); Path(self.co, "link.txt").symlink_to("target.txt")
+        v = rl.verify_dirty("t_1", ident, rl.default_git)
+        self.assertIn("link.txt", v["changed"])
+        self.assertEqual(set(v["changed_fields"]["link.txt"]), {"worktree_sha256", "worktree_mode"})
+        self.assertIn("target.txt", v["unknown"])
+        # Staged-then-modified: the staged object is part of the identity too.
+        Path(self.co, "link.txt").unlink(); Path(self.co, "target.txt").unlink()
+        Path(self.co, "s.txt").write_text("v1\n"); self.g("add", "s.txt")
+        self.checkpoint()
+        self.g("rm", "--cached", "-q", "s.txt"); Path(self.co, "s.txt").write_text("v1\n"); self.g("add", "s.txt")
+        self.assertTrue(rl.verify_dirty("t_1", ident, rl.default_git)["ok"], "identical re-stage is the same change")
+        Path(self.co, "s.txt").write_text("v2\n"); self.g("add", "s.txt")
+        v = rl.verify_dirty("t_1", ident, rl.default_git)
+        self.assertEqual(set(v["changed_fields"]["s.txt"]), {"worktree_sha256", "index_oid"})
+
+    def test_checkpoint_is_gated_and_never_launders_foreign_dirty_files(self):
+        ident = self.identity()
+        Path(self.co, "operator.txt").write_text("the operator's half-done work\n")
+        # No lease, no baseline: nothing to checkpoint from.
+        with self.assertRaises(rl.LeaseError) as ctx:
+            self.checkpoint()
+        self.assertIn("live lease", str(ctx.exception))
+        self.assertIsNone(rl.read_manifest("t_1"))
+        # Preflight cannot pass while a foreign path is dirty, so no baseline exists ...
+        rl.register_scanner(self.co, ["sudo", "-n", "/bin/true"])
+        result = rl.preflight("t_1", self.co, self.url, "feat/x", git=rl.default_git, scan_runner=self.passing_runner(), owner=self.owner())
+        self.assertFalse(result["ok"]); self.assertEqual(result["lease"]["status"], "acquired")
+        self.assertIsNone(rl.read_baseline("t_1"))
+        # ... and checkpoint, even with the lease held, refuses instead of adopting it.
+        with self.assertRaises(rl.LeaseError) as ctx:
+            self.checkpoint()
+        self.assertIn("no baseline", str(ctx.exception))
+        self.assertIsNone(rl.read_manifest("t_1"))
+        # A competing writer at checkpoint time refuses too (lease + baseline present).
+        Path(self.co, "operator.txt").unlink()
+        self.baseline()
+        Path(self.co, "mine.txt").write_text("mine\n")
+        bindir = self.tmp / "bin"; bindir.mkdir()
+        (bindir / "codex").symlink_to(shutil.which("sleep"))
+        foreign = self.spawn([str(bindir / "codex"), "60"], cwd=self.co); time.sleep(0.2)
+        hits = scan_runner(1, f"MATCH: PID={foreign.pid} CWD={self.co}\nBLOCKED: 1 matching processes.\n")
+        with mock.patch.object(rl, "ancestors", lambda pid, limit=64: []):
+            with self.assertRaises(rl.LeaseError) as ctx:
+                rl.checkpoint("t_1", ident, rl.default_git, owner=self.owner(), scan_runner=hits)
+        self.assertIn("agent-writer", str(ctx.exception))
+        self.assertIsNone(rl.read_manifest("t_1"))
+        # Another run of the same card (another process) holds no lease here: refused.
+        other = {**self.owner(), "pid": os.getpid() + 1}
+        with self.assertRaises(rl.LeaseError):
+            rl.checkpoint("t_1", ident, rl.default_git, owner=other, scan_runner=self.passing_runner())
+        # Our own edit since the baseline is adopted with its evidence.
+        manifest = self.checkpoint()
+        self.assertEqual(list(manifest["entries"]), ["mine.txt"])
+        self.assertEqual(manifest["evidence"]["new_since_baseline"], ["mine.txt"])
+        self.assertIn("not proof of who wrote", manifest["evidence"]["limits"])
+        # A commit moves HEAD: the baseline is bound to it, so a fresh preflight is required;
+        # the manifest is not, so a partial commit still resumes the rest (no deadlock).
+        Path(self.co, "keep.txt").write_text("still dirty\n")
+        self.checkpoint()
+        self.g("add", "mine.txt"); self.g("commit", "-qm", "feat: mine")
+        Path(self.co, "later.txt").write_text("later\n")
+        with self.assertRaises(rl.LeaseError) as ctx:
+            self.checkpoint()
+        self.assertIn("run preflight again", str(ctx.exception))
+        v = rl.verify_dirty("t_1", self.identity(), rl.default_git)
+        self.assertEqual((v["known"], v["unknown"]), (["keep.txt"], ["later.txt"]))
+        Path(self.co, "later.txt").unlink()
+        self.baseline()                                            # keep.txt resumes at the new HEAD
+        Path(self.co, "later.txt").write_text("later\n")
+        self.assertEqual(sorted(self.checkpoint()["entries"]), ["keep.txt", "later.txt"])
+        # The lease tenure changed (released, re-acquired): the old baseline is void.
+        rl.release_lease(ident, self.owner())
+        rl.acquire_lease(ident, self.owner())
+        with self.assertRaises(rl.LeaseError) as ctx:
+            self.checkpoint()
+        self.assertIn("no baseline", str(ctx.exception))
+
+    def test_adopt_requires_exact_provenance_and_keeps_paths_literal(self):
         ident = self.identity()
         Path(self.co, "a.txt").write_text("2\n")
         Path(self.co, "new.go").write_text("package x\n")
+        Path(self.co, ".env.example").write_text("KEY=\n")
         good = {"a.txt": rl.hash_worktree_path(self.co, "a.txt"), "new.go": rl.hash_worktree_path(self.co, "new.go")}
         src = self.tmp / "preserved-sha256.json"
         src.write_text(json.dumps({**good, "new.go": "0" * 64}))
@@ -373,12 +622,18 @@ class ManifestTest(TempRepo):
         with self.assertRaises(rl.LeaseError) as ctx:
             rl.adopt_manifest("t_1", ident, rl.default_git, str(src))
         self.assertIn("not dirty here: ghost.txt", str(ctx.exception))
-        src.write_text(json.dumps({"a.txt": good["a.txt"]}))
+        # A dotfile is adopted under its literal name; "./" is not a prefix to strip from it.
+        src.write_text(json.dumps({"a.txt": good["a.txt"], ".env.example": rl.hash_worktree_path(self.co, ".env.example")}))
         adopted = rl.adopt_manifest("t_1", ident, rl.default_git, str(src))
+        self.assertEqual(sorted(adopted["entries"]), [".env.example", "a.txt"])
         self.assertEqual(adopted["unlisted_dirty"], ["new.go"])
         self.assertEqual(adopted["source"], "adopt:preserved-sha256.json")
         verify = rl.verify_dirty("t_1", ident, rl.default_git)
-        self.assertEqual((verify["known"], verify["unknown"]), (["a.txt"], ["new.go"]))
+        self.assertEqual((verify["known"], verify["unknown"]), ([".env.example", "a.txt"], ["new.go"]))
+        src.write_text(json.dumps({"./a.txt": good["a.txt"]}))
+        with self.assertRaises(rl.LeaseError) as ctx:
+            rl.adopt_manifest("t_1", ident, rl.default_git, str(src))
+        self.assertIn("not dirty here: ./a.txt", str(ctx.exception))
         with self.assertRaises(rl.LeaseError):
             src.write_text("[]"); rl.adopt_manifest("t_1", ident, rl.default_git, str(src))
 
@@ -415,8 +670,9 @@ class PreflightTest(TempRepo):
     def test_scan_classification_decides(self):
         bindir = self.tmp / "bin"; bindir.mkdir()
         (bindir / "codex").symlink_to(shutil.which("sleep"))
+        (bindir / "nvim").symlink_to(shutil.which("sleep"))
         foreign = self.spawn([str(bindir / "codex"), "60"], cwd=self.co)
-        mine = self.spawn(["sleep", "60"], cwd=self.co)
+        mine = self.spawn([str(bindir / "nvim"), "60"], cwd=self.co)
         time.sleep(0.2)
         hits = scan_runner(1, f"MATCH: PID={mine.pid} CWD={self.co}\nMATCH: PID={foreign.pid} CWD={self.co}\nBLOCKED: 2 matching processes.\n")
         # The run's anchor is an unrelated live process and self_pid is far away, so neither match
@@ -426,13 +682,18 @@ class PreflightTest(TempRepo):
                               owner=self.owner(pid=anchor.pid), self_pid=10 ** 6)
         self.assertEqual((result["ok"], result["exit"]), (False, 2))
         kinds = {p["pid"]: p["kind"] for p in result["scan"]["processes"]}
-        self.assertEqual((kinds[mine.pid], kinds[foreign.pid]), ("service", "agent-writer"))
+        self.assertEqual((kinds[mine.pid], kinds[foreign.pid]), ("editor", "agent-writer"))
         self.assertIn(f"pid {foreign.pid}: agent-writer", next(c["detail"] for c in result["checks"] if c["check"] == "writers"))
         foreign.kill(); foreign.wait()
         result = rl.preflight("t_1", self.co, self.url, "feat/x", git=rl.default_git, scan_runner=hits,
                               owner=self.owner(pid=anchor.pid), self_pid=10 ** 6)
-        self.assertTrue(result["ok"], "a vanished match is not a writer")
-        self.assertEqual({p["kind"] for p in result["scan"]["processes"]}, {"service", "gone"})
+        self.assertTrue(result["ok"], "a vanished match is not a writer; an editor is an observation")
+        self.assertEqual({p["kind"] for p in result["scan"]["processes"]}, {"editor", "gone"})
+        plain = self.spawn(["sleep", "60"], cwd=self.co); time.sleep(0.2)
+        unknown_hits = scan_runner(1, f"MATCH: PID={plain.pid} CWD={self.co}\nBLOCKED: 1 matching processes.\n")
+        result = rl.preflight("t_1", self.co, self.url, "feat/x", git=rl.default_git, scan_runner=unknown_hits,
+                              owner=self.owner(pid=anchor.pid), self_pid=10 ** 6)
+        self.assertEqual((result["ok"], result["exit"]), (False, 3), "an arbitrary process is unknown: fail closed")
         self.assertEqual(self.pf(task="t_2", runner=hits)["lease"]["status"], "conflict",
                          "the anchor's run (alive) still holds the lease for another task")
         anchor.kill(); anchor.wait()
@@ -464,12 +725,17 @@ class PreflightTest(TempRepo):
                                       scan_runner=self.pass_scan, owner=self.owner())["ok"])
 
     def test_dirty_provenance_decides_resume(self):
+        self.assertTrue(self.pf()["ok"])                           # clean: baseline for the edit round
         Path(self.co, "a.txt").write_text("2\n")
         result = self.pf()
         self.assertEqual(self.names(result, False), ["dirty"])
         self.assertIn("unknown dirty paths", next(c["detail"] for c in result["checks"] if c["check"] == "dirty"))
-        rl.checkpoint("t_1", self.identity(), rl.default_git)
+        self.checkpoint()                                          # same lease tenure: a.txt is this round's edit
         self.assertTrue(self.pf()["ok"])
+        Path(self.co, "a.txt").chmod(0o755)
+        result = self.pf()
+        self.assertIn("changed since checkpoint: a.txt (worktree_mode)", next(c["detail"] for c in result["checks"] if c["check"] == "dirty"))
+        Path(self.co, "a.txt").chmod(0o644)
         self.assertFalse(self.pf(task="t_2")["ok"], "another task's run never resumes these files")
         strict = self.pf(require_clean=True)
         self.assertEqual(self.names(strict, False), ["dirty"])

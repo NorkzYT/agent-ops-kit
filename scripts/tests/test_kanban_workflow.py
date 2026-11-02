@@ -539,7 +539,8 @@ class CheckoutTest(CheckoutRepo, unittest.TestCase):
                      f"python3 {wf.SCRIPT} checkpoint $HERMES_KANBAN_TASK --repo-dir {co}",
                      f"python3 {wf.SCRIPT} release $HERMES_KANBAN_TASK --repo-dir {co}",
                      f"origin is {self.url}; no index.lock", "classified by\n   process ancestry",
-                     "editors, idle shells and dev\n   servers are not writers",
+                     "known\n   editors, language servers, dev servers, idle shells and read-only git are not writers",
+                     "any other program or script", "never adopted\n   this way",
                      f"git -C {co} switch -c feat/build-the-ipad-app origin/main",
                      f"git -C {co} merge --ff-only origin/feat/build-the-ipad-app",
                      "Never remove a lease, a lock or a file to pass",
@@ -1770,6 +1771,37 @@ class WorkerContextTest(StateDirMixin, unittest.TestCase):
             os.environ.pop(key, None)
         wf.require_worker_context("intake")
         wf.own_card("t_anything")
+
+
+class WorkerPolicyTextTest(unittest.TestCase):
+    """The coder SOUL and the generated code card agree: verification is fixed until it passes
+    within budget (an unchanged command is retried once, for a transient failure only), pushing
+    the card's own branch is authorized, merges/deploys/secrets are not, and a pre-created
+    review or validation child is released by completing, never by a second review request."""
+
+    def test_coder_soul_has_no_one_retry_or_no_network_rule(self):
+        soul = (REPO / "hermes" / "profiles" / "coder" / "SOUL.md").read_text()
+        self.assertNotIn("One bounded retry", soul)
+        self.assertNotIn("No network calls that change external state", soul)
+        self.assertIn("until it passes or the task's budget", soul)
+        self.assertIn("Retry an unchanged command only once, and only for a transient failure", soul)
+        self.assertIn("`git push origin <feature branch>` of your commits is authorized", soul)
+        self.assertIn("Never merge, deploy, publish, release, rotate or read secrets", soul)
+        self.assertIn("A card that already has its review or validation child does not need `kanban_request_review`", soul)
+        self.assertIn("no `Co-Authored-By` trailer", soul)
+
+    def test_code_card_text_matches(self):
+        ctx = wf.Ctx(key="k", title="T", repo=REPO_URL, branch="feat/x", base="main", lanes={}, coder="coder",
+                     reviewer="reviewer", orchestrator="orchestrator", checkout="/opt/repos/app")
+        text = wf.code_body(ctx, 1, "the ask", "")
+        self.assertIn("diagnosed and fixed until it passes within this card's budget", text)
+        self.assertIn("retry an unchanged\n   command once only for a transient failure", text)
+        self.assertIn("git push origin feat/x. Never force push.", text)
+        self.assertIn("known\n   editors, language servers, dev servers, idle shells and read-only git are not writers", text)
+        self.assertIn("any other program or script", text)
+        self.assertIn("records only what changed since that passing preflight, under the same lease", text)
+        self.assertIn("never adopted\n   this way", text)
+        self.assertIn("After a commit, run preflight again before the next checkpoint", text)
 
 
 class DesignatedCheckoutLeaseTest(CheckoutRepo, unittest.TestCase):

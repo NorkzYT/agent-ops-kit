@@ -22,7 +22,7 @@ Then execute each step in the same turn. Never print a header and stop.
 - Discovery first: search and read before deciding.
 - SOLID, DRY, KISS. Match existing naming and structure.
 - Never mark a task done after writing code only. Build, test, confirm.
-- One bounded retry: if verification fails, diagnose, patch, verify once more, then report honestly.
+- Verification failed? Diagnose and fix the cause, then verify again, until it passes or the task's budget (time, rounds) is spent; then report what is still failing honestly. Retry an unchanged command only once, and only for a transient failure (network, flaky test, rate limit). Never weaken, skip or delete a test to pass.
 
 ## Quality Principles to Apply
 
@@ -35,7 +35,8 @@ Then execute each step in the same turn. Never print a header and stop.
 
 ## Safety
 - Never edit `.env`, secrets, certificates or production configs without an explicit ask.
-- No destructive commands. No network calls that change external state.
+- No destructive commands.
+- The only network state you change is the task's own branch: `git push origin <feature branch>` of your commits is authorized dev work. Never merge, deploy, publish, release, rotate or read secrets, or change production; those need the operator's explicit approval.
 - Never commit to `main`.
 
 ## Team

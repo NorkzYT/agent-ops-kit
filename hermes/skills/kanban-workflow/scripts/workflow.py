@@ -664,9 +664,10 @@ def checkout_steps(ctx: Ctx) -> str:
    It takes this run's lease on the checkout and checks: origin is {ctx.repo}; no index.lock;
    the checkout is on {ctx.branch} and not diverged from origin/{ctx.branch}; {ctx.branch} is in no
    other worktree; no competing writer (the registered privileged CWD scanner, classified by
-   process ancestry: your own shells, scripts and subagents, editors, idle shells and dev
-   servers are not writers; another autonomous agent, a git mutation in progress, or anything
-   it cannot inspect is); and that every uncommitted path is one this card recorded
+   process ancestry and an explicit list: your own shells, scripts and subagents, known
+   editors, language servers, dev servers, idle shells and read-only git are not writers;
+   another autonomous agent, a git mutation in progress, any other program or script, or
+   anything it cannot inspect is); and that every uncommitted path is one this card recorded
    (resume) or the tree is clean. Read its JSON:
    - exit 0: proceed. The lease is yours; re-run preflight before each later edit round.
    - exit 2 with a failing "branch" check and a clean tree: git -C {co} fetch origin, then
@@ -683,10 +684,15 @@ def checkout_steps(ctx: Ctx) -> str:
    - exit 3 (unknown visibility: the scanner is missing, failed or incomplete): change
      nothing and block with the detail; the operator registers or repairs the scanner.
    After a coding subagent wrote files and after every edit of your own, before any other
-   step, record what this card owns so the next run can resume it:
+   step (and before running preflight again), record what this card owns so the next run
+   can resume it:
    python3 {SCRIPT} checkpoint {TASK_TOKEN} --repo-dir {co}
-   (hashes only, outside the repository; uncommitted work this card did not record is a
-   conflict for every later run). When the card ends (complete or block), run:
+   It records only what changed since that passing preflight, under the same lease, with a
+   clean writer scan (hashes only, outside the repository); it refuses without those, and a
+   dirty path that was never this card's never passes preflight, so it is never adopted
+   this way. Uncommitted work this card did not record is a conflict for every later run.
+   After a commit, run preflight again before the next checkpoint. When the card ends
+   (complete or block), run:
    python3 {SCRIPT} release {TASK_TOKEN} --repo-dir {co}
    Every later round of this request works in this same checkout and repeats these steps."""
 
@@ -724,7 +730,9 @@ Steps:
    the validators test. Exit 0: kanban_complete(summary=<the "summary" it printed>,
    metadata=<the "metadata" object it printed>). Exit 2: fix what it names (commit, push), run it again.
 6. Unfinished work is not a blocker: a running delegate_task child is collected, a failing
-   test is fixed or retried, a flaky tool is retried. Block (kanban_block with the exact
+   test is diagnosed and fixed until it passes within this card's budget (retry an unchanged
+   command once only for a transient failure: network, flaky test, rate limit), a flaky tool
+   is retried. Block (kanban_block with the exact
    check, command and output) only for a human decision (credentials, an approval named in
    the gates below, production or destructive actions), a confirmed competing writer, or a
    dependency on another card that cannot resolve from here. Never block for the mere
@@ -1096,7 +1104,8 @@ def checkout_command(cmd: str, task_id: str, repo_dir: str, manifest: str = "", 
         if identity["branch"] != h.get("branch", ""):
             raise WorkflowError(f"checkout is on '{identity['branch']}', the card's branch is '{h.get('branch')}'")
         if cmd == "checkpoint":
-            return 0, rl.checkpoint(task_id, identity, git)
+            return 0, rl.checkpoint(task_id, identity, git, owner=rl.owner_from_env(task_id),
+                                    scan_runner=scan_runner or rl.default_scan_runner)
         if cmd == "adopt":
             return 0, rl.adopt_manifest(task_id, identity, git, manifest)
         result = rl.release_lease(identity, rl.owner_from_env(task_id))
