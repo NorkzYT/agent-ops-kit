@@ -366,5 +366,8 @@ go test` command. Repair: runtime patch 0004 (`dev_test_run`, recovery directive
 root-owned, digest-pinned runner with its Landlock/seccomp sandbox. Root cause, design,
 threat limits, install and smoke: [dev-test-runner.md](dev-test-runner.md). **An independent
 review rejected that candidate's same-uid isolation for install**; it now fails closed
-(runner, installer, runtime tool; patch 0005) and `t_12595b96` stays blocked until the approved
-credential-broker/network-namespace design in that page is provisioned by the operator.
+(runner, installer, runtime tool; all carried in the combined patch 0004 = `git diff
+4f845b43ec..61cbead82d`, there is no patch 0005) and `t_12595b96` stays blocked until a revision
+of the *proposed* (not approved, not implemented) credential-broker/network-namespace design in
+that page is approved by the operator, implemented, provisioned and attested. A registry that
+merely declares the proposed mode is not readiness.

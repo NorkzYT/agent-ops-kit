@@ -1,31 +1,42 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: NorkzYT <richard@pcscorp.dev>
-Date: Mon, 2 Nov 2026 19:37:04 -0500
-Subject: [PATCH 4/4] feat(kanban): typed dev_test_run tool that fails closed on
- rejected isolation, scanner recovery and test-credential guards
+Date: Mon, 2 Nov 2026 20:30:00 -0500
+Subject: [PATCH 4/4] feat(kanban): typed dev_test_run tool that fails closed
+ without an attested isolation backend, scanner recovery and test-credential
+ guards
 
-Combined diff of runtime commits d15a70ddc8 (typed dev_test_run tool, scanner
-recovery and test-credential guards) and f04d4adc80 (dev_test_run fails closed on
-rejected isolation, scoped recovery state, stricter target guard). The registry
-must carry per-profile isolation.mode; only credential-broker-netns is approved
-and it is not implemented yet, so the tool stays hidden, emits no RECOVERY
-directive and refuses to run for the rejected same-uid-landlock design. Recovery
-state is scoped per (task, run) and cleared only by an actual runner start or a
-recorded precondition refusal. database_target_block additionally covers
-?host=, multi-host authorities, hostaddr=, PGHOSTADDR and PGSERVICE* (text
-guard, not a boundary). Result keys are redacted; the runner budget covers vet.
+Exact `git diff 4f845b43ec..61cbead82d` of the runtime branch
+feat/kanban-autonomous-reviewed: commits d15a70ddc8 (typed dev_test_run tool,
+scanner recovery and test-credential guards), f04d4adc80 (fails closed on
+rejected isolation, scoped recovery state, stricter target guard) and
+61cbead82d (readiness needs an attested backend, not a mode string). The base
+4f845b43ec is the third commit carried by 0003, so this patch contains no hunk
+of 0001-0003 (the previous 0004 was cut against the wrong base and repeated
+the agent/kanban_stop.py and tests/agent/test_kanban_stop.py hunks of 0003).
+
+The registry must carry per-profile isolation.mode. `same-uid-landlock` is a
+rejected design and `credential-broker-netns` is a recognised *proposed* design
+string: syntactic config validity only. Runnable readiness needs
+backend_attested() to pass, and no isolation backend is implemented, so at
+every surface (tool visibility, RECOVERY directive, dev_test_run, kanban_block)
+nothing is exposed regardless of what a root-owned registry declares; the
+refusal names the missing implementation. The additive credential and file
+guards read the trusted registry leniently so an older registry without
+isolation.mode keeps blocking credential reads. Recovery state is scoped per
+(task, run) and cleared only by an actual runner start or a recorded
+precondition refusal. database_target_block covers ?host=, multi-host
+authorities, hostaddr=, PGHOSTADDR and PGSERVICE* (text guard, not a
+boundary). Result keys are redacted; the runner budget covers vet.
 
 Tirith stays enabled and fail-closed, single-query/cron/unattended modes stay
 deny, hardline and deny rules are unchanged.
 ---
-  agent/file_safety.py              |  22 ++
-  agent/kanban_stop.py              |  84 +++++-
-  tests/agent/test_kanban_stop.py   |  64 ++++
-  tests/tools/test_dev_test_tool.py | 564 ++++++++++++++++++++++++++++++++++++
-  tools/approval.py                 |  45 ++-
-  tools/dev_test_tool.py            | 594 ++++++++++++++++++++++++++++++++++++++
-  tools/kanban_tools.py             |  13 +
-  7 files changed, 1372 insertions(+), 14 deletions(-)
+ agent/file_safety.py              |  22 ++
+ tests/tools/test_dev_test_tool.py | 655 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ tools/approval.py                 |  45 +++-
+ tools/dev_test_tool.py            | 667 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ tools/kanban_tools.py             |  13 ++
+ 5 files changed, 1400 insertions(+), 2 deletions(-)
 
 diff --git a/agent/file_safety.py b/agent/file_safety.py
 index 1ee92367ad..018f81568c 100644
@@ -63,196 +74,12 @@ index 1ee92367ad..018f81568c 100644
  def raise_if_read_blocked(path: str) -> None:
      """Raise ``ValueError`` if ``path`` is a denied Hermes read (see ``get_read_block_error``).
  
-diff --git a/agent/kanban_stop.py b/agent/kanban_stop.py
-index 5f4669bdb8..4215dbbbe1 100644
---- a/agent/kanban_stop.py
-+++ b/agent/kanban_stop.py
-@@ -10,7 +10,12 @@ import os
- from typing import Any, Iterable, Optional
- 
- 
--_TERMINAL_KANBAN_TOOLS = frozenset({"kanban_complete", "kanban_block"})
-+# Tools whose SUCCESS ends a worker turn legitimately: done, blocked, or handed to the review
-+# phase (request_review parks the card in `review`; request_changes is the reviewer's
-+# counterpart). A call that returned an error did not change the board and does not count.
-+_TERMINAL_KANBAN_TOOLS = frozenset({
-+    "kanban_complete", "kanban_block", "kanban_request_review", "kanban_request_changes",
-+})
- 
- _DEFAULT_MAX_ATTEMPTS = 2
- 
-@@ -31,17 +36,61 @@ def _tool_call_name(tc: Any) -> str:
-     return str((getattr(fn, "name", "") if fn is not None else getattr(tc, "name", "")) or "")
- 
- 
-+def _tool_call_id(tc: Any) -> str:
-+    if isinstance(tc, dict):
-+        return str(tc.get("id") or "")
-+    return str(getattr(tc, "id", "") or "")
-+
-+
-+def _tool_result_failed(content: Any) -> bool:
-+    """A kanban tool result that reports an error (JSON ``{"error": ...}`` or an ``Error:``
-+    line) left the board unchanged."""
-+    if isinstance(content, dict):
-+        return bool(content.get("error"))
-+    text = str(content or "").strip()
-+    if not text:
-+        return False
-+    if text.startswith("{"):
-+        try:
-+            import json
-+
-+            payload = json.loads(text)
-+        except ValueError:
-+            payload = None
-+        if isinstance(payload, dict):
-+            return bool(payload.get("error")) or payload.get("ok") is False or payload.get("success") is False
-+    return text.lower().startswith("error")
-+
-+
- def session_called_kanban_terminal(messages: Iterable[dict] | None) -> bool:
--    """True if this conversation already invoked a terminal kanban tool."""
-+    """True if this conversation already invoked a terminal kanban tool whose result arrived
-+    and was not an error.
-+
-+    Only a successful terminal call ends the turn legitimately. A ``kanban_complete`` refused
-+    by the board (open parents, wrong run, hallucinated card ids) left the task running, and a
-+    call with no result at all (interrupted, never executed) changed nothing either: counting
-+    either would let the worker exit on rc=0 and be recorded as a protocol violation."""
-+    terminal_calls: dict[str, bool] = {}  # tool_call_id -> result arrived and succeeded
-+    succeeded_unnamed = False
-     for msg in filter(lambda m: isinstance(m, dict), messages or ()):
-         role = msg.get("role")
--        if role == "assistant" and any(
--            _tool_call_name(tc) in _TERMINAL_KANBAN_TOOLS for tc in msg.get("tool_calls") or []
--        ):
--            return True
--        if role == "tool" and str(msg.get("name") or "") in _TERMINAL_KANBAN_TOOLS:
--            return True
--    return False
-+        if role == "assistant":
-+            for tc in msg.get("tool_calls") or []:
-+                if _tool_call_name(tc) in _TERMINAL_KANBAN_TOOLS:
-+                    call_id = _tool_call_id(tc)
-+                    if call_id:
-+                        terminal_calls.setdefault(call_id, False)  # pending until its result arrives
-+        elif role == "tool":
-+            call_id = str(msg.get("tool_call_id") or "")
-+            is_terminal = call_id in terminal_calls or str(msg.get("name") or "") in _TERMINAL_KANBAN_TOOLS
-+            if not is_terminal:
-+                continue
-+            failed = _tool_result_failed(msg.get("content"))
-+            if call_id:
-+                terminal_calls[call_id] = not failed
-+            elif not failed:
-+                succeeded_unnamed = True
-+    return succeeded_unnamed or any(terminal_calls.values())
- 
- 
- def build_kanban_stop_nudge(
-@@ -68,9 +117,20 @@ def build_kanban_stop_nudge(
-         "causes a protocol violation (clean exit with no "
-         "`kanban_complete` / `kanban_block`).\n\n"
-         "Do this immediately in your next response — do not narrate intent:\n"
--        "1. Finish any remaining deliverable (write the required file(s) now).\n"
--        "2. Call `kanban_complete(summary=..., artifacts=[...])` if the work "
--        "is done, OR `kanban_block(reason=...)` if you are blocked.\n\n"
-+        "1. Continue the work. Unfinished work is not a reason to stop or to block: "
-+        "a running delegate_task child is collected (wait for its result), a transient "
-+        "failure (network, flaky test, rate limit) is retried, a dependency on another "
-+        "card is a `kanban_block(reason=\"dependency: <card id>\")` only when it can "
-+        "never resolve from here.\n"
-+        "2. Finish the remaining deliverable (write the required file(s) now).\n"
-+        "3. Call `kanban_complete(summary=..., artifacts=[...])` when the work is done. "
-+        "Use `kanban_request_review` only when a reviewer is named AND this card has no "
-+        "review or validation child yet; a card whose review/validation child already "
-+        "exists is finished with `kanban_complete` (completing releases that child), never "
-+        "with a second review request. OR call `kanban_block(reason=...)` "
-+        "only for a genuine human decision (credentials, approvals, destructive or "
-+        "production actions) or a confirmed conflict. A refused board call is not "
-+        "terminal: read its error and fix the cause.\n\n"
-         "Never end a turn with only a promise of future action. Repeated "
-         "protocol violations will block this task and require manual intervention.]"
-     )
-diff --git a/tests/agent/test_kanban_stop.py b/tests/agent/test_kanban_stop.py
-index dbe371dd84..7759898b5f 100644
---- a/tests/agent/test_kanban_stop.py
-+++ b/tests/agent/test_kanban_stop.py
-@@ -88,3 +88,67 @@ def test_no_nudge_after_kanban_complete(clear_kanban_env):
- 
- 
- 
-+
-+
-+def _terminal_exchange(name, result, call_id="1", arguments="{}"):
-+    return [
-+        {"role": "assistant", "content": "",
-+         "tool_calls": [{"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}]},
-+        {"role": "tool", "name": name, "tool_call_id": call_id, "content": result},
-+    ]
-+
-+
-+def test_refused_complete_is_not_terminal(clear_kanban_env):
-+    """kanban_complete refused by the board (open parent, wrong run, phantom card ids) left the
-+    task running; exiting now would be recorded as a protocol violation, so keep nudging."""
-+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
-+    refused = '{"error": "kanban_complete refused: parents not satisfied"}'
-+    assert session_called_kanban_terminal(_terminal_exchange("kanban_complete", refused)) is False
-+    assert build_kanban_stop_nudge(messages=_terminal_exchange("kanban_block", "Error: claim expired")) is not None
-+
-+
-+def test_success_after_a_refusal_is_terminal(clear_kanban_env):
-+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
-+    messages = [*_terminal_exchange("kanban_complete", '{"error": "refused"}', call_id="1"),
-+                *_terminal_exchange("kanban_block", '{"ok": true, "status": "blocked"}', call_id="2")]
-+    assert session_called_kanban_terminal(messages) is True
-+    assert build_kanban_stop_nudge(messages=messages) is None
-+
-+
-+def test_request_review_and_request_changes_are_terminal(clear_kanban_env):
-+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
-+    for name in ("kanban_request_review", "kanban_request_changes"):
-+        assert build_kanban_stop_nudge(messages=_terminal_exchange(name, '{"ok": true}')) is None
-+    assert build_kanban_stop_nudge(messages=_terminal_exchange("kanban_request_review", '{"error": "no"}')) is not None
-+
-+
-+def test_pending_terminal_call_without_result_does_not_count(clear_kanban_env):
-+    """Only a successful terminal call ends the turn: a call whose result never arrived
-+    (interrupted, never executed) changed nothing on the board, so the guard still fires."""
-+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
-+    messages = [{"role": "assistant", "content": "", "tool_calls": [
-+        {"id": "9", "type": "function", "function": {"name": "kanban_complete", "arguments": "{}"}}]}]
-+    assert session_called_kanban_terminal(messages) is False
-+    assert build_kanban_stop_nudge(messages=messages) is not None
-+    assert session_called_kanban_terminal(messages + [
-+        {"role": "tool", "name": "kanban_complete", "tool_call_id": "9", "content": '{"ok": true}'}]) is True
-+
-+
-+def test_error_markers_are_not_terminal(clear_kanban_env):
-+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
-+    for result in ('{"error": "refused"}', '{"ok": false, "reason": "open parents"}', '{"success": false}',
-+                   "Error: claim expired", "error: no such task"):
-+        assert session_called_kanban_terminal(_terminal_exchange("kanban_complete", result)) is False, result
-+    for result in ('{"ok": true}', '{"status": "done"}', "Completed t_abc"):
-+        assert session_called_kanban_terminal(_terminal_exchange("kanban_complete", result)) is True, result
-+
-+
-+def test_nudge_tells_the_worker_to_continue_not_block(clear_kanban_env):
-+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
-+    nudge = build_kanban_stop_nudge(messages=[], attempts=0)
-+    assert "Unfinished work is not a reason to stop or to block" in nudge
-+    assert "delegate_task child is collected" in nudge
-+    assert "A refused board call is not terminal" in nudge
-+    assert "kanban_request_review" in nudge
-+    assert "no review or validation child yet" in nudge
-+    assert "completing releases that child" in nudge
 diff --git a/tests/tools/test_dev_test_tool.py b/tests/tools/test_dev_test_tool.py
 new file mode 100644
-index 0000000000..18cf40c763
+index 0000000000..c68885317b
 --- /dev/null
 +++ b/tests/tools/test_dev_test_tool.py
-@@ -0,0 +1,564 @@
+@@ -0,0 +1,655 @@
 +"""dev_test_run: the typed, registered Go/PostgreSQL test path for Kanban workers, plus the
 +scanner-recovery and credential/database-target guards it brings.
 +
@@ -349,6 +176,15 @@ index 0000000000..18cf40c763
 +    reg = _make_registry(monkeypatch, REJECTED_MODE)
 +    yield reg
 +    shutil.rmtree(reg["root"], ignore_errors=True)
++
++
++@pytest.fixture
++def attested_backend(monkeypatch):
++    """Simulates a FUTURE attested broker so the recovery state machine and the fixed runner
++    invocation can be exercised. Production ``backend_attested`` never returns None today: no
++    isolation backend is implemented, so the tests below that use this fixture describe how the
++    tool would behave once a real broker probe exists, not what a worker can do now."""
++    monkeypatch.setattr(dtt, "backend_attested", lambda cfg, name, prof: None)
 +
 +
 +@pytest.fixture
@@ -459,7 +295,7 @@ index 0000000000..18cf40c763
 +
 +# ------------------------------------------------- headless real gate ---
 +
-+def test_run370_command_is_rejected_with_a_recovery_directive(headless, registry_file, worker_env):
++def test_run370_command_is_rejected_with_a_recovery_directive(attested_backend, headless, registry_file, worker_env):
 +    verdict = check_all_command_guards(RUN370, "local")
 +    assert verdict["approved"] is False
 +    # The exact run-370 finding: Tirith raw_ip_url + schemeless_to_sink (MEDIUM), single-query deny.
@@ -552,7 +388,7 @@ index 0000000000..18cf40c763
 +
 +# ------------------------------------------------------- tool handler ---
 +
-+def test_handler_runs_the_verified_runner_with_an_empty_environment(headless, registry_file, worker_env):
++def test_handler_runs_the_verified_runner_with_an_empty_environment(attested_backend, headless, registry_file, worker_env):
 +    calls = []
 +
 +    def fake_runner(argv, **kw):
@@ -573,7 +409,7 @@ index 0000000000..18cf40c763
 +    assert CANARY not in json.dumps(result)
 +
 +
-+def test_handler_refuses_before_running_anything(headless, registry_file, worker_env, monkeypatch):
++def test_handler_refuses_before_running_anything(attested_backend, headless, registry_file, worker_env, monkeypatch):
 +    def runner(*a, **k):
 +        raise AssertionError("must not run")
 +
@@ -587,7 +423,7 @@ index 0000000000..18cf40c763
 +    assert "dispatcher-owned" in out["error"]
 +
 +
-+def test_kanban_block_refuses_once_until_the_equivalent_was_tried(headless, registry_file, worker_env):
++def test_kanban_block_refuses_once_until_the_equivalent_was_tried(attested_backend, headless, registry_file, worker_env):
 +    from tools import kanban_tools
 +    dtt.recovery_hint(RUN370)
 +    with pytest.raises(kanban_tools._Reject) as exc:
@@ -597,7 +433,7 @@ index 0000000000..18cf40c763
 +    kanban_tools._check_scanner_recovery()
 +
 +
-+def test_tool_is_registered_in_the_kanban_toolset_for_workers_only(registry_file, worker_env, monkeypatch):
++def test_tool_is_registered_in_the_kanban_toolset_for_workers_only(attested_backend, registry_file, worker_env, monkeypatch):
 +    from tools.registry import registry
 +    assert "dev_test_run" in registry.get_tool_names_for_toolset("kanban")
 +    assert dtt._check_fn() is True
@@ -678,7 +514,7 @@ index 0000000000..18cf40c763
 +    {"profile": "validate-matching", "run": "a b"},
 +    {"profile": "validate-matching", "timeout_seconds": 1},
 +])
-+def test_malformed_call_keeps_the_pending_recovery(registry_file, worker_env, args):
++def test_malformed_call_keeps_the_pending_recovery(attested_backend, registry_file, worker_env, args):
 +    dtt._reset_recovery_state()
 +    assert dtt.recovery_hint(RUN370)
 +    out = json.loads(dtt.dev_test_run(args, runner=_never_runner))
@@ -687,7 +523,7 @@ index 0000000000..18cf40c763
 +    dtt._reset_recovery_state()
 +
 +
-+def test_precondition_refusal_clears_with_a_recorded_refusal(registry_file, worker_env):
++def test_precondition_refusal_clears_with_a_recorded_refusal(attested_backend, registry_file, worker_env):
 +    dtt._reset_recovery_state()
 +    assert dtt.recovery_hint(RUN370)
 +    registry_file["helper"].write_text("tampered\n")
@@ -698,7 +534,7 @@ index 0000000000..18cf40c763
 +    dtt._reset_recovery_state()
 +
 +
-+def test_rejected_isolation_refusal_of_the_named_profile_is_a_precondition(registry_file, worker_env):
++def test_rejected_isolation_refusal_of_the_named_profile_is_a_precondition(attested_backend, registry_file, worker_env):
 +    dtt._reset_recovery_state()
 +    assert dtt.recovery_hint(RUN370)
 +    cfg = json.loads(json.dumps(registry_file["cfg"]))
@@ -711,7 +547,7 @@ index 0000000000..18cf40c763
 +    dtt._reset_recovery_state()
 +
 +
-+def test_refusal_for_another_profile_keeps_the_pending_recovery(registry_file, worker_env):
++def test_refusal_for_another_profile_keeps_the_pending_recovery(attested_backend, registry_file, worker_env):
 +    dtt._reset_recovery_state()
 +    cfg = json.loads(json.dumps(registry_file["cfg"]))
 +    cfg["profiles"]["other-legacy"] = {**cfg["profiles"]["validate-matching"], "isolation": {"mode": REJECTED_MODE},
@@ -724,7 +560,7 @@ index 0000000000..18cf40c763
 +    dtt._reset_recovery_state()
 +
 +
-+def test_runner_start_clears_the_pending_recovery_for_any_exit(registry_file, worker_env):
++def test_runner_start_clears_the_pending_recovery_for_any_exit(attested_backend, registry_file, worker_env):
 +    dtt._reset_recovery_state()
 +    assert dtt.recovery_hint(RUN370)
 +    dtt.dev_test_run({"profile": "validate-matching"},
@@ -732,7 +568,7 @@ index 0000000000..18cf40c763
 +    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
 +
 +
-+def test_pending_recovery_is_scoped_to_the_worker_identity(registry_file, worker_env, monkeypatch):
++def test_pending_recovery_is_scoped_to_the_worker_identity(attested_backend, registry_file, worker_env, monkeypatch):
 +    dtt._reset_recovery_state()
 +    assert dtt.recovery_hint(RUN370)
 +    assert dtt.block_refusal() is not None
@@ -747,6 +583,88 @@ index 0000000000..18cf40c763
 +    monkeypatch.delenv("HERMES_KANBAN_TASK")
 +    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
 +    dtt._reset_recovery_state()
++
++
++# ------------------------------------------- readiness without a backend ---
++# Red against runtime f04d4adc80: a root-owned registry declaring the recognised mode string
++# unhid the tool, emitted RECOVERY directives and made kanban_block refuse while every run
++# exited "not implemented". A mode string is config validity, never readiness.
++
++def test_recognised_mode_string_alone_exposes_nothing(headless, registry_file, worker_env):
++    cfg = dtt.load_registry()
++    assert list(dtt.approved_profiles(cfg)) == ["validate-matching"], "syntactically valid"
++    assert dtt.runnable_profiles(cfg) == {}, "but nothing is runnable without an attested backend"
++    assert dtt._check_fn() is False, "tool hidden"
++    verdict = check_all_command_guards(RUN370, "local")
++    assert verdict["approved"] is False
++    assert "RECOVERY" not in verdict["message"], "no directive points at a tool that cannot run"
++    assert dtt.recovery_hint(RUN370) == ""
++    assert dtt.pending_recovery() is None and dtt.block_refusal() is None, "kanban_block stays allowed"
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"] and APPROVED_MODE in out["error"]
++    assert "operator approval and privileged provisioning required" in out["error"]
++
++
++def test_backend_attestation_is_never_a_string_flag_or_environment(registry_file, worker_env, monkeypatch):
++    for var in ("HERMES_DEVTEST_BROKER_READY", "HERMES_DEVTEST_ATTESTED", "HERMES_DEVTEST_ISOLATION"):
++        monkeypatch.setenv(var, "1")
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    cfg["profiles"]["validate-matching"]["isolation"].update({"attested": True, "ready": True, "approved": True,
++                                                              "broker_socket": "/run/hermes-devtest/broker.sock"})
++    cfg["isolation_ready"] = True
++    _write_registry(registry_file["path"], cfg)
++    loaded = dtt.load_registry()
++    assert dtt.backend_attested(loaded, "validate-matching", loaded["profiles"]["validate-matching"]) == dtt.NOT_IMPLEMENTED_REFUSAL
++    assert dtt.runnable_profiles(loaded) == {}
++    assert dtt._check_fn() is False
++    assert dtt.recovery_hint(RUN370) == ""
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"]
++
++
++def test_not_implemented_refusal_is_recorded_as_a_precondition(registry_file, worker_env):
++    """A pending recovery (only possible once a backend attests) is resolved by the
++    not-implemented refusal exactly like any other precondition outside the worker's control."""
++    dtt._reset_recovery_state()
++    identity = dtt.worker_identity()
++    with dtt._RECOVERY_LOCK:
++        dtt._PENDING_RECOVERY[identity] = {"profile": "validate-matching", "at": 0.0}
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"]
++    assert dtt.block_refusal() is None
++    assert dtt.NOT_IMPLEMENTED_REFUSAL in dtt.pending_recovery()["refused"]
++    dtt._reset_recovery_state()
++
++
++def test_legacy_registry_without_isolation_keeps_the_guards_and_exposes_nothing(registry_file, worker_env):
++    """An older trusted registry that predates ``isolation.mode`` must still block credential
++    reads (additive guards never depend on runnable readiness) while every readiness surface
++    stays closed."""
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    del cfg["profiles"]["validate-matching"]["isolation"]
++    _write_registry(registry_file["path"], cfg)
++    with pytest.raises(dtt.DevTestRefused, match="isolation"):
++        dtt.load_registry()
++    assert dtt.runnable_registry_or_none() is None
++    assert dtt.registered_or_none() is not None, "the guards still see the trusted registry"
++    assert dtt.credential_block(f"cat {PGPASS}")
++    assert dtt.credential_block("base64 ~/.config/hermes-test-db/pgpass")
++    assert dtt.credential_block("docker exec validate-pgtest-door env")
++    from agent.file_safety import get_read_block_error
++    assert "credential" in (get_read_block_error(PGPASS) or "")
++    assert dtt._check_fn() is False
++    assert dtt.recovery_hint(RUN370) == ""
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert "isolation.mode" in out["error"]
++
++
++def test_guard_registry_still_requires_trust_and_shape(registry_file):
++    os.chmod(registry_file["path"], 0o666)
++    assert dtt.registered_or_none() is None, "a group/other-writable registry is not trusted even for guards"
++    os.chmod(registry_file["path"], 0o644)
++    _write_registry(registry_file["path"], {"version": 2, "profiles": {}})
++    assert dtt.registered_or_none() is None
++    assert dtt.credential_block(f"cat {PGPASS}") is None
 +
 +
 +# ------------------------------------------------ database target guard ---
@@ -797,7 +715,7 @@ index 0000000000..18cf40c763
 +# --------------------------------------------------------- runner budget ---
 +
 +@pytest.mark.parametrize("vet,expected", [(False, 600 + 300), (True, 600 + 300 + 600)])
-+def test_runner_budget_covers_vet(registry_file, worker_env, vet, expected):
++def test_runner_budget_covers_vet(attested_backend, registry_file, worker_env, vet, expected):
 +    req = dtt.validate_args({"profile": "validate-matching", "vet": vet, "timeout_seconds": 600}, _cfg())
 +    assert dtt.runner_budget(req) == expected
 +    calls = []
@@ -810,7 +728,7 @@ index 0000000000..18cf40c763
 +    assert calls[0]["timeout"] == expected
 +
 +
-+def test_runner_timeout_does_not_claim_containment(registry_file, worker_env):
++def test_runner_timeout_does_not_claim_containment(attested_backend, registry_file, worker_env):
 +    def slow_runner(argv, **kw):
 +        raise subprocess.TimeoutExpired(argv, kw["timeout"])
 +
@@ -889,10 +807,10 @@ index d8f01e1440..06bdf99d29 100644
          return _approved()
 diff --git a/tools/dev_test_tool.py b/tools/dev_test_tool.py
 new file mode 100644
-index 0000000000..cb7e7d02f2
+index 0000000000..8765262794
 --- /dev/null
 +++ b/tools/dev_test_tool.py
-@@ -0,0 +1,594 @@
+@@ -0,0 +1,667 @@
 +"""``dev_test_run``: registered Go/PostgreSQL development tests for Kanban coding workers.
 +
 +A typed tool instead of a terminal allowlist. The operator registers test profiles in a
@@ -914,12 +832,23 @@ index 0000000000..cb7e7d02f2
 +5. runs it with an empty environment and returns the runner's JSON (exit code, test, skip
 +   and package counts, failing-test output), redacted again.
 +
-+Isolation: every profile must declare ``isolation.mode``. Only ``credential-broker-netns`` is
-+an approved design; any other mode (including the current ``same-uid-landlock``) is refused,
-+hides the tool and never produces a recovery directive. The same-UID design was rejected in
-+review: it does not meet the network or credential isolation requirements (tests running as
-+the worker's uid can reach the network and the credential file). This module makes no claim
-+that any design is sound; see ``docs/dev-test-runner.md`` in agent-ops-kit.
++Isolation: every profile must declare ``isolation.mode``. ``credential-broker-netns`` is the
++only mode this module recognises as a *proposed* acceptable design; any other mode (including
++the current ``same-uid-landlock``) is a rejected design. A recognised mode string is syntactic
++config validity only. Runnable readiness additionally needs an implemented, provisioned and
++attested backend for that mode (``backend_attested``); no such backend exists in this runtime,
++so ``runnable_profiles`` is empty, the tool is hidden, ``dev_test_run`` refuses before
++anything runs and no ``RECOVERY:`` directive is ever produced, regardless of what a root-owned
++registry declares. A future implementation must probe the trusted broker (identity, liveness,
++schema, capability) there; it must not be a string comparison, an environment variable or a
++boolean. The same-UID design was rejected in review: it does not meet the network or
++credential isolation requirements (tests running as the worker's uid can reach the network
++and the credential file). This module makes no claim that any design is sound; see
++``docs/dev-test-runner.md`` in agent-ops-kit.
++
++The credential and database-target guards are additive and must never depend on runnable
++readiness: they read the trusted registry leniently (``guard_registry``), so an older trusted
++profile file without ``isolation.mode`` still blocks credential reads.
 +
 +The module also carries the scanner-recovery state, per worker (task, run): a terminal command
 +the unattended gate rejects that has an approved registered equivalent gets a recovery
@@ -952,9 +881,13 @@ index 0000000000..cb7e7d02f2
 +TIMEOUT_MIN, TIMEOUT_MAX, TIMEOUT_DEFAULT = 60, 3600, 1200
 +RUNNER_GRACE = 300
 +VET_BUDGET = 600
-+APPROVED_ISOLATION_MODE = "credential-broker-netns"
++APPROVED_ISOLATION_MODE = "credential-broker-netns"  # proposed design; recognised string, nothing more
 +ISOLATION_REFUSAL = ("rejected isolation design; operator approval and privileged provisioning required, "
 +                     "see docs/dev-test-runner.md in agent-ops-kit")
++NOT_IMPLEMENTED_REFUSAL = ("the proposed isolation design is recognised but no implemented, provisioned and "
++                           "attested backend exists in this runtime (a registry declaring the mode is config "
++                           "validity, not readiness); operator approval and privileged provisioning required, "
++                           "see docs/dev-test-runner.md in agent-ops-kit")
 +PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 +PACKAGE_RE = re.compile(r"^\./(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*(?:[A-Za-z0-9_][A-Za-z0-9_.-]*|\.\.\.)$")
 +RUN_FILTER_RE = re.compile(r"^[A-Za-z0-9_^$|()./*+?\[\]-]{1,256}$")
@@ -1029,8 +962,27 @@ index 0000000000..cb7e7d02f2
 +    return cfg
 +
 +
++def guard_registry(path: Optional[str] = None, trusted_uid: Optional[int] = None) -> dict:
++    """The root-owned profile file for the *additive guards* only: trust-checked and shape-checked
++    like ``load_registry`` but without the per-profile ``isolation.mode`` requirement, so an
++    older trusted registry keeps blocking credential reads. Never used to run or expose anything."""
++    path = CONFIG_PATH if path is None else path
++    trusted_uid = TRUSTED_UID if trusted_uid is None else trusted_uid
++    _check_trusted(path, trusted_uid, "dev-test profile file")
++    try:
++        cfg = json.loads(_read_nofollow(path, 1 << 20).decode("utf-8"))
++    except (ValueError, UnicodeDecodeError) as exc:
++        raise DevTestRefused(f"dev-test profile file {path} is not valid JSON: {exc}")
++    if not isinstance(cfg, dict) or cfg.get("version") != 1 or not isinstance(cfg.get("profiles"), dict):
++        raise DevTestRefused(f"dev-test profile file {path} has an unsupported shape")
++    return cfg
++
++
 +def approved_profiles(cfg: dict) -> dict:
-+    """Profiles whose declared isolation is the approved design; all others are refused."""
++    """Profiles whose declared isolation mode is the recognised *proposed* design string.
++
++    Syntactic config validity only: membership here says nothing about whether the design is
++    implemented, provisioned or attested on this host. Use ``runnable_profiles`` for readiness."""
 +    out = {}
 +    for name, prof in (cfg.get("profiles") or {}).items():
 +        isolation = prof.get("isolation") if isinstance(prof, dict) else None
@@ -1039,14 +991,51 @@ index 0000000000..cb7e7d02f2
 +    return out
 +
 +
++def backend_attested(cfg: dict, profile: str, prof: dict) -> Optional[str]:
++    """Why ``profile`` has no runnable isolation backend, or None once one is attested.
++
++    No backend for any isolation mode is implemented in this runtime, so every profile is
++    refused with ``NOT_IMPLEMENTED_REFUSAL``. The only acceptable way to return None is a
++    future implementation that probes a trusted broker for identity, liveness, schema and
++    capability on every call; a mode string, environment variable or configuration flag is
++    never attestation and must not be accepted here."""
++    return NOT_IMPLEMENTED_REFUSAL
++
++
++def runnable_profiles(cfg: dict) -> dict:
++    """Profiles that are both the recognised design *and* have an attested backend (none today)."""
++    out = {}
++    for name, prof in approved_profiles(cfg).items():
++        if backend_attested(cfg, name, prof) is None:
++            out[name] = prof
++    return out
++
++
 +def check_isolation(cfg: dict, profile: str) -> None:
-+    if profile not in approved_profiles(cfg):
-+        mode = ((cfg["profiles"].get(profile) or {}).get("isolation") or {}).get("mode")
++    """Fail closed: a rejected mode names the rejection; the recognised mode without an attested
++    backend names the missing implementation. Nothing is runnable unless both pass."""
++    prof = cfg["profiles"].get(profile) or {}
++    approved = approved_profiles(cfg)
++    if profile not in approved:
++        mode = (prof.get("isolation") or {}).get("mode")
 +        raise DevTestRefused(f"profile '{profile}' has isolation mode {mode!r}: {ISOLATION_REFUSAL}")
++    reason = backend_attested(cfg, profile, prof)
++    if reason is not None:
++        raise DevTestRefused(f"profile '{profile}' (isolation mode {APPROVED_ISOLATION_MODE!r}): {reason}")
 +
 +
 +def registered_or_none() -> Optional[dict]:
-+    """The trusted registry, or None when it is absent or untrusted (guards never raise)."""
++    """The trusted registry for the additive guards (lenient shape, see ``guard_registry``), or
++    None when it is absent or untrusted (guards never raise)."""
++    try:
++        return guard_registry()
++    except Exception:
++        return None
++
++
++def runnable_registry_or_none() -> Optional[dict]:
++    """The strictly validated registry, or None; readiness surfaces (tool visibility, recovery
++    directives) use this and then ``runnable_profiles``."""
 +    try:
 +        return load_registry()
 +    except Exception:
@@ -1093,8 +1082,8 @@ index 0000000000..cb7e7d02f2
 +        worker_identity()
 +    except DevTestRefused:
 +        return False
-+    cfg = registered_or_none()
-+    return bool(cfg and approved_profiles(cfg))
++    cfg = runnable_registry_or_none()
++    return bool(cfg and runnable_profiles(cfg))
 +
 +
 +# ------------------------------------------------------------- arguments ---
@@ -1235,8 +1224,10 @@ index 0000000000..cb7e7d02f2
 +
 +
 +def _matching_profile(command: str, cfg: dict) -> Optional[str]:
-+    """An APPROVED profile the rejected command corresponds to (rejected isolation never matches)."""
-+    profiles = approved_profiles(cfg)
++    """A RUNNABLE profile the rejected command corresponds to: recognised design *and* attested
++    backend. A rejected mode or a recognised mode without a backend never matches, so no
++    directive points the worker at a tool that cannot run."""
++    profiles = runnable_profiles(cfg)
 +    for name, prof in sorted(profiles.items()):
 +        db = prof.get("database") or {}
 +        markers = [str(db.get("url_env") or ""), str(db.get("pgpassfile") or ""),
@@ -1256,7 +1247,7 @@ index 0000000000..cb7e7d02f2
 +        identity = worker_identity()
 +    except DevTestRefused:
 +        return ""
-+    cfg = registered_or_none()
++    cfg = runnable_registry_or_none()
 +    if not cfg:
 +        return ""
 +    profile = _matching_profile(command, cfg)

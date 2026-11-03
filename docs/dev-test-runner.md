@@ -8,22 +8,25 @@
 > `same-uid-landlock` (the only implemented mode), the installer refuses to plan or install
 > such a profile, `status` exits non-zero, the runtime tool is hidden and emits no `RECOVERY:`
 > directive for a rejected profile, and workers are told to block naming the missing
-> capability. Nothing below is available to a worker until the approved design in
-> [Approved design (operator approval required)](#approved-design-operator-approval-required)
-> is provisioned, implemented and approved. Validate card `t_12595b96` stays blocked on this.
+> capability. Nothing below is available to a worker until a revision of the
+> [Proposed design](#proposed-design-not-approved-nothing-implemented-operator-decision-required)
+> is approved by the operator, implemented, provisioned and attested. A registry that merely
+> declares `isolation.mode: credential-broker-netns` is config validity, not readiness: the
+> tool stays hidden, no `RECOVERY:` directive is emitted, `check-config` exits 1 and the
+> installer refuses (`NOT IMPLEMENTED`). Validate card `t_12595b96` stays blocked on this.
 
 ## Review findings and what was done (kit 3e84caa → this change)
 
 | # | Finding | Status |
 |---|---------|--------|
-| 1 | Tests run as the uid that owns the credential file and the docker socket group; text guards are not a boundary | **Unresolved by design** → fail-closed gate; needs the broker/identity in the approved design |
-| 2 | `postgres` superuser lets a test escape via `COPY TO PROGRAM`, `pg_read_server_files` | **Unresolved** → approved design requires a verified non-superuser role; no DB change made |
+| 1 | Tests run as the uid that owns the credential file and the docker socket group; text guards are not a boundary | **Unresolved by design** → fail-closed gate; needs a restricted worker identity or VM plus the broker in the proposed design (operator decision) |
+| 2 | `postgres` superuser lets a test escape via `COPY TO PROGRAM`, `pg_read_server_files` | **Unresolved** → proposed design requires a verified non-superuser role behind a broker-side proxy; no DB change made |
 | 3 | TCP rules granted the whole ephemeral range (any host) and were described as "loopback" | **Fixed**: database port only; `sandbox.network_limit` says any host may be reached on it |
 | 4 | seccomp left `socket()` protocol unchecked (MPTCP/SCTP) | **Fixed**: protocol 0 or `IPPROTO_TCP` only; negative test with real syscalls (SCTP, MPTCP, UDP, UNIX, raw, netlink → `EACCES`) |
 | 5 | Source grants by path (TOCTOU), hardlink aliases of `.env` granted | **Fixed**: verified `O_PATH|O_NOFOLLOW` descriptors (regular, `st_nlink == 1`, dev/ino checked) held until the rule is added |
 | 6 | Test/package names and other keys were not scrubbed; truncation before scrubbing | **Fixed**: raw streams scrubbed before parsing, then every key and value of the result (`scrub_object`); encoded leaks remain unsolvable → gate |
 | 7 | Unbounded `communicate()` after timeout, escaped `setsid` descendants, no parent-death | **Fixed (bounded, not contained)**: `PR_SET_PDEATHSIG`, group kill, `KILL_GRACE`-bounded drain, vet budget from the remaining time; escaped descendants reported, not contained |
-| 8 | Container never verified; whole `pgpass` granted | **Partly fixed**: per-run file with only the registered entry; endpoint identity still unverified (needs the broker) |
+| 8 | Container never verified; whole `pgpass` granted | **Partly fixed**: per-run file with only the registered entry; endpoint identity still unverified (needs the broker); in the proposed design no credential reaches the test at all |
 | 9 | Malformed lease crashed the runner; TTL unbounded; board never compared | **Fixed**: typed lease fields, TTL 60..7200 s, future-skew refused, `board` compared (config `board`, default `default`) |
 | 10 | `/proc` readable (other processes' `cmdline`) | **Unresolved**: Go toolchain needs `/proc`; needs a pid namespace |
 | 11 | Zero matched tests returned `ok: true` | **Fixed**: zero tests → `ok: false`, exit 1, `error` names the filter |
@@ -31,54 +34,132 @@
 | 13 | `database_target_block` missed `?host=`, multi-host, `PGHOSTADDR`, `PGSERVICE` | **Fixed (additive text guard, not a boundary)** |
 | 14 | Shared build cache across profiles | **Fixed**: per-profile cache directory |
 | 15 | Installer `status` exited 0 when missing/untrusted | **Fixed**: non-zero; `plan`/`install` print `REJECTED` and exit 1 for a rejected design |
+| 16 | A registry declaring the `credential-broker-netns` mode string unhid the runtime tool, emitted `RECOVERY:` directives, made `kanban_block` refuse, and made `check-config`/`plan`/`install`/`status` report ready, while every run exited "not implemented" (second review, 2026-11-02) | **Fixed (runtime 61cbead82d, kit this change)**: readiness needs an attested backend (`backend_attested` / `IMPLEMENTED_ISOLATION`, both empty); validity and readiness are reported separately; `plan`/`install` print `NOT IMPLEMENTED`; the additive guards keep working for an older trusted registry without `isolation.mode` |
 
-## Approved design (operator approval required)
+## Proposed design (NOT approved; nothing implemented; operator decision required)
 
-Nothing here exists yet. Provisioning needs root and cannot run unattended: `sudo -n -l` on
-this host grants only `NOPASSWD: /usr/local/libexec/hermes-validate-cwd-scan ""`; unprivileged
-user namespaces are blocked by AppArmor (not to be relaxed). The operator performs these steps
-from an independent privileged shell after reviewing them; none of them is executed by Hermes.
+**Status: proposed.** Nothing in this section exists, is approved, or is provisioned. The
+earlier text of this section called the design "approved"; that was wrong. Readiness is
+*not* a registry string: the runtime tool, the runner's `check-config` and the installer's
+`plan`/`install`/`status` now treat `isolation.mode: credential-broker-netns` as syntactic
+validity only and stay closed until an implemented, provisioned and attested backend exists
+(runtime `backend_attested`, runner `IMPLEMENTED_ISOLATION`, both empty). A revision of this
+proposal that the operator approves is the precondition for any implementation work.
 
-1. **Credential broker identity.** A dedicated system user (e.g. `hermes-devtest-broker`) owns
-   the test credential; `polymath-dev` (and therefore every worker, delegate and terminal) has
-   no read access to it. The broker is a small root-installed service (`systemd` unit, UNIX
-   socket with peer-credential check) that, given `(task, run_id, profile)`, verifies the live
-   board claim and repository lease itself and then starts the test process. The password is
-   never handed to the worker uid in any form.
-2. **Test identity.** A second dedicated user (e.g. `hermes-devtest-runner`, not in `docker`,
-   `sudo` or `adm`) runs the tests. It gets the credential through a file descriptor the
-   broker opens (`PGPASSFILE` on a memfd / private tmpfs), never via a path in the worker home.
-3. **Database role.** A `matching_test`-only role (`NOSUPERUSER NOCREATEROLE NOCREATEDB
-   NOREPLICATION NOBYPASSRLS`, no membership in `pg_read_server_files`, `pg_write_server_files`,
-   `pg_execute_server_program` or any `pg_*` role) with grants limited to the test schema. The
-   broker refuses to start when `SELECT rolsuper, ...` for the role shows anything else. No
-   change to the existing container or its `postgres` superuser until the operator approves it.
-4. **Endpoint identity.** The broker verifies that `127.0.0.1:55443` is published by the
-   registered container (`docker inspect` run by root or by a user in `docker` that is *not*
-   the worker) and pins the container id for the run.
-5. **Network namespace.** Tests run in their own network namespace (root `ip netns` or a
-   `systemd` unit with `PrivateNetwork=` plus a veth/port-forward to the test service only).
-   Reachable: the test database and the sandbox's own loopback (`httptest` servers). Nothing
-   else; no DNS, no docker socket, no host loopback.
-6. **Source snapshot.** The tests build from a read-only snapshot (`git archive` of the claimed
-   checkout at the lease's recorded HEAD, or a bind-mount read-only) so a concurrently writing
-   process cannot alter sources mid-run; `.env*` excluded as today.
-7. **Process containment.** A transient `systemd` scope/cgroup per run (`systemd-run --scope`
-   or `--property=...`), `KillMode=control-group`, `RuntimeMaxSec=` = the requested timeout
-   plus vet budget, pid namespace. Timeout kills the whole cgroup; nothing escapes with `setsid`.
-8. **Registry.** `/usr/local/etc/hermes-devtest/profiles.json` root-owned with
-   `isolation.mode: credential-broker-netns`, pinned runner digest, and the broker socket path.
-   The runtime tool and the runner refuse any other mode (already enforced).
-9. **Verification before resume.** Kit tests with synthetic credentials under the real
-   broker; an installer `status` exiting 0; then a real Kanban smoke from a claimed worker of a
-   throwaway card (`dev_test_run(profile="validate-matching", run="^TestNoSuch$")` must return
-   `ok: false` with `matched no tests`, then a real run with counts). Only after that smoke is
-   `t_12595b96` resumed.
+Disproven assumptions removed from the earlier draft:
 
-Approval scope requested from the operator: the two system users, the systemd unit/socket, the
-sudoers-free root installation of broker + runner + registry, the database role and schema
-grants, the network namespace plumbing, and the docker inspect right for the broker. No change
-to Tirith, approval modes, hardline/deny rules, AppArmor, sysctls or the existing worker uid.
+- **"The worker uid cannot reach the credential once a broker owns it."** False as stated:
+  `polymath-dev` is in `docker`, which is root-equivalent on this host, and in other
+  privileged groups. Any broker, test identity or namespace set up next to that uid is
+  bypassable by it. Strong separation therefore requires **either** workers running under a
+  dedicated restricted execution identity with no docker socket access and no privileged
+  groups, **or** an isolated VM boundary for workers. This proposal does **not** remove the
+  current user's groups or alter the existing worker silently; choosing one of the two is an
+  explicit operator decision and no host-wide change is made before it.
+- **"Hand the test identity the credential through a memfd `PGPASSFILE`."** Rejected: any
+  credential that reaches the editable test binary (file, memfd, environment, fd) is readable
+  by test code and can be exfiltrated or encoded past the scrubber. Credentials must never
+  enter the test process in any form.
+- **"`git archive` of HEAD is the source snapshot."** Invalid: the worker's checkpointed work
+  is a dirty working tree (uncommitted changes under the sole-writer lease); HEAD alone would
+  test the wrong code.
+- **"`status` exiting 0 is a verification milestone."** It was reachable with a mode string
+  alone; it is now unreachable without an implemented backend and is no longer a milestone by
+  itself (see step 10).
+- **"Approved" anywhere in the earlier text.** Nothing here has operator approval.
+
+Provisioning needs root and cannot run unattended: `sudo -n -l` on this host grants only
+`NOPASSWD: /usr/local/libexec/hermes-validate-cwd-scan ""`; unprivileged user namespaces are
+blocked by AppArmor (not to be relaxed). None of the steps below is executed by Hermes.
+
+1. **Worker execution identity (operator decision, prerequisite for everything else).**
+   Option A: a dedicated restricted user (proposed name `hermes-devtest-worker`, proposed uid
+   allocated by the operator, groups: its own primary group only; not `docker`, `sudo`, `adm`,
+   `lxd`, `kvm` or any other privileged group) runs the Kanban workers that may call
+   `dev_test_run`. Option B: workers run inside an isolated VM whose only ingress is the task
+   queue and whose only egress to this host is the broker endpoint in step 2. Until A or B is
+   chosen and provisioned, the proposal cannot provide the separation it claims, and the
+   current worker (`polymath-dev`) is left exactly as it is.
+2. **Credential broker with a broker-side PostgreSQL auth proxy.** A dedicated system user
+   (proposed `hermes-devtest-broker`) owns the upstream credential exclusively; no other uid
+   has read access. A small root-installed service (proposed `hermes-devtest-broker.service`
+   with `hermes-devtest-broker.socket`, UNIX socket `/run/hermes-devtest/broker.sock`,
+   `SO_PEERCRED` check against the identity from step 1) receives `(task, run_id, profile)`,
+   verifies the live board claim and the repository lease itself, and then starts the test
+   process. For the database it exposes a **password-free ephemeral endpoint** inside the
+   test's network namespace (a per-run PostgreSQL protocol proxy, proposed
+   `hermes-devtest-pgproxy`); the proxy authenticates upstream with the broker's credential.
+   The tests see only `postgresql://<role>@<netns-endpoint>/matching_test`; no `PGPASSFILE`,
+   no memfd, no environment variable, no fd carries a secret into the test.
+3. **Proxy protocol gates.** The proxy accepts only the registered database name and the
+   registered non-superuser role; it refuses startup packets naming any other database, user
+   or `options`; it refuses `COPY ... TO/FROM PROGRAM`, `pg_read_server_files`,
+   `pg_write_server_files`, `pg_execute_server_program`, `lo_import/lo_export`, `ALTER ROLE`,
+   `SET ROLE`/`SET SESSION AUTHORIZATION`, `dblink`/`postgres_fdw` and connections to any
+   other database, and it never forwards to a host other than the pinned test container
+   endpoint. The role itself (step 4) is the second gate; the proxy is defence in depth, not
+   the boundary.
+4. **Database role.** A `matching_test`-only role (proposed `matching_test_runner`:
+   `NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS NOINHERIT`, no membership
+   in any `pg_*` role, grants limited to the test schema, `CONNECT` only on `matching_test`).
+   The broker refuses to start a run unless `pg_roles`/`pg_auth_members` show exactly that.
+   **Role capabilities must be validated through a root, credential-safe admin path once the
+   operator approves**; no database change, role creation or grant is made now, and the
+   existing container and its `postgres` superuser are untouched until then.
+5. **Endpoint identity.** The broker verifies that `127.0.0.1:55443` is published by the
+   registered container (`docker inspect` run by root, never by a worker-reachable uid) and
+   pins the container id for the run.
+6. **Network namespace.** Tests run in their own network namespace (root `ip netns`, proposed
+   name `hermes-devtest-<run>`, or a `systemd` unit with `PrivateNetwork=`). Reachable: the
+   per-run proxy endpoint and the namespace's own loopback (`httptest` servers in the same
+   namespace). Nothing else: no host loopback, no internet, no DNS, no docker socket.
+7. **Source snapshot.** The snapshot is the **dirty working tree** of the claimed checkout,
+   taken by the broker under the worker's sole-writer repository lease and recorded in a
+   checkpoint manifest: every tracked file plus every authorised untracked file (as the
+   lease's checkpoint lists them), with matching identities, modes and symlink targets, into an
+   immutable read-only staging directory (proposed `/var/lib/hermes-devtest/stage/<run>`,
+   owned by the broker, read-only to the test identity, no symlink pointing outside the
+   stage, `.env*` excluded as today). The broker computes a source digest before and after the
+   run and reports both; a mismatch fails the run. `git archive HEAD` alone is not a valid
+   snapshot.
+8. **Process containment and deadlines.** A transient `systemd` scope/cgroup per run
+   (proposed `hermes-devtest-<run>.scope`, `KillMode=control-group`, `RuntimeMaxSec=` =
+   requested timeout + vet budget), a pid namespace, `RLIMIT_CORE=0`, `no_new_privs`. The
+   deadline kills the whole cgroup; nothing escapes with `setsid`.
+9. **Registry and runtime readiness probe.** `/usr/local/etc/hermes-devtest/profiles.json`
+   root-owned with `isolation.mode: credential-broker-netns`, the pinned runner digest and
+   the broker socket path. The runtime tool's `backend_attested` and the runner's
+   `IMPLEMENTED_ISOLATION` gain a real probe only together with the implementation: trusted
+   broker identity (socket owner/peer), liveness, protocol schema version and capability
+   (role, proxy gates, namespace, snapshot) are checked on every call. A mode string, a
+   registry flag or an environment variable is never accepted as attestation (regression
+   tests in both repositories enforce this today).
+10. **Verification before any resume.** Kit tests with synthetic credentials under the real
+    broker; the runner's `check-config` reporting `runnable`; installer `status` exiting 0;
+    an independent review of the implementation; then a real Kanban smoke from a claimed
+    worker of a throwaway card (`dev_test_run(profile="validate-matching", run="^TestNoSuch$")`
+    must return `ok: false` with `matched no tests`, then a real run with counts). Only after
+    that smoke does the operator decide whether `t_12595b96` is resumed. No step here is
+    complete, and none of the earlier verification runs (29 kit runner tests, 96 runtime
+    tests at the previous revision) involved a successful worker execution.
+
+### Impact and rollback (what the operator is asked to approve, exactly)
+
+| Proposed resource | Impact | Rollback |
+|---|---|---|
+| User `hermes-devtest-worker` **or** a worker VM (step 1) | New execution identity for Kanban workers that use `dev_test_run`; current `polymath-dev` worker untouched | Delete the user / VM; workers keep running as today |
+| User `hermes-devtest-broker`, `hermes-devtest-broker.service`/`.socket`, `/run/hermes-devtest/broker.sock` | New root-installed service holding the test credential | `systemctl disable --now`, remove unit files and user |
+| `hermes-devtest-pgproxy` (per run, inside the netns) | New process per run; no listener on the host | Dies with the run's cgroup |
+| Role `matching_test_runner` in the existing `validate-pgtest-door` container | New non-superuser role; **no change** to the `postgres` superuser, the container, its port or the existing `pgpass` file | `DROP ROLE`; nothing else changed |
+| `ip netns hermes-devtest-<run>`, `hermes-devtest-<run>.scope` | Transient per run | Removed when the run ends |
+| `/var/lib/hermes-devtest/stage/<run>` | Transient immutable staging | Removed when the run ends |
+| `/usr/local/libexec/hermes-devtest-runner`, `/usr/local/etc/hermes-devtest/profiles.json` | Root-owned install of the implemented runner and registry | Remove both files; `status` returns to "missing" |
+
+Preserved until the operator approves a different lifecycle: the existing `pgpass` file, the
+existing `validate-pgtest-door` container and its `postgres` user, every Validate repository
+change on the worker's checkout, the current worker uid and its groups, Tirith, approval
+modes, hardline/deny rules, AppArmor and sysctls. No real secret and no root operation is part
+of this proposal's current state.
 
 Kanban coding workers run as single-query (`-q`) sessions. In that context the unattended
 approval gate denies every Tirith `warn`, and nobody can approve one. That is intended and
@@ -192,11 +273,14 @@ test run; there is no unsandboxed fallback.
 
 ### Recovery
 
-An unattended rejection of a `go test`/`go vet` command that matches a registered profile (its
-URL variable, credential path, `host:port` or `/dbname`) ends with
+Only once an implemented backend is attested (never today): an unattended rejection of a
+`go test`/`go vet` command that matches a *runnable* registered profile (its URL variable,
+credential path, `host:port` or `/dbname`) ends with
 `RECOVERY: an approved equivalent exists … Call dev_test_run(profile="validate-matching", …)`.
 Until the worker calls `dev_test_run` (any outcome counts as tried), `kanban_block` refuses with
-the same pointer. The code card (step 7), the skill and both SOULs say the same: read the
+the same pointer. With no runnable profile (the current state, whatever the registry declares)
+no directive is emitted and `kanban_block` is not refused; the worker blocks naming the command,
+the finding and the missing capability. The code card (step 7), the skill and both SOULs say the same: read the
 rejection, make the approved call once as a new request, verify, continue; never retry, wrap,
 encode or script the rejected command; with no approved equivalent, block naming the command,
 the finding and the missing capability.
@@ -219,28 +303,30 @@ the finding and the missing capability.
 - The guards match command text. Obfuscated references (globs, variables built in pieces) can
   evade them; the model is told never to try, and the sandbox, not the guard, is what keeps
   host secrets away from test code.
-- These limits are why the design is rejected and disabled; the approved design above
-  removes them with root-provisioned identities and namespaces. That is an operator decision.
+- These limits are why the design is rejected and disabled; the proposed design above would
+  remove them with a restricted worker identity or VM, a broker-side proxy and namespaces.
+  Nothing of it is approved or implemented; that is an operator decision.
 
 ## Install (operator, once; needs the sudo password) — currently refused
 
 `plan` and `install` exit 1 with `REJECTED` for the shipped profile (`isolation.mode:
-same-uid-landlock`); `status` exits non-zero while nothing trusted is installed. The commands
-stay documented for the approved design.
+same-uid-landlock`) and with `NOT IMPLEMENTED` for a profile declaring the proposed
+`credential-broker-netns` mode; `status` exits non-zero while nothing runnable is installed.
+The commands stay documented for a future implemented design.
 
 ```bash
 cd /opt/repos/claude-code-autopilot
 bash scripts/install-hermes-devtest.sh plan       # validates the profile, prints the digest it pins
 bash scripts/install-hermes-devtest.sh install    # sudo install root-owned runner + profile file
 bash scripts/install-hermes-devtest.sh status     # trust + pinned digest == installed runner
-make hermes-runtime-patch-status                  # 0001..0004 applied
+make hermes-runtime-patch-status                  # 0001..0004 applied (0004 = git diff 4f845b43ec..61cbead82d)
 ```
 
 Kanban workers are new `hermes chat -q` processes, so they load patch 0004 when they start;
 no gateway restart is needed for them. After any runner change: review, then `install` again
 (the old pin makes every call fail closed until then).
 
-## Smoke (from the claimed worker of a card, after `preflight`) — not available until approved
+## Smoke (from the claimed worker of a card, after `preflight`) — not available until an implemented design is approved
 
 ```
 dev_test_run(profile="validate-matching", packages=["./..."], race=true, vet=true)
@@ -265,4 +351,8 @@ worker).
   Go/dev commands pass; credential extraction (also under yolo), container env reads,
   production connections and genuinely unsafe commands stay blocked; the real terminal tool
   never executes a blocked credential read; digest/trust/worker-context refusals; empty
-  environment; `kanban_block` recovery refusal.
+  environment; `kanban_block` recovery refusal; a registry declaring the proposed mode string
+  exposes nothing (tool hidden, no directive, refusal names the missing implementation), flags
+  and environment variables are never attestation, and an older trusted registry without
+  `isolation.mode` keeps the credential guards. The recovery state-machine tests opt into a
+  simulated attested backend explicitly and describe future behaviour, not today's.

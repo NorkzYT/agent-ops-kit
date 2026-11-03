@@ -37,12 +37,17 @@ by independent review and does not meet the mandatory network and credential iso
 requirements: the tests run as the same uid that owns the credential file and the docker
 socket group, Landlock's TCP rules are port-based (any host on the database port), output
 scrubbing cannot stop deliberate encoding, and escaped descendants are not contained. ``run``
-therefore refuses every profile unless its ``isolation.mode`` is the approved
-``credential-broker-netns`` design, which is NOT implemented yet (it needs privileged
-provisioning: a dedicated credential-broker identity, a non-superuser test role, a network
-namespace that reaches only the test service; see docs/dev-test-runner.md). The remaining code
-paths are kept correct by regression tests (``scripts/tests/test_devtest_runner.py``) which
-opt into the rejected design explicitly; nothing else can.
+therefore refuses every profile: the rejected ``same-uid-landlock`` mode by design, and the
+*proposed* ``credential-broker-netns`` mode because no implementation of it exists in this
+runner (it needs operator approval and privileged provisioning: a broker-side database auth
+proxy that alone holds the upstream credential, a non-superuser test role, a network namespace
+that reaches only that proxy, cgroup/pid containment; see docs/dev-test-runner.md, "Proposed").
+``check-config`` reports syntactic validity (``valid``) separately from runnable readiness
+(``runnable``/``installable``); a recognised mode string is never readiness, so with no
+implemented mode ``check-config`` exits 1 for every profile file and the installer refuses.
+The remaining code paths are kept correct by regression tests
+(``scripts/tests/test_devtest_runner.py``) which opt into the rejected design explicitly;
+nothing else can.
 
 Exit: 0 tests (and vet) passed; 1 tests or vet failed or timed out; 2 refused; 3 sandbox or
 runner error.
@@ -89,9 +94,14 @@ ALLOWED_ENV_SAMPLES = {".env.example", ".env.sample", ".env.template"}
 LEASE_KEYS = ("task", "board", "host", "pid", "pid_start")
 LEASE_TTL_MIN, LEASE_TTL_MAX = 60, 7200
 LEASE_SKEW = 120  # a lease renewed "in the future" beyond this is malformed
-APPROVED_ISOLATION = "credential-broker-netns"  # approved design, not implemented here
+APPROVED_ISOLATION = "credential-broker-netns"  # PROPOSED design (not approved, not implemented here)
 REJECTED_ISOLATION = "same-uid-landlock"        # what this file implements; rejected for install
 ISOLATION_MODES = {APPROVED_ISOLATION, REJECTED_ISOLATION}
+# Modes this runner version implements with an attestable backend. Empty: nothing is runnable or
+# installable. A future broker implementation adds its mode here only together with the probe
+# of the trusted broker (identity, liveness, schema, capability) that ``run`` performs; a string
+# in a registry, an environment variable or a flag is never attestation.
+IMPLEMENTED_ISOLATION: frozenset = frozenset()
 REGRESSION_ENV_OPT_IN = False  # the kit's regression tests flip this in a private copy only
 MIN_VET_BUDGET = 30
 PR_SET_PDEATHSIG = 1
@@ -202,7 +212,13 @@ def validate_isolation(iso: dict, what: str) -> dict:
 
 
 def isolation_approved(prof: dict) -> bool:
+    """Syntactic: the profile declares the proposed design's mode string. Not readiness."""
     return (prof.get("isolation") or {}).get("mode") == APPROVED_ISOLATION
+
+
+def isolation_runnable(prof: dict) -> bool:
+    """Readiness: the proposed design *and* an implemented backend in this runner (none today)."""
+    return isolation_approved(prof) and (prof.get("isolation") or {}).get("mode") in IMPLEMENTED_ISOLATION
 
 
 def require_isolation(name: str, prof: dict, *, allow_rejected_for_regression: bool) -> dict:
@@ -1068,15 +1084,22 @@ def main(argv=None, *, config_path: str = CONFIG_PATH, trusted_uid: int = TRUSTE
         args = parse_args(argv)
         if args.cmd == "check-config":
             cfg = load_config(args.config, trusted_uid, candidate=args.candidate)
-            installable = [n for n, p in cfg["profiles"].items() if isolation_approved(p)]
+            # valid: the file parses and every profile is well formed (syntactic). installable/runnable:
+            # every profile is the proposed design AND this runner implements it (readiness). A profile
+            # with the recognised mode string but no implementation is "not_implemented", never ready.
             rejected = [n for n, p in cfg["profiles"].items() if not isolation_approved(p)]
-            print(json.dumps({"ok": True, "valid": True, "installable": bool(installable) and not rejected,
-                              "rejected_profiles": rejected, "profiles": {
+            not_implemented = [n for n, p in cfg["profiles"].items() if isolation_approved(p) and not isolation_runnable(p)]
+            runnable = [n for n, p in cfg["profiles"].items() if isolation_runnable(p)]
+            installable = bool(runnable) and not rejected and not not_implemented
+            print(json.dumps({"ok": installable, "valid": True, "installable": installable, "runnable": installable,
+                              "rejected_profiles": rejected, "not_implemented_profiles": not_implemented,
+                              "implemented_isolation_modes": sorted(IMPLEMENTED_ISOLATION), "profiles": {
                 name: {"checkout": p["checkout"], "module": p["module"], "packages": p["packages"],
                        "url_env": p["database"]["url_env"], "url": database_url(p["database"]),
-                       "isolation": p["isolation"]["mode"], "approved": isolation_approved(p)}
+                       "isolation": p["isolation"]["mode"], "approved": isolation_approved(p),
+                       "runnable": isolation_runnable(p)}
                 for name, p in cfg["profiles"].items()}}, indent=2, sort_keys=True))
-            return 0 if installable and not rejected else 1
+            return 0 if installable else 1
         cfg = load_config(config_path, trusted_uid)
         regression = allow_rejected_isolation_for_regression_tests or (
             REGRESSION_ENV_OPT_IN and os.environ.get("HERMES_DEVTEST_REGRESSION_UNSAFE") == "1")

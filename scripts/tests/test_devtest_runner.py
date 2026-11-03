@@ -543,6 +543,32 @@ class DevtestRunnerTests(unittest.TestCase):
             self.config = self._write_config(cfg)
             self.assertEqual(self._main(self._run_args())[0], 2, "unknown modes are refused even in regression")
 
+    def test_check_config_separates_validity_from_runnable_readiness(self):
+        """Red against 042fbbe: check-config exited 0 and reported installable for a profile that
+        merely declared the proposed credential-broker-netns mode string, although no runner
+        version implements it. Validity (parses, well formed) and readiness (implemented backend)
+        are reported separately and only readiness drives the exit code."""
+        self.assertEqual(dt.IMPLEMENTED_ISOLATION, frozenset(), "no isolation backend is implemented")
+        for mode, bucket in (("credential-broker-netns", "not_implemented_profiles"),
+                             ("same-uid-landlock", "rejected_profiles")):
+            with self.subTest(mode):
+                cfg = self._config()
+                cfg["profiles"]["probe"]["isolation"] = {"mode": mode}
+                self.config = self._write_config(cfg)
+                code, result, text = self._main(["check-config", "--config", self.config], regression=False)
+                self.assertEqual(code, 1, text)
+                self.assertTrue(result["valid"])
+                self.assertFalse(result["installable"])
+                self.assertFalse(result["runnable"])
+                self.assertFalse(result["ok"])
+                self.assertEqual(result[bucket], ["probe"])
+                self.assertFalse(result["profiles"]["probe"]["runnable"])
+                self.assertEqual(result["implemented_isolation_modes"], [])
+        prof = {"isolation": {"mode": "credential-broker-netns", "attested": True, "ready": True}}
+        self.assertTrue(dt.isolation_approved(prof), "syntactic recognition")
+        self.assertFalse(dt.isolation_runnable(prof), "a mode string plus flags is never readiness")
+
+
     def test_network_rule_is_the_database_port_only_and_described_honestly(self):
         run_pgpass = self.tmp / "run-pgpass"
         run_pgpass.write_text("x\n")
@@ -723,6 +749,53 @@ class InstallerTests(unittest.TestCase):
                 self.assertNotEqual(proc.returncode, 0, proc.stdout)
                 self.assertIn("REJECTED", proc.stdout + proc.stderr)
                 self.assertIn("same-uid-landlock", proc.stdout + proc.stderr)
+
+
+    def _profiles_with_mode(self, mode: str) -> str:
+        cfg = json.loads(EXAMPLE.read_text())
+        cfg["profiles"]["validate-matching"]["isolation"] = {"mode": mode}
+        tmp = Path(tempfile.mkdtemp(prefix="installer-profiles-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = tmp / "profiles.json"
+        path.write_text(json.dumps(cfg))
+        return str(path)
+
+    def test_plan_and_install_refuse_the_unimplemented_proposed_design(self):
+        """Red against 042fbbe: plan/install accepted a profile whose isolation.mode was the proposed
+        broker string although nothing implements it (install would have gone ahead with sudo)."""
+        profiles = self._profiles_with_mode("credential-broker-netns")
+        for cmd in ("plan", "install"):
+            with self.subTest(cmd):
+                proc = self._run(cmd, "--profiles", profiles, env_extra={"SUDO": "/bin/false"})
+                self.assertNotEqual(proc.returncode, 0, proc.stdout)
+                self.assertIn("NOT IMPLEMENTED", proc.stderr)
+                self.assertIn("mode string is not readiness", proc.stderr)
+                self.assertNotIn("REJECTED", proc.stderr, "a valid proposed-mode profile is not a rejected design")
+                self.assertNotIn("plan only; run:", proc.stdout)
+                self.assertNotIn("installed;", proc.stdout)
+
+    def test_status_is_not_ready_for_an_installed_proposed_mode_registry(self):
+        """A trusted-looking install whose registry declares the proposed mode must not report
+        ready: status exits non-zero and names the missing implementation."""
+        tmp = Path(tempfile.mkdtemp(prefix="installer-status-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        dest_runner = tmp / "runner"
+        shutil.copy(RUNNER, dest_runner)
+        os.chmod(dest_runner, 0o755)
+        etc = tmp / "etc"
+        etc.mkdir()
+        cfg = json.loads(EXAMPLE.read_text())
+        cfg["helper"] = str(dest_runner)
+        cfg["helper_sha256"] = __import__("hashlib").sha256(dest_runner.read_bytes()).hexdigest()
+        cfg["profiles"]["validate-matching"]["isolation"] = {"mode": "credential-broker-netns"}
+        (etc / "profiles.json").write_text(json.dumps(cfg))
+        env = dict(os.environ, HERMES_DEVTEST_DEST_RUNNER=str(dest_runner), HERMES_DEVTEST_DEST_DIR=str(etc))
+        proc = subprocess.run(["bash", str(self.SCRIPT), "status"], capture_output=True, text=True, env=env, timeout=120)
+        self.assertNotEqual(proc.returncode, 0, proc.stdout)
+        self.assertIn("NOT RUNNABLE", proc.stdout)
+        self.assertIn("NOT INSTALLED / not trusted", proc.stdout)
+        self.assertNotIn("INSTALLED and trusted", proc.stdout)
+        self.assertNotIn("approved isolation design", proc.stdout)
 
 
 if __name__ == "__main__":

@@ -13,9 +13,11 @@
 # re-verifies owner, mode and digest on every call, so a later edit of either file without
 # re-running `install` makes every call fail closed.
 #
-# STATUS: `plan`/`install` exit 1 with REJECTED for every profile whose isolation.mode is not
-# the approved `credential-broker-netns` design (the shipped example uses the rejected
-# `same-uid-landlock`); `status` exits non-zero unless a trusted, approved install exists.
+# STATUS: `plan`/`install` exit 1 unless the runner's check-config reports every profile
+# runnable: REJECTED for the rejected `same-uid-landlock` design (the shipped example) and
+# NOT IMPLEMENTED for the proposed `credential-broker-netns` design, which no runner version
+# implements yet. A valid profile file is not a runnable one. `status` exits non-zero unless a
+# trusted install whose profiles are runnable exists; today nothing can satisfy that.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNNER="$ROOT/hermes/libexec/hermes-devtest-runner"
@@ -52,10 +54,20 @@ if [[ "$CMD" == "status" ]]; then
   if [[ -f "$DEST_PROFILES" ]]; then
     pinned="$("$PY" -I -S -c 'import json,sys; print(json.load(open(sys.argv[1]))["helper_sha256"])' "$DEST_PROFILES" 2>/dev/null || echo unreadable)"
     echo "profile file:      $DEST_PROFILES $(stat -c '%U:%G %a' "$DEST_PROFILES") pins $pinned"
-    if [[ -f "$DEST_RUNNER" ]] && "$PY" -I -S "$DEST_RUNNER" check-config >/dev/null 2>&1; then
-      echo "trusted config:    ok (approved isolation design)"
+    if [[ -f "$DEST_RUNNER" ]] && check_out="$("$PY" -I -S "$DEST_RUNNER" check-config 2>/dev/null)"; then
+      echo "trusted config:    runnable (every profile's isolation design is implemented and installable)"
     else
-      echo "trusted config:    REFUSED or rejected design (dev_test_run fails closed)"; rc=1
+      detail="$(printf '%s' "${check_out:-}" | "$PY" -I -S -c '
+import json, sys
+try:
+    c = json.load(sys.stdin)
+except Exception:
+    print("REFUSED (untrusted, malformed or unreadable)"); sys.exit()
+parts = []
+if c.get("rejected_profiles"): parts.append("rejected design: " + ", ".join(c["rejected_profiles"]))
+if c.get("not_implemented_profiles"): parts.append("valid but NOT IMPLEMENTED (no backend): " + ", ".join(c["not_implemented_profiles"]))
+print("; ".join(parts) or "not runnable")' 2>/dev/null || echo "REFUSED")"
+      echo "trusted config:    NOT RUNNABLE — $detail (dev_test_run fails closed)"; rc=1
     fi
     if [[ -f "$DEST_RUNNER" && "$pinned" == "$(digest "$DEST_RUNNER")" ]]; then
       echo "pinned digest:     matches the installed runner"
@@ -83,10 +95,12 @@ EOF
 check="$("$PY" -I -S "$RUNNER" check-config --candidate --config "$TMP/profiles.json")" && check_rc=0 || check_rc=$?
 echo "$check"
 if [[ "$check_rc" -ne 0 ]]; then
-  rejected="$(printf '%s' "$check" | "$PY" -I -S -c 'import json,sys; c=json.load(sys.stdin); print(", ".join(c.get("rejected_profiles") or []) or "invalid config")' 2>/dev/null || echo "invalid config")"
-  echo "REJECTED: $rejected — isolation design rejected by review (same-uid-landlock) or config does not validate." >&2
-  echo "Nothing is installed. The same-uid-landlock design does not meet the network/credential isolation requirements;" >&2
-  echo "the approved credential-broker-netns design needs privileged provisioning and operator approval (docs/dev-test-runner.md)." >&2
+  rejected="$(printf '%s' "$check" | "$PY" -I -S -c 'import json,sys; c=json.load(sys.stdin); print(", ".join(c.get("rejected_profiles") or []))' 2>/dev/null || echo "")"
+  notimpl="$(printf '%s' "$check" | "$PY" -I -S -c 'import json,sys; c=json.load(sys.stdin); print(", ".join(c.get("not_implemented_profiles") or []))' 2>/dev/null || echo "")"
+  [[ -n "$rejected" ]] && echo "REJECTED: $rejected — isolation design rejected by review (same-uid-landlock): same-uid credential access and port-based network rules do not meet the isolation requirements." >&2
+  [[ -n "$notimpl" ]] && echo "NOT IMPLEMENTED: $notimpl — the profile is valid but its proposed credential-broker-netns design has no implemented, provisioned or attested backend; a mode string is not readiness." >&2
+  [[ -z "$rejected$notimpl" ]] && echo "INVALID: the profile file does not validate." >&2
+  echo "Nothing is installed. The proposed design needs operator approval and privileged provisioning first (docs/dev-test-runner.md, section Proposed design)." >&2
   exit 1
 fi
 echo "runner:   $RUNNER -> $DEST_RUNNER (root:root 0755, sha256 $sha)"
