@@ -32,12 +32,17 @@ abstract sockets outside the sandbox; no ptrace or /proc reads of processes outs
 Output is captured, parsed (``go test -json``), counted (pass/fail/skip) and scrubbed of the
 credential's password before it is printed as one JSON object.
 
-Limits (same-UID cooperative design, not a hard boundary): the tests are the checkout's own
-code and must authenticate, so they can read the test-database password; scrubbing stops
-accidental prints, not deliberate encoding; a malicious test can still send data over TCP to
-any host on the database port or an ephemeral port. Host secrets outside the granted paths
-(~/.hermes, ~/.ssh, other repositories, other config files, other processes' environments)
-are not readable from the sandbox.
+STATUS: the only isolation design this runner implements (``same-uid-landlock``) was REJECTED
+by independent review and does not meet the mandatory network and credential isolation
+requirements: the tests run as the same uid that owns the credential file and the docker
+socket group, Landlock's TCP rules are port-based (any host on the database port), output
+scrubbing cannot stop deliberate encoding, and escaped descendants are not contained. ``run``
+therefore refuses every profile unless its ``isolation.mode`` is the approved
+``credential-broker-netns`` design, which is NOT implemented yet (it needs privileged
+provisioning: a dedicated credential-broker identity, a non-superuser test role, a network
+namespace that reaches only the test service; see docs/dev-test-runner.md). The remaining code
+paths are kept correct by regression tests (``scripts/tests/test_devtest_runner.py``) which
+opt into the rejected design explicitly; nothing else can.
 
 Exit: 0 tests (and vet) passed; 1 tests or vet failed or timed out; 2 refused; 3 sandbox or
 runner error.
@@ -82,7 +87,15 @@ EXCLUDED_BASENAMES = re.compile(r"^\.env(\..*)?$")
 ALLOWED_ENV_SAMPLES = {".env.example", ".env.sample", ".env.template"}
 # Lease records written by hermes/skills/kanban-workflow/scripts/repo_lease.py (LEASE_VERSION 1).
 LEASE_KEYS = ("task", "board", "host", "pid", "pid_start")
-DEFAULT_LEASE_TTL = 1800
+LEASE_TTL_MIN, LEASE_TTL_MAX = 60, 7200
+LEASE_SKEW = 120  # a lease renewed "in the future" beyond this is malformed
+APPROVED_ISOLATION = "credential-broker-netns"  # approved design, not implemented here
+REJECTED_ISOLATION = "same-uid-landlock"        # what this file implements; rejected for install
+ISOLATION_MODES = {APPROVED_ISOLATION, REJECTED_ISOLATION}
+REGRESSION_ENV_OPT_IN = False  # the kit's regression tests flip this in a private copy only
+MIN_VET_BUDGET = 30
+PR_SET_PDEATHSIG = 1
+SIGKILL = 9
 
 
 class Refused(Exception):
@@ -181,6 +194,33 @@ def validate_database(db: dict, what: str) -> dict:
     return db
 
 
+def validate_isolation(iso: dict, what: str) -> dict:
+    _require_keys(iso, {"mode"}, set(), what)
+    if iso["mode"] not in ISOLATION_MODES:
+        raise Refused(f"{what}.mode {iso['mode']!r} is unknown; known: {sorted(ISOLATION_MODES)}")
+    return iso
+
+
+def isolation_approved(prof: dict) -> bool:
+    return (prof.get("isolation") or {}).get("mode") == APPROVED_ISOLATION
+
+
+def require_isolation(name: str, prof: dict, *, allow_rejected_for_regression: bool) -> dict:
+    """Fail closed: the rejected design never runs outside the kit's regression tests, and the
+    approved design is not implemented by this runner version."""
+    mode = prof["isolation"]["mode"]
+    if mode == APPROVED_ISOLATION:
+        raise Refused(f"profile {name!r} requires isolation {APPROVED_ISOLATION!r}, which is not implemented by this "
+                      "runner version (needs privileged provisioning of a credential broker, a non-superuser test role "
+                      "and a network namespace; see docs/dev-test-runner.md). Nothing ran.")
+    if mode == REJECTED_ISOLATION and not allow_rejected_for_regression:
+        raise Refused(f"profile {name!r} uses isolation {REJECTED_ISOLATION!r}, a design rejected by review: same-uid "
+                      "credential access, port-based (any host) network rules and uncontained descendants do not meet "
+                      "the isolation requirements. Installation and execution are disabled until the approved "
+                      f"{APPROVED_ISOLATION!r} design is provisioned and approved by the operator. Nothing ran.")
+    return {"mode": mode, "approved": False, "regression_only": True}
+
+
 def database_url(db: dict) -> str:
     """The password-free connection URL; the password comes from the credential file only."""
     return f"postgresql://{db['user']}@{db['host']}:{db['port']}/{db['dbname']}?sslmode={db['sslmode']}"
@@ -188,7 +228,9 @@ def database_url(db: dict) -> str:
 
 def validate_config(cfg: dict) -> dict:
     _require_keys(cfg, {"version", "helper", "helper_sha256", "python", "run_as_uid", "kanban_db", "lease_dir",
-                        "state_dir", "go", "gomodcache", "profiles"}, set(), "config")
+                        "state_dir", "go", "gomodcache", "profiles"}, {"board"}, "config")
+    if "board" in cfg and (not isinstance(cfg["board"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", cfg["board"])):
+        raise Refused("config.board must be a Kanban board name")
     if cfg["version"] != CONFIG_VERSION:
         raise Refused(f"config version {cfg['version']!r} is not {CONFIG_VERSION}")
     if not isinstance(cfg["helper_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", cfg["helper_sha256"]):
@@ -206,7 +248,8 @@ def validate_config(cfg: dict) -> dict:
         what = f"profile {name!r}"
         if not PROFILE_RE.match(name):
             raise Refused(f"{what}: invalid profile name")
-        _require_keys(prof, {"checkout", "module", "read_roots", "packages", "database"}, {"container"}, what)
+        _require_keys(prof, {"checkout", "module", "read_roots", "packages", "database", "isolation"}, {"container"}, what)
+        validate_isolation(prof["isolation"], f"{what}.isolation")
         checkout = _plain_path(prof["checkout"], f"{what}.checkout")
         for rel in [prof["module"], *prof["read_roots"]]:
             if not isinstance(rel, str) or rel.startswith("/") or ".." in rel.split("/") or not rel:
@@ -411,18 +454,32 @@ def verify_lease(cfg: dict, prof: dict, req: dict, worker_pid: int, now: float, 
         raise Refused(f"no repository lease on {prof['checkout']}; run workflow.py preflight first")
     except (OSError, ValueError) as exc:
         raise Refused(f"repository lease {path} unreadable: {exc}")
-    owner = lease.get("owner") or {}
-    expected = {"task": req["task"], "pid": worker_pid, "pid_start": proc_start_ticks(worker_pid), "host": hostname}
+    if not isinstance(lease, dict) or not isinstance(lease.get("owner"), dict):
+        raise Refused(f"repository lease {path} is malformed (no owner object); run workflow.py preflight")
+    owner = lease["owner"]
+    expected = {"task": req["task"], "board": cfg.get("board", "default"), "pid": worker_pid,
+                "pid_start": proc_start_ticks(worker_pid), "host": hostname}
+    if expected["pid_start"] is None:
+        raise Refused(f"cannot read the start time of worker pid {worker_pid}")
     for key, value in expected.items():
-        if owner.get(key) != value:
+        got = owner.get(key)
+        if type(got) is not type(value) or got != value:  # typed equality: "123" is not 123
             raise Refused(f"the lease on {prof['checkout']} is not held by this run ({key}: lease "
-                          f"{owner.get(key)!r}, expected {value!r}); run workflow.py preflight")
-    if str(owner.get("run_id") or "") != str(req["run_id"]):
-        raise Refused(f"the lease on {prof['checkout']} belongs to run {owner.get('run_id')!r}, not {req['run_id']}")
+                          f"{got!r}, expected {value!r}); run workflow.py preflight")
+    run_id = owner.get("run_id")
+    if not isinstance(run_id, (str, int)) or isinstance(run_id, bool) or str(run_id) != str(req["run_id"]):
+        raise Refused(f"the lease on {prof['checkout']} belongs to run {run_id!r}, not {req['run_id']}")
     if lease.get("root") != prof["checkout"]:
         raise Refused(f"the lease names checkout {lease.get('root')!r}, not {prof['checkout']}")
-    age = now - float(lease.get("renewed_at") or 0)
-    if age > int(lease.get("ttl") or DEFAULT_LEASE_TTL):
+    renewed, ttl = lease.get("renewed_at"), lease.get("ttl")
+    if isinstance(renewed, bool) or not isinstance(renewed, (int, float)) or renewed != renewed:
+        raise Refused(f"repository lease {path} has no numeric renewed_at")
+    if isinstance(ttl, bool) or not isinstance(ttl, int) or not LEASE_TTL_MIN <= ttl <= LEASE_TTL_MAX:
+        raise Refused(f"repository lease {path} ttl {ttl!r} is not an integer within {LEASE_TTL_MIN}..{LEASE_TTL_MAX}s")
+    age = now - float(renewed)
+    if age < -LEASE_SKEW:
+        raise Refused(f"repository lease {path} was renewed {int(-age)}s in the future (clock or file tampering)")
+    if age > ttl:
         raise Refused(f"the lease on {prof['checkout']} was last renewed {int(age)}s ago (expired); "
                       "run workflow.py preflight or checkpoint to renew it")
 
@@ -446,8 +503,9 @@ def _pgpass_fields(line: str) -> list:
     return fields
 
 
-def check_pgpass(db: dict, uid: int) -> list:
-    """Validate the credential file's metadata and return the secrets to scrub (never printed)."""
+def check_pgpass(db: dict, uid: int) -> tuple:
+    """Validate the credential file's metadata; return (secrets to scrub, the matching lines).
+    Only the matching lines are handed to the tests (a per-run file); nothing is printed."""
     path = db["pgpassfile"]
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -464,7 +522,7 @@ def check_pgpass(db: dict, uid: int) -> list:
         data = os.read(fd, 65536).decode("utf-8", "replace")
     finally:
         os.close(fd)
-    secrets, matched = set(), False
+    secrets, matching = set(), []
     for raw in data.splitlines():
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
@@ -476,10 +534,22 @@ def check_pgpass(db: dict, uid: int) -> list:
             secrets.add(password)
         if (host in ("*", db["host"]) and port in ("*", str(db["port"])) and dbname in ("*", db["dbname"])
                 and user in ("*", db["user"])):
-            matched = True
-    if not matched:
+            matching.append(raw)
+    if not matching:
         raise Refused(f"credential file {path} has no entry for {db['user']}@{db['host']}:{db['port']}/{db['dbname']}")
-    return sorted(secrets, key=len, reverse=True)
+    return sorted(secrets, key=len, reverse=True), matching
+
+
+def write_run_pgpass(workdir: str, lines: list) -> str:
+    """The tests get a private per-run file holding only the registered database's entries, never
+    the operator's whole credential file (which may carry other credentials)."""
+    path = os.path.join(workdir, "pgpass")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        os.write(fd, ("\n".join(lines) + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    return path
 
 
 _URL_USERINFO = re.compile(r"(?i)\b((?:postgres|postgresql|mysql|redis|amqp|mongodb(?:\+srv)?)://[^\s:/@]+:)[^\s@/]+@")
@@ -487,14 +557,28 @@ _KV_SECRET = re.compile(r"(?i)\b(password|passwd|pwd)(\s*[=:]\s*)(\"[^\"]*\"|'[^
 
 
 def scrub(text: str, secrets: list) -> str:
+    """Best-effort redaction of known secrets (plain, URL-encoded, JSON-escaped), URL userinfo
+    passwords and password= values. It stops accidental prints; it is not a security boundary
+    (a test that reads the credential can encode it), which is why the design gate above exists."""
     from urllib.parse import quote
     for secret in secrets:
         if len(secret) < 4:
             continue
-        for form in {secret, quote(secret, safe=""), quote(secret)}:
+        for form in {secret, quote(secret, safe=""), quote(secret), json.dumps(secret)[1:-1]}:
             text = text.replace(form, "[REDACTED]")
     text = _URL_USERINFO.sub(r"\1[REDACTED]@", text)
     return _KV_SECRET.sub(r"\1\2[REDACTED]", text)
+
+
+def scrub_object(obj, secrets: list):
+    """scrub() applied to every string key and value of a JSON-like structure."""
+    if isinstance(obj, str):
+        return scrub(obj, secrets)
+    if isinstance(obj, list):
+        return [scrub_object(v, secrets) for v in obj]
+    if isinstance(obj, dict):
+        return {scrub_object(k, secrets): scrub_object(v, secrets) for k, v in obj.items()}
+    return obj
 
 
 # --------------------------------------------------------------- sandbox ---
@@ -524,6 +608,7 @@ RX = RO | LL_FS_EXECUTE
 AUDIT_ARCH_X86_64 = 0xC000003E
 NR_SOCKET, NR_IO_URING_SETUP, NR_IO_URING_ENTER, NR_IO_URING_REGISTER = 41, 425, 426, 427
 AF_INET, AF_INET6, SOCK_STREAM, SOCK_TYPE_MASK = 2, 10, 1, 0xF
+IPPROTO_IP, IPPROTO_TCP = 0, 6
 EACCES = 13
 
 
@@ -553,36 +638,88 @@ def ephemeral_ports() -> range:
 
 
 class SandboxPlan:
-    """Paths and ports the sandbox grants; everything else is denied by Landlock."""
+    """Paths and ports the sandbox grants; everything else is denied by Landlock. Source files and
+    directories are held as verified O_PATH descriptors (opened O_NOFOLLOW, checked by fstat) so
+    the rule applies to the inode that was checked, not to whatever the path names at rule time."""
 
     def __init__(self):
-        self.ro, self.rx, self.rw, self.ro_files, self.rw_files, self.ro_dirs_listing = [], [], [], [], [], []
+        self.ro, self.rx, self.rw, self.rw_files = [], [], [], []
+        self.ro_files: list = []         # (path, fd) regular files, st_nlink == 1
+        self.ro_dirs_listing: list = []  # (path, fd) directories
         self.connect_ports: list = []
 
     def describe(self) -> dict:
-        return {"landlock": True, "seccomp": "inet/inet6 stream sockets only; no io_uring",
+        return {"landlock": True, "isolation": REJECTED_ISOLATION,
+                "seccomp": "inet/inet6 SOCK_STREAM protocol 0/TCP only; no io_uring",
                 "read_exec": self.rx, "read_only": self.ro, "read_write": self.rw,
                 "source_files": len(self.ro_files),
-                "tcp_connect": "database port + loopback ephemeral range", "tcp_bind": "port 0 only"}
+                "tcp_connect": list(self.connect_ports), "tcp_bind": "port 0 only",
+                "network_limit": "Landlock TCP rules are port-based: any host may be reached on the database "
+                                 "port; loopback is not confined and no namespace isolates the tests"}
+
+    def close(self) -> None:
+        for lst in (self.ro_files, self.ro_dirs_listing):
+            for _path, fd in lst:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            lst.clear()
+
+
+def _open_verified(path: str, *, directory: bool) -> int:
+    """O_PATH|O_NOFOLLOW descriptor whose fstat is a plain directory, or a regular file with one
+    link (a hardlink alias of an excluded file such as .env is never granted); dev/ino must equal
+    the lstat that selected it. Returns -1 when the entry does not qualify."""
+    try:
+        lst = os.lstat(path)
+        flags = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC | (os.O_DIRECTORY if directory else 0)
+        fd = os.open(path, flags)
+    except OSError:
+        return -1
+    try:
+        st = os.fstat(fd)
+        ok = (st.st_dev, st.st_ino) == (lst.st_dev, lst.st_ino)
+        if directory:
+            ok = ok and stat.S_ISDIR(st.st_mode)
+        else:
+            ok = ok and stat.S_ISREG(st.st_mode) and st.st_nlink == 1
+        if not ok:
+            os.close(fd)
+            return -1
+        return fd
+    except OSError:
+        os.close(fd)
+        return -1
 
 
 def source_rules(plan: SandboxPlan, checkout: str, roots: list) -> None:
-    """READ_DIR on each source dir, READ_FILE on each regular file except .env secrets.
+    """READ_DIR on each source dir, READ_FILE on each regular single-link file except .env secrets.
     Symlinks are never granted (Landlock checks the resolved target, which stays denied)."""
     for rel in roots:
         top = os.path.join(checkout, rel)
         for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
             dirnames[:] = [d for d in dirnames if d != ".git" and not os.path.islink(os.path.join(dirpath, d))]
-            plan.ro_dirs_listing.append(dirpath)
+            dfd = _open_verified(dirpath, directory=True)
+            if dfd < 0:
+                continue
+            plan.ro_dirs_listing.append((dirpath, dfd))
             for name in filenames:
                 if EXCLUDED_BASENAMES.match(name) and name not in ALLOWED_ENV_SAMPLES:
                     continue
                 full = os.path.join(dirpath, name)
-                try:
-                    if stat.S_ISREG(os.lstat(full).st_mode):
-                        plan.ro_files.append(full)
-                except OSError:
-                    continue
+                ffd = _open_verified(full, directory=False)
+                if ffd >= 0:
+                    plan.ro_files.append((full, ffd))
+
+
+def grant_file(plan: SandboxPlan, path: str, *, required: bool = True) -> None:
+    fd = _open_verified(path, directory=False)
+    if fd < 0:
+        if required:
+            raise SandboxError(f"sandbox file {path} cannot be verified (not a single-link regular file)")
+        return
+    plan.ro_files.append((path, fd))
 
 
 def _landlock_apply(plan: SandboxPlan, abi: int) -> None:
@@ -620,10 +757,15 @@ def _landlock_apply(plan: SandboxPlan, abi: int) -> None:
             add_path(p, RX, required=False)
         for p in plan.ro:
             add_path(p, RO, required=False)
-        for p in plan.ro_dirs_listing:
-            add_path(p, LL_FS_READ_DIR)
-        for p in plan.ro_files:
-            add_path(p, LL_FS_READ_FILE, required=False)
+        def add_fd(fd: int, access: int, path: str) -> None:
+            rule = ctypes.create_string_buffer(struct.pack("=Qi", access & handled_fs, fd), 12)
+            if _syscall(SYS_LANDLOCK_ADD_RULE, ruleset, LL_RULE_PATH_BENEATH, rule, ctypes.c_uint32(0)) < 0:
+                raise SandboxError(f"landlock_add_rule({path}) failed: {os.strerror(ctypes.get_errno())}")
+
+        for path, fd in plan.ro_dirs_listing:
+            add_fd(fd, LL_FS_READ_DIR, path)
+        for path, fd in plan.ro_files:
+            add_fd(fd, LL_FS_READ_FILE, path)
         for p in plan.rw:
             add_path(p, handled_fs)
         for p in plan.rw_files:
@@ -639,7 +781,8 @@ def _landlock_apply(plan: SandboxPlan, abi: int) -> None:
 
 def seccomp_program() -> bytes:
     """x86_64 filter: kill foreign arches, refuse x32 syscalls and io_uring, and allow socket()
-    only for AF_INET/AF_INET6 stream sockets (no UNIX: docker/dbus/agent sockets stay closed)."""
+    only for AF_INET/AF_INET6 SOCK_STREAM with protocol 0 or IPPROTO_TCP (no UNIX: docker/dbus/
+    agent sockets stay closed; no UDP/raw/netlink; no MPTCP or SCTP stream sockets)."""
     ld, jeq, jge, and_, ret = 0x20, 0x15, 0x35, 0x54, 0x06
     allow, kill = 0x7FFF0000, 0x80000000
     errno = 0x00050000 | EACCES
@@ -668,9 +811,13 @@ def seccomp_program() -> bytes:
         ins(ret, 0, 0, errno),                             # 17
         ins(ld, 0, 0, 24),                                 # 18 args[1] type
         ins(and_, 0, 0, SOCK_TYPE_MASK),                   # 19
-        ins(jeq, 0, 1, SOCK_STREAM),                       # 20
-        ins(ret, 0, 0, allow),                             # 21
-        ins(ret, 0, 0, errno),                             # 22
+        ins(jeq, 1, 0, SOCK_STREAM),                       # 20 stream -> 22, else 21
+        ins(ret, 0, 0, errno),                             # 21
+        ins(ld, 0, 0, 32),                                 # 22 args[2] protocol: 0 or TCP only (no MPTCP/SCTP)
+        ins(jeq, 1, 0, IPPROTO_IP),                        # 23 -> 25
+        ins(jeq, 0, 1, IPPROTO_TCP),                       # 24 -> 25 / 26
+        ins(ret, 0, 0, allow),                             # 25
+        ins(ret, 0, 0, errno),                             # 26
     ]
     return b"".join(prog)
 
@@ -695,6 +842,8 @@ def sandbox_preexec(plan: SandboxPlan, abi: int):
         import resource
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) != 0:  # the direct child dies with the runner
+            raise SandboxError("PR_SET_PDEATHSIG failed")
         if libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
             raise SandboxError("PR_SET_NO_NEW_PRIVS failed")
         _landlock_apply(plan, abi)
@@ -702,20 +851,27 @@ def sandbox_preexec(plan: SandboxPlan, abi: int):
     return apply
 
 
-def build_plan(cfg: dict, prof: dict, workdir: str, gocache: str) -> SandboxPlan:
+def build_cache_dir(state: str, profile: str) -> str:
+    """One build cache per profile: a profile's tests cannot poison another profile's cache."""
+    return os.path.join(state, "go-build", profile)
+
+
+def build_plan(cfg: dict, prof: dict, workdir: str, gocache: str, run_pgpass: str) -> SandboxPlan:
     plan = SandboxPlan()
     goroot = os.path.dirname(os.path.dirname(cfg["go"]))
     plan.rx = ["/usr", "/lib", "/lib64", "/lib32", "/bin", "/sbin", goroot]
+    # /proc stays readable as a whole (the Go toolchain and race runtime need it); world-readable
+    # entries of other processes (cmdline, status) are therefore visible: a pid namespace is needed.
     plan.ro = ["/etc", "/proc", "/sys", cfg["gomodcache"]]
     plan.rw = [workdir, gocache]
     plan.rw_files = ["/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom"]
     source_rules(plan, prof["checkout"], prof["read_roots"])
-    plan.ro_files.append(prof["database"]["pgpassfile"])
-    plan.connect_ports = sorted({prof["database"]["port"], *ephemeral_ports()})
+    grant_file(plan, run_pgpass)  # the per-run narrowed credential file, never the operator's file
+    plan.connect_ports = [prof["database"]["port"]]  # no ephemeral range: it would reach any host too
     return plan
 
 
-def clean_env(cfg: dict, prof: dict, workdir: str, gocache: str) -> dict:
+def clean_env(cfg: dict, prof: dict, workdir: str, gocache: str, run_pgpass: str) -> dict:
     """Built from nothing: no variable of the caller's environment reaches the tests."""
     goroot = os.path.dirname(os.path.dirname(cfg["go"]))
     home = os.path.join(workdir, "home")
@@ -727,7 +883,7 @@ def clean_env(cfg: dict, prof: dict, workdir: str, gocache: str) -> dict:
         "GOMODCACHE": cfg["gomodcache"], "GOCACHE": gocache, "GOENV": "off", "GOFLAGS": "-mod=readonly",
         "GOTOOLCHAIN": "local", "GOPROXY": "off", "GOSUMDB": "off", "GOWORK": "off", "GO111MODULE": "on",
         "GOTELEMETRY": "off", "CGO_ENABLED": "1",
-        "PGPASSFILE": db["pgpassfile"], db["url_env"]: database_url(db),
+        "PGPASSFILE": run_pgpass, db["url_env"]: database_url(db),
     }
 
 
@@ -794,31 +950,57 @@ def run_sandboxed(argv: list, env: dict, cwd: str, plan: SandboxPlan, abi: int, 
                                 preexec_fn=sandbox_preexec(plan, abi))  # noqa: PLW1509 - single-threaded runner
     except (OSError, subprocess.SubprocessError, SandboxError) as exc:
         raise SandboxError(f"could not start the sandboxed command: {exc}")
-    timed_out = False
+    timed_out, cleanup = False, None
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         try:
-            os.killpg(proc.pid, 9)
+            os.killpg(proc.pid, SIGKILL)
         except ProcessLookupError:
             pass
-        out, err = proc.communicate()
+        note = ("process group killed; descendants that left the session (setsid) or the group are not "
+                "contained (no cgroup or pid namespace in this design)")
+        try:
+            out, err = proc.communicate(timeout=KILL_GRACE)  # bounded: escaped holders of the pipes do not hang us
+            cleanup = {"bounded": True, "escaped_descendants": False, "note": note}
+        except subprocess.TimeoutExpired:
+            for pipe in (proc.stdout, proc.stderr):
+                try:
+                    pipe.close()
+                except OSError:
+                    pass
+            proc.kill()
+            try:
+                proc.wait(timeout=KILL_GRACE)
+            except subprocess.TimeoutExpired:
+                pass
+            out, err = b"", b""
+            cleanup = {"bounded": True, "escaped_descendants": True, "output": "discarded (pipes held by escaped "
+                       "descendants)", "note": note}
     return {"exit_code": proc.returncode, "timed_out": timed_out, "seconds": round(time.monotonic() - started, 1),
-            "stdout": out.decode("utf-8", "replace"), "stderr": err.decode("utf-8", "replace")}
+            "stdout": out.decode("utf-8", "replace"), "stderr": err.decode("utf-8", "replace"), "cleanup": cleanup}
+
+
+def remaining_budget(*, deadline: float, now: float) -> int:
+    """Seconds left for a follow-up step (go vet) inside the run's total budget, never below MIN_VET_BUDGET."""
+    return max(MIN_VET_BUDGET, int(deadline - now))
 
 
 # ------------------------------------------------------------------ main ---
 
-def cmd_run(args: argparse.Namespace, cfg: dict, *, worker_pid: int, hostname: str, now: float) -> dict:
+def cmd_run(args: argparse.Namespace, cfg: dict, *, worker_pid: int, hostname: str, now: float,
+            allow_rejected_isolation_for_regression_tests: bool = False) -> dict:
     req = validate_run_args(args, cfg)
     prof = cfg["profiles"][req["profile"]]
+    isolation = require_isolation(req["profile"], prof,
+                                  allow_rejected_for_regression=allow_rejected_isolation_for_regression_tests)
     if os.getuid() != cfg["run_as_uid"] or os.geteuid() != cfg["run_as_uid"]:
         raise Refused(f"runs only as uid {cfg['run_as_uid']}")
     _check_trusted_file(cfg["go"], 0, what="go toolchain", executable=True)
     verify_claim(cfg, req, worker_pid, now)
     verify_lease(cfg, prof, req, worker_pid, now, hostname)
-    secrets = check_pgpass(prof["database"], cfg["run_as_uid"])
+    secrets, pgpass_lines = check_pgpass(prof["database"], cfg["run_as_uid"])
     abi = landlock_abi()
     if abi < LL_MIN_ABI:
         raise SandboxError(f"Landlock ABI {abi} < {LL_MIN_ABI} (needs TCP port rules and scoping); refusing to "
@@ -828,62 +1010,80 @@ def cmd_run(args: argparse.Namespace, cfg: dict, *, worker_pid: int, hostname: s
     sst = os.lstat(state)
     if stat.S_ISLNK(sst.st_mode) or sst.st_uid != os.getuid() or sst.st_mode & 0o077:
         raise Refused(f"state dir {state} must be a private directory of this user")
-    gocache = os.path.join(state, "go-build")
+    gocache = build_cache_dir(state, req["profile"])
     os.makedirs(gocache, mode=0o700, exist_ok=True)
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < hard:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))  # verified source descriptors are held open
     workdir = tempfile.mkdtemp(prefix="run-", dir=state)
+    plan = None
     try:
         for sub in ("home", "tmp", "gopath"):
             os.makedirs(os.path.join(workdir, sub), mode=0o700)
-        plan = build_plan(cfg, prof, workdir, gocache)
-        env = clean_env(cfg, prof, workdir, gocache)
+        run_pgpass = write_run_pgpass(workdir, pgpass_lines)
+        plan = build_plan(cfg, prof, workdir, gocache, run_pgpass)
+        env = clean_env(cfg, prof, workdir, gocache, run_pgpass)
         module_dir = os.path.join(prof["checkout"], prof["module"])
         test_argv = go_test_argv(cfg["go"], req)
+        deadline = time.monotonic() + req["timeout"] + (600 if req["vet"] else 0)
         test = run_sandboxed(test_argv, env, module_dir, plan, abi, req["timeout"] + KILL_GRACE)
+        # Scrub the raw streams first, so no truncation can split a secret before it is removed.
+        test["stdout"], test["stderr"] = scrub(test["stdout"], secrets), scrub(test["stderr"], secrets)
         parsed = parse_go_json(test["stdout"], test["stderr"])
         vet = None
         if req["vet"]:
             vet_argv = go_vet_argv(cfg["go"], req)
-            v = run_sandboxed(vet_argv, env, module_dir, plan, abi, 600)
-            vet = {"exit_code": v["exit_code"], "timed_out": v["timed_out"],
-                   "output": scrub((v["stdout"] + v["stderr"]).strip()[-MAX_OUTPUT_CHARS // 4:], secrets),
+            v = run_sandboxed(vet_argv, env, module_dir, plan, abi,
+                              remaining_budget(deadline=deadline, now=time.monotonic()))
+            vet = {"exit_code": v["exit_code"], "timed_out": v["timed_out"], "cleanup": v["cleanup"],
+                   "output": scrub(v["stdout"] + v["stderr"], secrets).strip()[-MAX_OUTPUT_CHARS // 4:],
                    "argv": [os.path.basename(vet_argv[0]), *vet_argv[1:]]}
     finally:
+        if plan is not None:
+            plan.close()
         shutil.rmtree(workdir, ignore_errors=True)
-    ok = test["exit_code"] == 0 and not test["timed_out"] and (vet is None or (vet["exit_code"] == 0 and not vet["timed_out"]))
+    no_tests_ran = not any(parsed["tests"].values())
+    ok = (test["exit_code"] == 0 and not test["timed_out"] and not no_tests_ran
+          and (vet is None or (vet["exit_code"] == 0 and not vet["timed_out"])))
     result = {
         "ok": ok, "profile": req["profile"], "task": req["task"], "run_id": req["run_id"],
         "exit_code": test["exit_code"], "timed_out": test["timed_out"], "seconds": test["seconds"],
+        "cleanup": test["cleanup"],
         "argv": [os.path.basename(test_argv[0]), *test_argv[1:]], "cwd": module_dir,
         "database": {"url_env": prof["database"]["url_env"], "url": database_url(prof["database"]),
-                     "pgpassfile": prof["database"]["pgpassfile"]},
-        **parsed, "vet": vet, "sandbox": plan.describe(),
+                     "pgpassfile": "<per-run file holding only the registered entry>"},
+        **parsed, "vet": vet, "sandbox": plan.describe(), "isolation": isolation, "no_tests_ran": no_tests_ran,
     }
-    result["no_tests_ran"] = not any(parsed["tests"].values())
-    for key in ("build_output",):
-        result[key] = scrub(result[key], secrets)
-    for item in result["failed_tests"]:
-        item["output"] = scrub(item["output"], secrets)
-    for item in result["skipped_tests"]:
-        item["reason"] = scrub(item["reason"], secrets)
-    return result
+    if no_tests_ran and test["exit_code"] == 0 and not test["timed_out"]:
+        result["error"] = ("the requested packages" + (f" with -run={req['run_filter']}" if req["run_filter"] else "")
+                           + " matched no tests; a validation run with zero tests does not pass")
+    return scrub_object(result, secrets)
 
 
 def main(argv=None, *, config_path: str = CONFIG_PATH, trusted_uid: int = TRUSTED_UID,
-         worker_pid=None, hostname=None, now=None) -> int:
+         worker_pid=None, hostname=None, now=None, allow_rejected_isolation_for_regression_tests: bool = False) -> int:
     argv = sys.argv[1:] if argv is None else argv
     try:
         args = parse_args(argv)
         if args.cmd == "check-config":
             cfg = load_config(args.config, trusted_uid, candidate=args.candidate)
-            print(json.dumps({"ok": True, "profiles": {
+            installable = [n for n, p in cfg["profiles"].items() if isolation_approved(p)]
+            rejected = [n for n, p in cfg["profiles"].items() if not isolation_approved(p)]
+            print(json.dumps({"ok": True, "valid": True, "installable": bool(installable) and not rejected,
+                              "rejected_profiles": rejected, "profiles": {
                 name: {"checkout": p["checkout"], "module": p["module"], "packages": p["packages"],
-                       "url_env": p["database"]["url_env"], "url": database_url(p["database"])}
+                       "url_env": p["database"]["url_env"], "url": database_url(p["database"]),
+                       "isolation": p["isolation"]["mode"], "approved": isolation_approved(p)}
                 for name, p in cfg["profiles"].items()}}, indent=2, sort_keys=True))
-            return 0
+            return 0 if installable and not rejected else 1
         cfg = load_config(config_path, trusted_uid)
+        regression = allow_rejected_isolation_for_regression_tests or (
+            REGRESSION_ENV_OPT_IN and os.environ.get("HERMES_DEVTEST_REGRESSION_UNSAFE") == "1")
         result = cmd_run(args, cfg, worker_pid=os.getppid() if worker_pid is None else worker_pid,
                          hostname=socket.gethostname() if hostname is None else hostname,
-                         now=time.time() if now is None else now)
+                         now=time.time() if now is None else now,
+                         allow_rejected_isolation_for_regression_tests=regression)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0 if result["ok"] else 1
     except Refused as exc:

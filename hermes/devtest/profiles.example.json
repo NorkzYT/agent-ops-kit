@@ -16,6 +16,7 @@
       "read_roots": ["apps/matching-service-go", "packages/observability-go"],
       "packages": ["./..."],
       "container": "validate-pgtest-door",
+      "isolation": {"mode": "same-uid-landlock"},
       "database": {
         "host": "127.0.0.1",
         "port": 55443,

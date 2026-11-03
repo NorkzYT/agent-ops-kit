@@ -733,7 +733,10 @@ Steps:
 3. Read the full diff yourself. Run the host-side checks the repo has (lint, unit tests that run here).{xcui}
    Go tests against a registered local PostgreSQL test database run only through the
    dev_test_run tool (profile, packages, race, vet); never a terminal command carrying a
-   database URL or a credential file, and never read that file.
+   database URL or a credential file, and never read that file. When dev_test_run is not
+   among your tools, no approved equivalent exists on this host: kanban_block naming the
+   exact command, the scanner finding and the missing capability (an operator-approved
+   dev-test profile); do not assume one will appear.
 4. Commit on {ctx.branch} (Conventional Commits, no Co-Authored-By trailer), then
    git push origin {ctx.branch}. Never force push. Never merge unless the merge gates below allow it.
 5. With your own terminal tool (never inside delegate_task) run:

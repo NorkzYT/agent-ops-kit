@@ -1,43 +1,31 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: NorkzYT <richard@pcscorp.dev>
-Date: Mon, 2 Nov 2026 19:06:55 -0500
-Subject: [PATCH] feat(kanban): typed dev_test_run tool, scanner recovery and
- test-credential guards
+Date: Mon, 2 Nov 2026 19:37:04 -0500
+Subject: [PATCH 4/4] feat(kanban): typed dev_test_run tool that fails closed on
+ rejected isolation, scanner recovery and test-credential guards
 
-Kanban workers run as -q sessions, so the unattended gate denies a Tirith
-warn: the operator-approved `PGPASSFILE=... MATCHING_TEST_DATABASE_URL=
-'postgresql://postgres@127.0.0.1:55443/...' go test` command is rejected
-(raw_ip_url + schemeless_to_sink, MEDIUM; incident t_12595b96 run 370) and
-the worker had no approved path, so it blocked the whole card.
+Combined diff of runtime commits d15a70ddc8 (typed dev_test_run tool, scanner
+recovery and test-credential guards) and f04d4adc80 (dev_test_run fails closed on
+rejected isolation, scoped recovery state, stricter target guard). The registry
+must carry per-profile isolation.mode; only credential-broker-netns is approved
+and it is not implemented yet, so the tool stays hidden, emits no RECOVERY
+directive and refuses to run for the rejected same-uid-landlock design. Recovery
+state is scoped per (task, run) and cleared only by an actual runner start or a
+recorded precondition refusal. database_target_block additionally covers
+?host=, multi-host authorities, hostaddr=, PGHOSTADDR and PGSERVICE* (text
+guard, not a boundary). Result keys are redacted; the runner budget covers vet.
 
-- tools/dev_test_tool.py: `dev_test_run` (kanban toolset, dispatcher-owned
-  workers only). Typed arguments (profile, approved package patterns, -run
-  regex, race/short/vet, bounded timeout); no URL, env or go flag can be
-  passed. Every call re-verifies the root-owned profile registry and the
-  root-owned runner (owner, mode, no symlink, root-owned parents, pinned
-  SHA-256), scans the exact fixed invocation through the normal guards
-  (nothing filtered) and runs it with an empty environment; the runner
-  re-checks the board claim (its parent must be the worker pid of the
-  running claim) and the repository lease, then sandboxes the tests.
-- Scanner recovery: an unattended rejection of a go test/vet command that
-  matches a registered profile carries a RECOVERY directive naming
-  dev_test_run; kanban_block refuses until that equivalent was tried.
-- Guards (additive): commands that read a registered test credential file
-  or enter/inspect its container are blocked under every mode (also file
-  tools); unattended deny mode refuses non-loopback database targets and
-  passwords written into a command line.
-
-Tirith stays enabled and fail-closed, single-query/cron/unattended modes
-stay deny, hardline and deny rules are unchanged.
+Tirith stays enabled and fail-closed, single-query/cron/unattended modes stay
+deny, hardline and deny rules are unchanged.
 ---
- agent/file_safety.py              |  22 ++
- tests/tools/test_dev_test_tool.py | 330 +++++++++++++++++++++
- tools/approval.py                 |  45 ++-
- tools/dev_test_tool.py            | 461 ++++++++++++++++++++++++++++++
- tools/kanban_tools.py             |  13 +
- 5 files changed, 869 insertions(+), 2 deletions(-)
- create mode 100644 tests/tools/test_dev_test_tool.py
- create mode 100644 tools/dev_test_tool.py
+  agent/file_safety.py              |  22 ++
+  agent/kanban_stop.py              |  84 +++++-
+  tests/agent/test_kanban_stop.py   |  64 ++++
+  tests/tools/test_dev_test_tool.py | 564 ++++++++++++++++++++++++++++++++++++
+  tools/approval.py                 |  45 ++-
+  tools/dev_test_tool.py            | 594 ++++++++++++++++++++++++++++++++++++++
+  tools/kanban_tools.py             |  13 +
+  7 files changed, 1372 insertions(+), 14 deletions(-)
 
 diff --git a/agent/file_safety.py b/agent/file_safety.py
 index 1ee92367ad..018f81568c 100644
@@ -75,12 +63,196 @@ index 1ee92367ad..018f81568c 100644
  def raise_if_read_blocked(path: str) -> None:
      """Raise ``ValueError`` if ``path`` is a denied Hermes read (see ``get_read_block_error``).
  
+diff --git a/agent/kanban_stop.py b/agent/kanban_stop.py
+index 5f4669bdb8..4215dbbbe1 100644
+--- a/agent/kanban_stop.py
++++ b/agent/kanban_stop.py
+@@ -10,7 +10,12 @@ import os
+ from typing import Any, Iterable, Optional
+ 
+ 
+-_TERMINAL_KANBAN_TOOLS = frozenset({"kanban_complete", "kanban_block"})
++# Tools whose SUCCESS ends a worker turn legitimately: done, blocked, or handed to the review
++# phase (request_review parks the card in `review`; request_changes is the reviewer's
++# counterpart). A call that returned an error did not change the board and does not count.
++_TERMINAL_KANBAN_TOOLS = frozenset({
++    "kanban_complete", "kanban_block", "kanban_request_review", "kanban_request_changes",
++})
+ 
+ _DEFAULT_MAX_ATTEMPTS = 2
+ 
+@@ -31,17 +36,61 @@ def _tool_call_name(tc: Any) -> str:
+     return str((getattr(fn, "name", "") if fn is not None else getattr(tc, "name", "")) or "")
+ 
+ 
++def _tool_call_id(tc: Any) -> str:
++    if isinstance(tc, dict):
++        return str(tc.get("id") or "")
++    return str(getattr(tc, "id", "") or "")
++
++
++def _tool_result_failed(content: Any) -> bool:
++    """A kanban tool result that reports an error (JSON ``{"error": ...}`` or an ``Error:``
++    line) left the board unchanged."""
++    if isinstance(content, dict):
++        return bool(content.get("error"))
++    text = str(content or "").strip()
++    if not text:
++        return False
++    if text.startswith("{"):
++        try:
++            import json
++
++            payload = json.loads(text)
++        except ValueError:
++            payload = None
++        if isinstance(payload, dict):
++            return bool(payload.get("error")) or payload.get("ok") is False or payload.get("success") is False
++    return text.lower().startswith("error")
++
++
+ def session_called_kanban_terminal(messages: Iterable[dict] | None) -> bool:
+-    """True if this conversation already invoked a terminal kanban tool."""
++    """True if this conversation already invoked a terminal kanban tool whose result arrived
++    and was not an error.
++
++    Only a successful terminal call ends the turn legitimately. A ``kanban_complete`` refused
++    by the board (open parents, wrong run, hallucinated card ids) left the task running, and a
++    call with no result at all (interrupted, never executed) changed nothing either: counting
++    either would let the worker exit on rc=0 and be recorded as a protocol violation."""
++    terminal_calls: dict[str, bool] = {}  # tool_call_id -> result arrived and succeeded
++    succeeded_unnamed = False
+     for msg in filter(lambda m: isinstance(m, dict), messages or ()):
+         role = msg.get("role")
+-        if role == "assistant" and any(
+-            _tool_call_name(tc) in _TERMINAL_KANBAN_TOOLS for tc in msg.get("tool_calls") or []
+-        ):
+-            return True
+-        if role == "tool" and str(msg.get("name") or "") in _TERMINAL_KANBAN_TOOLS:
+-            return True
+-    return False
++        if role == "assistant":
++            for tc in msg.get("tool_calls") or []:
++                if _tool_call_name(tc) in _TERMINAL_KANBAN_TOOLS:
++                    call_id = _tool_call_id(tc)
++                    if call_id:
++                        terminal_calls.setdefault(call_id, False)  # pending until its result arrives
++        elif role == "tool":
++            call_id = str(msg.get("tool_call_id") or "")
++            is_terminal = call_id in terminal_calls or str(msg.get("name") or "") in _TERMINAL_KANBAN_TOOLS
++            if not is_terminal:
++                continue
++            failed = _tool_result_failed(msg.get("content"))
++            if call_id:
++                terminal_calls[call_id] = not failed
++            elif not failed:
++                succeeded_unnamed = True
++    return succeeded_unnamed or any(terminal_calls.values())
+ 
+ 
+ def build_kanban_stop_nudge(
+@@ -68,9 +117,20 @@ def build_kanban_stop_nudge(
+         "causes a protocol violation (clean exit with no "
+         "`kanban_complete` / `kanban_block`).\n\n"
+         "Do this immediately in your next response — do not narrate intent:\n"
+-        "1. Finish any remaining deliverable (write the required file(s) now).\n"
+-        "2. Call `kanban_complete(summary=..., artifacts=[...])` if the work "
+-        "is done, OR `kanban_block(reason=...)` if you are blocked.\n\n"
++        "1. Continue the work. Unfinished work is not a reason to stop or to block: "
++        "a running delegate_task child is collected (wait for its result), a transient "
++        "failure (network, flaky test, rate limit) is retried, a dependency on another "
++        "card is a `kanban_block(reason=\"dependency: <card id>\")` only when it can "
++        "never resolve from here.\n"
++        "2. Finish the remaining deliverable (write the required file(s) now).\n"
++        "3. Call `kanban_complete(summary=..., artifacts=[...])` when the work is done. "
++        "Use `kanban_request_review` only when a reviewer is named AND this card has no "
++        "review or validation child yet; a card whose review/validation child already "
++        "exists is finished with `kanban_complete` (completing releases that child), never "
++        "with a second review request. OR call `kanban_block(reason=...)` "
++        "only for a genuine human decision (credentials, approvals, destructive or "
++        "production actions) or a confirmed conflict. A refused board call is not "
++        "terminal: read its error and fix the cause.\n\n"
+         "Never end a turn with only a promise of future action. Repeated "
+         "protocol violations will block this task and require manual intervention.]"
+     )
+diff --git a/tests/agent/test_kanban_stop.py b/tests/agent/test_kanban_stop.py
+index dbe371dd84..7759898b5f 100644
+--- a/tests/agent/test_kanban_stop.py
++++ b/tests/agent/test_kanban_stop.py
+@@ -88,3 +88,67 @@ def test_no_nudge_after_kanban_complete(clear_kanban_env):
+ 
+ 
+ 
++
++
++def _terminal_exchange(name, result, call_id="1", arguments="{}"):
++    return [
++        {"role": "assistant", "content": "",
++         "tool_calls": [{"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}]},
++        {"role": "tool", "name": name, "tool_call_id": call_id, "content": result},
++    ]
++
++
++def test_refused_complete_is_not_terminal(clear_kanban_env):
++    """kanban_complete refused by the board (open parent, wrong run, phantom card ids) left the
++    task running; exiting now would be recorded as a protocol violation, so keep nudging."""
++    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
++    refused = '{"error": "kanban_complete refused: parents not satisfied"}'
++    assert session_called_kanban_terminal(_terminal_exchange("kanban_complete", refused)) is False
++    assert build_kanban_stop_nudge(messages=_terminal_exchange("kanban_block", "Error: claim expired")) is not None
++
++
++def test_success_after_a_refusal_is_terminal(clear_kanban_env):
++    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
++    messages = [*_terminal_exchange("kanban_complete", '{"error": "refused"}', call_id="1"),
++                *_terminal_exchange("kanban_block", '{"ok": true, "status": "blocked"}', call_id="2")]
++    assert session_called_kanban_terminal(messages) is True
++    assert build_kanban_stop_nudge(messages=messages) is None
++
++
++def test_request_review_and_request_changes_are_terminal(clear_kanban_env):
++    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
++    for name in ("kanban_request_review", "kanban_request_changes"):
++        assert build_kanban_stop_nudge(messages=_terminal_exchange(name, '{"ok": true}')) is None
++    assert build_kanban_stop_nudge(messages=_terminal_exchange("kanban_request_review", '{"error": "no"}')) is not None
++
++
++def test_pending_terminal_call_without_result_does_not_count(clear_kanban_env):
++    """Only a successful terminal call ends the turn: a call whose result never arrived
++    (interrupted, never executed) changed nothing on the board, so the guard still fires."""
++    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
++    messages = [{"role": "assistant", "content": "", "tool_calls": [
++        {"id": "9", "type": "function", "function": {"name": "kanban_complete", "arguments": "{}"}}]}]
++    assert session_called_kanban_terminal(messages) is False
++    assert build_kanban_stop_nudge(messages=messages) is not None
++    assert session_called_kanban_terminal(messages + [
++        {"role": "tool", "name": "kanban_complete", "tool_call_id": "9", "content": '{"ok": true}'}]) is True
++
++
++def test_error_markers_are_not_terminal(clear_kanban_env):
++    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
++    for result in ('{"error": "refused"}', '{"ok": false, "reason": "open parents"}', '{"success": false}',
++                   "Error: claim expired", "error: no such task"):
++        assert session_called_kanban_terminal(_terminal_exchange("kanban_complete", result)) is False, result
++    for result in ('{"ok": true}', '{"status": "done"}', "Completed t_abc"):
++        assert session_called_kanban_terminal(_terminal_exchange("kanban_complete", result)) is True, result
++
++
++def test_nudge_tells_the_worker_to_continue_not_block(clear_kanban_env):
++    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
++    nudge = build_kanban_stop_nudge(messages=[], attempts=0)
++    assert "Unfinished work is not a reason to stop or to block" in nudge
++    assert "delegate_task child is collected" in nudge
++    assert "A refused board call is not terminal" in nudge
++    assert "kanban_request_review" in nudge
++    assert "no review or validation child yet" in nudge
++    assert "completing releases that child" in nudge
 diff --git a/tests/tools/test_dev_test_tool.py b/tests/tools/test_dev_test_tool.py
 new file mode 100644
-index 0000000000..01d1c264b5
+index 0000000000..18cf40c763
 --- /dev/null
 +++ b/tests/tools/test_dev_test_tool.py
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,564 @@
 +"""dev_test_run: the typed, registered Go/PostgreSQL test path for Kanban workers, plus the
 +scanner-recovery and credential/database-target guards it brings.
 +
@@ -132,8 +304,11 @@ index 0000000000..01d1c264b5
 +            "command_allowlist": cfg.get("command_allowlist") or []}
 +
 +
-+@pytest.fixture
-+def registry_file(monkeypatch):
++APPROVED_MODE = "credential-broker-netns"
++REJECTED_MODE = "same-uid-landlock"
++
++
++def _make_registry(monkeypatch, mode):
 +    """A trusted (this uid) registry + runner copy in a private dir under the real home."""
 +    root = Path(tempfile.mkdtemp(prefix="devtest-reg-", dir=REAL_HOME))
 +    os.chmod(root, 0o755)
@@ -145,15 +320,35 @@ index 0000000000..01d1c264b5
 +           "profiles": {"validate-matching": {
 +               "checkout": "/opt/repos/validate", "module": "apps/matching-service-go",
 +               "read_roots": ["apps/matching-service-go"], "packages": ["./..."], "container": "validate-pgtest-door",
++               "isolation": {"mode": mode},
 +               "database": {"host": "127.0.0.1", "port": 55443, "dbname": "matching_test", "user": "postgres",
 +                            "sslmode": "disable", "url_env": "MATCHING_TEST_DATABASE_URL", "pgpassfile": PGPASS}}}}
 +    path = root / "profiles.json"
-+    path.write_text(json.dumps(cfg))
-+    os.chmod(path, 0o644)
++    _write_registry(path, cfg)
 +    monkeypatch.setattr(dtt, "CONFIG_PATH", str(path))
 +    monkeypatch.setattr(dtt, "TRUSTED_UID", os.getuid())
-+    yield {"root": root, "path": path, "helper": helper, "cfg": cfg}
-+    shutil.rmtree(root, ignore_errors=True)
++    return {"root": root, "path": path, "helper": helper, "cfg": cfg}
++
++
++def _write_registry(path, cfg):
++    Path(path).write_text(json.dumps(cfg))
++    os.chmod(path, 0o644)
++
++
++@pytest.fixture
++def registry_file(monkeypatch):
++    """Registry whose profile carries the approved isolation mode (directive path enabled)."""
++    reg = _make_registry(monkeypatch, APPROVED_MODE)
++    yield reg
++    shutil.rmtree(reg["root"], ignore_errors=True)
++
++
++@pytest.fixture
++def rejected_registry(monkeypatch):
++    """Registry whose profile carries the rejected same-UID isolation mode."""
++    reg = _make_registry(monkeypatch, REJECTED_MODE)
++    yield reg
++    shutil.rmtree(reg["root"], ignore_errors=True)
 +
 +
 +@pytest.fixture
@@ -178,14 +373,14 @@ index 0000000000..01d1c264b5
 +    approval_module._permanent_approved.clear()
 +    approval_module.clear_session("default")
 +    reset_session_vars()
-+    dtt.mark_recovery_attempted()
++    dtt._reset_recovery_state()
 +    with patch("hermes_cli.config.load_config_readonly", return_value=policy):
 +        assert policy["security"].get("tirith_fail_open") is False, "operator config must stay fail-closed"
 +        assert (policy["approvals"].get("single_query_mode") or "deny") == "deny"
 +        yield policy
 +    approval_module._permanent_approved.clear()
 +    reset_session_vars()
-+    dtt.mark_recovery_attempted()
++    dtt._reset_recovery_state()
 +
 +
 +# ------------------------------------------------------------ arguments ---
@@ -411,6 +606,217 @@ index 0000000000..01d1c264b5
 +    monkeypatch.setattr(dtt, "CONFIG_PATH", str(registry_file["path"]))
 +    monkeypatch.delenv("HERMES_KANBAN_TASK")
 +    assert dtt._check_fn() is False
++
++
++# ------------------------------------------------------ isolation gate ---
++
++ISOLATION_REFUSAL = ("rejected isolation design; operator approval and privileged provisioning required, "
++                     "see docs/dev-test-runner.md in agent-ops-kit")
++
++
++@pytest.mark.parametrize("isolation", [None, {}, {"mode": 3}, {"mode": ""}, "credential-broker-netns"])
++def test_load_registry_requires_an_isolation_mode(registry_file, isolation):
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    if isolation is None:
++        del cfg["profiles"]["validate-matching"]["isolation"]
++    else:
++        cfg["profiles"]["validate-matching"]["isolation"] = isolation
++    _write_registry(registry_file["path"], cfg)
++    with pytest.raises(dtt.DevTestRefused, match="isolation"):
++        dtt.load_registry()
++
++
++def test_approved_profiles_keeps_only_the_broker_netns_mode():
++    cfg = {"profiles": {"a": {"isolation": {"mode": APPROVED_MODE}}, "b": {"isolation": {"mode": REJECTED_MODE}},
++                        "c": {"isolation": {"mode": "credential-broker-netns "}}, "d": {}}}
++    assert list(dtt.approved_profiles(cfg)) == ["a"]
++
++
++def test_rejected_isolation_emits_no_recovery_directive(headless, rejected_registry, worker_env):
++    verdict = check_all_command_guards(RUN370, "local")
++    assert verdict["approved"] is False
++    assert "RECOVERY" not in verdict["message"]
++    assert dtt.recovery_hint(RUN370) == ""
++    assert dtt.pending_recovery() is None
++    assert dtt.block_refusal() is None
++
++
++def test_rejected_isolation_refuses_before_running(rejected_registry, worker_env):
++    def runner(*a, **k):
++        raise AssertionError("must not run")
++
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=runner))
++    assert "validate-matching" in out["error"] and REJECTED_MODE in out["error"]
++    assert ISOLATION_REFUSAL in out["error"]
++
++
++def test_rejected_isolation_hides_the_tool(rejected_registry, worker_env):
++    assert dtt._check_fn() is False
++
++
++def test_rejected_isolation_keeps_the_credential_guards(rejected_registry):
++    assert dtt.credential_block(f"cat {PGPASS}")
++    assert dtt.credential_block("docker exec validate-pgtest-door env")
++    from agent.file_safety import get_read_block_error
++    assert "credential" in (get_read_block_error(PGPASS) or "")
++
++
++# ------------------------------------------------------ recovery state ---
++
++def _ok_runner(argv, **kw):
++    return subprocess.CompletedProcess(argv, 0, json.dumps({"exit_code": 0}), "")
++
++
++def _never_runner(*a, **k):
++    raise AssertionError("must not run")
++
++
++@pytest.mark.parametrize("args", [
++    {"profile": "validate-matching", "database_url": "x"},
++    {"profile": "nope"},
++    {"profile": "validate-matching", "packages": ["../x"]},
++    {"profile": "validate-matching", "run": "a b"},
++    {"profile": "validate-matching", "timeout_seconds": 1},
++])
++def test_malformed_call_keeps_the_pending_recovery(registry_file, worker_env, args):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    out = json.loads(dtt.dev_test_run(args, runner=_never_runner))
++    assert "refused" in out["error"]
++    assert dtt.block_refusal() is not None
++    dtt._reset_recovery_state()
++
++
++def test_precondition_refusal_clears_with_a_recorded_refusal(registry_file, worker_env):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    registry_file["helper"].write_text("tampered\n")
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert "pinned SHA-256" in out["error"]
++    assert dtt.block_refusal() is None
++    assert "pinned SHA-256" in dtt.pending_recovery()["refused"]
++    dtt._reset_recovery_state()
++
++
++def test_rejected_isolation_refusal_of_the_named_profile_is_a_precondition(registry_file, worker_env):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    cfg["profiles"]["validate-matching"]["isolation"]["mode"] = REJECTED_MODE
++    _write_registry(registry_file["path"], cfg)
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert ISOLATION_REFUSAL in out["error"]
++    assert dtt.block_refusal() is None
++    assert REJECTED_MODE in dtt.pending_recovery()["refused"]
++    dtt._reset_recovery_state()
++
++
++def test_refusal_for_another_profile_keeps_the_pending_recovery(registry_file, worker_env):
++    dtt._reset_recovery_state()
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    cfg["profiles"]["other-legacy"] = {**cfg["profiles"]["validate-matching"], "isolation": {"mode": REJECTED_MODE},
++                                       "database": {"host": "127.0.0.1", "port": 1, "dbname": "zz_unrelated"}}
++    _write_registry(registry_file["path"], cfg)
++    assert 'profile="validate-matching"' in dtt.recovery_hint(RUN370)
++    out = json.loads(dtt.dev_test_run({"profile": "other-legacy"}, runner=_never_runner))
++    assert ISOLATION_REFUSAL in out["error"]
++    assert dtt.block_refusal() is not None
++    dtt._reset_recovery_state()
++
++
++def test_runner_start_clears_the_pending_recovery_for_any_exit(registry_file, worker_env):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    dtt.dev_test_run({"profile": "validate-matching"},
++                     runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "garbage", ""))
++    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
++
++
++def test_pending_recovery_is_scoped_to_the_worker_identity(registry_file, worker_env, monkeypatch):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    assert dtt.block_refusal() is not None
++    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "78")
++    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
++    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_87654321")
++    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "77")
++    assert dtt.block_refusal() is None
++    dtt.dev_test_run({"profile": "validate-matching"}, runner=_ok_runner)
++    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_12345678")
++    assert dtt.block_refusal() is not None, "another identity's attempt does not clear this one"
++    monkeypatch.delenv("HERMES_KANBAN_TASK")
++    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
++    dtt._reset_recovery_state()
++
++
++# ------------------------------------------------ database target guard ---
++
++@pytest.mark.parametrize("command", [
++    "psql 'postgresql://u@127.0.0.1:5432/x?host=db.prod.internal'",
++    "psql 'postgresql://u@localhost/x?sslmode=disable&host=10.0.0.5'",
++    "psql 'postgresql:///x?hostaddr=10.0.0.5'",
++    "psql 'postgresql://u@127.0.0.1/x?host=localhost,db.prod.internal'",
++    "psql 'host=localhost hostaddr=10.0.0.5 dbname=x'",
++    "psql 'hostaddr=10.0.0.5 dbname=x'",
++    "psql 'postgresql://u@127.0.0.1:5432,db.prod.internal:5432/x'",
++    "psql 'postgresql://u@db.prod.internal:5432,127.0.0.1:5432/x'",
++    "psql 'postgresql://u@[::1]:5432,[2001:db8::1]:5432/x'",
++    "PGHOSTADDR=10.0.0.5 psql x",
++    "PGHOST=localhost,db.prod.internal psql x",
++    "PGSERVICE=prod psql",
++    "PGSERVICEFILE=/tmp/pg_service.conf psql",
++    "export PGSERVICE=test; go test ./...",
++    "psql 'service=prod'",
++    "psql 'postgresql:///x?service=prod'",
++])
++def test_database_target_block_refuses_hidden_targets(command):
++    assert dtt.database_target_block(command), command
++
++
++@pytest.mark.parametrize("command", [
++    "psql postgresql://u@127.0.0.1:55443/x_test",
++    "PGHOST=localhost psql x",
++    "psql 'postgresql://u@127.0.0.1:5432,localhost:5433/x?sslmode=disable'",
++    "psql 'postgresql:///x?host=/var/run/postgresql'",
++    "psql 'host=127.0.0.1 hostaddr=127.0.0.1 dbname=x'",
++    "PGHOSTADDR=127.0.0.1 psql x",
++    RUN370,
++])
++def test_database_target_block_allows_loopback(command):
++    assert dtt.database_target_block(command) is None
++
++
++# ------------------------------------------------------------ redaction ---
++
++def test_redact_covers_dict_keys():
++    key = f"TestX postgres://postgres:{CANARY}@127.0.0.1:55443/matching_test"
++    out = dtt._redact({key: {key: [key]}})
++    assert CANARY not in json.dumps(out)
++
++
++# --------------------------------------------------------- runner budget ---
++
++@pytest.mark.parametrize("vet,expected", [(False, 600 + 300), (True, 600 + 300 + 600)])
++def test_runner_budget_covers_vet(registry_file, worker_env, vet, expected):
++    req = dtt.validate_args({"profile": "validate-matching", "vet": vet, "timeout_seconds": 600}, _cfg())
++    assert dtt.runner_budget(req) == expected
++    calls = []
++
++    def fake_runner(argv, **kw):
++        calls.append(kw)
++        return _ok_runner(argv, **kw)
++
++    dtt.dev_test_run({"profile": "validate-matching", "vet": vet, "timeout_seconds": 600}, runner=fake_runner)
++    assert calls[0]["timeout"] == expected
++
++
++def test_runner_timeout_does_not_claim_containment(registry_file, worker_env):
++    def slow_runner(argv, **kw):
++        raise subprocess.TimeoutExpired(argv, kw["timeout"])
++
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching", "vet": True}, runner=slow_runner))
++    assert "killed" in out["error"] and "process-group cleanup" in out["error"]
++    assert "2100s" in out["error"]
 diff --git a/tools/approval.py b/tools/approval.py
 index d8f01e1440..06bdf99d29 100644
 --- a/tools/approval.py
@@ -483,10 +889,10 @@ index d8f01e1440..06bdf99d29 100644
          return _approved()
 diff --git a/tools/dev_test_tool.py b/tools/dev_test_tool.py
 new file mode 100644
-index 0000000000..abac0a4b23
+index 0000000000..cb7e7d02f2
 --- /dev/null
 +++ b/tools/dev_test_tool.py
-@@ -0,0 +1,461 @@
+@@ -0,0 +1,594 @@
 +"""``dev_test_run``: registered Go/PostgreSQL development tests for Kanban coding workers.
 +
 +A typed tool instead of a terminal allowlist. The operator registers test profiles in a
@@ -508,13 +914,17 @@ index 0000000000..abac0a4b23
 +5. runs it with an empty environment and returns the runner's JSON (exit code, test, skip
 +   and package counts, failing-test output), redacted again.
 +
-+The connection URL is built by the runner from the profile; the password stays in the
-+operator's credential file, which only the sandboxed tests read. Same-UID limits are
-+documented in the kit (``docs/dev-test-runner.md``).
++Isolation: every profile must declare ``isolation.mode``. Only ``credential-broker-netns`` is
++an approved design; any other mode (including the current ``same-uid-landlock``) is refused,
++hides the tool and never produces a recovery directive. The same-UID design was rejected in
++review: it does not meet the network or credential isolation requirements (tests running as
++the worker's uid can reach the network and the credential file). This module makes no claim
++that any design is sound; see ``docs/dev-test-runner.md`` in agent-ops-kit.
 +
-+The module also carries the scanner-recovery state: a terminal command the unattended gate
-+rejects that has a registered equivalent gets a recovery directive naming this tool, and
-+``kanban_block`` refuses once until that equivalent was tried.
++The module also carries the scanner-recovery state, per worker (task, run): a terminal command
++the unattended gate rejects that has an approved registered equivalent gets a recovery
++directive naming this tool, and ``kanban_block`` refuses until that equivalent was started or
++refused for a precondition outside the worker's control.
 +"""
 +
 +from __future__ import annotations
@@ -541,6 +951,10 @@ index 0000000000..abac0a4b23
 +TOOL_NAME = "dev_test_run"
 +TIMEOUT_MIN, TIMEOUT_MAX, TIMEOUT_DEFAULT = 60, 3600, 1200
 +RUNNER_GRACE = 300
++VET_BUDGET = 600
++APPROVED_ISOLATION_MODE = "credential-broker-netns"
++ISOLATION_REFUSAL = ("rejected isolation design; operator approval and privileged provisioning required, "
++                     "see docs/dev-test-runner.md in agent-ops-kit")
 +PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 +PACKAGE_RE = re.compile(r"^\./(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*(?:[A-Za-z0-9_][A-Za-z0-9_.-]*|\.\.\.)$")
 +RUN_FILTER_RE = re.compile(r"^[A-Za-z0-9_^$|()./*+?\[\]-]{1,256}$")
@@ -607,7 +1021,28 @@ index 0000000000..abac0a4b23
 +    for key in ("helper", "helper_sha256", "python"):
 +        if not isinstance(cfg.get(key), str) or not cfg[key]:
 +            raise DevTestRefused(f"dev-test profile file {path} lacks {key}")
++    for name, prof in cfg["profiles"].items():
++        isolation = prof.get("isolation") if isinstance(prof, dict) else None
++        mode = isolation.get("mode") if isinstance(isolation, dict) else None
++        if not isinstance(mode, str) or not mode:
++            raise DevTestRefused(f"dev-test profile file {path}: profile {name!r} lacks isolation.mode")
 +    return cfg
++
++
++def approved_profiles(cfg: dict) -> dict:
++    """Profiles whose declared isolation is the approved design; all others are refused."""
++    out = {}
++    for name, prof in (cfg.get("profiles") or {}).items():
++        isolation = prof.get("isolation") if isinstance(prof, dict) else None
++        if isinstance(isolation, dict) and isolation.get("mode") == APPROVED_ISOLATION_MODE:
++            out[name] = prof
++    return out
++
++
++def check_isolation(cfg: dict, profile: str) -> None:
++    if profile not in approved_profiles(cfg):
++        mode = ((cfg["profiles"].get(profile) or {}).get("isolation") or {}).get("mode")
++        raise DevTestRefused(f"profile '{profile}' has isolation mode {mode!r}: {ISOLATION_REFUSAL}")
 +
 +
 +def registered_or_none() -> Optional[dict]:
@@ -658,7 +1093,8 @@ index 0000000000..abac0a4b23
 +        worker_identity()
 +    except DevTestRefused:
 +        return False
-+    return os.path.exists(CONFIG_PATH)
++    cfg = registered_or_none()
++    return bool(cfg and approved_profiles(cfg))
 +
 +
 +# ------------------------------------------------------------- arguments ---
@@ -709,6 +1145,11 @@ index 0000000000..abac0a4b23
 +    return argv + ["--timeout", str(req["timeout"])]
 +
 +
++def runner_budget(req: dict) -> int:
++    """Wall-clock budget for the runner process: go test timeout + grace (+ go vet's own budget)."""
++    return req["timeout"] + RUNNER_GRACE + (VET_BUDGET if req["vet"] else 0)
++
++
 +def _redact(value):
 +    try:
 +        from agent.redact import redact_sensitive_text
@@ -719,7 +1160,7 @@ index 0000000000..abac0a4b23
 +    if isinstance(value, list):
 +        return [_redact(v) for v in value]
 +    if isinstance(value, dict):
-+        return {k: _redact(v) for k, v in value.items()}
++        return {_redact(k) if isinstance(k, str) else k: _redact(v) for k, v in value.items()}
 +    return value
 +
 +
@@ -727,11 +1168,23 @@ index 0000000000..abac0a4b23
 +
 +def dev_test_run(args: dict, *, config_path: Optional[str] = None, trusted_uid: Optional[int] = None,
 +                 runner=subprocess.run) -> str:
-+    mark_recovery_attempted()
++    # Recovery state: an argument-validation refusal leaves the pending recovery in place; a
++    # precondition outside the worker's control records the refusal; a started runner clears it.
 +    try:
-+        task, run_id = worker_identity()
++        identity = worker_identity()
++    except DevTestRefused as exc:
++        return tool_error(f"{TOOL_NAME} refused: {exc}")
++    task, run_id = identity
++    try:
 +        cfg = load_registry(config_path, trusted_uid)
++    except DevTestRefused as exc:
++        return _precondition_refused(identity, None, exc)
++    try:
 +        req = validate_args(args, cfg)
++    except DevTestRefused as exc:
++        return tool_error(f"{TOOL_NAME} refused: {exc}")
++    try:
++        check_isolation(cfg, req["profile"])
 +        python = verify_runner(cfg, trusted_uid)
 +        argv = runner_argv(cfg, python, task, run_id, req)
 +        command = shlex.join(argv)
@@ -740,15 +1193,20 @@ index 0000000000..abac0a4b23
 +        if not verdict.get("approved"):
 +            raise DevTestRefused(f"the command guards rejected the fixed runner invocation: {verdict.get('message')}")
 +    except DevTestRefused as exc:
-+        return tool_error(f"{TOOL_NAME} refused: {exc}")
++        return _precondition_refused(identity, req["profile"], exc)
++    budget = runner_budget(req)
 +    started = time.monotonic()
 +    try:
 +        proc = runner(argv, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}, cwd="/", stdin=subprocess.DEVNULL,
-+                      capture_output=True, text=True, timeout=req["timeout"] + RUNNER_GRACE, close_fds=True)
++                      capture_output=True, text=True, timeout=budget, close_fds=True)
 +    except subprocess.TimeoutExpired:
-+        return tool_error(f"{TOOL_NAME}: the runner did not finish within {req['timeout'] + RUNNER_GRACE}s")
++        mark_recovery_attempted(identity, profile=req["profile"])
++        return tool_error(f"{TOOL_NAME}: the runner did not finish within {budget}s and was killed; its descendants "
++                          "(go test, test binaries) may still be running and need the kit's process-group cleanup")
 +    except OSError as exc:
-+        return tool_error(f"{TOOL_NAME}: could not start the trusted runner: {exc}")
++        return _precondition_refused(identity, req["profile"],
++                                     DevTestRefused(f"could not start the trusted runner: {exc}"))
++    mark_recovery_attempted(identity, profile=req["profile"])
 +    try:
 +        result = json.loads(proc.stdout)
 +        if not isinstance(result, dict):
@@ -772,19 +1230,21 @@ index 0000000000..abac0a4b23
 +# ----------------------------------------------------- scanner recovery ---
 +
 +_RECOVERY_LOCK = threading.Lock()
-+_PENDING_RECOVERY: dict = {}
++_PENDING_RECOVERY: dict = {}  # (task, run) -> {"profile", "at"[, "refused"]}
 +_GO_TEST_RE = re.compile(r"(?:^|[\s;&|(])go\s+(?:test|vet)\b")
 +
 +
 +def _matching_profile(command: str, cfg: dict) -> Optional[str]:
-+    for name, prof in sorted(cfg.get("profiles", {}).items()):
++    """An APPROVED profile the rejected command corresponds to (rejected isolation never matches)."""
++    profiles = approved_profiles(cfg)
++    for name, prof in sorted(profiles.items()):
 +        db = prof.get("database") or {}
 +        markers = [str(db.get("url_env") or ""), str(db.get("pgpassfile") or ""),
 +                   f"{db.get('host')}:{db.get('port')}", f"/{db.get('dbname')}"]
 +        if any(m and m in command for m in markers if m not in ("None:None", "/None")):
 +            return name
-+    if len(cfg.get("profiles", {})) == 1 and re.search(r"PGPASSFILE|DATABASE_URL", command):
-+        return next(iter(cfg["profiles"]))
++    if len(profiles) == 1 and re.search(r"PGPASSFILE|DATABASE_URL", command):
++        return next(iter(profiles))
 +    return None
 +
 +
@@ -793,7 +1253,7 @@ index 0000000000..abac0a4b23
 +    if not command or not _GO_TEST_RE.search(command):
 +        return ""
 +    try:
-+        worker_identity()
++        identity = worker_identity()
 +    except DevTestRefused:
 +        return ""
 +    cfg = registered_or_none()
@@ -803,8 +1263,7 @@ index 0000000000..abac0a4b23
 +    if not profile:
 +        return ""
 +    with _RECOVERY_LOCK:
-+        _PENDING_RECOVERY.clear()
-+        _PENDING_RECOVERY.update({"profile": profile, "at": time.time()})
++        _PENDING_RECOVERY[identity] = {"profile": profile, "at": time.time()}
 +    return (f" RECOVERY: an approved equivalent exists. Do not retry, wrap, encode or script this command. "
 +            f"Call {TOOL_NAME}(profile=\"{profile}\", packages=[\"./...\"], race=true, vet=<true if you also need "
 +            f"go vet>, run=<optional test regex>) once as a new request; it runs the registered Go/PostgreSQL tests "
@@ -812,20 +1271,58 @@ index 0000000000..abac0a4b23
 +            f"Continue from its result; block only if {TOOL_NAME} itself refuses, quoting its error.")
 +
 +
++def _current_identity() -> Optional[tuple]:
++    try:
++        return worker_identity()
++    except DevTestRefused:
++        return None
++
++
 +def pending_recovery() -> Optional[dict]:
++    """The recovery entry of the current worker (task, run); None without a worker identity."""
++    identity = _current_identity()
++    if identity is None:
++        return None
 +    with _RECOVERY_LOCK:
-+        return dict(_PENDING_RECOVERY) or None
++        entry = _PENDING_RECOVERY.get(identity)
++        return dict(entry) if entry else None
 +
 +
-+def mark_recovery_attempted() -> None:
++def mark_recovery_attempted(identity: Optional[tuple] = None, *, profile: Optional[str] = None,
++                            refused: Optional[str] = None) -> None:
++    """Resolve the pending recovery of ``identity`` (default: the current worker): drop it, or with
++    ``refused`` record the precondition refusal on it. A ``profile`` other than the one the
++    directive named resolves nothing."""
++    identity = identity or _current_identity()
++    if identity is None:
++        return
++    with _RECOVERY_LOCK:
++        entry = _PENDING_RECOVERY.get(identity)
++        if not entry or (profile is not None and entry.get("profile") != profile):
++            return
++        if refused is None:
++            del _PENDING_RECOVERY[identity]
++        else:
++            entry["refused"] = refused
++
++
++def _reset_recovery_state() -> None:
++    """Tests only: forget every worker's recovery state."""
 +    with _RECOVERY_LOCK:
 +        _PENDING_RECOVERY.clear()
 +
 +
++def _precondition_refused(identity: tuple, profile: Optional[str], exc: Exception) -> str:
++    message = f"{TOOL_NAME} refused: {exc}"
++    mark_recovery_attempted(identity, profile=profile, refused=message)
++    return tool_error(message)
++
++
 +def block_refusal() -> Optional[str]:
-+    """kanban_block refusal while a rejected command's registered equivalent is untried."""
++    """kanban_block refusal while a rejected command's approved equivalent is untried (a recorded
++    precondition refusal lets the worker block, quoting it)."""
 +    pending = pending_recovery()
-+    if not pending:
++    if not pending or pending.get("refused"):
 +        return None
 +    return (f"Not blocked: a terminal command was rejected by the security scanner but an approved equivalent "
 +            f"exists and has not been tried. Call {TOOL_NAME}(profile=\"{pending['profile']}\", ...) first, verify "
@@ -870,42 +1367,84 @@ index 0000000000..abac0a4b23
 +    return None
 +
 +
-+_DB_URL_RE = re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?)://([^\s'\"/?#]*)")
++_DB_URL_RE = re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?)://([^\s'\"/?#]*)([^\s'\"]*)")
 +_PG_CLIENT_RE = re.compile(r"(?:^|[\s;&|(])(?:psql|pg_dump|pg_dumpall|pg_restore|pgbench|createdb|dropdb|vacuumdb|"
 +                           r"reindexdb|clusterdb|pg_isready)\b([^;&|\n]*)")
 +_LOOPBACK = {"127.0.0.1", "localhost", "::1", ""}
++_ENV_PREFIX = r"(?:^|[\s;&|(])"
 +
 +
-+def _host_of(authority: str) -> tuple:
-+    userinfo, _, hostport = authority.rpartition("@")
-+    if hostport.startswith("["):
-+        host = hostport[1:].split("]", 1)[0]
-+    else:
-+        host = hostport.split(",")[0].rsplit(":", 1)[0] if hostport.count(":") <= 1 else hostport
-+    return userinfo, host.lower()
++def _hosts_of(authority: str) -> tuple:
++    """(userinfo, [hosts]) of a URL authority; a multi-host authority yields every host."""
++    userinfo, _, hostports = authority.rpartition("@")
++    hosts = []
++    for hostport in hostports.split(","):
++        if hostport.startswith("["):
++            host = hostport[1:].split("]", 1)[0]
++        else:
++            host = hostport.rsplit(":", 1)[0] if hostport.count(":") <= 1 else hostport
++        hosts.append(host.lower())
++    return userinfo, hosts
++
++
++def _non_loopback(value: str) -> Optional[str]:
++    """First host of a (comma-separated) host list that is neither loopback nor a socket directory."""
++    from urllib.parse import unquote
++    for host in unquote(value).split(","):
++        host = host.strip().lower()
++        if host.startswith("[") and host.endswith("]"):
++            host = host[1:-1]
++        if host not in _LOOPBACK and not host.startswith("/"):
++            return host
++    return None
++
++
++def _host_refusal(host: str) -> str:
++    return f"database host '{host}' is not an approved loopback development database"
++
++
++_SERVICE_REFUSAL = ("a libpq service (PGSERVICE/PGSERVICEFILE/service=) names an unresolvable database target; "
++                    f"use the registered profile through {TOOL_NAME}")
 +
 +
 +def database_target_block(command: str) -> Optional[str]:
 +    """Unattended contexts only: database connection targets other than loopback, and passwords
-+    written into a command line, are refused (nobody can approve a production connection)."""
++    written into a command line, are refused (nobody can approve a production connection).
++
++    This is NOT a security boundary: it is an additive text guard over the command string and
++    cannot see targets set indirectly (config files, variables expanded at run time, programs
++    choosing their own target). It only refuses more; it never approves anything."""
 +    if not command:
 +        return None
 +    for m in _DB_URL_RE.finditer(command):
-+        userinfo, host = _host_of(m.group(1))
++        userinfo, hosts = _hosts_of(m.group(1))
 +        if ":" in userinfo:
 +            return ("a database password written into the command line (use the registered credential file "
 +                    f"through {TOOL_NAME})")
-+        if host not in _LOOPBACK:
-+            return f"database host '{host}' is not an approved loopback development database"
++        for host in hosts:
++            if host not in _LOOPBACK:
++                return _host_refusal(host)
++        for qm in re.finditer(r"(?i)[?&](host|hostaddr|service)=([^&#]*)", m.group(2)):
++            if qm.group(1).lower() == "service":
++                return _SERVICE_REFUSAL
++            bad = _non_loopback(qm.group(2))
++            if bad is not None:
++                return _host_refusal(bad)
 +    for m in _PG_CLIENT_RE.finditer(command):
 +        args = m.group(1)
-+        for hm in re.finditer(r"(?:^|\s)(?:-h\s*|--host[=\s]+)(['\"]?)([^\s'\"]+)\1|\bhost=([^\s'\"]+)", args):
-+            host = (hm.group(2) or hm.group(3) or "").lower()
-+            if host not in _LOOPBACK and not host.startswith("/"):
-+                return f"database host '{host}' is not an approved loopback development database"
-+    for m in re.finditer(r"(?:^|[\s;&|(])PGHOST=(['\"]?)([^\s'\"]+)\1", command):
-+        if m.group(2).lower() not in _LOOPBACK and not m.group(2).startswith("/"):
-+            return f"database host '{m.group(2)}' is not an approved loopback development database"
++        for hm in re.finditer(r"(?:^|\s)(?:-h\s*|--host[=\s]+)(['\"]?)([^\s'\"]+)\1|\b(?:host|hostaddr)=([^\s'\"]+)",
++                              args):
++            bad = _non_loopback(hm.group(2) or hm.group(3) or "")
++            if bad is not None:
++                return _host_refusal(bad)
++        if re.search(r"(?:^|[\s'\"])service=", args):
++            return _SERVICE_REFUSAL
++    for m in re.finditer(_ENV_PREFIX + r"(?:PGHOST|PGHOSTADDR)=(['\"]?)([^\s'\"]+)\1", command):
++        bad = _non_loopback(m.group(2))
++        if bad is not None:
++            return _host_refusal(bad)
++    if re.search(_ENV_PREFIX + r"PGSERVICE(?:FILE)?=", command):
++        return _SERVICE_REFUSAL
 +    return None
 +
 +
@@ -976,3 +1515,6 @@ index f616a4d53a..19f4617f9b 100644
      reason = _redact(
          _require_text(args, "reason", "reason is required — explain what input you need"))
      kind = args.get("kind")
+-- 
+2.43.0
+

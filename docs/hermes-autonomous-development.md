@@ -364,5 +364,7 @@ the operator-approved `PGPASSFILE=â€¦ MATCHING_TEST_DATABASE_URL=postgresql://â€
 go test` command. Repair: runtime patch 0004 (`dev_test_run`, recovery directive,
 `kanban_block` recovery refusal, credential and production-database guards) and the
 root-owned, digest-pinned runner with its Landlock/seccomp sandbox. Root cause, design,
-threat limits, install and smoke: [dev-test-runner.md](dev-test-runner.md). Live activation
-(`make hermes-devtest-install`, then a claimed-worker smoke) is the operator's/parent's step.
+threat limits, install and smoke: [dev-test-runner.md](dev-test-runner.md). **An independent
+review rejected that candidate's same-uid isolation for install**; it now fails closed
+(runner, installer, runtime tool; patch 0005) and `t_12595b96` stays blocked until the approved
+credential-broker/network-namespace design in that page is provisioned by the operator.

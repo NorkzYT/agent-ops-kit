@@ -1,5 +1,85 @@
 # Trusted Go/PostgreSQL dev tests for Kanban workers (`dev_test_run`)
 
+> **Status (2026-11-02): NOT INSTALLED, DISABLED, DESIGN REJECTED.** An independent review of
+> the candidate in kit commit 3e84caa / runtime d15a70ddc8 found that its same-UID Landlock
+> design does not meet the mandatory network and credential isolation requirements. The
+> candidate is kept in the kit with its tractable defects fixed and regression-tested, but it
+> **fails closed everywhere**: the runner refuses every profile whose `isolation.mode` is
+> `same-uid-landlock` (the only implemented mode), the installer refuses to plan or install
+> such a profile, `status` exits non-zero, the runtime tool is hidden and emits no `RECOVERY:`
+> directive for a rejected profile, and workers are told to block naming the missing
+> capability. Nothing below is available to a worker until the approved design in
+> [Approved design (operator approval required)](#approved-design-operator-approval-required)
+> is provisioned, implemented and approved. Validate card `t_12595b96` stays blocked on this.
+
+## Review findings and what was done (kit 3e84caa → this change)
+
+| # | Finding | Status |
+|---|---------|--------|
+| 1 | Tests run as the uid that owns the credential file and the docker socket group; text guards are not a boundary | **Unresolved by design** → fail-closed gate; needs the broker/identity in the approved design |
+| 2 | `postgres` superuser lets a test escape via `COPY TO PROGRAM`, `pg_read_server_files` | **Unresolved** → approved design requires a verified non-superuser role; no DB change made |
+| 3 | TCP rules granted the whole ephemeral range (any host) and were described as "loopback" | **Fixed**: database port only; `sandbox.network_limit` says any host may be reached on it |
+| 4 | seccomp left `socket()` protocol unchecked (MPTCP/SCTP) | **Fixed**: protocol 0 or `IPPROTO_TCP` only; negative test with real syscalls (SCTP, MPTCP, UDP, UNIX, raw, netlink → `EACCES`) |
+| 5 | Source grants by path (TOCTOU), hardlink aliases of `.env` granted | **Fixed**: verified `O_PATH|O_NOFOLLOW` descriptors (regular, `st_nlink == 1`, dev/ino checked) held until the rule is added |
+| 6 | Test/package names and other keys were not scrubbed; truncation before scrubbing | **Fixed**: raw streams scrubbed before parsing, then every key and value of the result (`scrub_object`); encoded leaks remain unsolvable → gate |
+| 7 | Unbounded `communicate()` after timeout, escaped `setsid` descendants, no parent-death | **Fixed (bounded, not contained)**: `PR_SET_PDEATHSIG`, group kill, `KILL_GRACE`-bounded drain, vet budget from the remaining time; escaped descendants reported, not contained |
+| 8 | Container never verified; whole `pgpass` granted | **Partly fixed**: per-run file with only the registered entry; endpoint identity still unverified (needs the broker) |
+| 9 | Malformed lease crashed the runner; TTL unbounded; board never compared | **Fixed**: typed lease fields, TTL 60..7200 s, future-skew refused, `board` compared (config `board`, default `default`) |
+| 10 | `/proc` readable (other processes' `cmdline`) | **Unresolved**: Go toolchain needs `/proc`; needs a pid namespace |
+| 11 | Zero matched tests returned `ok: true` | **Fixed**: zero tests → `ok: false`, exit 1, `error` names the filter |
+| 12 | Malformed `dev_test_run` call cleared the recovery state; state global | **Fixed (runtime f04d4adc80)**: per (task, run) state; cleared only by an actual runner start or a recorded precondition refusal |
+| 13 | `database_target_block` missed `?host=`, multi-host, `PGHOSTADDR`, `PGSERVICE` | **Fixed (additive text guard, not a boundary)** |
+| 14 | Shared build cache across profiles | **Fixed**: per-profile cache directory |
+| 15 | Installer `status` exited 0 when missing/untrusted | **Fixed**: non-zero; `plan`/`install` print `REJECTED` and exit 1 for a rejected design |
+
+## Approved design (operator approval required)
+
+Nothing here exists yet. Provisioning needs root and cannot run unattended: `sudo -n -l` on
+this host grants only `NOPASSWD: /usr/local/libexec/hermes-validate-cwd-scan ""`; unprivileged
+user namespaces are blocked by AppArmor (not to be relaxed). The operator performs these steps
+from an independent privileged shell after reviewing them; none of them is executed by Hermes.
+
+1. **Credential broker identity.** A dedicated system user (e.g. `hermes-devtest-broker`) owns
+   the test credential; `polymath-dev` (and therefore every worker, delegate and terminal) has
+   no read access to it. The broker is a small root-installed service (`systemd` unit, UNIX
+   socket with peer-credential check) that, given `(task, run_id, profile)`, verifies the live
+   board claim and repository lease itself and then starts the test process. The password is
+   never handed to the worker uid in any form.
+2. **Test identity.** A second dedicated user (e.g. `hermes-devtest-runner`, not in `docker`,
+   `sudo` or `adm`) runs the tests. It gets the credential through a file descriptor the
+   broker opens (`PGPASSFILE` on a memfd / private tmpfs), never via a path in the worker home.
+3. **Database role.** A `matching_test`-only role (`NOSUPERUSER NOCREATEROLE NOCREATEDB
+   NOREPLICATION NOBYPASSRLS`, no membership in `pg_read_server_files`, `pg_write_server_files`,
+   `pg_execute_server_program` or any `pg_*` role) with grants limited to the test schema. The
+   broker refuses to start when `SELECT rolsuper, ...` for the role shows anything else. No
+   change to the existing container or its `postgres` superuser until the operator approves it.
+4. **Endpoint identity.** The broker verifies that `127.0.0.1:55443` is published by the
+   registered container (`docker inspect` run by root or by a user in `docker` that is *not*
+   the worker) and pins the container id for the run.
+5. **Network namespace.** Tests run in their own network namespace (root `ip netns` or a
+   `systemd` unit with `PrivateNetwork=` plus a veth/port-forward to the test service only).
+   Reachable: the test database and the sandbox's own loopback (`httptest` servers). Nothing
+   else; no DNS, no docker socket, no host loopback.
+6. **Source snapshot.** The tests build from a read-only snapshot (`git archive` of the claimed
+   checkout at the lease's recorded HEAD, or a bind-mount read-only) so a concurrently writing
+   process cannot alter sources mid-run; `.env*` excluded as today.
+7. **Process containment.** A transient `systemd` scope/cgroup per run (`systemd-run --scope`
+   or `--property=...`), `KillMode=control-group`, `RuntimeMaxSec=` = the requested timeout
+   plus vet budget, pid namespace. Timeout kills the whole cgroup; nothing escapes with `setsid`.
+8. **Registry.** `/usr/local/etc/hermes-devtest/profiles.json` root-owned with
+   `isolation.mode: credential-broker-netns`, pinned runner digest, and the broker socket path.
+   The runtime tool and the runner refuse any other mode (already enforced).
+9. **Verification before resume.** Kit tests with synthetic credentials under the real
+   broker; an installer `status` exiting 0; then a real Kanban smoke from a claimed worker of a
+   throwaway card (`dev_test_run(profile="validate-matching", run="^TestNoSuch$")` must return
+   `ok: false` with `matched no tests`, then a real run with counts). Only after that smoke is
+   `t_12595b96` resumed.
+
+Approval scope requested from the operator: the two system users, the systemd unit/socket, the
+sudoers-free root installation of broker + runner + registry, the database role and schema
+grants, the network namespace plumbing, and the docker inspect right for the broker. No change
+to Tirith, approval modes, hardline/deny rules, AppArmor, sysctls or the existing worker uid.
+
 Kanban coding workers run as single-query (`-q`) sessions. In that context the unattended
 approval gate denies every Tirith `warn`, and nobody can approve one. That is intended and
 stays as is. This page describes the narrow, typed path that lets a worker run the
@@ -86,10 +166,12 @@ network namespaces are not available without relaxing a host security setting. L
 - Processes: Landlock scopes signals and abstract UNIX sockets to the sandbox and denies
   ptrace-mode access (`/proc/<pid>/environ`, `mem`) to processes outside it, so the worker's
   environment is not readable.
-- Network: TCP connect only to the database port and the ephemeral port range (httptest
-  servers), TCP bind only to port 0; seccomp allows `socket()` only for `AF_INET`/`AF_INET6`
-  stream sockets (no UNIX sockets such as `docker.sock`, no UDP/DNS, raw, netlink) and refuses
-  io_uring and x32 syscalls; foreign architectures are killed.
+- Network: TCP connect only to the database port (port-based: any host on that port is
+  reachable, loopback is not confined; `httptest` servers on ephemeral ports are therefore not
+  reachable in this design), TCP bind only to port 0; seccomp allows `socket()` only for
+  `AF_INET`/`AF_INET6` `SOCK_STREAM` with protocol 0 or `IPPROTO_TCP` (no UNIX sockets such as
+  `docker.sock`, no UDP/DNS, raw, netlink, MPTCP or SCTP) and refuses io_uring and x32
+  syscalls; foreign architectures are killed.
 - `RLIMIT_CORE=0`, `no_new_privs`, own session; killed as a group on timeout.
 
 No sandbox (Landlock missing or below ABI 6, not x86_64, any rule failing) means exit 3 and no
@@ -137,11 +219,14 @@ the finding and the missing capability.
 - The guards match command text. Obfuscated references (globs, variables built in pieces) can
   evade them; the model is told never to try, and the sandbox, not the guard, is what keeps
   host secrets away from test code.
-- Stronger isolation (network namespace, separate uid, container without the docker socket)
-  needs a root-level change: an AppArmor `userns` profile for `bwrap` or a dedicated test user
-  with a sudo rule. That is an operator decision, not part of this change.
+- These limits are why the design is rejected and disabled; the approved design above
+  removes them with root-provisioned identities and namespaces. That is an operator decision.
 
-## Install (operator, once; needs the sudo password)
+## Install (operator, once; needs the sudo password) — currently refused
+
+`plan` and `install` exit 1 with `REJECTED` for the shipped profile (`isolation.mode:
+same-uid-landlock`); `status` exits non-zero while nothing trusted is installed. The commands
+stay documented for the approved design.
 
 ```bash
 cd /opt/repos/claude-code-autopilot
@@ -155,7 +240,7 @@ Kanban workers are new `hermes chat -q` processes, so they load patch 0004 when 
 no gateway restart is needed for them. After any runner change: review, then `install` again
 (the old pin makes every call fail closed until then).
 
-## Smoke (from the claimed worker of a card, after `preflight`)
+## Smoke (from the claimed worker of a card, after `preflight`) — not available until approved
 
 ```
 dev_test_run(profile="validate-matching", packages=["./..."], race=true, vet=true)
