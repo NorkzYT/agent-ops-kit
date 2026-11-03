@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "helper": "/usr/local/libexec/hermes-devtest-runner",
+  "helper_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "python": "/usr/bin/python3",
+  "run_as_uid": 1000,
+  "kanban_db": "/home/polymath-dev/.hermes/kanban.db",
+  "lease_dir": "/home/polymath-dev/.hermes/kanban/workflow-runs/leases",
+  "state_dir": "/home/polymath-dev/.cache/hermes-devtest",
+  "go": "/usr/local/go/bin/go",
+  "gomodcache": "/home/polymath-dev/go/pkg/mod",
+  "profiles": {
+    "validate-matching": {
+      "checkout": "/opt/repos/validate",
+      "module": "apps/matching-service-go",
+      "read_roots": ["apps/matching-service-go", "packages/observability-go"],
+      "packages": ["./..."],
+      "container": "validate-pgtest-door",
+      "database": {
+        "host": "127.0.0.1",
+        "port": 55443,
+        "dbname": "matching_test",
+        "user": "postgres",
+        "sslmode": "disable",
+        "url_env": "MATCHING_TEST_DATABASE_URL",
+        "pgpassfile": "/home/polymath-dev/.config/hermes-test-db/pgpass"
+      }
+    }
+  }
+}

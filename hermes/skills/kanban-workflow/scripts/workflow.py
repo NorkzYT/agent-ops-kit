@@ -642,6 +642,15 @@ CODE_HUMAN_GATES = HUMAN_GATES.replace(
   without the operator's explicit approval.""")
 
 
+SCANNER_RECOVERY = """\
+7. A command the security scanner rejects is not a blocker when an approved equivalent
+   exists. Read the rejection; when it names one (RECOVERY: dev_test_run for registered
+   Go/PostgreSQL tests), make that call once as a new request, verify its result and
+   continue. Never retry the rejected command, wrap it in a script, encode it, or ask for a
+   weaker scanner or approval mode. Without an approved equivalent, kanban_block naming the
+   exact command, the scanner finding and the missing capability."""
+
+
 def label(lane: str) -> str:
     return LANE_LABELS.get(lane, lane)
 
@@ -722,6 +731,9 @@ Steps:
    debugging or broad architecture work, start the goal with a line holding only #fable to
    run Claude Fable. Do not hand coding to the Mac or Windows workers or to a local model.
 3. Read the full diff yourself. Run the host-side checks the repo has (lint, unit tests that run here).{xcui}
+   Go tests against a registered local PostgreSQL test database run only through the
+   dev_test_run tool (profile, packages, race, vet); never a terminal command carrying a
+   database URL or a credential file, and never read that file.
 4. Commit on {ctx.branch} (Conventional Commits, no Co-Authored-By trailer), then
    git push origin {ctx.branch}. Never force push. Never merge unless the merge gates below allow it.
 5. With your own terminal tool (never inside delegate_task) run:
@@ -737,6 +749,7 @@ Steps:
    the gates below, production or destructive actions), a confirmed competing writer, or a
    dependency on another card that cannot resolve from here. Never block for the mere
    existence of uncommitted work this card made: checkpoint it, then continue or commit.
+{SCANNER_RECOVERY}
 
 {CODE_HUMAN_GATES}
 {fix}

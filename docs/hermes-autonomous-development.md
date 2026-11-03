@@ -355,3 +355,14 @@ metadata and can be deleted; nothing in any repository was changed by this work.
   terminal env path; `hermes-runtime-patch.sh status` reports `conflict` and the
   three test files in the patches are the contract to rebase against.
 - `test_terminal_yield_to_background` flakiness is pre-existing and unrelated.
+
+## Follow-up: scanner rejection of the approved PostgreSQL tests (run 370)
+
+Run 370 adopted its work and then blocked on a Tirith `warn` (`raw_ip_url` +
+`schemeless_to_sink`, MEDIUM) that the single-query deny mode turns into a block, for
+the operator-approved `PGPASSFILE=… MATCHING_TEST_DATABASE_URL=postgresql://…@127.0.0.1:55443/…
+go test` command. Repair: runtime patch 0004 (`dev_test_run`, recovery directive,
+`kanban_block` recovery refusal, credential and production-database guards) and the
+root-owned, digest-pinned runner with its Landlock/seccomp sandbox. Root cause, design,
+threat limits, install and smoke: [dev-test-runner.md](dev-test-runner.md). Live activation
+(`make hermes-devtest-install`, then a claimed-worker smoke) is the operator's/parent's step.

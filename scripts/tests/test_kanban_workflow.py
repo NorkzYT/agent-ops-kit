@@ -1808,6 +1808,24 @@ class WorkerPolicyTextTest(unittest.TestCase):
         self.assertIn("never adopted\n   this way", text)
         self.assertIn("After a commit, run preflight again before the next checkpoint", text)
 
+    def test_code_card_carries_the_scanner_recovery_policy(self):
+        ctx = wf.Ctx(key="k", title="T", repo=REPO_URL, branch="feat/x", base="main", lanes={}, coder="coder",
+                     reviewer="reviewer", orchestrator="orchestrator", checkout="/opt/repos/app")
+        text = wf.code_body(ctx, 1, "the ask", "")
+        self.assertIn("run only through the\n   dev_test_run tool", text)
+        self.assertIn("never a terminal command carrying a\n   database URL or a credential file", text)
+        self.assertIn("7. A command the security scanner rejects is not a blocker", text)
+        self.assertIn("make that call once as a new request, verify its result and\n   continue", text)
+        self.assertIn("Never retry the rejected command, wrap it in a script, encode it", text)
+        self.assertIn("kanban_block naming the\n   exact command, the scanner finding and the missing capability", text)
+        self.assertNotIn("single_query_mode: approve", text)
+        skill = (REPO / "hermes" / "skills" / "kanban-workflow" / "SKILL.md").read_text()
+        self.assertIn("call the `dev_test_run` tool", skill)
+        self.assertIn("`kanban_block` refuses until you tried it", skill)
+        self.assertNotIn("PGPASSFILE=<path> MATCHING_TEST_DATABASE_URL", skill)
+        for soul in ("hermes/SOUL.md", "hermes/profiles/coder/SOUL.md"):
+            self.assertIn("dev_test_run", (REPO / soul).read_text(), soul)
+
 
 class DesignatedCheckoutLeaseTest(CheckoutRepo, unittest.TestCase):
     """preflight / checkpoint / release on a --checkout code card, and record-sha's
