@@ -9,6 +9,11 @@ the kanban-workflow coordinator working in an operator-designated checkout (`--c
     repo_lease.py register-scanner DIR -- sudo -n /usr/local/libexec/<helper>
     repo_lease.py status     --checkout DIR [--json]
 
+The owner of a run is never taken from the environment: it is the card's board-recorded
+`worker_bound` interpreter of its current run (`bound_worker`), an ancestor of this process
+with the recorded start time, and it fails closed (exit 3) when that is ambiguous (a shared
+owner process, a nested worker, a sibling card bound to the same chain).
+
 One central writer per working tree. The lease is a small JSON file outside the
 repository (under the shared Kanban root) keyed by the canonical git directory and
 owned by board/task/run plus the worker process identity (host, pid and its kernel
@@ -25,7 +30,7 @@ fallback) are classified by ancestry and process facts. Only a small, explicit s
 passive tools is accepted by name; everything else fails closed:
 
   self-chain / own-descendant  this run's own process chain (up to its verified anchor,
-                               the supervising Hermes worker) and its descendants -> fine
+                               the card's board-bound managed worker) and its descendants -> fine
   gone                         exited between scan and inspection (ENOENT/ESRCH)  -> fine
   editor / language-server /   known passive tools: editors, LSP servers, idle
   dev-server / shell           shells with no args or only -i/-l/--login, dev servers -> reported
@@ -305,21 +310,6 @@ def proc_cmdline(pid: int) -> Optional[list]:
     return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
 
 
-def proc_env_value(pid: int, key: str) -> Optional[str]:
-    """One variable of /proc/<pid>/environ (same uid only); None when absent, gone or unreadable."""
-    try:
-        raw = _proc_read(pid, "environ")
-    except ProcVisibilityError:
-        return None
-    if raw is None:
-        return None
-    prefix = key.encode("utf-8") + b"="
-    for part in raw.split(b"\0"):
-        if part.startswith(prefix):
-            return part[len(prefix):].decode("utf-8", "replace")
-    return None
-
-
 def proc_alive(pid: int, start_ticks: Optional[int]) -> Optional[bool]:
     """True/False when decidable; None when /proc is not visible for *pid*."""
     try:
@@ -349,41 +339,136 @@ def ancestors(pid: int, limit: int = 64) -> list:
     return out
 
 
-def _is_hermes_cmd(cmd: list) -> bool:
-    return any(Path(part).name == "hermes" or "hermes_cli" in part for part in cmd[:3])
+# Upstream's per-attempt private interpreter (`python -m agent.managed_worker`): the process
+# `bind_worker_context` binds to exactly one card run and records as that run's `worker_bound`
+# event. The profile's owner (gateway) process is not one: it hosts many cards at once.
+MANAGED_WORKER_MODULE = "agent.managed_worker"
 
 
-def anchor_pid(explicit: Optional[int] = None, task_id: Optional[str] = None) -> int:
-    """Long-lived process that stands for this coordinator run: an explicit pid, else a
-    VERIFIED supervising Hermes worker, else this process itself.
+class IdentityError(LeaseError):
+    """No task-scoped worker identity for this shell: fail closed (exit 3, capability)."""
 
-    A candidate counts as the worker only when it is an ancestor of this process AND, when
-    *task_id* is known, its own environment carries HERMES_KANBAN_TASK=<task_id>. The nearest
-    `hermes` ancestor without that identity (typically the gateway every worker descends
-    from) is never the anchor: with the gateway as anchor every foreign worker would have
-    read as "own descendant". Falling back to our own pid keeps the chain narrow."""
-    if explicit:
-        return int(explicit)
-    lineage = ancestors(os.getpid())
 
-    def verified(pid: int) -> bool:
-        if pid not in lineage:
-            return False
-        if task_id is None:
-            return True
-        return proc_env_value(pid, "HERMES_KANBAN_TASK") == task_id
+def is_managed_worker(cmd: Optional[list]) -> bool:
+    cmd = cmd or []
+    return any(a == "-m" and b == MANAGED_WORKER_MODULE for a, b in zip(cmd, cmd[1:4])) or \
+        any(part.endswith("agent/managed_worker.py") for part in cmd[:3])
 
-    env_pid = (os.environ.get("HERMES_KANBAN_SUPERVISED_WORKER_PID") or "").strip()
-    if env_pid.isdigit() and verified(int(env_pid)):
-        return int(env_pid)
-    for pid in lineage:
+
+def instantiation_epoch() -> str:
+    """`<boot_id>:<pid 1 start ticks>`, the epoch half of upstream's worker fingerprint."""
+    boot_id = pid1 = ""
+    with contextlib.suppress(OSError):
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    with contextlib.suppress(OSError):
+        pid1 = str(proc_start_ticks(1) or "")
+    return f"{boot_id}:{pid1}" if (boot_id or pid1) else ""
+
+
+def _payload(event: dict) -> dict:
+    payload = event.get("payload")
+    if isinstance(payload, str):
         try:
-            cmd = proc_cmdline(pid) or []
-        except ProcVisibilityError:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def current_run(show: dict) -> dict:
+    """The card's one live run from `hermes kanban show --json` (the task dict carries no
+    current_run_id): the card is running and exactly one run is running."""
+    task = show.get("task") or {}
+    if task.get("status") != "running":
+        raise IdentityError(f"card {task.get('id')} is {task.get('status')}, not running")
+    live = [r for r in show.get("runs") or [] if r.get("status") == "running" and not r.get("ended_at")]
+    if len(live) != 1:
+        raise IdentityError(f"card {task.get('id')} has {len(live)} running runs; its current run is not decidable")
+    return live[0]
+
+
+def run_bindings(show: dict, run_id) -> tuple:
+    """(latest worker_bound payload or None, owner_admitted pids) of one run."""
+    bound, owners = None, set()
+    for e in show.get("events") or []:
+        if str(e.get("run_id")) != str(run_id):
             continue
-        if _is_hermes_cmd(cmd) and "gateway" not in cmd[:4] and verified(pid):
-            return pid
-    return os.getpid()
+        if e.get("kind") == "worker_bound":
+            bound = _payload(e)
+        elif e.get("kind") == "owner_admitted" and isinstance(_payload(e).get("pid"), int):
+            owners.add(_payload(e)["pid"])
+    return bound, owners
+
+
+def live_binding_pids(show: dict) -> set:
+    """Pids another running card is bound to (its bound interpreter and its owner); empty
+    when it is not running. Used only to refuse ambiguity, never to grant anything."""
+    try:
+        run = current_run(show)
+    except IdentityError:
+        return set()
+    bound, owners = run_bindings(show, run.get("id"))
+    pids = set(owners)
+    if bound and isinstance(bound.get("pid"), int):
+        pids.add(bound["pid"])
+    return pids
+
+
+def bound_worker(task_id: str, show: dict, others: Iterable[dict] = (), *, explicit_pid: Optional[int] = None,
+                 self_pid: Optional[int] = None, cmdline: Callable[[int], Optional[list]] = None,
+                 epoch: Callable[[], str] = None) -> dict:
+    """Lease owner of this shell for card *task_id*, from board facts only (no environment
+    variable is identity): the card's current run R, the latest `worker_bound` event of R
+    (pid P, fingerprint `<epoch>|<start ticks>`), P an ancestor of this process with that
+    exact start time and epoch, and P a per-attempt managed worker interpreter.
+
+    Fails closed (IdentityError) on anything ambiguous: P is the profile's owner process or
+    not a managed worker (an owner hosts many cards, so its descendants are not attributable),
+    another managed worker sits between this process and P, or another running card of
+    *others* is bound to P or to a process in that chain. Cooperative observation only: it
+    shows which process tree is this card's worker, it does not exclude another writer."""
+    cmdline = cmdline or proc_cmdline
+    epoch = epoch or instantiation_epoch
+    task = show.get("task") or {}
+    if task.get("id") != task_id:
+        raise IdentityError(f"board show is for {task.get('id')}, not {task_id}")
+    run_id = current_run(show).get("id")
+    bound, owners = run_bindings(show, run_id)
+    if not bound:
+        raise IdentityError(f"run {run_id} of {task_id} has no worker_bound event (not a managed worker attempt)")
+    pid, started = bound.get("pid"), bound.get("started_at")
+    ep, sep, ticks = str(started or "").rpartition("|")
+    if not isinstance(pid, int) or pid <= 1 or not sep or not ticks.isdigit():
+        raise IdentityError(f"run {run_id} of {task_id}: worker_bound has no verifiable fingerprint ({started!r})")
+    self_pid = self_pid or os.getpid()
+    lineage = ancestors(self_pid)
+    if pid not in lineage:
+        raise IdentityError(f"no board-recorded bound worker of run {run_id} of {task_id} is an ancestor of this process")
+    try:
+        if proc_start_ticks(pid) != int(ticks):
+            raise IdentityError(f"bound worker pid {pid} of run {run_id} has another start time (pid reused)")
+        if ep and ep != epoch():
+            raise IdentityError(f"bound worker pid {pid} of run {run_id} was recorded in another boot/instantiation")
+        if not is_managed_worker(cmdline(pid)):
+            raise IdentityError(f"bound pid {pid} of run {run_id} is not a per-attempt managed worker "
+                                f"({MANAGED_WORKER_MODULE}); a shared owner process cannot attribute this shell to one card")
+        chain = lineage[:lineage.index(pid)]
+        nested = [p for p in chain if is_managed_worker(cmdline(p))]
+    except ProcVisibilityError as exc:
+        raise IdentityError(f"cannot inspect the bound worker chain: {exc}") from exc
+    if pid in owners:
+        raise IdentityError(f"bound pid {pid} of run {run_id} is the owner process that admitted it; ambiguous")
+    if nested:
+        raise IdentityError(f"another managed worker (pid {nested[0]}) sits between this process and pid {pid}; ambiguous")
+    mine = set(chain) | {pid}
+    for other in others:
+        oid = (other.get("task") or {}).get("id")
+        if oid != task_id and live_binding_pids(other) & mine:
+            raise IdentityError(f"running card {oid} is bound to this process chain too; ambiguous, refusing")
+    if explicit_pid is not None and int(explicit_pid) != pid:
+        raise IdentityError(f"--owner-pid {explicit_pid} is not the bound worker pid {pid} of run {run_id}")
+    return {"board": (os.environ.get("HERMES_KANBAN_BOARD") or "default").strip(), "task": task_id,
+            "run_id": run_id, "pid": pid, "pid_start": int(ticks), "host": socket.gethostname()}
 
 
 def self_chain(self_pid: int, anchors: Iterable[int]) -> set:
@@ -400,22 +485,6 @@ def self_chain(self_pid: int, anchors: Iterable[int]) -> set:
 
 
 # -------------------------------------------------------------- lease ---
-
-def owner_from_env(task_id: str, pid: Optional[int] = None) -> dict:
-    """Lease owner identity of this run; the task id must match the worker's env when present."""
-    env_task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
-    if env_task and env_task != task_id:
-        raise LeaseError(f"this terminal belongs to card {env_task}, not {task_id}")
-    anchor = anchor_pid(pid, task_id)
-    return {
-        "board": (os.environ.get("HERMES_KANBAN_BOARD") or "default").strip(),
-        "task": task_id,
-        "run_id": (os.environ.get("HERMES_KANBAN_RUN_ID") or "").strip() or None,
-        "pid": anchor,
-        "pid_start": proc_start_ticks(anchor),
-        "host": socket.gethostname(),
-    }
-
 
 def leases_dir() -> Path:
     return _private_dir(state_root() / "leases")
@@ -958,7 +1027,8 @@ def checkpoint(task_id: str, identity: dict, git: GitRunner, *, owner: Optional[
     baseline and is never laundered here. Limit: same-uid cooperative evidence; this proves the
     lease was held and no competing writer was observed between baseline and checkpoint, not
     who wrote the bytes."""
-    owner = owner or owner_from_env(task_id)
+    if not owner:
+        raise IdentityError("checkpoint needs the card's bound worker identity (bound_worker)")
     lease = acquire_lease(identity, owner, renew_only=True)
     if lease["status"] != "renewed":
         raise LeaseError(f"checkpoint needs this run's live lease on the checkout ({lease['status']}: {lease['reason']}); "
@@ -1111,7 +1181,8 @@ def preflight(task_id: str, checkout: str, repo: str, branch: str, base: str = "
                "detail": "origin matches the card's repo" if same_remote(identity["remote"], repo)
                else f"origin is '{identity['remote'] or 'none'}', the card's repo is '{repo}'"}]
     checks += branch_checks(identity, branch, base, git)
-    owner = owner or owner_from_env(task_id)
+    if not owner:
+        raise IdentityError("preflight needs the card's bound worker identity (bound_worker)")
     lease = acquire_lease(identity, owner, ttl)
     checks.append({"check": "lease", "ok": lease["status"] != "conflict", "detail": f"{lease['status']}: {lease['reason']}"})
     scan = classify_scan(run_scan(identity["root"], scan_runner, registry), self_pid, anchors=[owner["pid"]])
@@ -1171,7 +1242,8 @@ def parser() -> argparse.ArgumentParser:
     pf.add_argument("--branch", required=True)
     pf.add_argument("--base", default="main")
     pf.add_argument("--require-clean", action="store_true", help="also fail on any uncommitted path (record-sha)")
-    pf.add_argument("--owner-pid", type=int, default=None, help="process that stands for this run (default: the worker)")
+    pf.add_argument("--owner-pid", type=int, default=None,
+                    help="must equal the card's board-recorded bound worker pid (never an arbitrary anchor)")
     cp = sub.add_parser("checkpoint", help="record this task's own dirty files for resume (needs this run's lease, "
                                            "a clean writer scan and a baseline from a passing preflight)")
     common(cp)
@@ -1194,24 +1266,46 @@ def emit(result, as_json: bool = True) -> None:
     print(json.dumps(result, indent=2, sort_keys=True, default=str))
 
 
-def cli_owner(task_id: str, explicit_pid: Optional[int] = None) -> dict:
-    """Lease owner for the lease-taking CLI commands. Without --owner-pid the anchor must be a
-    verified supervising worker: falling back to this short-lived CLI process would take a lease
-    that dies with it, so the next checkpoint could never renew it. Refuse that up front."""
-    owner = owner_from_env(task_id, explicit_pid)
-    if explicit_pid is None and owner["pid"] == os.getpid():
-        raise LeaseError(f"no verified supervising Hermes worker for card {task_id} in this process's ancestry "
-                         "(HERMES_KANBAN_SUPERVISED_WORKER_PID unset/unverified, or the worker's HERMES_KANBAN_TASK "
-                         "differs); refusing a lease owned by this short-lived CLI process. Run from the card's "
-                         "worker terminal or pass --owner-pid <long-lived pid that stands for this run>")
-    return owner
+HermesRunner = Callable[[list], subprocess.CompletedProcess]
 
 
-def main(argv=None, git: GitRunner = default_git, scan_runner: ScanRunner = default_scan_runner) -> int:
+def default_hermes(argv: list) -> subprocess.CompletedProcess:
+    return subprocess.run([os.environ.get("HERMES_BIN", "hermes"), *argv], capture_output=True, text=True, timeout=120)
+
+
+def read_show(task_id: str, hermes: HermesRunner = default_hermes) -> dict:
+    """`hermes kanban show <id> --json`, the only board call this module makes (a read)."""
+    r = hermes(["kanban", "show", task_id, "--json"])
+    if r.returncode != 0:
+        raise IdentityError(f"hermes kanban show {task_id} failed: {(r.stderr or r.stdout).strip()[:300]}")
+    try:
+        show = json.loads(r.stdout)
+    except json.JSONDecodeError as exc:
+        raise IdentityError(f"hermes kanban show {task_id} returned non-JSON output") from exc
+    if not isinstance(show, dict):
+        raise IdentityError(f"hermes kanban show {task_id} returned no task")
+    return show
+
+
+def cli_owner(task_id: str, checkout_identity: Optional[dict] = None, explicit_pid: Optional[int] = None,
+              hermes: HermesRunner = default_hermes) -> dict:
+    """Lease owner for the CLI: the card's bound worker (bound_worker), checked against the
+    card that holds the checkout's lease when that is another card (a sibling bound to the
+    same chain is ambiguous). Never this short-lived CLI process, never an env value."""
+    show = read_show(task_id, hermes)
+    others = []
+    holder = ((read_lease(checkout_identity) or {}).get("owner") or {}) if checkout_identity else {}
+    if holder.get("task") and holder["task"] != task_id and TASK_RE.match(str(holder["task"])):
+        others.append(read_show(holder["task"], hermes))
+    return bound_worker(task_id, show, others, explicit_pid=explicit_pid)
+
+
+def main(argv=None, git: GitRunner = default_git, scan_runner: ScanRunner = default_scan_runner,
+         hermes: HermesRunner = default_hermes) -> int:
     args = parser().parse_args(argv)
     try:
         if args.cmd == "preflight":
-            owner = cli_owner(args.task, args.owner_pid)
+            owner = cli_owner(args.task, repo_identity(args.checkout, git), args.owner_pid, hermes)
             result = preflight(args.task, args.checkout, args.repo, args.branch, args.base, git=git,
                                scan_runner=scan_runner, owner=owner, require_clean=args.require_clean)
             emit(result)
@@ -1219,9 +1313,7 @@ def main(argv=None, git: GitRunner = default_git, scan_runner: ScanRunner = defa
         identity = None
         if args.cmd in ("checkpoint", "adopt", "release"):
             identity = repo_identity(args.checkout, git)
-            explicit = getattr(args, "owner_pid", None)
-            # refuses another card's terminal; checkpoint also refuses a self-anchored owner
-            owner = cli_owner(args.task, explicit) if args.cmd == "checkpoint" else owner_from_env(args.task, explicit)
+            owner = cli_owner(args.task, identity, getattr(args, "owner_pid", None), hermes)
         if args.cmd == "checkpoint":
             emit(checkpoint(args.task, identity, git, owner=owner, scan_runner=scan_runner))
             return 0
@@ -1238,6 +1330,9 @@ def main(argv=None, git: GitRunner = default_git, scan_runner: ScanRunner = defa
             return 0
         emit(lease_status(args.checkout, git))
         return 0
+    except IdentityError as exc:
+        print(f"repo-lease: capability: task-scoped worker identity: {exc}", file=sys.stderr)
+        return 3
     except LeaseError as exc:
         print(f"repo-lease: {exc}", file=sys.stderr)
         return 2

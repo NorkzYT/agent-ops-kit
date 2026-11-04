@@ -1,5 +1,20 @@
 # Runtime patches to the installed Hermes
 
+> **Status (2026-11-04): archived legacy, not an install prerequisite.** The installed runtime is
+> the official Hermes `71736c9f32597bbca9d89cede5aa136e55946b2f`. None of 0001–0004 applies to it
+> (0001 fails `git apply --check` on 6 files and reverses a documented upstream invariant: worker
+> shells stay fenced and workers write the board through native `kanban_*` tools; 0002 is native
+> upstream; 0003 is partly upstreamed; 0004's tool is a rejected design and its trigger, Tirith,
+> was removed upstream in 911da42e9e). Source: the scratch compatibility report
+> `~/.hermes/cache/scratch/runtime-compat-20261104/REPORT.md` §1–2, §6. The base `9ebe5777` =
+> `9ebe577798eaab1b3e95b5c44c588c9bb5e43799` is a **local, customized, unpushed** commit of the old
+> live checkout (on upstream `205645ee`), not an upstream commit; `manifest.json` pins it as
+> provenance only. Every patch stays `unreviewed`: the reproduction proof (base + 0001..0004 = tree
+> of `61cbead82d`) is not a review, and nothing here is approved. Do not apply, regenerate or rebase
+> these patches. The kit's workflow no longer depends on them: `workflow.py` reads the board and
+> prints native ops (docs/discord-kanban-workflow.md, "Board transport"). The text below describes
+> the legacy set as it was built.
+
 The kit configures Hermes through documented keys, skills and prompts. Four
 behaviours it depends on live in the Hermes runtime itself and are not
 configurable; they are carried here as git patches against the installed
@@ -21,13 +36,64 @@ no trailers) so a reinstall or upgrade can re-apply them and
 ## Commands
 
 ```bash
-make hermes-runtime-patch-status      # applied | applicable | conflict, per patch
-make hermes-runtime-patch-apply       # apply the applicable ones (working tree only), then: make hermes-restart
-scripts/hermes-runtime-patch.sh check --src /path/to/hermes-agent   # exit 0 iff nothing conflicts
+make hermes-runtime-patch-status      # applied | applicable | conflict | ambiguous | blocked | dirty | unsafe
+make hermes-runtime-patch-apply SRC=/path/to/isolated-checkout   # never the installed runtime (refused)
+scripts/hermes-runtime-patch.sh check --src /path/to/hermes-agent   # exit 0 iff every patch is applied or applicable (= apply would not refuse)
 ```
 
-`apply` touches only the files a patch names and refuses when one of them is
-dirty in the runtime checkout; an unrelated dirty file never blocks it. Nothing
+`apply` needs an explicit isolated `--src` and refuses the installed runtime
+by path, dev/inode, shared git metadata (linked worktrees) and every home it
+can be reached from, including profile sessions; it is disabled when the passwd
+home can't be resolved (docs/hermes-source-management.md, which also lists the
+residual limits: pathname checks only, apply atomic only up to `git apply`).
+
+**Manifest gate.** `manifest.json` (schema `hermes-runtime-patches/v1`, or `--manifest FILE`)
+pins the full upstream `base` commit, the ordered patch file names, each patch's SHA-256 and
+its `review` (`status`: `unreviewed` | `reviewed` | `rejected`; `reviewed` also needs
+`verdict: "approved"`, `reviewer`, `reference`, `date` and `sha256` equal to the patch's hash,
+which binds the record to those bytes). The manifest is parsed strictly: duplicate keys,
+`NaN`/`Infinity`, nesting deeper than 32 and strings that are not valid Unicode refuse the set
+(status still exits 0, `NOT VERIFIED`). `apply` refuses the whole set (exit 1,
+nothing written) unless the manifest exists, `base` is a full id equal to the checkout's HEAD,
+the patch files equal the listed ones in order, every hash matches and every patch is
+`reviewed`; `check` fails in the same cases. `status` exits 0 and prints `manifest: verified`
+or `NOT VERIFIED` with each reason, plus `review=<status>` per patch (`--json`: `manifest`,
+`patches[].review`). Today's manifest pins the hashes of 0001–0004, all `unreviewed`, and the
+legacy local base `9ebe577798eaab1b3e95b5c44c588c9bb5e43799` as provenance only (`status:
+archived-legacy`): `apply` refuses because nothing is reviewed, and against the official runtime
+because HEAD is not that base. A hash match is not a review; never mark a
+patch reviewed without the reviewer's record. Regenerating a patch changes its hash, so its
+review must be redone. Every field is self-asserted: the manifest (and any file passed with
+`--manifest`, which replaces the default entirely) is plain JSON any same-UID process can
+write; `review.sha256` is an equality check, not a signature or proof that a review happened.
+Git reads ignore replace refs (`GIT_NO_REPLACE_OBJECTS=1`), trees and blobs are read by the
+captured full HEAD id, and HEAD is rechecked after classification and before and after the
+write (a move exits 2; for `apply` it refuses before the write, or after the real write began
+marks the patches `unknown`); the index and worktree are still
+read separately, so this cannot exclude a hostile same-UID process racing them.
+Deployment is a separate authorized step. Classification is a simulation, not `git apply --check`:
+the set is peeled back from HEAD (committed patches) and replayed in order on the targets' HEAD
+blobs; a hunk lands at its stated line on its exact base (`index` blob id), elsewhere only where
+its context occurs exactly once (now and in the base), so a repeated block, a duplicate patch
+or an overlapping hunk is `conflict`/`ambiguous`, never shifted. Each target's worktree must
+equal one state of that chain: changes the set explains (an earlier or interrupted apply) are
+`applied` and the rest `applicable`, so a partly applied isolated checkout resumes; a staged
+change, a local edit or a partly present patch is `dirty`, and patches after a refused one on
+the same file are `blocked`. A patch whose targets or hunks can't be parsed exactly (copy,
+binary, symlink/submodule modes), or that touches a filtered, ident, working-tree-encoding,
+non-LF `eol`, CR-carrying `text`, submodule, assume-unchanged or skip-worktree path, is
+`unsafe`. `check` fails exactly when `apply` would refuse; any refused patch refuses the whole
+set, `--json` encodability of paths and names is checked before any write (the report is
+rendered and written after the write phase: a nonzero exit or missing report from `apply`
+means an unknown outcome, run `status` before retrying; exit 4 = the report could not be
+written), the remaining patches are
+replayed with `git apply` in a scratch copy and must match the simulation, and the written
+targets are compared afterwards (a mismatch is reported, not rolled back: not a transaction).
+`apply` reports `outcome: not_attempted` (refused or no-op, nothing written), `verified`, or
+`unknown` (the real write began, then failed or was not verified: patch state `unknown`,
+`applied now: unknown`; `--json` adds `outcome`, `write_attempted`, `applied_now` = null).
+An unrelated dirty file never blocks it. status/check
+refuse a split-index checkout (any index read rewrites `.git/sharedindex.*` mtimes). Nothing
 is committed, reset or restarted. After `hermes update`, run `status`: an
 upstream that already contains a change reports it `applied`; a `conflict` means
 the patch must be rebased by hand on the new source (the tests under

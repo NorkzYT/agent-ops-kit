@@ -57,9 +57,10 @@ Ollama stays available for explicit `#privacy` turns (see
 
 ## The loop
 
-1. **Intake.** One command builds round 1 and the report card and subscribes
-   the Discord thread. The request (the CSV-derived task set) is stored
-   verbatim at the end of each card.
+1. **Intake.** One command plans round 1 and the report card; the orchestrator
+   creates them with its native `kanban_create` tool (see "Board transport"),
+   which subscribes the Discord thread. The request (the CSV-derived task set) is
+   stored verbatim at the end of each card.
 2. **Code card.** The coordinator clones the repo URL into
    `~/hermes-work/<card>`, writes the code through `delegate_task` (Claude
    Opus; `#fable` for hard work), reads the diff, runs the host-side checks,
@@ -142,12 +143,50 @@ overrides) and then mirrored to the card as a `kanban-workflow` comment.
   dispatch; the peer replays the same run.
 - A failed card comment no longer loses the run: the ledger has it, `dispatch`
   and `wait` resume from it, and the next command mirrors it to the card.
-- Mutating commands refuse to run inside a `delegate_task` child or a cron run
-  (Hermes refuses Kanban writes there), before any remote run starts. The prompts
-  tell relays and the coordinator to run them with their own terminal tool. That
-  terminal carries the card id (`$HERMES_KANBAN_TASK`) and the supervised-terminal
-  marker from runtime patch 0001 (`hermes/runtime-patches/README.md`); without the
-  patch every `hermes kanban comment/create/link` from a worker is refused.
+- **Board transport (native-v1).** The scripts never write the board: they read it
+  with `hermes kanban show --json` (allowed from every worker shell) and print the
+  writes as native ops, exit 5: `{"converged": false, "ops": [...], "rerun": [...],
+  "bind_root": bool}`. The agent applies each op verbatim with its own
+  `kanban_create` / `kanban_comment` / `kanban_link` tool (they carry the runtime's
+  claimed-worker identity, author/creator from the runtime profile, and refuse a
+  `delegate_task` child) and runs `rerun`; only a converged run prints the result and
+  its `kanban_complete` metadata. Discovery before every create (children of the
+  first parent by header identity; the root through `--bind <id>`, verified like any
+  other card), deterministic record ids, ledger-first records and at most two
+  re-emissions per op (the third is exit 4 `native apply did not land`) keep reruns
+  idempotent; existing graphs, including pre-migration (legacy) ones, resolve to their
+  cards. Records on a card count only from the runtime author of their role; the old
+  `kanban-workflow` author only on preserved pre-migration records of legacy cards.
+  This replaces runtime patch 0001, which does not apply to the official runtime.
+- **Readback is a re-evaluation.** A finished command's rerun is `sync <card> --op
+  <token>`, one token per output. Once its ops landed, sync reruns the command
+  read-only: the source, HEAD, remote branch, the card's status and run, gates and
+  verdicts are checked again. Any move after the output, any new write the command
+  would need, or a missing, consumed or superseded token is exit 4 `"stale": true`
+  (nothing certified; run the original command again). A second command on the same
+  card never hands its result to the first.
+- **Verdict authority.** `verdict` records only from the review card's own bound
+  worker (the identity below); the gate counts only a verdict landed on the review
+  card by the reviewer's runtime profile. A ledger-only verdict (never sent, or
+  written by any same-UID shell) is no approval. Ledger and board files stay same-UID
+  writable: this is cooperative attribution, not an OS security boundary.
+- **Notifications.** There is no `notify-subscribe` call any more. A native
+  `kanban_create` from the Discord session subscribes that session to the card with
+  upstream's default `notify+wake`, and later cards inherit their parents' and
+  creator's subscriptions. Thus the thread is woken for work cards too, not only the
+  report: such a wake is a status line (at most one line, no action, never a new
+  route or card); only the report card's completion is the report.
+- **Worker identity for repository steps.** No environment variable is identity
+  (the worker shell carries no card id). `preflight`/`checkpoint`/`adopt`/`release`,
+  `record-sha` and completion writes on a `--checkout` card take their lease owner from
+  the board: the card's running run, its `worker_bound` event (the per-attempt
+  `python -m agent.managed_worker` interpreter, pid + start time), that pid an ancestor
+  of the shell with the recorded start time and epoch, and no other running card of the
+  request (or the lease holder) bound to the same process chain. A shared owner
+  process, a nested worker, a second running run or any mismatch fails closed with
+  exit 3 `capability: task-scoped worker identity: …` while the board transport keeps
+  working. This is cooperative observation by same-uid processes, not a protected
+  exclusive writer and not containment.
 - Designated checkout (`--checkout`): `workflow.py preflight <code card> --repo-dir <checkout>`
   takes a repository lease (`~/.hermes/kanban/workflow-runs/leases/<key>.json`,
   owner = board, card, run, worker pid + start time), runs the registered
@@ -161,6 +200,12 @@ overrides) and then mirrored to the card as a `kanban-workflow` comment.
   uncommitted work: `workflow.py adopt <code card> --repo-dir <checkout> --manifest <path: sha256 json>`
   (every listed path must match byte for byte; nothing else is adopted).
   Details and the threat boundary: `docs/hermes-autonomous-development.md`.
+- Completion state (`completion` records): the coordinator's criteria, plan,
+  delegate states, source-bound test/review evidence, recovery attempts and
+  block checks. `workflow.py completion status <card>` shows the stages and the
+  next unmet criteria after any restart; `completion handoff` gates the code
+  card (implementation handoff), `completion final` the report (final
+  completion). Runbook: `docs/engineering-completion.md`.
 - An approval stop is tied to the card and run: the blocker names both
   (`… (card t_…, run run_…)`). After you approve or deny on the worker and
   unblock, `dispatch` resumes that same run while it is live, else starts the
@@ -228,7 +273,7 @@ make hermes-dev-workflow-plan    # what the narrow helper would copy; writes not
 make hermes-dev-workflow-apply   # kanban-workflow skill + coder SOUL.md only; backups, no config, no restart
 for p in mac-worker windows-worker reviewer; do cp hermes/profiles/$p/SOUL.md ~/.hermes/profiles/$p/SOUL.md; done
 make hermes-runtime-patch-status   # the three runtime patches the workflow relies on (hermes/runtime-patches/README.md)
-make hermes-runtime-patch-apply    # when any is "applicable"
+# "applicable" = not installed; deploy a reviewed build only with authorization (docs/hermes-source-management.md)
 make hermes-restart          # from your own terminal, never from inside Hermes
 ```
 
@@ -347,17 +392,23 @@ These hold on every card, in the remote task and in the profile prompts:
 | `preflight` exit 2 `writers: pid N: agent-writer` / `git-mutation` | another autonomous agent or a git command is working in the checkout | let it finish or stop it yourself; the card retries `preflight` |
 | `preflight` exit 3 `scan incomplete` / `unknown` | the registered scanner failed, is missing, or the unprivileged fallback could not inspect other users' processes | `repo_lease.py register-scanner <checkout> -- sudo -n <root-owned helper>`; check `sudo -n <helper>` runs without a password |
 | `preflight` exit 2 `dirty: unknown dirty paths` | uncommitted files this card never recorded | if they are this card's: `checkpoint`; if they are authorized pre-existing work: `adopt --manifest`; otherwise the operator decides, never reset/stash |
-| `this terminal belongs to card t_…, not t_…` | a command named another card | run it for `$HERMES_KANBAN_TASK` only |
-| worker `hermes kanban comment …` says `delegate_task child contexts cannot mutate` | runtime patch 0001 not applied, or the command ran inside delegate_task | `make hermes-runtime-patch-status`; run from the worker's own terminal |
+| exit 3 `capability: task-scoped worker identity: …` | the shell is not under the card's board-bound managed worker (another card's run, a shared owner, a sibling bound to the same chain, the run ended) | run it from the card's own worker; if it persists the card blocks with that reason for the operator |
+| exit 4 `native apply did not land: …` | the op was not applied (or applied from a delegate child, or edited) three times | apply the printed op verbatim with the native tool from the card's worker, then rerun |
+| exit 4 `board-mismatch: …` | a card with the planned identity exists but differs (edited body, other creator, wrong `--bind`) | inspect it with `hermes kanban show`; never create a second card |
+| worker `hermes kanban comment …` says `delegate_task child contexts cannot mutate` | a CLI board write from a worker shell (always fenced) | never use the CLI for board writes: apply the printed native ops |
 | card `blocked: peer-run: …` | worker offline, gateway down, key mismatch (HTTP 401), or 3 unusable attempts | `hermes -p mac-worker peer dm mac`; on the worker, `hermes gateway status`; re-run step 2 for a new key; then `hermes kanban unblock <id>` |
 | round card `blocked: round N: … done without evidence` | a validation card was completed by hand | re-run that lane: unblock is not possible on `done`; start a new intake for the work with `--key <old key>-r2 --branch <same branch>` |
 | report card `blocked: review-gate: …` | the final SHA lacks evidence or an independent approval | `make workflow-gate ID=<report>` lists the failing check |
 | `no idempotency key` | intake ran outside a Discord turn | pass `--key <unique>` |
 | card sits in `ready` | gateway down, or `max_in_progress` reached | `hermes gateway status`, `hermes kanban diagnostics` |
-| no report in Discord | intake ran without a Discord origin | `hermes kanban notify-list <report id>`; subscribe with `hermes kanban notify-subscribe <id> --platform discord --chat-id <id> --delivery-mode notify+wake` |
+| no report in Discord | the cards were not created from the Discord session (no native auto-subscribe) | `hermes kanban notify-list <report id>`; the operator may subscribe by hand: `hermes kanban notify-subscribe <id> --platform discord --chat-id <id> --delivery-mode notify+wake` |
 
-Tests: `make test-kanban-workflow` (fake runner and temp git repositories, plus
-the real `hermes kanban` and `hermes peer` CLIs on a temporary board against a
-local fake peer gateway when Hermes is installed; never the live board or real
-peers; and `test_repo_lease.py`: two processes racing for a lease, dead/reused
-owner recovery, writer classification, scanner contract, manifests, preflight).
+Tests: `make test-kanban-workflow` (fake runner with native-op handlers and temp git
+repositories; with `HERMES_UPSTREAM_SRC` and `HERMES_UPSTREAM_PYTHON` pointing at a
+pinned upstream checkout and its venv, the real `kanban_create`/`kanban_comment`/
+`kanban_link` handlers, `hermes kanban show` and `hermes peer` on a throwaway
+`HERMES_HOME` against a local fake peer gateway, skipped otherwise; never the live
+board, runtime or real peers; and `test_repo_lease.py`: two processes racing for a
+lease, dead/reused owner recovery, board-bound worker identity under a real
+`python -m agent.managed_worker` parent, writer classification, scanner contract,
+manifests, preflight).

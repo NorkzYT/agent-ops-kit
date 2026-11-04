@@ -50,18 +50,30 @@ validates against the SHA and stores on the card (not the model's prose).
 
 Every record (peer run, evidence, pushed SHA, round outcome, review verdict) is
 written first to a local append-only ledger under the shared Kanban root and then
-mirrored to the card as a comment; a failed comment is re-synced by the next
-command, thus a started remote run is never lost. Mutating commands refuse to run
-inside a delegate_task child, where Hermes forbids Kanban writes.
+mirrored to the card as a comment; a comment that did not land is re-synced by the
+next command, thus a started remote run is never lost.
 
-Everything goes through the `hermes kanban` / `hermes peer` CLIs and `git` (no
-direct SQLite access). Idempotent: every card carries an idempotency key derived
-from the Discord message and the round. Stdlib only.
+Board transport (native-v1): this script only READS the board (`hermes kanban show
+--json`) and never writes it. Every board write is a native operation the agent
+applies with its own `kanban_create` / `kanban_comment` / `kanban_link` tools, which
+carry the runtime's claimed-worker identity and guards (a delegate_task child is
+refused there). A command that needs writes prints
+{"converged": false, "ops": [...], "rerun": [...]} and exits 5; the agent applies the
+ops verbatim, in order, and runs `rerun`, which reads them back. Only a converged run
+prints the result (and any kanban_complete metadata). No CLI value or environment
+variable is authority: explicit task ids are data, verified against the board.
+
+Reads go through the `hermes kanban show` / `hermes peer` CLIs and `git` (no direct
+SQLite access). Idempotent: every card carries an idempotency key derived from the
+Discord message and the round, and is discovered by its header before any create.
+Stdlib only.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import hashlib
 import json
 import os
 import re
@@ -75,6 +87,7 @@ SCRIPT = Path(__file__).resolve()
 sys.dont_write_bytecode = True  # keep __pycache__ out of the installed skill dir
 sys.path.insert(0, str(SCRIPT.parent))
 import browserstack as bs  # noqa: E402
+import completion as cp  # noqa: E402
 import repo_lease as rl  # noqa: E402
 
 LANES = {"mac": "mac-worker", "windows": "windows-worker"}
@@ -116,8 +129,22 @@ RUNTIME_RE = re.compile(r"^(?:[0-9]+[smhd]?)?$")
 PROTECTED_BRANCHES = {"main", "master", "develop", "release", "production"}
 KINDS = ("code", "validate", "round", "review", "report")
 REQUEST_MARKER = "===== Request (verbatim) ====="
-TASK_TOKEN = "$HERMES_KANBAN_TASK"
-RECORD_TYPES = ("peer-run", "evidence", "code-sha", "round", "verdict")
+TASK_TOKEN = "<this card's id>"  # the agent types its own card id (kanban_show); no shell carries it
+NATIVE_V1 = "native-v1"
+TRANSPORT_HEADER = ("Board-transport", NATIVE_V1)  # bodies this transport renders (byte-exact readback)
+LEGACY_AUTHOR = "kanban-workflow"  # the CLI-era record author; trusted on preserved pre-migration records only
+# Native tool argument keys (upstream tools/kanban_tools_schemas.py at 71736c9f); ops carry no other key.
+NATIVE_SCHEMA = {
+    "kanban_create": frozenset({"title", "assignee", "body", "parents", "idempotency_key", "max_runtime_seconds",
+                                "tenant", "priority", "workspace_kind", "workspace_path", "project", "triage",
+                                "skills", "model", "provider", "goal_mode", "goal_max_turns", "completion_contract",
+                                "initial_status", "board"}),
+    "kanban_comment": frozenset({"task_id", "body", "board"}),
+    "kanban_link": frozenset({"parent_id", "child_id", "board"}),
+}
+EXIT_PENDING = 5  # native ops to apply, then rerun
+MAX_EMISSIONS = 2  # an op emitted a third time did not land: block instead of looping
+RECORD_TYPES = ("peer-run", "evidence", "code-sha", "round", "verdict", cp.RTYPE)
 MAX_ATTEMPTS = 3  # automatic peer attempts per validation card; an operator unblock adds one
 RUNNING = {"queued", "started", "running", "stopping"}
 FAILED = {"failed", "cancelled", "interrupted"}
@@ -145,6 +172,23 @@ class WorkflowError(RuntimeError):
     pass
 
 
+class Mismatch(WorkflowError):
+    """A board card exists for a planned create but differs from it (exit 4, never a second create)."""
+
+
+class CapabilityError(WorkflowError):
+    """A required capability is missing on this host (exit 3), e.g. no task-scoped worker identity."""
+
+
+class Pending(Exception):
+    """Native create ops were emitted and later steps need their ids: stop here, rerun after applying."""
+
+
+class Stale(WorkflowError):
+    """`sync` re-evaluated a finished command and it would now write something else: the source,
+    the remote, the card's run or a gate moved after the output. Never success; rerun the command."""
+
+
 def default_runner(argv: list) -> subprocess.CompletedProcess:
     hermes = os.environ.get("HERMES_BIN", "hermes")
     return subprocess.run([hermes, *argv], capture_output=True, text=True, timeout=120)
@@ -155,8 +199,18 @@ def default_git(argv: list, cwd: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *argv], cwd=cwd, capture_output=True, text=True, timeout=120, env=env)
 
 
+def invoke(run: Runner, argv: list) -> subprocess.CompletedProcess:
+    """Every Hermes CLI call goes through here: board access is read-only (`kanban show`);
+    a board write verb never reaches the CLI (native ops carry every write)."""
+    if "kanban" in argv[:4]:
+        verb = argv[argv.index("kanban") + 1:argv.index("kanban") + 2]
+        if verb != ["show"]:
+            raise WorkflowError(f"refusing CLI board call 'hermes {' '.join(argv[:4])}': board writes are native ops")
+    return run(argv)
+
+
 def hermes_json(run: Runner, argv: list):
-    r = run(argv)
+    r = invoke(run, argv)
     if r.returncode != 0:
         raise WorkflowError(f"hermes {' '.join(argv[:3])} failed: {(r.stderr or r.stdout).strip()[:300]}")
     try:
@@ -169,27 +223,82 @@ def card(run: Runner, task_id: str) -> dict:
     return hermes_json(run, ["kanban", "show", task_id, "--json"])
 
 
-SUPERVISED_MARKER = "HERMES_KANBAN_SUPERVISED_TERMINAL"  # set by Hermes on the worker's own terminal only
+# ------------------------------------------------------- native transport ---
+
+class Outbox:
+    """The native board operations one command invocation needs, in order, deduplicated."""
+
+    def __init__(self):
+        self.ops, self.links, self.bind_root = [], [], False
+        # readback: `sync` re-evaluating a finished command; any write is Stale. expect: rids of the
+        # records that command emitted; reput: those re-put so far in this readback.
+        self.readback, self.expect, self.reput = False, set(), set()
+
+    def add(self, tool: str, args: dict, why: str) -> dict:
+        if self.readback:
+            raise Stale(f"re-evaluation needs a new board write ({tool}: {why})")
+        extra = set(args) - NATIVE_SCHEMA[tool]
+        if extra:
+            raise WorkflowError(f"{tool}: non-native argument(s) {sorted(extra)}")
+        op_id = hashlib.sha256((tool + json.dumps(args, sort_keys=True)).encode("utf-8")).hexdigest()[:16]
+        for op in self.ops:
+            if op["op_id"] == op_id:
+                return op
+        op = {"op_id": op_id, "tool": tool, "args": args, "why": why}
+        self.ops.append(op)
+        if tool == "kanban_link":
+            self.links.append({"parent": args["parent_id"], "child": args["child_id"]})
+        return op
 
 
-def require_worker_context(action: str) -> None:
-    """Refuse before any side effect when this is not a place Hermes lets write to the board:
-    a delegate_task child's terminal, a cron run or any other fenced descendant. The card's
-    own worker terminal carries the fence too, plus the supervised-terminal identity
-    (HERMES_KANBAN_SUPERVISED_TERMINAL with HERMES_KANBAN_TASK); the orchestrator's Discord
-    terminal carries neither."""
-    fenced = bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
-    supervised = os.environ.get(SUPERVISED_MARKER) == "1" and bool(os.environ.get("HERMES_KANBAN_TASK"))
-    if fenced and not supervised:
-        raise WorkflowError(f"{action} must run in the card's own worker terminal, not inside delegate_task or a "
-                            "cron run (Hermes refuses Kanban writes from delegate_task children)")
+_BOX = Outbox()
 
 
-def own_card(task_id: str) -> None:
-    """A worker terminal acts for its own card only (``$HERMES_KANBAN_TASK``)."""
-    env_task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
-    if env_task and env_task != task_id:
-        raise WorkflowError(f"this terminal belongs to card {env_task}, not {task_id}")
+@contextlib.contextmanager
+def transport():
+    """A fresh outbox for one command invocation (main, sync and the test harness)."""
+    global _BOX
+    previous, _BOX = _BOX, Outbox()
+    try:
+        yield _BOX
+    finally:
+        _BOX = previous
+
+
+def ops_path(scope: str) -> Path:
+    return state_dir() / "ops" / (re.sub(r"[^A-Za-z0-9_-]", "_", scope) + ".json")
+
+
+def read_ops_state(scope: str) -> dict:
+    try:
+        data = json.loads(ops_path(scope).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_ops_state(scope: str, data: Optional[dict]) -> None:
+    path = ops_path(scope)
+    if data is None:
+        with contextlib.suppress(FileNotFoundError):
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def runtime_seconds(value: str) -> Optional[int]:
+    """'90m' / '2h' / '1d' / '45s' / '600' (seconds) -> int seconds; '' -> None."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if not RUNTIME_RE.match(value):
+        raise WorkflowError(f"invalid runtime '{value}'")
+    unit = value[-1] if value[-1] in "smhd" else "s"
+    number = int(value.rstrip("smhd"))
+    return number * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
 
 
 def redact(value):
@@ -303,13 +412,20 @@ def ledger_path(task_id: str) -> Path:
     return state_dir() / (re.sub(r"[^A-Za-z0-9_-]", "_", task_id) + ".jsonl")
 
 
-def append_ledger(task_id: str, rec: dict) -> None:
+def append_ledger(task_id: str, rec: dict) -> dict:
+    """Append *rec*, unless the latest line of the same rid equals it but for `ts` (a rerun
+    re-puts deterministic rids). Returns the record as the ledger holds it."""
+    if rec.get("rid") and rec.get("type") != "peer-run":
+        same = [r for r in read_ledger(task_id) if r.get("type") == rec.get("type") and r.get("rid") == rec["rid"]]
+        if same and {k: v for k, v in same[-1].items() if k != "ts"} == {k: v for k, v in rec.items() if k != "ts"}:
+            return same[-1]
     path = ledger_path(task_id)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(rec, sort_keys=True) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
+    return rec
 
 
 def read_ledger(task_id: str) -> list:
@@ -328,12 +444,66 @@ def read_ledger(task_id: str) -> list:
     return out
 
 
+def native_v1(show: dict) -> bool:
+    return header_of(show).get(TRANSPORT_HEADER[0].lower()) == NATIVE_V1
+
+
+def migration_at() -> float:
+    """When this host first ran the native transport (written once, exclusively, next to the
+    ledger). A legacy-authored comment counts only when the board stamped it before this."""
+    path = state_dir() / "transport-migration.json"
+    try:
+        return float(json.loads(path.read_text(encoding="utf-8"))["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with contextlib.suppress(FileExistsError):
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"at": time.time(), "transport": NATIVE_V1}))
+    return float(json.loads(path.read_text(encoding="utf-8"))["at"])
+
+
+def record_authors(show: dict, rtype: str) -> set:
+    """The runtime profile that writes *rtype* records on this card (native comments carry
+    the writer's runtime profile as author): code-sha/completion on a code card -> coder,
+    peer-run/evidence -> the card's lane, round -> orchestrator, verdict -> reviewer (never
+    the coder or a lane), completion on the report -> its assignee. Anything else: nobody."""
+    task, h = show.get("task") or {}, header_of(show)
+    kind = h.get("workflow")
+    if kind == "validate":
+        return {h.get("lane") or task.get("assignee")} - {None, ""} if rtype in ("peer-run", "evidence") else set()
+    if kind == "report":
+        return {task.get("assignee")} - {None, ""} if rtype == cp.RTYPE else set()
+    try:
+        ctx = Ctx.from_header(h)
+    except WorkflowError:
+        return set()
+    if kind == "code" and rtype in ("code-sha", cp.RTYPE):
+        return {ctx.coder}
+    if kind == "round" and rtype == "round":
+        return {ctx.orchestrator}
+    if kind == "review" and rtype == "verdict":
+        return {ctx.reviewer} - {ctx.coder, *ctx.lanes}
+    return set()
+
+
+def trusted_comment(show: dict, rtype: str, comment: dict) -> bool:
+    author = comment.get("author")
+    if author == LEGACY_AUTHOR:
+        # Preserved pre-migration records only: a legacy (pre-native) card, stamped by the board
+        # before this host's migration. A new comment with the old author is not trusted.
+        at = comment.get("created_at")
+        return not native_v1(show) and isinstance(at, (int, float)) and at < migration_at()
+    return bool(author) and author in record_authors(show, rtype)
+
+
 def card_records(show: dict) -> list:
     out = []
     for c in show.get("comments") or []:
         body = c.get("body") or ""
         rtype, sep, payload = body.partition(" ")
-        if not sep or rtype not in RECORD_TYPES or c.get("author") != "kanban-workflow":
+        if not sep or rtype not in RECORD_TYPES or not trusted_comment(show, rtype, c):
             continue
         try:
             rec = json.loads(payload)
@@ -364,31 +534,58 @@ def records(show: dict, rtype: str) -> list:
     return out
 
 
-def comment_record(run: Runner, task_id: str, rec: dict) -> bool:
-    r = run(["kanban", "comment", task_id, f"{rec['type']} " + json.dumps(rec, sort_keys=True),
-             "--author", "kanban-workflow"])
-    return r.returncode == 0
+def record_body(rec: dict) -> str:
+    return f"{rec['type']} " + json.dumps(rec, sort_keys=True)
+
+
+def comment_record(task_id: str, rec: dict) -> None:
+    """Queue the card copy of a ledger record as a native kanban_comment."""
+    _BOX.add("kanban_comment", {"task_id": task_id, "body": record_body(rec)},
+             f"mirror {rec['type']} {rec.get('rid')} to {task_id}")
+
+
+def landed_record(run: Runner, task_id: str, rtype: str, rec: dict, ignore: tuple = ("ts",)) -> dict:
+    """Readback: the trusted card record equal to *rec* but for *ignore* (one this command emitted
+    first), else Stale. Never writes the ledger: a re-evaluation only confirms."""
+    def bare(r):
+        return {k: v for k, v in r.items() if k not in ignore and k != "recorded_on_card"}
+    want = bare({**rec, "type": rtype})
+    same = [r for r in card_records(card(run, task_id)) if r.get("type") == rtype and bare(r) == want]
+    if not same:
+        raise Stale(f"{rtype} {rec.get('rid')} on {task_id} differs from what the command recorded")
+    same.sort(key=lambda r: (r.get("rid") in _BOX.expect and r.get("rid") not in _BOX.reput, float(r.get("ts") or 0)))
+    _BOX.reput.add(same[-1].get("rid"))
+    return same[-1]
 
 
 def put_record(run: Runner, task_id: str, rtype: str, rec: dict) -> bool:
-    """Ledger first (durable before anything else can fail), then the card.
-    Returns whether the card copy landed; `sync_records` retries it later."""
+    """Ledger first (durable before anything else can fail), then the card copy as a native op.
+    Returns whether the card already shows it; `sync_records` re-queues a copy that did not land."""
     rec = {**rec, "type": rtype, "ts": rec.get("ts") or time.time()}
     rec.setdefault("rid", f"{rtype}:{rec['ts']}")
-    append_ledger(task_id, rec)
-    return comment_record(run, task_id, rec)
+    if _BOX.readback:
+        landed_record(run, task_id, rtype, rec)
+        return True
+    rec = append_ledger(task_id, rec)
+    on_card = {(r.get("type"), r.get("rid"), bool(r.get("run_id"))) for r in card_records(card(run, task_id))}
+    if (rtype, rec["rid"], bool(rec.get("run_id"))) in on_card:
+        return True
+    comment_record(task_id, rec)
+    return False
 
 
 def sync_records(run: Runner, show: dict) -> None:
-    """Mirror ledger records the card does not show yet (a comment that failed)."""
+    """Queue ledger records the card does not show yet (a comment that did not land)."""
     task_id = (show.get("task") or {}).get("id") or ""
     on_card = {(r.get("type"), r.get("rid"), bool(r.get("run_id"))) for r in card_records(show)}
+    latest_of = {}
     for rec in read_ledger(task_id):
         if rec.get("type") == "peer-run" and not rec.get("run_id"):
             continue  # a pending marker; the card gets the started run
-        if (rec.get("type"), rec.get("rid"), bool(rec.get("run_id"))) not in on_card:
-            if comment_record(run, task_id, rec):
-                on_card.add((rec.get("type"), rec.get("rid"), bool(rec.get("run_id"))))
+        latest_of[(rec.get("type"), rec.get("rid"), bool(rec.get("run_id")))] = rec
+    for key, rec in latest_of.items():
+        if key not in on_card:
+            comment_record(task_id, rec)
 
 
 def latest(show: dict, rtype: str, **match) -> Optional[dict]:
@@ -396,6 +593,13 @@ def latest(show: dict, rtype: str, **match) -> Optional[dict]:
         if all(rec.get(k) == v for k, v in match.items()):
             return rec
     return None
+
+
+def latest_landed(show: dict, rtype: str) -> Optional[dict]:
+    """The newest trusted card record of *rtype*: landed and authored by its role's runtime
+    profile. The same-UID local ledger never counts here (an unsent or forged line is not proof)."""
+    recs = sorted((r for r in card_records(show) if r.get("type") == rtype), key=lambda r: float(r.get("ts") or 0))
+    return recs[-1] if recs else None
 
 
 # ------------------------------------------------------------------ intake ---
@@ -616,6 +820,16 @@ def check_profiles(run: Runner, ctx: Ctx) -> None:
         raise WorkflowError("; ".join(problems))
 
 
+NATIVE_PROTOCOL = f"""\
+Board writes: {TASK_TOKEN} in these steps means this card's own id (kanban_show); type it,
+no shell variable carries it. Workflow commands never write the board. Exit 5 prints
+{{"converged": false, "ops": [...], "rerun": [...]}}: call each op's "tool" with its "args"
+verbatim, in order, with your native kanban_* tools (never the `hermes kanban` CLI), then run
+"rerun" (with --bind <the task_id the create returned> when "bind_root" is true); repeat until
+the exit is not 5. Act on a result only after that; a wake on a card you do not own is a
+status line, not work. Exit 3 "capability: task-scoped worker identity: ..." from any
+command: change nothing in the checkout and kanban_block(reason=<that line>)."""
+
 HUMAN_GATES = """\
 Human gates (mandatory):
 - Never merge, deploy, release, publish, sign, or submit to the App Store or Play Store, and never
@@ -647,8 +861,8 @@ SCANNER_RECOVERY = """\
    exists. Read the rejection; when it names one (RECOVERY: dev_test_run for registered
    Go/PostgreSQL tests), make that call once as a new request, verify its result and
    continue. Never retry the rejected command, wrap it in a script, encode it, or ask for a
-   weaker scanner or approval mode. Without an approved equivalent, kanban_block naming the
-   exact command, the scanner finding and the missing capability."""
+   weaker scanner or approval mode. Without an approved equivalent, after completion
+   block-check: kanban_block(reason="capability: <the exact command>; <the scanner finding>; missing <the capability>")."""
 
 
 def label(lane: str) -> str:
@@ -690,8 +904,9 @@ def checkout_steps(ctx: Ctx) -> str:
      nothing. Wait and retry preflight a few times when the holder may finish (another card
      of this request, a git command); otherwise kanban_block(reason="checkout: <the failing
      check and its detail verbatim>"). Never remove a lease, a lock or a file to pass.
-   - exit 3 (unknown visibility: the scanner is missing, failed or incomplete): change
-     nothing and block with the detail; the operator registers or repairs the scanner.
+   - exit 3 (unknown visibility: the scanner is missing, failed or incomplete, or this shell
+     has no task-scoped worker identity on the board): change nothing and
+     kanban_block(reason="capability: <the detail>"); the operator registers or repairs it.
    After a coding subagent wrote files and after every edit of your own, before any other
    step (and before running preflight again), record what this card owns so the next run
    can resume it:
@@ -718,32 +933,60 @@ def code_body(ctx: Ctx, n: int, request: str, feedback: str) -> str:
     hint = ("; the Xcode scheme, the UI test target, bundle id and the screens to check on iPhone and iPad"
             if ctx.mobile else "")
     return f"""\
-{header_block([("Workflow", "code"), *ctx.header(), ("Round", n)])}
+{header_block([("Workflow", "code"), *ctx.header(), ("Round", n), TRANSPORT_HEADER])}
 
 You are the coordinator and the only code writer for this request (round {n}). The Mac and
 Windows workers never edit code: they test the exact commit you push and send evidence back.
 Failures come back to you as the next round, without the operator.
 
+You own this request until it is complete, not until a subagent returns. Completion state
+is durable (`completion` records on this request's cards).
+
 Steps:
 {checkout_steps(ctx)}
+   Then, {"after preflight exit 0 (completion writes need its lease)" if ctx.checkout else "once the clone exists"},
+   start every run with
+   python3 {SCRIPT} completion status {TASK_TOKEN} --repo-dir {work}
+   and continue from its "next" list. On a first run, recover the acceptance criteria from
+   the request, the card and the repository before asking anything, then record them and a plan:
+   python3 {SCRIPT} completion criteria {TASK_TOKEN} --item "<criterion>" ... --check <check> ...
+   python3 {SCRIPT} completion plan {TASK_TOKEN} --step "<step>" ...
+   `completion capabilities --repo-dir {work}` lists the stacks and the approved capabilities
+   this repository needs (it reads manifest names only and runs nothing).
 2. Write the code with a Claude coding subagent: delegate_task(goal=<the request or the
    failures below, the checkout path, the acceptance criteria>). It runs Claude Opus. For hard
    debugging or broad architecture work, start the goal with a line holding only #fable to
    run Claude Fable. Do not hand coding to the Mac or Windows workers or to a local model.
+   Record each delegate: completion delegate {TASK_TOKEN} --id <id> --state started, then
+   complete | partial --remaining "<what is left>" | failed | interrupted. A partial or
+   interrupted delegate means you continue the remaining work; its exit never ends this run.
 3. Read the full diff yourself. Run the host-side checks the repo has (lint, unit tests that run here).{xcui}
+   Record every result right after it runs, pass or fail (bound to the exact source state;
+   any later edit makes it stale):
+   python3 {SCRIPT} completion evidence {TASK_TOKEN} --repo-dir {work} --kind test --check <check> --result pass|fail --command "<cmd>" --exit <code> [--passed N --failed N] [--log <file>]
+   A failure is routine work, not a blocker: diagnose it, then
+   python3 {SCRIPT} completion recover {TASK_TOKEN} --stage test --class routine --signature "<failure>" --diagnosis "<cause>" --action "<fix>"
+   (exit 0 proceed; 2 identical repeat refused: change the diagnosis or approach; 4 stop: use
+   its block_reason). Fix, retest, record again. After your full-diff review:
+   completion evidence {TASK_TOKEN} --repo-dir {work} --kind review --check diff --result pass|fail.
    Go tests against a registered local PostgreSQL test database run only through the
    dev_test_run tool (profile, packages, race, vet); never a terminal command carrying a
    database URL or a credential file, and never read that file. When dev_test_run is not
-   among your tools, no approved equivalent exists on this host: kanban_block naming the
-   exact command, the scanner finding and the missing capability (an operator-approved
-   dev-test profile); do not assume one will appear.
+   among your tools, no approved equivalent exists on this host:
+   kanban_block(reason="capability: <the exact command>; <the scanner finding>; missing <the capability>")
+   (an operator-approved dev-test profile); do not assume one will appear.
 4. Commit on {ctx.branch} (Conventional Commits, no Co-Authored-By trailer), then
    git push origin {ctx.branch}. Never force push. Never merge unless the merge gates below allow it.
 5. With your own terminal tool (never inside delegate_task) run:
    python3 {SCRIPT} record-sha {TASK_TOKEN} --repo-dir {work} --notes "<what changed; what each platform should check{hint}>"
    It checks the tree is clean and the remote branch is at HEAD, and records the exact SHA
-   the validators test. Exit 0: kanban_complete(summary=<the "summary" it printed>,
-   metadata=<the "metadata" object it printed>). Exit 2: fix what it names (commit, push), run it again.
+   the validators test. Exit 2: fix what it names (commit, push), run it again. Then:
+   python3 {SCRIPT} completion handoff {TASK_TOKEN} --repo-dir {work}
+   It checks every stage up to push on this exact source and the remote branch now (git
+   ls-remote). Exit 0: kanban_complete(summary=<the "summary" it printed>,
+   metadata=<the "metadata" object it printed>). This is the implementation handoff only:
+   the validation lanes and the independent review still decide completion. Exit 4: work
+   its "next" list and run it again.
 6. Unfinished work is not a blocker: a running delegate_task child is collected, a failing
    test is diagnosed and fixed until it passes within this card's budget (retry an unchanged
    command once only for a transient failure: network, flaky test, rate limit), a flaky tool
@@ -752,7 +995,17 @@ Steps:
    the gates below, production or destructive actions), a confirmed competing writer, or a
    dependency on another card that cannot resolve from here. Never block for the mere
    existence of uncommitted work this card made: checkpoint it, then continue or commit.
+   Before any kanban_block run
+   python3 {SCRIPT} completion block-check {TASK_TOKEN} --reason "<reason>"
+   and block only on exit 0 with that reason; exit 2 means the failure is routine: recover.
+   A recorded stop stays first in "next" until its stage is met again or you record the
+   operator's decision: completion resolve {TASK_TOKEN} --stop <rid> --reason "<decision>"
+   (an approval stop closes only this way; it never stands in for an approval itself).
+   A running owner (preflight or a completion command naming another live run) is never
+   taken over, on a timeout or after a delegate exits: wait, or block with checkout: <detail>.
 {SCANNER_RECOVERY}
+
+{NATIVE_PROTOCOL}
 
 {CODE_HUMAN_GATES}
 {fix}
@@ -772,7 +1025,7 @@ def validate_body(ctx: Ctx, n: int, lane: str, code_id: str, request: str, devic
 {header_block([("Workflow", "validate"), ("Key", ctx.key), ("Round", n), ("Transport", PEER_TRANSPORT),
                ("Peer", ctx.lanes[lane]), ("Lane", lane), ("Code", code_id), ("Repo", ctx.repo),
                ("Branch", ctx.branch), ("Mobile", ctx.mobile), ("Stage", DEVICE_STAGE if devices else ""),
-               ("Devices", "|".join(devices))])}
+               ("Devices", "|".join(devices)), TRANSPORT_HEADER])}
 
 You relay this card to {where}'s own Hermes agent. The worker only tests: it checks out the
 exact commit that code card {code_id} pushed, {what}. Neither you nor the worker edits code; the
@@ -797,6 +1050,8 @@ Relay steps (run each one with your own terminal tool, never inside delegate_tas
    review runs once, after every lane passed the same SHA.
    Never build, test or fix on this host, and never switch to another transport (SSH included).
 
+{NATIVE_PROTOCOL}
+
 {HUMAN_GATES}
 
 {REQUEST_MARKER}
@@ -811,7 +1066,8 @@ def round_body(ctx: Ctx, n: int, code_id: str, request: str, stage: str = "") ->
            "(else, or after it passed, the independent review card)" if ctx.mobile and stage != DEVICE_STAGE
            else "the independent review card")
     return f"""\
-{header_block([("Workflow", "round"), *ctx.header(), ("Round", n), ("Code", code_id), ("Stage", stage)])}
+{header_block([("Workflow", "round"), *ctx.header(), ("Round", n), ("Code", code_id), ("Stage", stage),
+               TRANSPORT_HEADER])}
 
 You close {what} {n} of this request. Do not edit code, test or review here.
 
@@ -825,6 +1081,8 @@ You close {what} {n} of this request. Do not edit code, test or review here.
    Exit 4: kanban_block(reason=<the "blocker" it printed>). The operator fixes it (a BrowserStack
    activation, a missing evidence) or unblocks to allow one more round.
    Exit 2: kanban_block(reason="round: <its output>").
+
+{NATIVE_PROTOCOL}
 
 {REQUEST_MARKER}
 {request}
@@ -841,7 +1099,7 @@ def review_body(ctx: Ctx, n: int, code_id: str, round_id: str, sha: str, request
     scratch = (f"\n   Never read from or write to the coordinator's checkout {ctx.checkout}." if ctx.checkout else "")
     return f"""\
 {header_block([("Workflow", "review"), *ctx.header(), ("Round", n), ("Code", code_id),
-               ("Round-card", round_id), ("Commit", sha)])}
+               ("Round-card", round_id), ("Commit", sha), TRANSPORT_HEADER])}
 
 You are the independent review gate. Every lane passed commit {sha} on {ctx.branch}.
 Nothing reaches the operator as done until you approve this exact commit.
@@ -862,6 +1120,8 @@ Nothing reaches the operator as done until you approve this exact commit.
    Only for an external blocker (missing access, a human decision): kanban_block.
 Review only: never push to, merge, deploy or release the branch, and never edit it.
 
+{NATIVE_PROTOCOL}
+
 {REQUEST_MARKER}
 {request}
 """
@@ -879,12 +1139,15 @@ MOBILE_REPORT = """
 def report_body(ctx: Ctx, request: str) -> str:
     mobile = MOBILE_REPORT if ctx.mobile else ""
     return f"""\
-{header_block([("Workflow", "report"), ("Key", ctx.key), ("Title", ctx.title)])}
+{header_block([("Workflow", "report"), ("Key", ctx.key), ("Title", ctx.title), TRANSPORT_HEADER])}
 
 You write the final report. Steps:
 1. Run: python3 {SCRIPT} gate {TASK_TOKEN}
    Exit 0 means the final SHA passed every lane and the independent reviewer approved that SHA.
    Any other exit: call kanban_block(reason="review-gate: <its output>") and stop.
+   Then run: python3 {SCRIPT} completion final {TASK_TOKEN}
+   Exit 0 records the final completion of the SHA the coordinator handed off after remote
+   verification. Exit 4: kanban_block(reason="review-gate: <its problems>") and stop.
 2. Run: python3 {SCRIPT} status {TASK_TOKEN} --json
 3. Call kanban_complete(summary=<one-line outcome>, result=<report>). The report lists: the
    final branch and SHA; per round the SHA, each lane's verdict (tests, failures, device) and
@@ -893,6 +1156,8 @@ You write the final report. Steps:
    login still open.{mobile} The gateway posts the outcome to the Discord thread and wakes the
    orchestrator there to deliver the report.
 
+{NATIVE_PROTOCOL}
+
 {HUMAN_GATES}
 
 {REQUEST_MARKER}
@@ -900,47 +1165,115 @@ You write the final report. Steps:
 """
 
 
+IDENTITY_FIELDS = ("workflow", "key", "round", "lane", "stage")  # which planned card a board card is
+
+
+def card_spec(title: str, assignee: str, body: str, key: str, parents: list = (), max_runtime: str = "") -> dict:
+    return {"title": title, "assignee": assignee, "body": body, "key": key, "parents": list(parents),
+            "max_runtime": max_runtime}
+
+
+def card_diff(spec: dict, show: dict, creators: set) -> list:
+    """Why a discovered card is not the planned one (empty: it is). A native-v1 body must be
+    byte-identical; a legacy (pre-migration) body only has to carry the same header identity."""
+    task = show.get("task") or {}
+    diff = []
+    want_h = card_header(spec["body"])
+    for field in ("title", "assignee"):
+        if task.get(field) != spec[field]:
+            diff.append(f"{field}: board {task.get(field)!r}, planned {spec[field]!r}")
+    have_h = header_of(show)
+    for field in IDENTITY_FIELDS:
+        if have_h.get(field, "") != want_h.get(field, ""):
+            diff.append(f"header {field}: board {have_h.get(field, '')!r}, planned {want_h.get(field, '')!r}")
+    missing = [p for p in spec["parents"] if p not in (show.get("parents") or [])]
+    if missing:
+        diff.append(f"parents: board {show.get('parents')}, missing {missing}")
+    if native_v1(show):
+        if task.get("body") != spec["body"]:
+            diff.append("body differs from the planned native-v1 body (truncated or edited)")
+        if task.get("created_by") not in creators:
+            diff.append(f"created_by: board {task.get('created_by')!r}, expected one of {sorted(creators)}")
+    elif task.get("created_by") not in (LEGACY_AUTHOR, None):
+        diff.append(f"legacy card created_by {task.get('created_by')!r}, not {LEGACY_AUTHOR!r}")
+    return diff
+
+
+def identity_of(body_or_header) -> tuple:
+    h = card_header(body_or_header) if isinstance(body_or_header, str) else body_or_header
+    return tuple(h.get(f, "") for f in IDENTITY_FIELDS)
+
+
+def discover(run: Runner, spec: dict, creators: set, bind: str = "") -> Optional[str]:
+    """The board card of a planned create, or None. A child card is found among the children
+    of its first parent by header identity; a root card only through an explicit --bind id,
+    which is data: it passes the same readback. A card that matches the identity but not the
+    plan is a Mismatch (exit 4), never a second create."""
+    want = identity_of(spec["body"])
+    if spec["parents"]:
+        found = []
+        for cid in card(run, spec["parents"][0]).get("children") or []:
+            child = card(run, cid)
+            if identity_of(header_of(child)) == want:
+                found.append((cid, child))
+    elif bind:
+        found = [(bind, card(run, bind))]
+    else:
+        return None
+    if len(found) > 1:
+        raise Mismatch(f"{len(found)} board cards claim planned card '{spec['title']}': "
+                       f"{', '.join(cid for cid, _ in found)}; refusing to pick one")
+    if not found:
+        return None
+    cid, show = found[0]
+    if (show.get("task") or {}).get("id") != cid:
+        raise Mismatch(f"bound card {cid}: board returned another task")
+    diff = card_diff(spec, show, creators)
+    if diff:
+        raise Mismatch(f"board card {cid} is not planned card '{spec['title']}' ({spec['key']}): " + "; ".join(diff))
+    return cid
+
+
+def ensure_cards(run: Runner, specs: list, creators: set, bind: str = "") -> list:
+    """Ids of the planned sibling cards; queues a native kanban_create for each missing one and
+    raises Pending (the caller's later steps need the ids). Never creates a card that exists."""
+    ids, missing = [], False
+    for spec in specs:
+        cid = discover(run, spec, creators, bind)
+        ids.append(cid)
+        if cid:
+            continue
+        missing = True
+        args = {"title": spec["title"], "assignee": spec["assignee"], "body": spec["body"],
+                "idempotency_key": spec["key"]}
+        if spec["parents"]:
+            args["parents"] = list(spec["parents"])
+        seconds = runtime_seconds(spec["max_runtime"])
+        if seconds:
+            args["max_runtime_seconds"] = seconds
+        _BOX.add("kanban_create", args, f"create {spec['title']}")
+        if not spec["parents"]:
+            _BOX.bind_root = True
+    if missing:
+        raise Pending()
+    return ids
+
+
 def create_card(run: Runner, title: str, assignee: str, body: str, key: str,
-                parents: list = (), max_runtime: str = "") -> dict:
-    argv = ["kanban", "create", title, "--assignee", assignee, "--body", body,
-            "--idempotency-key", key, "--created-by", "kanban-workflow", "--json"]
-    for p in parents:
-        argv += ["--parent", p]
-    if max_runtime:
-        argv += ["--max-runtime", max_runtime]
-    return hermes_json(run, argv)
+                parents: list = (), max_runtime: str = "", creators: set = frozenset(), bind: str = "") -> dict:
+    return {"id": ensure_cards(run, [card_spec(title, assignee, body, key, parents, max_runtime)], creators, bind)[0]}
 
 
 def link(run: Runner, parent: str, child: str) -> None:
-    r = run(["kanban", "link", parent, child])
-    if r.returncode != 0:
-        raise WorkflowError(f"kanban link {parent} {child} failed: {(r.stderr or r.stdout).strip()[:300]}")
+    """Queue a native kanban_link unless the board already has the edge."""
+    if parent not in (card(run, child).get("parents") or []):
+        _BOX.add("kanban_link", {"parent_id": parent, "child_id": child}, f"{child} waits for {parent}")
 
 
-def subscribe(run: Runner, task_id: str, origin: dict, mode: str) -> None:
-    argv = ["kanban", "notify-subscribe", task_id, "--platform", origin.get("platform") or "discord",
-            "--chat-id", origin["chat_id"], "--delivery-mode", mode]
-    for flag, field in (("--thread-id", "thread_id"), ("--user-id", "user_id"), ("--chat-type", "chat_type")):
-        if origin.get(field):
-            argv += [flag, origin[field]]
-    r = run(argv)
-    if r.returncode != 0:
-        raise WorkflowError(f"notify-subscribe {task_id} failed: {(r.stderr or r.stdout).strip()[:300]}")
-
-
-def copy_subscriptions(run: Runner, source: str, targets: list) -> None:
-    """New round cards inherit the thread of the card that opened them (status lines only)."""
-    r = run(["kanban", "notify-list", source, "--json"])
-    if r.returncode != 0:
-        return
-    try:
-        subs = json.loads(r.stdout or "[]")
-    except json.JSONDecodeError:
-        return
-    for sub in subs if isinstance(subs, list) else []:
-        if sub.get("chat_id"):
-            for tid in targets:
-                subscribe(run, tid, sub, "notify")
+def creators_of(ctx: "Ctx") -> set:
+    """Profiles that create this request's cards with native kanban_create: the orchestrator
+    (intake, round and device-stage cards) and the reviewer (a changes verdict opens the next round)."""
+    return {ctx.orchestrator, ctx.reviewer}
 
 
 def short_title(title: str, limit: int = 80) -> str:
@@ -948,17 +1281,19 @@ def short_title(title: str, limit: int = 80) -> str:
     return title if len(title) <= limit else title[: limit - 1] + "…"
 
 
-def create_round(run: Runner, ctx: Ctx, n: int, request: str, parent: Optional[str], feedback: str) -> dict:
-    """Code card -> one validation card per lane -> round card, idempotent per round."""
+def create_round(run: Runner, ctx: Ctx, n: int, request: str, parent: Optional[str], feedback: str,
+                 bind: str = "") -> dict:
+    """Code card -> one validation card per lane -> round card, idempotent per round: each
+    level is discovered on the board first; missing cards of one level are queued together."""
+    creators = creators_of(ctx)
     code = create_card(run, f"[code {n}] {ctx.title}", ctx.coder, code_body(ctx, n, request, feedback),
-                       f"{ctx.key}:code:{n}", parents=[parent] if parent else [], max_runtime=ctx.code_max_runtime)
-    lanes = {}
-    for lane in ctx.lanes:
-        v = create_card(run, f"[{label(lane)} {n}] {ctx.title}", lane, validate_body(ctx, n, lane, code["id"], request),
-                        f"{ctx.key}:{lane}:{n}", parents=[code["id"]], max_runtime=ctx.max_runtime)
-        lanes[lane] = v["id"]
+                       f"{ctx.key}:code:{n}", parents=[parent] if parent else [], max_runtime=ctx.code_max_runtime,
+                       creators=creators, bind=bind)
+    specs = [card_spec(f"[{label(lane)} {n}] {ctx.title}", lane, validate_body(ctx, n, lane, code["id"], request),
+                       f"{ctx.key}:{lane}:{n}", [code["id"]], ctx.max_runtime) for lane in ctx.lanes]
+    lanes = dict(zip(ctx.lanes, ensure_cards(run, specs, creators)))
     rnd = create_card(run, f"[round {n}] {ctx.title}", ctx.orchestrator, round_body(ctx, n, code["id"], request),
-                      f"{ctx.key}:round:{n}", parents=list(lanes.values()))
+                      f"{ctx.key}:round:{n}", parents=list(lanes.values()), creators=creators)
     return {"round": n, "code": code["id"], "lanes": lanes, "round_card": rnd["id"]}
 
 
@@ -1012,23 +1347,19 @@ def intake(args, run: Runner = default_runner, git: Optional[GitRunner] = None) 
         return plan
 
     check_profiles(run, ctx)
-    first = create_round(run, ctx, 1, request, None, "")
+    first = create_round(run, ctx, 1, request, None, "", bind=getattr(args, "bind", "") or "")
     plan["code"]["id"] = first["code"]
     for spec in plan["lanes"]:
         spec["id"] = first["lanes"][spec["assignee"]]
     plan["round"]["id"] = first["round_card"]
     report = create_card(run, plan["request"]["title"], ctx.orchestrator, report_body(ctx, request),
-                         plan["request"]["idempotency_key"], parents=[first["round_card"]])
+                         plan["request"]["idempotency_key"], parents=[first["round_card"]], creators=creators_of(ctx))
     plan["request"]["id"] = report["id"]
-
-    plan["subscribed"] = False
-    if origin:
-        # Work cards: passive status lines (SHA pushed, lane passed/failed, blocked).
-        # Report card: notify + wake the orchestrator so it delivers the report.
-        for tid in [first["code"], *first["lanes"].values(), first["round_card"]]:
-            subscribe(run, tid, origin, "notify")
-        subscribe(run, report["id"], origin, "notify+wake")
-        plan["subscribed"] = True
+    # Native kanban_create from this Discord session subscribes it to every card it creates
+    # (upstream default notify+wake); later rounds inherit it. A wake on a work card is a
+    # status line; only the report card's completion is the report.
+    plan["notify"] = ("native auto-subscribe of the creating session (notify+wake); child cards inherit"
+                      if origin else "none: not created from a gateway session")
     return plan
 
 
@@ -1048,11 +1379,33 @@ def code_sha(run: Runner, code_id: str) -> dict:
     return rec
 
 
-def checkout_preflight(task_id: str, h: dict, checkout: str, *, scan_runner=None, require_clean: bool = False,
-                       git: GitRunner = default_git) -> dict:
-    """repo_lease preflight for a code card's designated checkout, owned by this run."""
+def worker_owner(run: Runner, task_id: str, show: dict, checkout: str = "", git: GitRunner = default_git) -> dict:
+    """This shell's lease owner for *task_id* from board facts (repo_lease.bound_worker): the
+    card's current run and its bound managed-worker interpreter as an ancestor. Checked against
+    every card of the request and the checkout's current lease holder: a sibling bound to the
+    same process chain is ambiguous. No identity: CapabilityError (exit 3); the native board
+    transport keeps working, only repository-mutating steps stop."""
+    others = list(request_cards(run, task_id).values())
+    if checkout:
+        try:
+            holder = ((rl.read_lease(rl.repo_identity(checkout, git)) or {}).get("owner") or {}).get("task")
+        except rl.LeaseError:
+            holder = None
+        if holder and holder != task_id and rl.TASK_RE.match(str(holder)) and \
+                holder not in {(o.get("task") or {}).get("id") for o in others}:
+            with contextlib.suppress(WorkflowError):  # an unreadable holder still conflicts on the lease itself
+                others.append(card(run, holder))
     try:
-        owner = rl.cli_owner(task_id)  # refuses a lease owned by this short-lived process
+        return rl.bound_worker(task_id, show, others)
+    except rl.IdentityError as exc:
+        raise CapabilityError(f"capability: task-scoped worker identity: {exc}") from exc
+
+
+def checkout_preflight(run: Runner, task_id: str, show: dict, h: dict, checkout: str, *, scan_runner=None,
+                       require_clean: bool = False, git: GitRunner = default_git) -> dict:
+    """repo_lease preflight for a code card's designated checkout, owned by this card's bound worker."""
+    owner = worker_owner(run, task_id, show, checkout, git)
+    try:
         return rl.preflight(task_id, checkout, h.get("repo", ""), h.get("branch", ""), h.get("base", "main"),
                             git=git, scan_runner=scan_runner or rl.default_scan_runner, owner=owner,
                             require_clean=require_clean)
@@ -1065,8 +1418,6 @@ def record_sha(task_id: str, repo_dir: str, notes: str, run: Runner = default_ru
     """Verify the checkout is committed and pushed, then record the exact SHA. In a designated
     checkout the lease, writer scan and clean-tree checks are re-validated right before the
     record is written."""
-    require_worker_context("record-sha")
-    own_card(task_id)
     show = card(run, task_id)
     h = kind_of(show, "code")
     branch, repo, n = h.get("branch", ""), h.get("repo", ""), int(h.get("round") or 1)
@@ -1084,7 +1435,8 @@ def record_sha(task_id: str, repo_dir: str, notes: str, run: Runner = default_ru
         raise WorkflowError("uncommitted or untracked paths; commit them (or move files that do not belong to this "
                             f"card out of the checkout) first: {clip(dirty, 300)}")
     if checkout:
-        pre = checkout_preflight(task_id, h, checkout, scan_runner=scan_runner, require_clean=True)
+        pre = checkout_preflight(run, task_id, show, h, checkout, scan_runner=scan_runner, require_clean=True,
+                                 git=git)
         if not pre["ok"]:
             failed = "; ".join(f"{c['check']}: {c['detail']}" for c in pre["checks"] if not c["ok"])
             raise WorkflowError(f"the designated checkout is not safe to record from ({failed})")
@@ -1104,27 +1456,27 @@ def checkout_command(cmd: str, task_id: str, repo_dir: str, manifest: str = "", 
                      git: GitRunner = default_git, scan_runner=None) -> tuple:
     """preflight | checkpoint | adopt | release for a code card's designated checkout.
     Returns (exit code, result). The card header is the source of repo/branch/base/checkout."""
-    require_worker_context(cmd)
-    own_card(task_id)
-    h = kind_of(card(run, task_id), "code")
+    show = card(run, task_id)
+    h = kind_of(show, "code")
     checkout = h.get("checkout", "")
     if not checkout:
         raise WorkflowError(f"{task_id} works in a fresh clone, not a designated checkout; {cmd} applies to --checkout cards")
     if str(Path(repo_dir).expanduser().resolve()) != checkout:
         raise WorkflowError(f"this card works in the designated checkout {checkout}, not '{repo_dir}'")
+    if cmd == "preflight":
+        result = checkout_preflight(run, task_id, show, h, checkout, scan_runner=scan_runner, git=git)
+        return result["exit"], result
+    owner = worker_owner(run, task_id, show, checkout, git)
     try:
-        if cmd == "preflight":
-            result = checkout_preflight(task_id, h, checkout, scan_runner=scan_runner, git=git)
-            return result["exit"], result
         identity = rl.repo_identity(checkout, git)
         if identity["branch"] != h.get("branch", ""):
             raise WorkflowError(f"checkout is on '{identity['branch']}', the card's branch is '{h.get('branch')}'")
         if cmd == "checkpoint":
-            return 0, rl.checkpoint(task_id, identity, git, owner=rl.cli_owner(task_id),
+            return 0, rl.checkpoint(task_id, identity, git, owner=owner,
                                     scan_runner=scan_runner or rl.default_scan_runner)
         if cmd == "adopt":
             return 0, rl.adopt_manifest(task_id, identity, git, manifest)
-        result = rl.release_lease(identity, rl.owner_from_env(task_id))
+        result = rl.release_lease(identity, owner)
         return (0 if result["status"] in ("released", "none") else 2), result
     except rl.LeaseError as exc:
         raise WorkflowError(str(exc)) from exc
@@ -1432,6 +1784,8 @@ def start_run(run: Runner, show: dict, lane: str, target: str, h: dict, sha_rec:
     A crash between the two leaves the pending marker; the next dispatch re-sends the
     same idempotency key and the peer replays the same run."""
     task_id = show["task"]["id"]
+    if _BOX.readback:
+        raise Stale(f"re-evaluation of {task_id} would start another peer run")
     idem = idem or f"kanban:{task_id}:{attempt}" + (":report" if kind == "report" else "")
     if kind == "report":
         message = report_only_message(task_id, sha_rec["sha"], h.get("mobile", ""), h.get("stage", ""))
@@ -1458,7 +1812,6 @@ def dispatch(task_id: str, run: Runner = default_runner) -> dict:
     """Start (or resume) the peer run for a validation card. A new attempt starts
     only for a first dispatch, or an operator unblock after the previous run ended;
     a pending (unrecorded) run is re-sent with its own idempotency key."""
-    require_worker_context("dispatch")
     show = card(run, task_id)
     lane, target, h = validate_lane(show)
     problem = peer_problem(run, lane, target)
@@ -1769,7 +2122,6 @@ def wait(task_id: str, timeout: float, interval: float, run: Runner = default_ru
     """Poll the recorded peer run. Exit codes: 0 evidence recorded (pass or fail),
     4 blocked (human gate or device), 1 no usable run after the automatic retries,
     3 still running after `timeout` seconds."""
-    require_worker_context("wait")
     show = card(run, task_id)
     lane, target, h = validate_lane(show)
     sha_rec = code_sha(run, h["code"])
@@ -1924,7 +2276,6 @@ def open_next_round(run: Runner, show: dict, ctx: Ctx, n: int, feedback: str) ->
     report = report_card_for(run, show)
     nxt = create_round(run, ctx, n + 1, request_of(show), show["task"]["id"], feedback)
     link(run, nxt["round_card"], report)
-    copy_subscriptions(run, show["task"]["id"], [nxt["code"], *nxt["lanes"].values(), nxt["round_card"]])
     return nxt
 
 
@@ -1940,12 +2291,12 @@ def open_device_stage(run: Runner, show: dict, ctx: Ctx, n: int, code_id: str, d
     report = report_card_for(run, show)
     dev = create_card(run, f"[devices {n}] {ctx.title}", MOBILE_LANE,
                       validate_body(ctx, n, MOBILE_LANE, code_id, request, devices),
-                      f"{ctx.key}:devices:{n}", parents=[task_id], max_runtime=ctx.max_runtime)
+                      f"{ctx.key}:devices:{n}", parents=[task_id], max_runtime=ctx.max_runtime,
+                      creators=creators_of(ctx))
     rnd = create_card(run, f"[devices-round {n}] {ctx.title}", ctx.orchestrator,
                       round_body(ctx, n, code_id, request, DEVICE_STAGE),
-                      f"{ctx.key}:devices-round:{n}", parents=[dev["id"]])
+                      f"{ctx.key}:devices-round:{n}", parents=[dev["id"]], creators=creators_of(ctx))
     link(run, rnd["id"], report)
-    copy_subscriptions(run, task_id, [dev["id"], rnd["id"]])
     return {"devices": dev["id"], "devices_round": rnd["id"]}
 
 
@@ -1953,7 +2304,6 @@ def advance(task_id: str, run: Runner = default_runner) -> tuple:
     """Close a round. Exit 0 with the next step opened (BrowserStack device stage,
     review or next fix round), 4 when a lane has no evidence, the BrowserStack
     activation is partial, or the fix-loop limit is reached."""
-    require_worker_context("advance")
     show = card(run, task_id)
     h = kind_of(show, "round")
     ctx, n, stage = Ctx.from_header(h), int(h.get("round") or 1), h.get("stage", "")
@@ -1988,9 +2338,8 @@ def advance(task_id: str, run: Runner = default_runner) -> tuple:
             devices = f"BrowserStack real devices passed: {devices}"
         review = create_card(run, f"Review: {ctx.title} (round {n})", ctx.reviewer,
                              review_body(ctx, n, h["code"], task_id, sha, request_of(show), devices),
-                             f"{ctx.key}:review:{n}", parents=[task_id])
+                             f"{ctx.key}:review:{n}", parents=[task_id], creators=creators_of(ctx))
         link(run, review["id"], report)
-        copy_subscriptions(run, task_id, [review["id"]])
         state, nxt = "VALIDATED", {"review": review["id"]}
         summary = f"VALIDATED {sha[:12]}: every lane passed; review {review['id']}"
         if ctx.mobile:
@@ -2018,13 +2367,20 @@ def advance(task_id: str, run: Runner = default_runner) -> tuple:
 
 def verdict(task_id: str, decision: str, reason: str, run: Runner = default_runner) -> tuple:
     """The reviewer's verdict on a review card: approve, or changes (opens the next round)."""
-    require_worker_context("verdict")
     show = card(run, task_id)
     h = kind_of(show, "review")
     ctx, n, sha = Ctx.from_header(h), int(h.get("round") or 1), h.get("commit", "")
-    profile = os.environ.get("HERMES_PROFILE", "")
-    if profile and profile in (ctx.coder, *ctx.lanes):
+    try:
+        profile = rl.current_run(show).get("profile") or ""  # the runtime-recorded reviewer, never an env value
+    except rl.IdentityError as exc:
+        raise WorkflowError(f"verdict needs the review card's own running run: {exc}") from exc
+    if not profile:
+        raise WorkflowError(f"{task_id}: the running run records no profile; the reviewer is not decidable")
+    if profile in (ctx.coder, *ctx.lanes):
         raise WorkflowError(f"profile '{profile}' wrote or relayed this work; it cannot review it")
+    # This shell must be the review card's own bound managed worker (repo_lease.bound_worker) before
+    # anything is recorded; another card's shell seeing the reviewer's running run is not the reviewer.
+    worker_owner(run, task_id, show)
     if decision == "approve":
         rec = {"rid": f"verdict:{n}:{sha}", "verdict": "approve", "round": n, "commit": sha, "reviewer": profile}
         on_card = put_record(run, task_id, "verdict", rec)
@@ -2051,21 +2407,25 @@ def verdict(task_id: str, decision: str, reason: str, run: Runner = default_runn
 # -------------------------------------------------------------------- gate ---
 
 def review_verdict(show: dict, sha: str, ctx: Ctx) -> tuple:
-    """(ok, reason) for the final review card from `hermes kanban show --json`."""
+    """(ok, reason) for the final review card from `hermes kanban show --json`. The verdict counts
+    only as a landed card comment authored by the reviewer's runtime profile; a ledger-only
+    verdict (never sent, or written by any same-UID shell) is no approval."""
     task = show.get("task") or {}
     if task.get("status") != "done":
         return False, f"review is {task.get('status')}"
     if header_of(show).get("commit") != sha:
         return False, f"review covers {header_of(show).get('commit', '')[:12]}, not the final {sha[:12]}"
-    rec = latest(show, "verdict")
+    rec = latest_landed(show, "verdict")
     if not rec or rec.get("verdict") != "approve" or rec.get("commit") != sha:
-        return False, f"no approve verdict for {sha[:12]} (verdict: {(rec or {}).get('verdict') or 'none'})"
+        return False, f"no approve verdict for {sha[:12]} on the card (verdict: {(rec or {}).get('verdict') or 'none'})"
     approvals = [r for r in show.get("runs") or [] if r.get("outcome") == "completed"]
     if not approvals:
         return False, "no completing run recorded"
     approver = approvals[-1].get("profile") or ""
     if approver in (ctx.coder, *ctx.lanes):
         return False, f"approved by {approver}, who wrote or relayed the work"
+    if rec.get("reviewer") and rec["reviewer"] != approver:
+        return False, f"verdict by {rec['reviewer']}, but {approver} completed the review"
     return True, f"approved by {approver} at {sha[:12]}"
 
 
@@ -2168,9 +2528,8 @@ def card_state(show: dict) -> str:
     return str(status or "").upper()
 
 
-def status(task_id: str, run: Runner = default_runner) -> list:
-    """Every card of the request that `task_id` belongs to, ordered by round, with
-    its state; read from the cards and the ledger (no network call)."""
+def request_cards(run: Runner, task_id: str) -> dict:
+    """{card id: show} of every card of the request `task_id` belongs to (same Key header)."""
     start = card(run, task_id)
     key = header_of(start).get("key")
     seen, queue, shows = set(), [task_id], {}
@@ -2184,6 +2543,13 @@ def status(task_id: str, run: Runner = default_runner) -> list:
             continue
         shows[tid] = show
         queue += [*(show.get("parents") or []), *(show.get("children") or [])]
+    return shows
+
+
+def status(task_id: str, run: Runner = default_runner) -> list:
+    """Every card of the request that `task_id` belongs to, ordered by round, with
+    its state; read from the cards and the ledger (no network call)."""
+    shows = request_cards(run, task_id)
     order = {k: i for i, k in enumerate(KINDS)}
     rows = []
     for tid, show in shows.items():
@@ -2209,6 +2575,256 @@ def status(task_id: str, run: Runner = default_runner) -> list:
     rows.sort(key=lambda r: (10**6 if r["kind"] == "report" else (r["round"] or 0), bool(r.get("stage")),
                              order.get(r["kind"], 99), r["id"]))
     return rows
+
+
+# ------------------------------------------------------------- completion ---
+# The coordinator's completion state (completion.py): stage criteria, source-bound
+# evidence, bounded recovery, implementation handoff and final completion, kept as
+# `completion` records on the request's own cards (ledger first, then the card).
+
+def completion_records(shows: dict) -> list:
+    """Every completion record of the request, oldest first, each tagged with its card."""
+    out = []
+    hidden = _BOX.expect - _BOX.reput  # readback: not yet re-put, thus not seen by the first run here
+    for tid, show in shows.items():
+        out += [{**r, "card": r.get("card") or tid} for r in records(show, cp.RTYPE) if r.get("rid") not in hidden]
+    out.sort(key=lambda r: float(r.get("ts") or 0))
+    return out
+
+
+def code_cards(shows: dict) -> dict:
+    """{round: (card id, show)} of the request's code cards."""
+    return {int(header_of(s).get("round") or 0): (tid, s) for tid, s in shows.items()
+            if header_of(s).get("workflow") == "code"}
+
+
+def lease_owner(h: dict, git: GitRunner) -> Optional[dict]:
+    """Read-only lease facts of a --checkout card's checkout (None for a fresh clone)."""
+    if not h.get("checkout"):
+        return None
+    try:
+        identity = rl.repo_identity(h["checkout"], git)
+        lease = rl.read_lease(identity)
+    except rl.LeaseError as exc:
+        return {"checkout": h["checkout"], "error": str(exc), "containment": cp.CONTAINMENT}
+    holder = (lease or {}).get("owner") or {}
+    return {"checkout": h["checkout"], "held": bool(lease),
+            "holder": {k: holder.get(k) for k in ("task", "run_id", "pid", "host")} if lease else None,
+            "alive": rl.owner_alive(holder) if lease else None, "containment": cp.CONTAINMENT}
+
+
+def completion_put(run: Runner, task_id: str, h: dict, rec: dict) -> dict:
+    rid = f"{cp.RTYPE}:{rec['event']}:{time.time():.6f}"
+    rec = {**redact(rec), "rid": rid, "key": h.get("key", ""), "card": task_id}
+    if _BOX.readback:  # the record the first run wrote, with its rid (time-based ids never repeat)
+        return {**landed_record(run, task_id, cp.RTYPE, rec, ignore=("ts", "rid")), "recorded_on_card": True}
+    rec["recorded_on_card"] = put_record(run, task_id, cp.RTYPE, rec)
+    return rec
+
+
+def require_completion_writer(run: Runner, task_id: str, h: dict, git: GitRunner) -> None:
+    """A completion write on a --checkout card needs this run's live lease (renewed, never
+    taken). Another live or undecidable owner is recorded as a conflict and refused: a
+    timeout or a delegate's exit never hands the checkout to a second writer."""
+    if not h.get("checkout"):
+        return
+    owner = worker_owner(run, task_id, card(run, task_id), h["checkout"], git)
+    try:
+        identity = rl.repo_identity(h["checkout"], git)
+        result = rl.acquire_lease(identity, owner, renew_only=True)
+    except rl.LeaseError as exc:
+        raise WorkflowError(str(exc)) from exc
+    if result["status"] == "renewed":
+        return
+    if result["status"] == "conflict":
+        completion_put(run, task_id, h, {"event": "owner-conflict", "detail": result["reason"]})
+        raise WorkflowError(f"running owner: {result['reason']}; never start a second writer: wait for it, or "
+                            f"block with checkout: <this detail> when it cannot finish")
+    raise WorkflowError(f"this run holds no lease on {h['checkout']}: run preflight first")
+
+
+def completion_source(h: dict, repo_dir: str, git: GitRunner) -> dict:
+    """Source identity of the card's checkout; a --checkout card only from its checkout."""
+    cwd = str(Path(repo_dir).expanduser().resolve())
+    if h.get("checkout") and cwd != h["checkout"]:
+        raise WorkflowError(f"this card works in the designated checkout {h['checkout']}, not '{repo_dir}'")
+    top = git_out(git, ["rev-parse", "--show-toplevel"], cwd)
+    if str(Path(top).resolve()) != cwd:
+        raise WorkflowError(f"'{repo_dir}' is not the top of a git working tree")
+    r = git(["remote", "get-url", "origin"], cwd)
+    if r.returncode != 0 or not same_remote((r.stdout or "").strip(), h.get("repo", "")):
+        raise WorkflowError(f"'{repo_dir}' is not a checkout of {h.get('repo')}")
+    try:
+        return cp.source_identity(cwd, git)
+    except (cp.CompletionError, rl.LeaseError) as exc:
+        raise WorkflowError(str(exc)) from exc
+
+
+def completion_view(run: Runner, task_id: str, repo_dir: str = "", git: GitRunner = default_git,
+                    remote_sha: Optional[str] = None, shows: Optional[dict] = None) -> dict:
+    """Stages, next unmet criteria, owner and held cards of the request (reads only)."""
+    shows = shows or request_cards(run, task_id)
+    codes = code_cards(shows)
+    if not codes:
+        raise WorkflowError(f"{task_id} belongs to no workflow request with a code card")
+    n = max(codes)
+    code_id, code_show = codes[n]
+    h = header_of(code_show)
+    recs = completion_records(shows)
+    pushed = latest(code_show, "code-sha")
+    current, basis = None, "unknown"
+    if repo_dir:
+        current, basis = completion_source(h, repo_dir, git), "checkout"
+    elif pushed:
+        done = [r for r in cp.of(recs, "handoff") if r.get("commit") == pushed.get("sha")]
+        if done:
+            current, basis = done[-1]["source"], "handoff"
+    final = None
+    report = next((tid for tid, s in shows.items() if header_of(s).get("workflow") == "report"), None)
+    if report:
+        ok, rows = gate(report, run)
+        lanes = [r for r in rows if header_of(shows.get(r["id"]) or {}).get("workflow") == "validate"]
+        final = {"validate": (bool(lanes) and all(r["ok"] for r in lanes),
+                              [r["reason"] for r in lanes if not r["ok"]] or ["no lane evidence for the final round"]),
+                 "complete": (ok, [r["reason"] for r in rows if not r["ok"]])}
+    rows = cp.evaluate(recs, code_id, current, pushed, remote_sha, final)
+    held = [{"id": tid, "title": s["task"].get("title"), "status": "blocked",
+             "rule": "held for the operator; never unblocked or promoted automatically"}
+            for tid, s in shows.items() if (s.get("task") or {}).get("status") == "blocked"]
+    running = (code_show.get("task") or {}).get("status") == "running"
+    stop = cp.open_stop(recs)
+    nxt = cp.next_unmet(rows)
+    if stop:
+        nxt = [{"stage": stop.get("stage") or "blocked", "met": False,
+                "unmet": [f"last recorded stop: {stop.get('block_reason') or stop.get('reason')} ({stop.get('rid')}; "
+                          + ("resolved only by `completion resolve` with the operator's decision)"
+                             if stop.get("class") == "approval" else
+                             "resolved by its stage being met, a handoff, or `completion resolve`)")]}] + nxt
+    return {"request": h.get("key"), "round": n, "code_card": code_id, "report_card": report,
+            "branch": h.get("branch"), "source": current, "source_basis": basis,
+            "handoff_ready": cp.handoff_ready(rows), "complete": all(r["met"] is True for r in rows),
+            "stages": rows, "next": nxt, "owner": lease_owner(h, git), "code_card_running": running,
+            "held": held, "records": len(recs)}
+
+
+def completion_write(cmd: str, args, run: Runner = default_runner, git: GitRunner = default_git) -> tuple:
+    """criteria | plan | delegate | evidence | recover | block-check | resolve on the coordinator's own code card."""
+    show = card(run, args.task_id)
+    h = kind_of(show, "code")
+    require_completion_writer(run, args.task_id, h, git)
+    recs = completion_records(request_cards(run, args.task_id))
+    try:
+        if cmd == "criteria":
+            rec = cp.criteria_record(args.item, args.check, args.source)
+        elif cmd == "plan":
+            rec = cp.plan_record(args.step)
+        elif cmd == "delegate":
+            rec = cp.delegate_record(args.id, args.state, args.summary, args.remaining)
+        elif cmd == "evidence":
+            source = completion_source(h, args.repo_dir, git)
+            counts = {"passed": args.passed, "failed": args.failed, "skipped": args.skipped}
+            rec = cp.evidence_record(args.kind, args.check, args.result, args.command, args.exit, counts, source,
+                                     cp.log_digest(args.log), args.summary)
+        elif cmd == "recover":
+            rec = cp.plan_recovery(recs, args.stage, getattr(args, "class"), args.signature, args.diagnosis,
+                                   args.action)
+            if args.area:
+                rec["area"] = args.area
+        elif cmd == "resolve":
+            rec = cp.resolve_record(recs, args.stop, args.reason)
+        else:
+            rec = cp.check_block(recs, args.reason)
+    except cp.CompletionError as exc:
+        raise WorkflowError(str(exc)) from exc
+    rec = completion_put(run, args.task_id, h, rec)
+    view = completion_view(run, args.task_id, getattr(args, "repo_dir", "") or "", git)
+    resume = completion_put(run, args.task_id, h, {"event": "resume", "next": view["next"]})
+    out = {"task": args.task_id, "record": rec, "next": view["next"], "resume_rid": resume["rid"]}
+    if cmd == "recover":
+        code = {"proceed": 0, "repeat-refused": 2}.get(rec["decision"], 4)
+        if rec.get("block_reason"):
+            out["block_reason"] = rec["block_reason"]
+        return code, out
+    if cmd == "block-check":
+        return (0, out) if rec["event"] == "block" else (2, out)
+    return 0, out
+
+
+def completion_handoff(task_id: str, repo_dir: str, run: Runner = default_runner,
+                       git: GitRunner = default_git) -> tuple:
+    """Exit 0 iff every implementation-handoff stage is met for the current source and the
+    remote branch is at the recorded SHA right now (git ls-remote, not the local claim).
+    Records the handoff; validation and the independent review still follow."""
+    show = card(run, task_id)
+    h = kind_of(show, "code")
+    require_completion_writer(run, task_id, h, git)
+    cwd = str(Path(repo_dir).expanduser().resolve())
+    remote = git_out(git, ["ls-remote", h.get("repo", ""), f"refs/heads/{h.get('branch', '')}"], cwd).split()
+    remote_sha = remote[0] if remote else ""
+    view = completion_view(run, task_id, repo_dir, git, remote_sha=remote_sha)
+    if view["code_card"] != task_id:
+        raise WorkflowError(f"{task_id} is not the current round's code card ({view['code_card']})")
+    if view["source"]["branch"] != h.get("branch"):
+        raise WorkflowError(f"checkout is on '{view['source']['branch']}', the card's branch is '{h.get('branch')}'")
+    if not view["handoff_ready"]:
+        completion_put(run, task_id, h, {"event": "resume", "next": view["next"]})
+        return 4, {"task": task_id, "handoff": False, "next": view["next"],
+                   "stages": [r for r in view["stages"] if r["stage"] in cp.HANDOFF_STAGES]}
+    sha = view["source"]["head"]
+    rec = completion_put(run, task_id, h, {"event": "handoff", "commit": sha, "branch": h.get("branch"),
+                                           "source": view["source"], "remote_sha": remote_sha,
+                                           "verified_by": "git ls-remote"})
+    remaining = [r for r in view["stages"] if r["stage"] in cp.FINAL_STAGES]
+    return 0, {"task": task_id, "handoff": True, "recorded_on_card": rec["recorded_on_card"],
+               "summary": f"IMPLEMENTATION_HANDOFF {sha[:12]} on {h.get('branch')}: tests and diff review pass on "
+                          f"this exact source, remote verified; validation and independent review follow",
+               "metadata": {"state": "IMPLEMENTATION_HANDOFF", "final": False, "commit": sha,
+                            "content_id": view["source"]["content_id"], "branch": h.get("branch"),
+                            "remaining": [s["stage"] for s in remaining]}}
+
+
+def completion_final(task_id: str, run: Runner = default_runner) -> tuple:
+    """Report card: exit 0 iff the gate passes and the gated SHA is the SHA the coordinator
+    handed off after remote verification. Records the final completion."""
+    show = card(run, task_id)
+    h = kind_of(show, "report")
+    shows = request_cards(run, task_id)
+    view = completion_view(run, task_id, shows=shows)
+    sha = next((r.get("commit") for r in view["stages"] if r["stage"] == "push"), None)
+    handed = [r for r in cp.of(completion_records(shows), "handoff") if r.get("commit") == sha]
+    problems = [] if handed else [f"no remote-verified implementation handoff for {str(sha)[:12]}"]
+    complete = next(r for r in view["stages"] if r["stage"] == "complete")
+    if complete["met"] is not True:
+        problems += complete["unmet"]
+    if problems:
+        return 4, {"task": task_id, "complete": False, "problems": problems, "next": view["next"]}
+    rec = completion_put(run, task_id, h, {"event": "complete", "commit": sha})
+    return 0, {"task": task_id, "complete": True, "commit": sha, "recorded_on_card": rec["recorded_on_card"],
+               "summary": f"COMPLETE {sha[:12]}: validated on every lane and independently approved"}
+
+
+def completion_metrics() -> dict:
+    ledgers = {}
+    root = state_dir()
+    for path in sorted(root.glob("*.jsonl")) if root.is_dir() else []:
+        ledgers[path.stem] = read_ledger(path.stem)
+    return cp.metrics(ledgers)
+
+
+def completion_command(args, run: Runner = default_runner, git: GitRunner = default_git) -> tuple:
+    act = args.action
+    if act in ("criteria", "plan", "delegate", "evidence", "recover", "block-check", "resolve"):
+        return completion_write(act, args, run, git)
+    if act == "handoff":
+        return completion_handoff(args.task_id, args.repo_dir, run, git)
+    if act == "final":
+        return completion_final(args.task_id, run)
+    if act == "status":
+        return 0, completion_view(run, args.task_id, args.repo_dir, git)
+    if act == "metrics":
+        return 0, completion_metrics()
+    root = str(Path(args.repo_dir).expanduser().resolve())
+    return 0, cp.detect_capabilities(root, registered_scanner=root in rl.scanner_registry())
 
 
 # --------------------------------------------------------------------- CLI ---
@@ -2245,6 +2861,9 @@ def parser() -> argparse.ArgumentParser:
                         "then BrowserStack real devices when activated (disabled by default); Windows deferred "
                         "(docs/mobile-validation.md)")
     i.add_argument("--dry-run", action="store_true", help="print the plan, create nothing")
+    i.add_argument("--bind", default="", metavar="TASK_ID",
+                   help="rerun after exit 5: the task_id kanban_create returned for the root code card (data, "
+                        "verified against the board like every discovered card)")
     for name in ("chat-id", "thread-id", "message-id", "user-id", "chat-type"):
         i.add_argument(f"--discord-{name}", default="")
 
@@ -2277,6 +2896,70 @@ def parser() -> argparse.ArgumentParser:
     v.add_argument("decision", choices=["approve", "changes"])
     v.add_argument("--reason", default="")
 
+    c = sub.add_parser("completion", help="coordinator completion state: criteria, source-bound evidence, bounded "
+                                          "recovery, implementation handoff, final completion, metrics")
+    csub = c.add_subparsers(dest="action", required=True)
+    ca = csub.add_parser("criteria", help="code card: record the acceptance criteria and the required checks")
+    ca.add_argument("--item", action="append", default=[], help="one acceptance criterion (repeatable)")
+    ca.add_argument("--check", action="append", default=[], help="a required check name, e.g. unit, lint (repeatable; "
+                                                                 "default: tests)")
+    ca.add_argument("--source", action="append", default=[], help="where the criterion was recovered from")
+    cp_ = csub.add_parser("plan", help="code card: record the plan")
+    cp_.add_argument("--step", action="append", default=[])
+    cd = csub.add_parser("delegate", help="code card: record a coding delegate's state (started, complete, partial, "
+                                          "failed, interrupted)")
+    cd.add_argument("--id", required=True, help="the delegate_task id, or 'self'")
+    cd.add_argument("--state", required=True, choices=cp.DELEGATE_STATES)
+    cd.add_argument("--summary", default="")
+    cd.add_argument("--remaining", default="", help="partial: what is still not done")
+    ce = csub.add_parser("evidence", help="code card: record a test or full-diff review result bound to the current "
+                                          "source identity (HEAD + content of tracked and untracked files)")
+    ce.add_argument("--kind", required=True, choices=cp.EVIDENCE_KINDS)
+    ce.add_argument("--check", default="", help="the check name from criteria (test), 'diff' for a review")
+    ce.add_argument("--result", required=True, choices=["pass", "fail"])
+    ce.add_argument("--command", default="", help="the exact command that ran (test)")
+    ce.add_argument("--exit", type=int, default=None, help="its exit code")
+    for name in ("passed", "failed", "skipped"):
+        ce.add_argument(f"--{name}", type=int, default=None)
+    ce.add_argument("--log", default="", help="the command's log file: only its SHA-256 and size are recorded")
+    ce.add_argument("--summary", default="")
+    cr = csub.add_parser("recover", help="code card: one bounded recovery attempt; exit 0 proceed, 2 identical "
+                                         "repeat refused, 4 stop (print block_reason)")
+    cr.add_argument("--stage", required=True, choices=cp.STAGES)
+    cr.add_argument("--class", required=True, choices=cp.RECOVERY_CLASSES)
+    cr.add_argument("--signature", required=True, help="the failure: command and error class, e.g. 'go test ./x: nil deref'")
+    cr.add_argument("--diagnosis", required=True)
+    cr.add_argument("--action", required=True, help="what you will do differently now")
+    cr.add_argument("--area", default="", choices=["", "code", "infra"])
+    cb = csub.add_parser("block-check", help="code card: exit 0 iff the proposed kanban_block reason is a genuine "
+                                             "stop (approval, device, conflict, capability, dependency, exhausted)")
+    cb.add_argument("--reason", required=True)
+    cv = csub.add_parser("resolve", help="code card: record the explicit resolution of a recorded stop (the only "
+                                         "way an approval stop closes)")
+    cv.add_argument("--stop", required=True, help="the stop's rid from `completion status`")
+    cv.add_argument("--reason", required=True, help="the operator's decision or the evidence that resolves it")
+    ch = csub.add_parser("handoff", help="code card: exit 0 iff every stage up to push is met on this exact source "
+                                         "and the remote branch is at it now; prints the kanban_complete summary")
+    cf = csub.add_parser("final", help="report card: exit 0 iff the gate passes for the handed-off SHA")
+    cf.add_argument("task_id")
+    cs = csub.add_parser("status", help="stages, next unmet criteria, owner, held cards (reads only)")
+    csub.add_parser("metrics", help="delivery metrics from the ledger only (no baseline)")
+    cc = csub.add_parser("capabilities", help="repository stacks, hints and approved capabilities needed (reads "
+                                              "allowlisted manifest names; executes nothing)")
+    cc.add_argument("--repo-dir", required=True)
+    for sp in (ca, cp_, cd, ce, cr, cb, cv, ch, cs):
+        sp.add_argument("task_id")
+        sp.add_argument("--repo-dir", default="" if sp not in (ce, ch) else None, required=sp in (ce, ch),
+                        help="the card's checkout (source identity)")
+    for sp in (cs, cc, csub.choices["metrics"]):
+        sp.add_argument("--json", action="store_true")
+
+    y = sub.add_parser("sync", help="rerun after exit 5: read back the native ops of a command on this card; "
+                                     "once every op landed, re-evaluate that command and print its result "
+                                     "(exit 4 stale when anything it certified moved)")
+    y.add_argument("task_id")
+    y.add_argument("--op", default="", help="the operation token from the envelope's rerun")
+
     for name, text in (("gate", "exit 0 iff the final SHA passed every lane and an independent review"),
                        ("status", "show every card of the request and its state")):
         s = sub.add_parser(name, help=text)
@@ -2289,53 +2972,249 @@ def emit(result) -> None:
     print(json.dumps(result, indent=2))
 
 
-def main(argv=None, run: Runner = default_runner, git: GitRunner = default_git) -> int:
-    args = parser().parse_args(argv)
-    try:
-        if args.cmd == "intake":
-            emit(intake(args, run, git))
-            return 0
-        if args.cmd == "record-sha":
-            emit(record_sha(args.task_id, args.repo_dir, args.notes, run, git))
-            return 0
-        if args.cmd in ("preflight", "checkpoint", "adopt", "release"):
-            code, result = checkout_command(args.cmd, args.task_id, args.repo_dir, getattr(args, "manifest", ""), run, git)
-            emit(result)
-            return code
-        if args.cmd == "dispatch":
-            emit(dispatch(args.task_id, run))
-            return 0
-        if args.cmd in ("wait", "advance", "verdict"):
-            if args.cmd == "wait":
-                code, result = wait(args.task_id, args.timeout, args.interval, run)
-            elif args.cmd == "advance":
-                code, result = advance(args.task_id, run)
-            else:
-                code, result = verdict(args.task_id, args.decision, args.reason, run)
-            emit(result)
-            return code
-        if args.cmd == "gate":
-            ok, rows = gate(args.task_id, run)
-            if args.json:
-                emit({"ok": ok, "checks": rows})
-            else:
-                for r in rows:
-                    print(f"{'OK  ' if r['ok'] else 'FAIL'} {r['id']}  {r['reason']}")
-                print("review gate: PASS" if ok else "review gate: FAIL")
-            return 0 if ok else 1
-        rows = status(args.task_id, run)
+def run_command(args, run: Runner, git: GitRunner) -> tuple:
+    """(exit code, kind, output) of one command: kind "json" (an object to print), "text"
+    (lines) or "error" (a message for stderr)."""
+    if args.cmd == "intake":
+        return 0, "json", intake(args, run, git)
+    if args.cmd == "record-sha":
+        return 0, "json", record_sha(args.task_id, args.repo_dir, args.notes, run, git)
+    if args.cmd in ("preflight", "checkpoint", "adopt", "release"):
+        code, result = checkout_command(args.cmd, args.task_id, args.repo_dir, getattr(args, "manifest", ""), run, git)
+        return code, "json", result
+    if args.cmd == "dispatch":
+        return 0, "json", dispatch(args.task_id, run)
+    if args.cmd == "wait":
+        code, result = wait(args.task_id, args.timeout, args.interval, run)
+        return code, "json", result
+    if args.cmd == "advance":
+        code, result = advance(args.task_id, run)
+        return code, "json", result
+    if args.cmd == "verdict":
+        code, result = verdict(args.task_id, args.decision, args.reason, run)
+        return code, "json", result
+    if args.cmd == "completion":
+        code, result = completion_command(args, run, git)
+        return code, "json", result
+    if args.cmd == "gate":
+        ok, rows = gate(args.task_id, run)
         if args.json:
-            emit(rows)
-        else:
-            for r in rows:
-                extra = f"  {r['commit'][:12]}" if r.get("commit") else ""
-                if r.get("transport"):
-                    extra += f"  [peer {r['peer']} run {r['run_id'] or '-'}]"
-                print(f"{r['id']}  {r['status']:<8} {r['state']:<22} {r['assignee'] or '-':<16} {r['title']}{extra}")
-        return 0
+            return (0 if ok else 1), "json", {"ok": ok, "checks": rows}
+        lines = [f"{'OK  ' if r['ok'] else 'FAIL'} {r['id']}  {r['reason']}" for r in rows]
+        return (0 if ok else 1), "text", lines + ["review gate: PASS" if ok else "review gate: FAIL"]
+    rows = status(args.task_id, run)
+    if args.json:
+        return 0, "json", rows
+    lines = []
+    for r in rows:
+        extra = f"  {r['commit'][:12]}" if r.get("commit") else ""
+        if r.get("transport"):
+            extra += f"  [peer {r['peer']} run {r['run_id'] or '-'}]"
+        lines.append(f"{r['id']}  {r['status']:<8} {r['state']:<22} {r['assignee'] or '-':<16} {r['title']}{extra}")
+    return 0, "text", lines
+
+
+def outcome(args, run: Runner, git: GitRunner) -> tuple:
+    """run_command with errors mapped to exit codes; (None, ...) when a create is pending."""
+    try:
+        return run_command(args, run, git)
+    except Pending:
+        return None, "pending", None
+    except Mismatch as exc:
+        _BOX.ops.clear()  # a mismatch stops the graph here: no further op, never a second create
+        _BOX.links.clear()
+        return 4, "json", {"blocker": f"board-mismatch: {redact(str(exc))}"}
+    except CapabilityError as exc:
+        return 3, "error", redact(str(exc))
     except WorkflowError as exc:
-        print(f"kanban-workflow: {redact(str(exc))}", file=sys.stderr)
-        return 2
+        return 2, "error", redact(str(exc))
+
+
+def scope_of(args) -> str:
+    """Where the bounded op counts of a command live: its card, or intake's request key."""
+    if getattr(args, "task_id", None):
+        return args.task_id
+    if args.cmd != "intake":
+        return args.cmd
+    try:
+        return "intake-" + idempotency_base(args.key, discord_origin(args))
+    except WorkflowError:
+        return "intake-unkeyed"
+
+
+def show_outcome(code: int, kind: str, out) -> int:
+    if kind == "json":
+        emit(out)
+    elif kind == "text":
+        for line in out:
+            print(line)
+    elif kind == "error":
+        print(f"kanban-workflow: {out}", file=sys.stderr)
+    return code
+
+
+def op_path(scope: str, token: str) -> Path:
+    return state_dir() / "ops" / (re.sub(r"[^A-Za-z0-9_-]", "_", scope) + ".op-"
+                                  + re.sub(r"[^A-Za-z0-9]", "_", token) + ".json")
+
+
+def run_fence(show: dict) -> dict:
+    """The card facts a finished command's result rests on: status and the current run."""
+    task = show.get("task") or {}
+    live = [r.get("id") for r in show.get("runs") or [] if r.get("status") == "running" and not r.get("ended_at")]
+    return {"status": task.get("status"), "runs": len(show.get("runs") or []), "live": live}
+
+
+def deliver(box: Outbox, scope: str, argv: list, code, kind: str, out, fence: Optional[dict] = None,
+            token: str = "") -> int:
+    """Converged: print the outcome. Else count each op's emission (a third one means it was
+    applied but never read back, or never applied: block, no loop), keep the finished command
+    (argv, ops, outcome) under its own operation token for `sync`, and print the native ops with
+    the exact rerun. *token*: a `sync` still reading that operation back."""
+    state = read_ops_state(scope)
+    if not box.ops:
+        if state:
+            write_ops_state(scope, None)
+        return show_outcome(code, kind, out)
+    counts = state.get("counts") or {}
+    for op in box.ops:
+        counts[op["op_id"]] = int(counts.get(op["op_id"]) or 0) + 1
+        if counts[op["op_id"]] > MAX_EMISSIONS:
+            write_ops_state(scope, None)
+            if token:
+                with contextlib.suppress(FileNotFoundError):
+                    op_path(scope, token).unlink()
+            return show_outcome(4, "json", {"blocker": f"native apply did not land: {op['tool']} {op['why']} "
+                                                      f"(emitted {counts[op['op_id']]} times)", "op": op})
+    pending = kind == "pending"
+    write_ops_state(scope, {"counts": counts})
+    if pending or token:
+        rerun = [sys.executable, str(SCRIPT), *argv]
+    else:
+        token = hashlib.sha256(os.urandom(16)).hexdigest()[:16]
+        path = op_path(scope, token)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"argv": argv, "cwd": os.getcwd(), "ops": box.ops, "fence": fence,
+                                   "outcome": {"code": code, "kind": kind, "out": out}}, sort_keys=True),
+                       encoding="utf-8")
+        os.replace(tmp, path)
+        rerun = [sys.executable, str(SCRIPT), "sync", scope, "--op", token]
+    emit({"converged": False, "ops": box.ops, "rerun": rerun, "bind_root": pending and box.bind_root,
+          "next": "apply each op with the named native kanban_* tool, args verbatim and in order, then run rerun"
+                  + (" with --bind <the task_id kanban_create returned>" if pending and box.bind_root else "")})
+    return EXIT_PENDING
+
+
+VOLATILE = {"recorded_on_card", "resumed", "ts", "type"}
+
+
+def certified(value):
+    """What a result asserts, minus the bookkeeping a readback changes (on-card flags, ts)."""
+    if isinstance(value, dict):
+        return {k: certified(v) for k, v in value.items() if k not in VOLATILE}
+    if isinstance(value, list):
+        return [certified(v) for v in value]
+    return value
+
+
+def op_landed(run: Runner, op: dict) -> bool:
+    args = op["args"]
+    if op["tool"] == "kanban_link":
+        return args["parent_id"] in (card(run, args["child_id"]).get("parents") or [])
+    if op["tool"] != "kanban_comment":
+        raise Stale(f"a finished command holds a {op['tool']} op; its result cannot be read back")
+    show = card(run, args["task_id"])
+    rtype = args["body"].partition(" ")[0]
+    return rtype in RECORD_TYPES and any(c.get("body") == args["body"] and trusted_comment(show, rtype, c)
+                                         for c in show.get("comments") or [])
+
+
+def stale(scope: str, saved: dict, why: str) -> tuple:
+    return 4, "json", {"task": scope, "stale": True, "retry": [sys.executable, str(SCRIPT), *saved.get("argv", [])],
+                       "blocker": f"stale: {redact(why)}; nothing is certified: rerun the original command"}
+
+
+def sync(task_id: str, run: Runner = default_runner, git: GitRunner = default_git, op: Optional[str] = None) -> tuple:
+    """Read back the ops of the finished command *op* on *task_id*: re-queue each one that did
+    not land (as its runtime author). Once all landed, re-evaluate that command read-only (exit
+    4 stale, never its stored result, when the source, HEAD, remote, card run, a gate or a verdict
+    moved: any new write it would need, a different result, an error). op None (no CLI path):
+    readback of the card's ledger records only."""
+    if op is None:
+        sync_records(run, card(run, task_id))
+        return 0, "json", {"task": task_id, "synced": True}
+    path = op_path(task_id, op) if op else None
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8")) if path else None
+    except (OSError, json.JSONDecodeError):
+        saved = None
+    if not isinstance(saved, dict) or not saved.get("argv"):
+        return stale(task_id, {}, f"no pending operation '{op}' on {task_id} (cleared, superseded or already read back)")
+    try:
+        for queued in saved.get("ops") or []:
+            if not op_landed(run, queued):
+                _BOX.add(queued["tool"], queued["args"], queued["why"])
+    except Stale as exc:
+        _BOX.ops.clear()
+        path.unlink(missing_ok=True)
+        return stale(task_id, saved, str(exc))
+    if _BOX.ops:
+        return None, "readback", None
+    path.unlink(missing_ok=True)  # one re-evaluation per output; a refusal needs the command again
+    if saved.get("fence") is not None and run_fence(card(run, task_id)) != saved["fence"]:
+        return stale(task_id, saved, f"{task_id} changed status or run after the output (reclaimed or moved)")
+    args = parser().parse_args(saved["argv"])
+    if args.cmd == "sync":
+        return stale(task_id, saved, "a sync cannot be re-evaluated")
+    if args.cmd == "wait":
+        args.timeout = 0  # re-reads the settled run; never waits again
+    expect = set()
+    for queued in saved.get("ops") or []:
+        body = queued["args"].get("body") or ""
+        with contextlib.suppress(json.JSONDecodeError, AttributeError):
+            expect.add(json.loads(body.partition(" ")[2]).get("rid"))
+    cwd = os.getcwd()
+    try:
+        os.chdir(saved.get("cwd") or cwd)
+    except OSError as exc:
+        return stale(task_id, saved, f"the command's working directory is gone: {exc}")
+    with transport() as box:
+        box.readback, box.expect = True, expect
+        try:
+            code, kind, out = run_command(args, run, git)
+        except (Stale, Pending, Mismatch) as exc:
+            return stale(task_id, saved, f"re-evaluation needs new writes: {exc}" if str(exc) else "re-evaluation "
+                                         "needs new cards")
+        except CapabilityError as exc:
+            code, kind, out = 3, "error", redact(str(exc))
+        except WorkflowError as exc:
+            code, kind, out = 2, "error", redact(str(exc))
+        finally:
+            os.chdir(cwd)
+    first = saved.get("outcome") or {}
+    if (code, kind, certified(out)) != (first.get("code"), first.get("kind"), certified(first.get("out"))):
+        return stale(task_id, saved, f"the result moved after the output (exit {first.get('code')} -> {code}): "
+                                     + clip(json.dumps(certified(out), sort_keys=True) if kind == "json" else out, 400))
+    return code, kind, out
+
+
+def main(argv=None, run: Runner = default_runner, git: GitRunner = default_git) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser().parse_args(argv)
+    with transport() as box:
+        if args.cmd == "sync":
+            try:
+                code, kind, out = sync(args.task_id, run, git, args.op)
+            except WorkflowError as exc:
+                code, kind, out = 2, "error", redact(str(exc))
+            return deliver(box, args.task_id, argv, code, kind, out, token=args.op if kind == "readback" else "")
+        code, kind, out = outcome(args, run, git)
+        fence = None
+        if box.ops and kind != "pending" and rl.TASK_RE.match(scope_of(args)):
+            with contextlib.suppress(WorkflowError):
+                fence = run_fence(card(run, scope_of(args)))
+        return deliver(box, scope_of(args), argv, code, kind, out, fence)
 
 
 if __name__ == "__main__":

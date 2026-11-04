@@ -53,6 +53,36 @@ def scan_runner(returncode, stdout):
     return run
 
 
+def bound_show(task="t_1", pid=None, run=7, status="running", started_at=None, extra_events=(), runs=None):
+    """`hermes kanban show --json` of a card whose run `run` was bound by the managed worker `pid`."""
+    pid = pid or os.getppid()
+    if started_at is None:
+        started_at = f"{rl.instantiation_epoch()}|{rl.proc_start_ticks(pid)}"
+    return {"task": {"id": task, "status": status},
+            "runs": runs if runs is not None else [{"id": run, "profile": "default", "status": "running", "ended_at": None}],
+            "events": [{"kind": "worker_bound", "run_id": run, "payload": {"pid": pid, "claim_lock": "l",
+                                                                         "started_at": started_at}},
+                       *extra_events]}
+
+
+def show_runner(*shows):
+    by_id = {s["task"]["id"]: s for s in shows}
+
+    def hermes(argv):
+        if argv[:2] == ["kanban", "show"] and argv[2] in by_id:
+            return done(0, json.dumps(by_id[argv[2]]))
+        return done(1, err=f"no such task: {argv[2:3]}")
+    return hermes
+
+
+# A genuine bound interpreter: `python -m agent.managed_worker` (the module name upstream's managed
+# worker runs under) that starts PROBE as its child, the way the worker's terminal tool does.
+MANAGED_WORKER = (
+    "import os, subprocess, sys\n"
+    "r = subprocess.run([sys.executable, '-c', os.environ['PROBE']], capture_output=True, text=True, timeout=120)\n"
+    "sys.stdout.write(r.stdout); sys.stderr.write(r.stderr)\n")
+
+
 class TempState(unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -60,7 +90,7 @@ class TempState(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"HERMES_WORKFLOW_STATE": str(self.state)}, clear=False)
         patcher.start()
         for key in ("HERMES_KANBAN_TASK", "HERMES_KANBAN_RUN_ID", "HERMES_KANBAN_BOARD",
-                    "HERMES_KANBAN_SUPERVISED_WORKER_PID", "HERMES_DELEGATED_CHILD_CONTEXT"):
+                    "HERMES_KANBAN_SUPERVISED_WORKER_PID", "HERMES_DELEGATED_CHILD_CONTEXT", "HERMES_BIN"):
             os.environ.pop(key, None)
         self.addCleanup(patcher.stop)
         self.addCleanup(shutil.rmtree, self.state, True)
@@ -312,31 +342,6 @@ class ProcessClassificationTest(TempRepo):
         row = rl.classify_process(child.pid, self_pid=10 ** 6, anchors=[os.getpid()], self_chain=set())
         self.assertEqual(row["kind"], "own-descendant")
 
-    def test_anchor_requires_a_verified_worker_identity(self):
-        """The anchor is a supervising worker only when it is an ancestor AND its own environment
-        carries this task; a `hermes` ancestor without it (the gateway) or a sibling never is.
-        Without a verified worker the anchor is this process itself."""
-        self.assertEqual(rl.anchor_pid(task_id="t_1"), os.getpid())
-        self.assertEqual(rl.anchor_pid(4242), 4242)
-        probe = (
-            "import os, sys, json, importlib.util\n"
-            f"spec = importlib.util.spec_from_file_location('rl', {str(SCRIPT)!r}); rl = importlib.util.module_from_spec(spec); spec.loader.exec_module(rl)\n"
-            "print(json.dumps({'anchor': rl.anchor_pid(task_id='t_1'), 'self': os.getpid(), 'parent': os.getppid()}))\n"
-        )
-        parent_code = (
-            "import os, sys, subprocess\n"
-            "env = {**os.environ, 'HERMES_KANBAN_SUPERVISED_WORKER_PID': str(os.getpid())}\n"
-            f"sys.stdout.write(subprocess.run([sys.executable, '-c', {probe!r}], env=env, capture_output=True, text=True).stdout)\n"
-        )
-        for env_task, expect in (("t_1", "parent"), ("t_other", "self"), (None, "self")):
-            env = {k: v for k, v in os.environ.items() if k != "HERMES_KANBAN_TASK"}
-            if env_task:
-                env["HERMES_KANBAN_TASK"] = env_task
-            out = subprocess.run([sys.executable, "-c", parent_code], env=env, capture_output=True, text=True, timeout=60)
-            self.assertTrue(out.stdout.strip(), out.stderr)
-            got = json.loads(out.stdout)
-            self.assertEqual(got["anchor"], got[expect], (env_task, got))
-
     def test_foreign_agent_and_mutating_git_block(self):
         bindir = self.tmp / "bin"
         bindir.mkdir()
@@ -422,14 +427,6 @@ class ProcessClassificationTest(TempRepo):
             self.assertFalse(rl.classify_scan(scan)["ok"])
         else:
             self.assertTrue(rl.classify_scan(scan)["ok"])
-
-    def test_anchor_pid_prefers_a_verified_supervised_worker(self):
-        with mock.patch.dict(os.environ, {"HERMES_KANBAN_SUPERVISED_WORKER_PID": str(os.getppid())}):
-            self.assertEqual(rl.anchor_pid(), os.getppid())                 # no task known: ancestry alone
-            self.assertEqual(rl.anchor_pid(task_id="t_1"), os.getpid())     # parent env has no such task: not verified
-        with mock.patch.dict(os.environ, {"HERMES_KANBAN_SUPERVISED_WORKER_PID": "999999999"}):
-            self.assertNotEqual(rl.anchor_pid(), 999999999)  # not an ancestor: ignored
-        self.assertEqual(rl.anchor_pid(4242), 4242)
 
 
 # ---------------------------------------------------------------- scanner ---
@@ -644,6 +641,95 @@ class ManifestTest(TempRepo):
 
 # -------------------------------------------------------------- preflight ---
 
+class BoundWorkerTest(TempState):
+    """The lease owner comes from the board's worker_bound event of the card's current run, only
+    when that interpreter is a per-attempt managed worker and an ancestor of this process with
+    the recorded start time; every forged, mismatched or ambiguous binding fails closed."""
+
+    def run_probe(self, probe: str) -> dict:
+        root = Path(tempfile.mkdtemp(prefix="managed-worker-")).resolve()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "agent").mkdir()
+        (root / "agent" / "__init__.py").write_text("")
+        (root / "agent" / "managed_worker.py").write_text(MANAGED_WORKER)
+        out = subprocess.run([sys.executable, "-m", "agent.managed_worker"], cwd=root, capture_output=True, text=True,
+                             timeout=180, env={**os.environ, "PROBE": probe, "PYTHONPATH": str(root)})
+        line = next((ln for ln in out.stdout.splitlines() if ln.startswith("RESULT ")), None)
+        self.assertTrue(line, out.stdout + out.stderr)
+        return json.loads(line[len("RESULT "):])
+
+    def test_genuine_managed_worker_parent_is_the_owner_and_forgeries_fail_closed(self):
+        probe = (
+            "import os, json, importlib.util\n"
+            f"spec = importlib.util.spec_from_file_location('rl', {str(SCRIPT)!r}); rl = importlib.util.module_from_spec(spec); spec.loader.exec_module(rl)\n"
+            "P = os.getppid(); ticks = rl.proc_start_ticks(P); ep = rl.instantiation_epoch()\n"
+            "def show(task='t_1', pid=P, run=7, status='running', started=None, extra=(), runs=None):\n"
+            "    return {'task': {'id': task, 'status': status}, 'runs': runs if runs is not None else\n"
+            "            [{'id': run, 'profile': 'default', 'status': 'running', 'ended_at': None}],\n"
+            "            'events': [{'kind': 'worker_bound', 'run_id': run, 'payload': {'pid': pid, 'claim_lock': 'l',\n"
+            "                        'started_at': started or f'{ep}|{ticks}'}}, *extra]}\n"
+            "def attempt(s, **kw):\n"
+            "    try:\n"
+            "        return rl.bound_worker('t_1', s, **kw)\n"
+            "    except rl.IdentityError as e:\n"
+            "        return 'refused: ' + str(e)\n"
+            "os.environ.update(HERMES_KANBAN_TASK='t_9', HERMES_KANBAN_RUN_ID='99', HERMES_KANBAN_SUPERVISED_WORKER_PID='1')\n"
+            "res = {'P': P, 'cmd': rl.proc_cmdline(P), 'ok': attempt(show()),\n"
+            "  'not_running': attempt(show(status='ready')),\n"
+            "  'wrong_run': attempt(show(runs=[{'id': 8, 'status': 'running'}])),\n"
+            "  'no_event': attempt({'task': {'id': 't_1', 'status': 'running'}, 'runs': [{'id': 7, 'status': 'running'}], 'events': []}),\n"
+            "  'ticks': attempt(show(started=f'{ep}|{ticks + 1}')),\n"
+            "  'epoch': attempt(show(started=f'other-boot:1|{ticks}')),\n"
+            "  'unverified': attempt(show(started='unverified')),\n"
+            "  'owner_pid': attempt(show(), explicit_pid=os.getpid()),\n"
+            "  'owner_pid_ok': attempt(show(), explicit_pid=P),\n"
+            "  'owner_admitted': attempt(show(extra=[{'kind': 'owner_admitted', 'run_id': 7, 'payload': {'pid': P}}])),\n"
+            "  'sibling': attempt(show(), others=[show(task='t_2', run=3)]),\n"
+            "  'sibling_done': attempt(show(), others=[show(task='t_2', run=3, status='done')]),\n"
+            "  'other_task': attempt(show(task='t_2'))}\n"
+            "print('RESULT ' + json.dumps(res))\n")
+        got = self.run_probe(probe)
+        self.assertEqual(got["cmd"][1:], ["-m", "agent.managed_worker"])
+        ok = got["ok"]
+        self.assertEqual((ok["task"], ok["run_id"], ok["pid"]), ("t_1", 7, got["P"]))  # env claims changed nothing
+        self.assertEqual(got["owner_pid_ok"]["pid"], got["P"])
+        self.assertEqual(got["sibling_done"]["pid"], got["P"], "a sibling that is not running is no binding")
+        for case, text in (("not_running", "is ready, not running"), ("wrong_run", "no worker_bound event"),
+                           ("no_event", "no worker_bound event"), ("ticks", "another start time"),
+                           ("epoch", "another boot"), ("unverified", "no verifiable fingerprint"),
+                           ("owner_pid", "is not the bound worker pid"), ("owner_admitted", "owner process"),
+                           ("sibling", "running card t_2 is bound to this process chain too"),
+                           ("other_task", "not t_1")):
+            self.assertIsInstance(got[case], str, case)
+            self.assertTrue(got[case].startswith("refused: "), (case, got[case]))
+            self.assertIn(text, got[case], case)
+
+    def test_not_an_ancestor_not_a_managed_worker_and_a_nested_worker_fail_closed(self):
+        sleeper = self.spawn(["sleep", "60"])
+        with self.assertRaisesRegex(rl.IdentityError, "is an ancestor of this process"):
+            rl.bound_worker("t_1", bound_show(pid=sleeper.pid))
+        with self.assertRaisesRegex(rl.IdentityError, "not a per-attempt managed worker"):
+            rl.bound_worker("t_1", bound_show())  # this test's parent is a shell / runner, not a managed worker
+        grand = rl.proc_parent(os.getppid())
+        if grand and grand > 1:
+            managed = lambda pid: ["python3", "-m", rl.MANAGED_WORKER_MODULE]  # noqa: E731
+            with self.assertRaisesRegex(rl.IdentityError, "another managed worker"):
+                rl.bound_worker("t_1", bound_show(pid=grand), cmdline=managed)
+        self.assertTrue(rl.is_managed_worker(["/usr/bin/python3", "-m", "agent.managed_worker"]))
+        for cmd in (["hermes", "gateway", "run"], ["python3", "-m", "hermes_cli.main"], [], None):
+            self.assertFalse(rl.is_managed_worker(cmd), cmd)
+
+    def test_owner_needs_a_board_identity_never_the_environment(self):
+        with mock.patch.dict(os.environ, {"HERMES_KANBAN_TASK": "t_1", "HERMES_KANBAN_RUN_ID": "7",
+                                          "HERMES_KANBAN_SUPERVISED_WORKER_PID": str(os.getppid())}):
+            with self.assertRaises(rl.IdentityError):
+                rl.cli_owner("t_1", hermes=show_runner(bound_show(status="ready")))
+            with self.assertRaisesRegex(rl.IdentityError, "show t_1 failed"):
+                rl.cli_owner("t_1", hermes=show_runner())
+        for name in ("anchor_pid", "owner_from_env", "proc_env_value"):
+            self.assertFalse(hasattr(rl, name), name)
+
+
 class PreflightTest(TempRepo):
     def setUp(self):
         super().setUp()
@@ -745,60 +831,67 @@ class PreflightTest(TempRepo):
         self.assertEqual(self.names(strict, False), ["dirty"])
         self.assertEqual(Path(self.co, "a.txt").read_text(), "2\n", "nothing is ever reset or stashed")
 
-    def test_cli_refuses_a_self_anchored_lease_early(self):
-        """No verified worker and no --owner-pid: preflight and checkpoint refuse before taking a
-        lease that would die with the CLI process."""
-        for argv in (["preflight", "--task", "t_1", "--checkout", self.co, "--repo", self.url, "--branch", "feat/x"],
-                     ["checkpoint", "--task", "t_1", "--checkout", self.co]):
-            with mock.patch("sys.stderr", new_callable=lambda: __import__("io").StringIO()) as err:
-                self.assertEqual(rl.main(argv, scan_runner=self.pass_scan), 2, argv)
-            self.assertIn("no verified supervising Hermes worker", err.getvalue())
-            self.assertIsNone(rl.read_lease(rl.repo_identity(self.co, rl.default_git)), argv)
+    def test_cli_without_a_bound_worker_refuses_before_any_lease(self):
+        """No board-recorded bound worker of the card's running run above this process: exit 3
+        (capability) before a lease that would die with the CLI process is taken."""
+        for show in (bound_show(status="ready"), bound_show(), bound_show(pid=1)):
+            for argv in (["preflight", "--task", "t_1", "--checkout", self.co, "--repo", self.url, "--branch", "feat/x"],
+                         ["checkpoint", "--task", "t_1", "--checkout", self.co]):
+                with mock.patch("sys.stderr", new_callable=lambda: __import__("io").StringIO()) as err:
+                    self.assertEqual(rl.main(argv, scan_runner=self.pass_scan, hermes=show_runner(show)), 3, argv)
+                self.assertIn("capability: task-scoped worker identity", err.getvalue())
+                self.assertIsNone(rl.read_lease(rl.repo_identity(self.co, rl.default_git)), argv)
 
-    def test_cli_under_a_verified_worker_takes_the_workers_lease(self):
-        """The genuine path: a worker process carrying HERMES_KANBAN_TASK runs the CLI with
-        HERMES_KANBAN_SUPERVISED_WORKER_PID pointing at itself; the lease is the worker's."""
-        child = (
-            "import os, sys, json, subprocess, importlib.util\n"
+    def test_cli_under_a_genuine_managed_worker_takes_the_workers_lease(self):
+        """The genuine path, no patching: the CLI runs as the child of a real `python -m
+        agent.managed_worker` process that the board records as the run's bound worker; the
+        lease is that worker's, and a lease holder bound to the same chain is refused."""
+        probe = (
+            "import os, json, subprocess, importlib.util\n"
             f"spec = importlib.util.spec_from_file_location('rl', {str(SCRIPT)!r}); rl = importlib.util.module_from_spec(spec); spec.loader.exec_module(rl)\n"
+            "P = os.getppid()\n"
+            "show = {'task': {'id': 't_1', 'status': 'running'}, 'runs': [{'id': 7, 'status': 'running'}],\n"
+            "        'events': [{'kind': 'worker_bound', 'run_id': 7, 'payload': {'pid': P,\n"
+            "                    'started_at': f'{rl.instantiation_epoch()}|{rl.proc_start_ticks(P)}'}}]}\n"
+            "hermes = lambda argv: subprocess.CompletedProcess(argv, 0, json.dumps(show), '')\n"
             "scan = lambda argv: subprocess.CompletedProcess(argv, 0, 'PASS: No repository CWD matches found.\\n', '')\n"
-            f"code = rl.main(['preflight', '--task', 't_1', '--checkout', {self.co!r}, '--repo', {self.url!r}, '--branch', 'feat/x'], scan_runner=scan)\n"
-            f"code2 = rl.main(['checkpoint', '--task', 't_1', '--checkout', {self.co!r}], scan_runner=scan)\n"
-            f"lease = rl.read_lease(rl.repo_identity({self.co!r}, rl.default_git))\n"
-            "print('RESULT ' + json.dumps({'codes': [code, code2], 'owner': lease['owner']['pid'], 'parent': os.getppid()}))\n"
-        )
-        worker = (
-            "import os, sys, subprocess\n"
-            "env = {**os.environ, 'HERMES_KANBAN_SUPERVISED_WORKER_PID': str(os.getpid())}\n"
-            f"sys.stdout.write(subprocess.run([sys.executable, '-c', {child!r}], env=env, capture_output=True, text=True).stdout)\n"
-        )
-        out = subprocess.run([sys.executable, "-c", worker], env={**os.environ, "HERMES_KANBAN_TASK": "t_1"},
-                             capture_output=True, text=True, timeout=120)
-        line = next((ln for ln in out.stdout.splitlines() if ln.startswith("RESULT ")), None)
-        self.assertTrue(line, out.stdout + out.stderr)
-        got = json.loads(line[len("RESULT "):])
-        self.assertEqual(got["codes"], [0, 0], got)
-        self.assertEqual(got["owner"], got["parent"], "the lease is owned by the verified worker, not the CLI")
+            f"co, url = {self.co!r}, {self.url!r}\n"
+            "codes = [rl.main(['preflight', '--task', 't_1', '--checkout', co, '--repo', url, '--branch', 'feat/x'],\n"
+            "                 scan_runner=scan, hermes=hermes),\n"
+            "         rl.main(['checkpoint', '--task', 't_1', '--checkout', co], scan_runner=scan, hermes=hermes),\n"
+            "         rl.main(['release', '--task', 't_1', '--checkout', co, '--owner-pid', str(os.getpid())], hermes=hermes)]\n"
+            "lease = rl.read_lease(rl.repo_identity(co, rl.default_git))\n"
+            "codes.append(rl.main(['release', '--task', 't_1', '--checkout', co], hermes=hermes))\n"
+            "print('RESULT ' + json.dumps({'codes': codes, 'owner': lease['owner'], 'P': P}))\n")
+        got = BoundWorkerTest.run_probe(self, probe)
+        self.assertEqual(got["codes"], [0, 0, 3, 0], got)
+        self.assertEqual((got["owner"]["pid"], got["owner"]["run_id"], got["owner"]["task"]), (got["P"], 7, "t_1"),
+                         "the lease is owned by the bound managed worker, not the CLI")
 
     def test_cli_round_trip(self):
         out = subprocess.run([sys.executable, str(SCRIPT), "status", "--checkout", self.co], capture_output=True, text=True,
                              env={**os.environ, "HERMES_WORKFLOW_STATE": str(self.state)})
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(json.loads(out.stdout)["scanner"], ["sudo", "-n", "/bin/true"])
-        owner_pid = str(os.getppid())  # explicit long-lived owner: no verified worker in a test run
-        with mock.patch.object(rl, "default_scan_runner", self.pass_scan):
+        owner_pid = str(os.getppid())  # the board-bound worker (lease adaptor: its cmdline stands in)
+        hermes = show_runner(bound_show())
+        adaptor = mock.patch.object(rl, "is_managed_worker", lambda cmd: cmd == rl.proc_cmdline(os.getppid()))
+        with adaptor, mock.patch.object(rl, "default_scan_runner", self.pass_scan):
             with mock.patch("sys.stdout", new_callable=lambda: __import__("io").StringIO()) as buf:
                 code = rl.main(["preflight", "--task", "t_1", "--checkout", self.co, "--repo", self.url, "--branch", "feat/x",
-                                "--owner-pid", owner_pid])
+                                "--owner-pid", owner_pid], hermes=hermes)
             self.assertEqual(code, 0, buf.getvalue())
             self.assertTrue(json.loads(buf.getvalue())["ok"])
-        with mock.patch.dict(os.environ, {"HERMES_KANBAN_TASK": "t_zzz"}):
+            with mock.patch.dict(os.environ, {"HERMES_KANBAN_TASK": "t_zzz"}):  # an env claim changes nothing
+                with mock.patch("sys.stdout", new_callable=lambda: __import__("io").StringIO()):
+                    self.assertEqual(rl.main(["checkpoint", "--task", "t_1", "--checkout", self.co], hermes=hermes), 0)
             with mock.patch("sys.stderr", new_callable=lambda: __import__("io").StringIO()) as err:
-                code = rl.main(["checkpoint", "--task", "t_1", "--checkout", self.co, "--owner-pid", owner_pid])
-            self.assertEqual(code, 2)
-            self.assertIn("belongs to card t_zzz", err.getvalue())
-        with mock.patch("sys.stdout", new_callable=lambda: __import__("io").StringIO()) as buf:
-            self.assertEqual(rl.main(["release", "--task", "t_1", "--checkout", self.co, "--owner-pid", owner_pid]), 0)
+                self.assertEqual(rl.main(["release", "--task", "t_1", "--checkout", self.co, "--owner-pid", "4242"],
+                                         hermes=hermes), 3)
+            self.assertIn("is not the bound worker pid", err.getvalue())
+            with mock.patch("sys.stdout", new_callable=lambda: __import__("io").StringIO()) as buf:
+                self.assertEqual(rl.main(["release", "--task", "t_1", "--checkout", self.co, "--owner-pid", owner_pid],
+                                         hermes=hermes), 0)
         self.assertEqual(json.loads(buf.getvalue())["status"], "released")
 
 

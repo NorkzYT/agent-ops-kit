@@ -47,6 +47,7 @@ the Hermes templates and an offline render of `scripts/stack-init.sh`.
   and are referenced as `${VAR}`. Apply `.env` changes with
   `make hermes-config-apply` (forced render, no restart), then
   `make hermes-restart` from the operator's terminal (docs/install.md).
+- **Hermes source separation** (docs/hermes-source-management.md). Agent-Ops-Kit is the canonical home of Hermes config, prompts, skills, templates, infrastructure and reviewed runtime patches. The installed runtime (`~/.hermes/hermes-agent`, however reached: shell, direct file tools, symlinks or aliases) is read-only for diagnostics and is never a coding, test or patch workspace. Classify first: config/skill/supported extension point → kit only; native Hermes defect → narrow patch in a separate isolated checkout pinned to an exact upstream revision; privileged/infra change → reviewed kit artifacts, installed only with separate authorization. Never overwrite, reset, stash or fold unrelated dirty files into a patch. Review and authorized deployment are separate steps; never auto-apply patches or auto-restart the gateway (restarts follow the existing operator approval).
 - **Docs:** short, one path per task, commands in fenced blocks. `README.md` is
   the fast path; detail lives in `docs/`.
 - **Commits:** Conventional Commits (`feat(hermes): …`, `fix(compose): …`,

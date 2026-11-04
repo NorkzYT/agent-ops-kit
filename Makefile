@@ -137,10 +137,10 @@ hermes-dev-workflow-apply: ## Copy the kanban-workflow skill + coder SOUL.md int
 hermes-restart: ## Restart the Hermes gateway (Discord bot)
 	@hermes gateway restart
 
-hermes-runtime-patch-status: ## Per kit runtime patch (hermes/runtime-patches): applied | applicable | conflict in ~/.hermes/hermes-agent [SRC=<dir>]
+hermes-runtime-patch-status: ## Per kit runtime patch (hermes/runtime-patches): applied | applicable | conflict | ambiguous | blocked | dirty | unsafe in ~/.hermes/hermes-agent [SRC=<dir>]
 	@bash scripts/hermes-runtime-patch.sh status $(if $(SRC),--src "$(SRC)",)
 
-hermes-runtime-patch-apply: ## Apply the applicable kit runtime patches to the installed Hermes (working tree only, dirty targets refused); then make hermes-restart
+hermes-runtime-patch-apply: ## Apply the applicable kit runtime patches to an ISOLATED checkout SRC=<dir> (installed runtime refused; unexplained local changes on targets refused; a partly applied set resumes)
 	@bash scripts/hermes-runtime-patch.sh apply $(if $(SRC),--src "$(SRC)",)
 
 hermes-devtest-status: ## Trusted Go/PostgreSQL dev-test runner: installed vs kit digest, root ownership, pinned SHA-256 (docs/dev-test-runner.md)
@@ -501,6 +501,7 @@ test-knowledge-apply: ## Run the reviewed-plan / knowledge-apply / bulk-approval
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'
 
-test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed) and the repo_lease tests (leases, writers, manifests)
+test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed), the repo_lease tests (leases, writers, manifests) and the completion-policy tests
 	@python3 -m unittest discover -s scripts/tests -p 'test_kanban_workflow.py'
 	@python3 -m unittest discover -s scripts/tests -p 'test_repo_lease.py'
+	@python3 -m unittest discover -s scripts/tests -p 'test_completion.py'

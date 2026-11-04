@@ -3,7 +3,7 @@
 
 Copies exactly these tracked files from this checkout into an installed Hermes home:
 
-  hermes/skills/kanban-workflow/{SKILL.md, scripts/browserstack.py,
+  hermes/skills/kanban-workflow/{SKILL.md, scripts/browserstack.py, scripts/completion.py,
     scripts/workflow.py, scripts/repo_lease.py}
                                      -> <home>/skills/agent-ops-kit/kanban-workflow/...
   hermes/profiles/coder/SOUL.md      -> <coder-home>/SOUL.md
@@ -45,7 +45,8 @@ SKILL_SRC = Path("hermes/skills/kanban-workflow")
 SKILL_DEST = ("skills", "agent-ops-kit", "kanban-workflow")
 CODER_SOUL_SRC = Path("hermes/profiles/coder/SOUL.md")
 # The tracked skill files this helper deploys. Anything else under SKILL_SRC is ignored.
-SKILL_FILES = ("SKILL.md", "scripts/browserstack.py", "scripts/workflow.py", "scripts/repo_lease.py")
+SKILL_FILES = ("SKILL.md", "scripts/browserstack.py", "scripts/completion.py", "scripts/workflow.py",
+               "scripts/repo_lease.py")
 
 
 class Refused(Exception):

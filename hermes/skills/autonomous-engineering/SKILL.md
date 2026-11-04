@@ -1,7 +1,7 @@
 ---
 name: autonomous-engineering
 description: End-to-end engineering loop for unattended coding tasks (Discord, cron, Kanban)
-version: 2.0.0
+version: 2.1.0
 metadata:
   hermes:
     tags: [engineering, workflow, git, verification]
@@ -31,7 +31,9 @@ For multi-session work keep `.claude/context/<task>/` in the repo:
 7. **Test**: run the suite; for UI changes, open the flow with the browser tools.
 8. **Commit**: Conventional Commits, no `Co-Authored-By`, no `--amend`, no force push.
 9. **Push** the branch and open a PR for the operator.
-10. **Report**: files changed, test counts, branch, remaining work.
+10. **Report**: files changed, test counts, branch, remaining work. Pushing is implementation
+    handoff, not completion: when validation lanes or a review follow, the task is complete
+    only after they pass on the exact pushed SHA (docs/engineering-completion.md).
 
 ## Quality Principles to Apply
 
@@ -44,8 +46,12 @@ For multi-session work keep `.claude/context/<task>/` in the repo:
 
 ## Error recovery
 
-- Test failure: diagnose, patch, re-verify; at most three rounds, then report.
-- Network error: wait 30 s, retry up to three times.
+- Test failure: diagnose, patch, re-verify until it passes. Each new attempt needs a changed
+  diagnosis or approach (never the identical failing command again); the bound is the
+  task's budget and, on a `kanban-workflow` card, `workflow.py completion recover`
+  (bounded per stage, then `recovery-exhausted:` with the work preserved). A failing test
+  is never a reason to stop early or to report a partial result as done.
+- Transient network error: wait 30 s, retry the unchanged command once; then diagnose.
 - Git conflict: report it; never force-resolve.
 - Expired web session: ask the operator to log in; never type credentials.
 

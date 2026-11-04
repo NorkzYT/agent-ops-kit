@@ -1,5 +1,13 @@
 # Hermes autonomous development on the Ubuntu dev VM: audit and repair
 
+> **Superseded (2026-11-04).** This is the historical record of the repair on the old local
+> runtime (`9ebe5777`, a local customized commit, not upstream). The installed runtime is now the
+> official Hermes 71736c9f: the supervised-terminal patch 0001 and 0002–0004 do not apply to it and
+> are archived, unreviewed and not an install prerequisite (`hermes/runtime-patches/README.md`).
+> Tirith was removed upstream, so the Tirith settings below are not active. The workflow now uses
+> the native board transport (`docs/discord-kanban-workflow.md`, "Board transport"); statements
+> below about `$HERMES_KANBAN_TASK` in worker shells and CLI board writes describe the old runtime.
+
 Scope: why Kanban code cards kept blocking (regression case `t_12595b96`,
 checkout `/opt/repos/validate`, branch `feat/integration-recording-qa`, Mac child
 `t_8e1c1f11`), what in the installed Hermes runtime and in this kit caused it,
@@ -314,8 +322,9 @@ Blockers found in review of the first pass and how they were closed:
    (the dirty, unrelated `agent/memory_manager.py` carries over untouched; the
    first branch stays as a ref). Then `make hermes-runtime-patch-status` → all
    three `applied` (on the old branch 0001 and 0003 report `conflict`, which is
-   the expected answer until the switch), or `applicable` after a reinstall →
-   `make hermes-runtime-patch-apply`.
+   the expected answer until the switch), or `applicable` after a reinstall → build and
+   review in an isolated checkout (`make hermes-runtime-patch-apply SRC=<isolated>`),
+   then deploy only with authorization (docs/hermes-source-management.md).
 3. Register the scanner once:
    `python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py register-scanner /opt/repos/validate -- sudo -n /usr/local/libexec/hermes-validate-cwd-scan`.
 4. For `t_12595b96`: bootstrap provenance of the preserved work from the

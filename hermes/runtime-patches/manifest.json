@@ -1,0 +1,37 @@
+{
+  "schema": "hermes-runtime-patches/v1",
+  "status": "archived-legacy",
+  "base": "9ebe577798eaab1b3e95b5c44c588c9bb5e43799",
+  "base_note": "Provenance only. 9ebe5777 = 9ebe577798eaab1b3e95b5c44c588c9bb5e43799 is a LOCAL, unpushed, customized commit (9th of 9 local commits on feat/discord-channel-org over upstream 205645ee424163c7b6cfc032c331c3557797497b), not an upstream commit; resolved from the live reflog and reproduced in scratch (base + 0001..0004 = tree of 61cbead82d). None of 0001-0004 applies to the official runtime 71736c9f32597bbca9d89cede5aa136e55946b2f, and none is an install prerequisite: the kit uses native kanban_* tools (workflow.py board transport native-v1). Every patch stays unreviewed; a pinned base is not a review and approves nothing.",
+  "ancestry_note": "0001-0003 = 9ebe5777..4f845b43ec, 0004 = git diff 4f845b43ec..61cbead82d. Ancestry is provenance, not review.",
+  "patches": [
+    {
+      "file": "0001-feat-kanban-hand-the-worker-s-own-terminal-its-task-.patch",
+      "sha256": "22cea8b110ba9341637a5b4597979631173b3c15daef7d516aac241b7b2a7e3d",
+      "review": {
+        "status": "unreviewed"
+      }
+    },
+    {
+      "file": "0002-fix-approvals-honour-permanent-command_allowlist-pat.patch",
+      "sha256": "a4d27cdf69c43bd3a212381ab431c654948bd526527f43ace816044bfb96209c",
+      "review": {
+        "status": "unreviewed"
+      }
+    },
+    {
+      "file": "0003-fix-kanban-stop-guard-counts-only-successful-termina.patch",
+      "sha256": "57a2203bd4bc4933ecff7c4ba7e0c276ba419b54023653dfcc1ddd4fb2c10607",
+      "review": {
+        "status": "unreviewed"
+      }
+    },
+    {
+      "file": "0004-feat-kanban-typed-dev_test_run-tool-scanner-recovery.patch",
+      "sha256": "42740016897c32fdb0482e2998190308df95440584bfad488cdeedeb3683cb77",
+      "review": {
+        "status": "unreviewed"
+      }
+    }
+  ]
+}
