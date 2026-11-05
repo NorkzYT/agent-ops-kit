@@ -1,0 +1,5 @@
+$ python3 scripts/capability_workflow.py validate --analysis hermes/capabilities/evals/capability-cli-qa/probes/duplicate-keys.json
+--- stdout
+--- stderr
+capability_workflow: duplicate key 'kind'
+exit=2

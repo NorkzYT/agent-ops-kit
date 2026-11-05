@@ -34,8 +34,10 @@ deterministic constraints above. `ai` with `specialist_classifier: none` routes
 nothing (the installer and `make specialist-install` warn).
 
 **Private tasks** (`#privacy` in the current turn): cliproxy is never called.
-Only a `local` classifier may run, and only over the local-eligible profiles;
-none exists today, so a private task routes no specialist (fail-closed).
+Only a `local` classifier may run, and only over the local-eligible profiles
+(plus capability IDs when the catalog is enabled) and the typed task: no
+attachment is read or extracted for it. No local-eligible profile exists today,
+so a private task routes no specialist (fail-closed).
 
 **Dynamic profiles.** Profiles that `make knowledge-apply` created (book-backed,
 installed under `~/.hermes/profiles/<name>`) join the catalog in `ai` mode
@@ -57,6 +59,28 @@ readiness, `dropped[]` with reasons (`classifier:unknown`,
 `classifier:duplicate`, `classifier:not-eligible`, `readiness:<status>`,
 `privacy:local-only`, `cap`), and never the task text. The hook log line adds
 `mode=ai`.
+
+**Capability catalog (opt-in, off by default).** With both
+`specialist_capability_root` (a kit checkout or the activated
+`$HERMES_HOME/agent-ops-kit/capability-root`) and
+`specialist_capability_catalog_sha256` (the SHA-256 that
+`python3 scripts/capability_selection.py catalog|check` prints for
+`hermes/capabilities/routing-catalog.json`) set, the hook re-verifies the catalog
+on every turn and offers its capability IDs to the same single ai-mode
+classifier call. Selected IDs are appended to the routing note with the skill
+each maps to, as pending coordinator input (not a plan; nothing runs). Every
+gate above still applies first (current task, runtime envelopes, subagent
+turns, `#privacy`, not substantive). An unpinned, absent, symlinked, malformed
+or drifted catalog (file hash differs from the pin, or the registry/recipes no
+longer match the hashes it records) offers no capability; profile routing is
+unchanged. The log line then adds `capabilities=<outcome>:<ids|reason>` (closed
+IDs only). With the catalog the classifier prompt asks for one list, profile
+names first and then capability IDs (each list capped), and the `local`
+classifier's output budget grows to fit both (bounded at 256 tokens; 48 without
+the catalog). A `~/` root is expanded. `/route-specialists` reports
+`capability_catalog` (`not-configured`, `verified`, `unavailable:catalog:<reason>`)
+but never offers it. A capability grants no tool, permission or data access. See
+`docs/capability-activation.md`.
 
 **Expanding the route during a task.** The first route is not final. When
 verified findings or a specialist's result reveal another domain, the
@@ -277,7 +301,10 @@ list, and drops the lowest-ranked.
   - `local`: the routine local model (`ollama_routine_model`, qwen3.5:27b by
     default), then once on the fallback model (`ollama_fallback_model`,
     qwen3.6:27b) after a model-level failure. Thinking is off, temperature 0,
-    at most 48 output tokens, the first 2000 characters of the context. A
+    at most 48 output tokens (more with the capability catalog, above), the
+    first 2000 characters of the context, inside
+    `specialist_classifier_timeout` and never past the route deadline (no time
+    left: no call, outcome `unavailable:budget`). A
     non-local `ollama_base_url` disables it. Ollama keeps one 27b model
     resident on a single GPU: the first classifier call after an agent-model
     turn reloads qwen3.5 (about 20-25 s on the current host) and usually

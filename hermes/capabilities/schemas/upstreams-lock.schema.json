@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-ops-kit.local/schemas/capabilities/upstreams-lock.schema.json",
+  "title": "Agent-Ops-Kit third-party source and license lock v1",
+  "description": "Exact upstream revisions, per-file hashes, license/notice scope and update/rollback procedure for every upstream file a registry record names. Hashes are copied from a verified research lock; this file is not fetched source and installs nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "research_lock", "sources", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "description": {"type": "string", "maxLength": 1000},
+    "research_lock": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "sha256", "research_date", "files_recorded"],
+      "properties": {
+        "name": {"const": "upstreams.lock.json"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "research_date": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "files_recorded": {"type": "integer", "minimum": 1, "maximum": 100000}
+      }
+    },
+    "sources": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gstack", "pm-skills", "solosquad", "pna-builders", "hermes", "agentskills"],
+      "properties": {
+        "gstack": {"$ref": "#/$defs/source"},
+        "pm-skills": {"$ref": "#/$defs/source"},
+        "solosquad": {"$ref": "#/$defs/source"},
+        "pna-builders": {"$ref": "#/$defs/source"},
+        "hermes": {"$ref": "#/$defs/source"},
+        "agentskills": {"$ref": "#/$defs/source"}
+      }
+    },
+    "files": {
+      "type": "array", "minItems": 1, "maxItems": 2000,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["repo", "path", "sha256", "bytes", "status"],
+        "properties": {
+          "repo": {"enum": ["gstack", "pm-skills", "solosquad", "pna-builders", "hermes", "agentskills"]},
+          "path": {"type": "string", "minLength": 1, "maxLength": 240, "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\\\x00-\\x1f]+$"},
+          "sha256": {"$ref": "#/$defs/sha256"},
+          "bytes": {"type": "integer", "minimum": 0, "maximum": 100000000},
+          "status": {
+            "description": "selected: method source an adapter may adapt; license-notice: notice to preserve; reference-only: concept citation, never copied; excluded-moved-stub: migration pointer, never usable.",
+            "enum": ["selected", "license-notice", "reference-only", "excluded-moved-stub"]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository", "revision", "license_spdx", "reuse", "notices", "auto_update", "update_procedure", "rollback_procedure"],
+      "properties": {
+        "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+        "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "license_spdx": {"oneOf": [{"enum": ["MIT", "Apache-2.0", "CC-BY-4.0"]}, {"type": "null"}]},
+        "license_scope": {"type": "string", "maxLength": 600},
+        "reuse": {"enum": ["adapt-with-notice", "reference-only", "documentation-reference"]},
+        "notices": {"type": "array", "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 600}},
+        "auto_update": {"const": false},
+        "update_procedure": {"type": "string", "minLength": 1, "maxLength": 600},
+        "rollback_procedure": {"type": "string", "minLength": 1, "maxLength": 600}
+      }
+    }
+  }
+}

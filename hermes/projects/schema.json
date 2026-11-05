@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-ops-kit.local/schemas/projects/schema.json",
+  "title": "Project manifest v1",
+  "description": "Project scope owned by one company. Every field is a reference or an upper bound for policy intersection; nothing here grants access.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "company_id",
+    "manifest_version",
+    "synthetic",
+    "repositories",
+    "knowledge_collection_ids",
+    "dataset_target_ids",
+    "browser_scope_refs",
+    "service_account_refs",
+    "approved_capability_ids",
+    "environment",
+    "output_root_ref",
+    "required_validation_lanes",
+    "allowed_inference_routes",
+    "review_owner_refs",
+    "approval_owner_refs"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "project_id": {
+      "$ref": "#/$defs/tenant"
+    },
+    "company_id": {
+      "$ref": "#/$defs/tenant"
+    },
+    "manifest_version": {
+      "type": "string",
+      "pattern": "^[0-9]{1,6}$"
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "repositories": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repo_id",
+          "origin",
+          "checkout_root_ref",
+          "protected_branches"
+        ],
+        "properties": {
+          "repo_id": {
+            "$ref": "#/$defs/tenant"
+          },
+          "origin": {
+            "type": "string",
+            "pattern": "^(https://|ssh://|git@)[A-Za-z0-9._@:/-]{1,200}$"
+          },
+          "checkout_root_ref": {
+            "$ref": "#/$defs/ref"
+          },
+          "protected_branches": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._/-]{1,100}$"
+            }
+          }
+        }
+      }
+    },
+    "knowledge_collection_ids": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/ref"
+      },
+      "uniqueItems": true
+    },
+    "dataset_target_ids": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/ref"
+      },
+      "uniqueItems": true
+    },
+    "browser_scope_refs": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/$defs/ref"
+      },
+      "uniqueItems": true
+    },
+    "service_account_refs": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "pattern": "^vault-ref:[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+      },
+      "uniqueItems": true
+    },
+    "approved_capability_ids": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "pattern": "^(kit|pm|gstack|existing)\\.[a-z0-9]+(-[a-z0-9]+)*$",
+        "maxLength": 64
+      },
+      "uniqueItems": true,
+      "description": "Upper bound intersected with operator, company and capability policy. Narrows, never widens; not a grant."
+    },
+    "environment": {
+      "enum": [
+        "test",
+        "staging",
+        "production"
+      ]
+    },
+    "output_root_ref": {
+      "$ref": "#/$defs/ref"
+    },
+    "required_validation_lanes": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "enum": [
+          "linux",
+          "mac",
+          "windows",
+          "ios",
+          "android"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "allowed_inference_routes": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "enum": [
+          "local-only",
+          "cloud-subscription",
+          "cloud-api"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "review_owner_refs": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/ref"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "approval_owner_refs": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/ref"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "tenant": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9_./:-]{0,159}$",
+      "description": "Opaque handle resolved by a trusted broker; never a secret value, filesystem path or credentialed URL."
+    }
+  }
+}

@@ -44,6 +44,46 @@ export PATH="$HOME/.local/bin:$PATH"
 HERMES_HOME="$(getenv HERMES_HOME "$HOME/.hermes")"
 export HERMES_HOME
 
+# ------------------------------------------- capability activation gate ---
+# Capability skills install only through the reviewed, approved activation with their capability
+# root (docs/capability-activation.md), never here. Fail closed before any write: when this
+# checkout has capability source, the activation manifest must exist, be strict JSON and list
+# exactly the registry's source-implemented skills (each present under hermes/skills/).
+gated=""
+if [[ -z "$RENDER_ONLY" && -e hermes/capabilities ]]; then
+  gated=" $(python3 - <<'PY'
+import json, os, re, sys
+def strict(path):
+    def pairs(kv):
+        out = {}
+        for k, v in kv:
+            if k in out:
+                raise ValueError(f"duplicate key {k!r}")
+            out[k] = v
+        return out
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh, object_pairs_hook=pairs, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
+try:
+    reg = strict("hermes/capabilities/registry.json")
+    man = strict("hermes/capabilities/activation/manifest.json")
+    want = sorted(c["exposed_skill_name"] for c in reg["capabilities"]
+                  if c["lifecycle"] == "source-implemented" and c["exposed_skill_name"])
+    have = man["skills"]
+    if not want or not isinstance(have, list) or not have or not all(isinstance(n, str) for n in have):
+        raise ValueError("skills must be a non-empty list of names")
+    if len(set(have)) != len(have) or sorted(have) != want:
+        raise ValueError(f"skills {sorted(have)} differ from the registry's source-implemented {want}")
+    for n in have:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", n) or not os.path.isfile(f"hermes/skills/{n}/SKILL.md"):
+            raise ValueError(f"{n!r} is not a capability skill directory here")
+except Exception as exc:  # any failure refuses: the gate list is required, never guessed
+    print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+    sys.exit(1)
+print(" ".join(have))
+PY
+) " || die "capability activation gate: hermes/capabilities/activation/manifest.json is missing or does not list exactly the registry's source-implemented skills; refusing to install (docs/capability-activation.md)"
+fi
+
 # ------------------------------------------------------------ 1. Hermes ---
 if [[ -n "$RENDER_ONLY" ]]; then
   :  # render-only: hermes is not needed
@@ -346,28 +386,42 @@ if [[ ! -f "$HERMES_HOME/memories/USER.md" ]]; then
 fi
 
 # ------------------------------------------------------------ 6. skills ---
+# Capability skills ($gated, checked at the top) install only through the activation.
+installed=(); skipped=()
 for d in hermes/skills/*/; do
   name="$(basename "$d")"
+  if [[ "$gated" == *" $name "* ]]; then skipped+=("$name"); continue; fi
   mkdir -p "$HERMES_HOME/skills/agent-ops-kit/$name"
   cp -rf "$d". "$HERMES_HOME/skills/agent-ops-kit/$name/"
+  installed+=("$name")
 done
-log "installed skills: $(ls hermes/skills | tr '\n' ' ')"
+log "installed skills: ${installed[*]}"
+(( ${#skipped[@]} )) && log "activation-gated (docs/capability-activation.md): ${skipped[*]}"
 
 # ------------------------------------------------------- 6b. plugins ---
 # Bundled Hermes plugins ship in hermes/plugins/<name>/ and install into
 # $HERMES_HOME/plugins/<name>/ where Hermes discovers them. Enablement is in
 # config.yaml (plugins.enabled), rendered above.
+# With capability source in this checkout ($gated set above) the model-router carries the
+# capability seam: it installs only through `make specialist-install` (own approval, backup of the
+# previous plugin for rollback), never through this routine installer.
 if [[ -d hermes/plugins ]]; then
   mkdir -p "$HERMES_HOME/plugins"
+  plugins=()
   for d in hermes/plugins/*/; do
     name="$(basename "$d")"
+    if [[ -n "$gated" && "$name" == model-router ]]; then
+      warn "model-router not installed here (capability seam, activation-gated): use make specialist-install after its review and approval"
+      continue
+    fi
     dest="$HERMES_HOME/plugins/$name"
     mkdir -p "$dest"
     cp -rf "$d". "$dest/"
     # Drop any test bytecode that may have been produced in the source tree.
     rm -rf "$dest/__pycache__" 2>/dev/null || true
+    plugins+=("$name")
   done
-  log "installed plugins: $(ls hermes/plugins | tr '\n' ' ')"
+  log "installed plugins: ${plugins[*]:-none}"
 fi
 
 # ------------------------------------------------------------ 7. gateway ---

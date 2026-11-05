@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-public-work-management-pricing",
+  "binding": {
+    "task_id": "t-public-work-management-pricing",
+    "company_id": null,
+    "project_id": null,
+    "data_classification": "public"
+  },
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "public-1",
+      "kind": "primary-web",
+      "classification": "real",
+      "title": "Notion Pricing Plans: Free, Plus, Business, & Enterprise.",
+      "ref": "https://www.notion.com/pricing",
+      "retrieved_at": "2026-11-04T23:26:52.879113+00:00",
+      "captured_file": "captured/notion-pricing-excerpt.md",
+      "digest": "427f59ecc0958e3d2db542b74f0392f05462ef31ca40662d469780aa7cd4d7e4",
+      "snapshot_digest": "c7dc0f20cb45b13c6c066ed3055b231388444205845ec8a14d6ab8563f993b27",
+      "topics": [
+        "pricing-notion",
+        "features-notion",
+        "positioning-notion"
+      ],
+      "study_design": "descriptive",
+      "excerpt": "Plus\\*$10 per seat/month\nBusiness$20 per seat/month",
+      "values": {
+        "plus_per_seat": 10,
+        "business_per_seat": 20
+      }
+    },
+    {
+      "source_id": "public-2",
+      "kind": "primary-web",
+      "classification": "real",
+      "title": "Which Trello Plan Is Best for You? Our Pricing Guide Can Help",
+      "ref": "https://trello.com/pricing",
+      "retrieved_at": "2026-11-04T23:26:52.879113+00:00",
+      "captured_file": "captured/trello-pricing-excerpt.md",
+      "digest": "360fd33eeefb70b8ca89135ec1538ed3690414d7c9a1c674d4fc5daabeaec7df",
+      "snapshot_digest": "5df3bdd6dfbec91f138538b0cb617c5708ca57b6301be679edcfde521135bd4e",
+      "topics": [
+        "pricing-trello",
+        "features-trello",
+        "positioning-trello"
+      ],
+      "study_design": "descriptive",
+      "excerpt": "$5USD\nPer user/month if billed annually ($6 billed monthly)\n$10USD\nPer user/month if billed annually ($12.50 billed monthly)\n$17.50USD\nPer user/month - billed annually ($210.00 annual price per user)",
+      "values": {
+        "standard_annual": 5,
+        "standard_monthly": 6,
+        "premium_annual": 10,
+        "premium_monthly": 12.5,
+        "enterprise_annual": 17.5,
+        "enterprise_annual_price": 210
+      }
+    },
+    {
+      "source_id": "public-3",
+      "kind": "primary-web",
+      "classification": "real",
+      "title": "Asana Pricing | Personal, Starter, Advanced, & Enterprise plans • Asana",
+      "ref": "https://asana.com/pricing",
+      "retrieved_at": "2026-11-04T23:26:52.879113+00:00",
+      "captured_file": "captured/asana-pricing-excerpt.md",
+      "digest": "cd62d1d5b53604cb6e62781b014bacf4329143c4f3b15c258bdc337188c0392d",
+      "snapshot_digest": "1de51fbb3bc1522c9e27b74f6abb1984e73b43d4955696edec717f0f022fd1fb",
+      "topics": [
+        "pricing-asana",
+        "features-asana",
+        "positioning-asana"
+      ],
+      "study_design": "descriptive",
+      "excerpt": "YearlySave up to 18%\nPer user, per month billed annually. $13.49 billed monthly\nPer user, per month billed annually. $30.49 billed monthly\n$10.99\n$24.99",
+      "values": {
+        "save_up_to": 18,
+        "starter_annual": 10.99,
+        "starter_monthly": 13.49,
+        "advanced_annual": 24.99,
+        "advanced_monthly": 30.49
+      }
+    }
+  ],
+  "not_available": [
+    {
+      "topic": "market-size",
+      "reason": "not-supplied",
+      "detail": "No market-size or market-share source was retrieved for this comparison."
+    },
+    {
+      "topic": "customer-reviews",
+      "reason": "not-supplied",
+      "detail": "No customer reviews or independent tests were retrieved; only vendor pricing pages."
+    }
+  ],
+  "policy": {
+    "public_research": "allowed",
+    "private_terms": []
+  }
+}

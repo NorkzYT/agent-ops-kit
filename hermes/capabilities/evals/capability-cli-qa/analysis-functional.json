@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "authored_by": {"kind": "coordinator-analysis", "ref": "coordinator:c3-cli-qa"},
+  "binding": {"task_id": "t-cli-qa", "company_id": null, "project_id": null, "data_classification": "public"},
+  "evidence": {"pack_id": "pack-cli-qa", "digest": "60030c1964f43e2947c1af4b3f9b5cdbda9ef8103d80dcfcb7bc82d5e41683bc"},
+  "reused_artifacts": [],
+  "reviewed_artifacts": [{"artifact_id": "t-cli-qa.contract", "kind": "code-change-handoff", "digest": "643bfb7f36a8eb60a594d1b62541adc91f0aaef88c9ca37c657cc98db103a05a"}],
+  "statements": [
+    {"id": "s-race", "class": "hypothesis", "text": "Reading write_fresh_dir: the existence check runs before os.mkdir, so two renders racing on one --out could make os.mkdir raise FileExistsError, which main() does not catch.", "source_ids": []}
+  ],
+  "computations": [],
+  "next_action": {"action": "Decide whether a concurrent-render probe is worth adding to the source tests; no repair is proposed from this QA pass.", "kind": "decide", "owner_role": "coordinator", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []},
+  "kind": "qa",
+  "capability_id": "gstack.qa",
+  "mode": "audit",
+  "qa_mode": "full",
+  "surfaces": ["functional"],
+  "charter": [
+    {"id": "p-success", "contract": "success", "surface": "functional", "probe": "python3 scripts/capability_workflow.py validate --analysis hermes/capabilities/evals/support-billing-spec/analysis-feature.json --evidence hermes/capabilities/evals/support-billing-spec/evidence-pack.json --artifacts hermes/capabilities/evals/support-billing-spec/inputs/artifacts.json",
+     "expectation": "ok true and exit 0", "expect_exit": 0, "source": {"artifact_id": "t-cli-qa.contract", "text": "exits 0 when the analysis passes its contract"}, "outcome": "pass", "capture_ids": ["c-success"]},
+    {"id": "p-no-evidence", "contract": "invalid-input", "surface": "functional", "probe": "python3 scripts/capability_workflow.py validate --analysis hermes/capabilities/evals/trial-office-hours/analysis-startup.json --artifacts hermes/capabilities/evals/trial-office-hours/inputs/artifacts.json",
+     "expectation": "errors listed and exit 1 when the cited evidence pack is missing", "expect_exit": 1, "source": {"artifact_id": "t-cli-qa.contract", "text": "exit 1 when the analysis or a supplied input fails validation"}, "outcome": "pass", "capture_ids": ["c-no-evidence"]},
+    {"id": "p-dup-keys", "contract": "invalid-input", "surface": "functional", "probe": "python3 scripts/capability_workflow.py validate --analysis hermes/capabilities/evals/capability-cli-qa/probes/duplicate-keys.json",
+     "expectation": "refused with exit 2 and a stderr message", "expect_exit": 2, "source": {"artifact_id": "t-cli-qa.contract", "text": "A file that cannot be read or parsed (for example duplicate JSON keys) is refused with exit 2"}, "outcome": "pass", "capture_ids": ["c-dup-keys"]},
+    {"id": "p-no-out", "contract": "cli-process", "surface": "functional", "probe": "python3 scripts/capability_workflow.py render --analysis hermes/capabilities/evals/support-billing-spec/analysis-feature.json",
+     "expectation": "usage error on stderr, nothing on stdout, exit 2", "expect_exit": 2, "source": {"artifact_id": "t-cli-qa.contract", "text": "A missing required argument is a usage error: exit 2"}, "outcome": "pass", "capture_ids": ["c-render-no-out"]},
+    {"id": "p-overwrite", "contract": "idempotency", "surface": "functional", "probe": "render twice to the same --out",
+     "expectation": "second render refused with exit 2 before anything is written", "source": {"artifact_id": "t-cli-qa.contract", "text": "an existing output directory is refused with exit 2 before anything is written"}, "outcome": "not-run", "capture_ids": [],
+     "reason": "Its stderr embeds the absolute checkout path, which this public fixture does not ship; the source test suite covers the refusal."},
+    {"id": "p-auth", "contract": "auth", "surface": "functional", "probe": "none", "expectation": "none", "source": {"artifact_id": "t-cli-qa.contract", "text": "No network, shell or repository write happens"}, "outcome": "not-applicable", "capture_ids": [], "reason": "Local CLI with no identity or permission model."},
+    {"id": "p-state", "contract": "state-transitions", "surface": "functional", "probe": "none", "expectation": "none", "source": {"artifact_id": "t-cli-qa.contract", "text": "only the fresh output directory of render is created"}, "outcome": "not-applicable", "capture_ids": [], "reason": "validate is stateless; render creates one directory in one step."},
+    {"id": "p-timeout", "contract": "timeout", "surface": "functional", "probe": "none", "expectation": "none", "source": {"artifact_id": "t-cli-qa.contract", "text": "No network, shell or repository write happens"}, "outcome": "not-applicable", "capture_ids": [], "reason": "No deadline or cancellation is documented or owned by the CLI."},
+    {"id": "p-retry", "contract": "retry", "surface": "functional", "probe": "none", "expectation": "none", "source": {"artifact_id": "t-cli-qa.contract", "text": "No network, shell or repository write happens"}, "outcome": "not-applicable", "capture_ids": [], "reason": "Nothing is retried."},
+    {"id": "p-race", "contract": "concurrency", "surface": "functional", "probe": "two renders started together with the same --out", "expectation": "one succeeds, the other is refused with exit 2", "source": {"artifact_id": "t-cli-qa.contract", "text": "an existing output directory is refused with exit 2 before anything is written"}, "outcome": "not-run", "capture_ids": [], "reason": "No controlled way to order the two processes was available; see finding f-race."},
+    {"id": "p-partial", "contract": "partial-failure", "surface": "functional", "probe": "interrupt render after the directory is created", "expectation": "a partial directory is left and a re-run is refused", "source": {"artifact_id": "t-cli-qa.contract", "text": "only the fresh output directory of render is created"}, "outcome": "not-run", "capture_ids": [], "reason": "Interrupting the process at a chosen point was not set up."}
+  ],
+  "bugs": [],
+  "findings": [
+    {"id": "f-race", "title": "Concurrent renders to one output directory may crash", "section": "concurrency", "severity": "low", "confidence": 4,
+     "problem": "By code reading only: a render that loses the race between the existence check and os.mkdir would end with an uncaught FileExistsError instead of exit 2.",
+     "recommendation": "Add a concurrency probe or a source test before treating this as a bug.",
+     "evidence": [{"kind": "statement", "statement_id": "s-race"}], "disposition": "pending"}
+  ],
+  "decisions": [],
+  "handoff": {"targets": ["existing.engineering-path"], "notes": "No bug reproduced; f-race is an unverified lead for a source test, not a repair.", "carries_approval": false}
+}

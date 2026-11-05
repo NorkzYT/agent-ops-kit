@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Billing queue</title>
+<style>
+:root { --ink: #202124; --paper: #ffffff; --hint: #9aa0a6; }
+body { margin: 0; font-family: Arial, sans-serif; color: var(--ink); background: var(--paper); }
+.toolbar a, .toolbar button { outline: none; }
+.age { color: var(--hint); background: var(--paper); }
+.badge-late { color: #ffffff; background: #e53935; }
+.cta { background: linear-gradient(90deg, #7b2ff7, #2f80ed); color: #ffffff; border-radius: 24px; }
+.card { border-radius: 24px; transition: transform 300ms ease-in; }
+</style>
+<script src="https://cdn.example.com/chat-widget.js"></script>
+</head>
+<body>
+<div class="toolbar">
+  <a href="#">Queue</a>
+  <a href="#">Macros</a>
+  <button onclick="refresh()"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="16" height="16"></button>
+</div>
+<div class="content">
+  <h1>Billing queue</h1>
+  <h3>Waiting tickets</h3>
+  <input type="search" placeholder="Search tickets" tabindex="3">
+  <div class="card">
+    <p>Ticket T-4812 <span class="badge-late">late</span></p>
+    <p class="age">Waiting 31 hours</p>
+  </div>
+  <div class="card">
+    <p class="error">Oops! Something went wrong.</p>
+  </div>
+  <button class="cta">Supercharge your queue</button>
+</div>
+</body>
+</html>

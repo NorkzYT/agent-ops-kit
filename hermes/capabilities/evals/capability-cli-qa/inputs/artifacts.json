@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "artifact_id": "t-cli-qa.contract",
+      "kind": "code-change-handoff",
+      "company_id": null,
+      "project_id": null,
+      "task_id": "t-cli-qa",
+      "content_digest": "643bfb7f36a8eb60a594d1b62541adc91f0aaef88c9ca37c657cc98db103a05a",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "public",
+      "location": "cli-contract.md",
+      "source_refs": [],
+      "review_status": "draft"
+    }
+  ]
+}

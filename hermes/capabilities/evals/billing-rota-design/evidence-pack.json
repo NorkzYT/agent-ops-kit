@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-billing-design",
+  "binding": {"task_id": "t-billing-design", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "F1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic support-lead notes on the off-hours rota",
+      "ref": "fixture:billing-rota-design/lead-notes",
+      "topics": ["use-scene", "brand-assets"],
+      "excerpt": "Synthetic fixture. Off-hours rota agents work evenings and weekends from home, often in dim rooms, on laptops and sometimes on a phone. Agents need the queue, the rota and the macro list in one tool. Nobody has recorded a licence for any typeface for this internal tool."
+    },
+    {
+      "source_id": "F2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Background facts carried from the accepted lean PRD",
+      "ref": "artifact:t-support-prd.lean-prd",
+      "topics": ["response-time", "staffing"],
+      "excerpt": "Synthetic fixture (from the accepted PRD background): billing tickets had a median first response of 31 hours versus 9 hours for other tickets in October 2026. Only 2 agents are trained on billing.",
+      "values": {"billing_median_hours": 31, "other_median_hours": 9, "trained_agents": 2}
+    }
+  ],
+  "not_available": [
+    {"topic": "font-license", "reason": "not-supplied", "detail": "No licence record exists for the proposed faces."},
+    {"topic": "usability-test", "reason": "not-measured", "detail": "No rota agent has used any design of this tool."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-crew-scheduling-competitors",
+  "binding": {
+    "task_id": "t-crew-competitors",
+    "company_id": "example-a",
+    "project_id": "example-web",
+    "data_classification": "synthetic"
+  },
+  "as_of": "2026-10-30",
+  "items": [
+    {
+      "source_id": "R1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Rotaly pricing page (synthetic fixture)",
+      "ref": "https://www.rotaly.example/pricing",
+      "retrieved_at": "2026-10-28T14:05:00Z",
+      "captured_file": "captured/rotaly-pricing.md",
+      "digest": "971ad8bf6c03f76d15a6d019d81db2773cc169db019340e2eeb451a2d7f2b4c3",
+      "topics": [
+        "pricing-rotaly",
+        "features-rotaly"
+      ],
+      "excerpt": "$8 USD\nPer user/month if billed annually ($10 billed monthly)\n$15 USD per user / month",
+      "values": {
+        "starter_annual": 8,
+        "starter_monthly": 10,
+        "team_per_user": 15
+      }
+    },
+    {
+      "source_id": "C1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "CrewLedger home page (synthetic fixture)",
+      "ref": "https://crewledger.example/",
+      "retrieved_at": "2026-10-28T14:09:00Z",
+      "captured_file": "captured/crewledger-home.md",
+      "digest": "aa2e6897b6901b6851ee32e03432a769dd477a7656aebbdb65f493204d805111",
+      "topics": [
+        "features-crewledger"
+      ],
+      "excerpt": "Offline mode for job sheets, synced when the van is back in range"
+    },
+    {
+      "source_id": "Y1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Yardbook plans page (synthetic fixture)",
+      "ref": "https://yardbook.example/plans",
+      "retrieved_at": "2026-10-29T09:30:00Z",
+      "captured_file": "captured/yardbook-pricing.md",
+      "digest": "7f37c48df757a6b3e56722477ef096ba002e91ff171aa1608a6224ef7d4d652e",
+      "topics": [
+        "pricing-yardbook",
+        "features-yardbook"
+      ],
+      "excerpt": "$49 USD per account per month, billed monthly. Unlimited crew members.",
+      "values": {
+        "business_flat": 49
+      }
+    }
+  ],
+  "not_available": [
+    {
+      "topic": "pricing-crewledger",
+      "reason": "page-unavailable",
+      "detail": "Synthetic: https://crewledger.example/pricing returned 404 at capture; no other CrewLedger price source was supplied."
+    },
+    {
+      "topic": "market-size",
+      "reason": "not-supplied",
+      "detail": "Synthetic: no market-size source was supplied."
+    }
+  ],
+  "policy": {
+    "public_research": "allowed",
+    "private_terms": [
+      "Crewboard"
+    ]
+  }
+}

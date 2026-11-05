@@ -1,0 +1,115 @@
+{
+  "capabilities": [
+    {
+      "id": "kit.problem-definition",
+      "lifecycle": "source-implemented",
+      "purpose": "Turn a vague business, product or process problem into an evidenced decision frame: quick brief, causal why-tree, or full SCQA, why tree, MECE issue map, customer/process causal map, measurable hypothesis and one-page draft PRD. Not for known code bugs.",
+      "skill": "problem-definition"
+    },
+    {
+      "id": "pm.product-discovery",
+      "lifecycle": "source-implemented",
+      "purpose": "Hermes workflow adapted from the PM Skills discover command: new/existing branch, ideas, assumption register, impact x uncertainty ranking, experiment plan and recommended next decision, with explicit checkpoints.",
+      "skill": "pm-product-discovery"
+    },
+    {
+      "id": "pm.lean-prd",
+      "lifecycle": "source-implemented",
+      "purpose": "Convert an accepted problem, discovery result or feature brief into a lean PRD: target users, problem/value, goals and metrics, functional requirements, non-goals, constraints, risks, testable acceptance criteria and an implementation handoff. Never edits source.",
+      "skill": "pm-lean-prd"
+    },
+    {
+      "id": "gstack.office-hours",
+      "lifecycle": "source-implemented",
+      "purpose": "Adapted gstack office-hours: interrogate demand, users and alternatives to produce an opportunity brief with open decisions; skips questions whose answers are already in accepted artifacts.",
+      "skill": "gstack-office-hours"
+    },
+    {
+      "id": "gstack.spec",
+      "lifecycle": "source-implemented",
+      "purpose": "Adapted gstack spec: turn intent into a scoped local spec with acceptance tests and a task handoff. Issue filing is an external write that needs exact approval.",
+      "skill": "gstack-spec"
+    },
+    {
+      "id": "gstack.plan-eng-review",
+      "lifecycle": "source-implemented",
+      "purpose": "Adapted gstack plan-eng-review checklists: architecture, failure modes, test plan and delivery risks recorded as an engineering review/ADR feeding the existing engineering path.",
+      "skill": "gstack-plan-eng-review"
+    },
+    {
+      "id": "gstack.plan-design-review",
+      "lifecycle": "source-implemented",
+      "purpose": "Adapted gstack plan-design-review: information architecture, journeys, interaction-state coverage, accessibility risks and unresolved design decisions for a plan, before implementation.",
+      "skill": "gstack-plan-design-review"
+    },
+    {
+      "id": "gstack.design-consultation",
+      "lifecycle": "source-implemented",
+      "purpose": "Adapted gstack design-consultation: design brief, user journey, semantic tokens, interaction states, responsive behavior, accessibility requirements and a preview artifact, with asset rights recorded.",
+      "skill": "gstack-design-consultation"
+    },
+    {
+      "id": "gstack.review",
+      "lifecycle": "source-implemented",
+      "purpose": "gstack review checklists applied as an independent, input-bound audit through the existing restricted review path; fix-first behavior is split out to the existing coordinator writer.",
+      "skill": "gstack-review"
+    },
+    {
+      "id": "gstack.qa",
+      "lifecycle": "source-implemented",
+      "purpose": "Adapted gstack qa audit half: functional QA charter for site/API/CLI with reproduced bugs and evidence; repairs go to the existing writer, never from this capability.",
+      "skill": "gstack-qa"
+    },
+    {
+      "id": "gstack.design-review",
+      "lifecycle": "source-implemented",
+      "purpose": "Adapted gstack design-review audit half: visual consistency, missing states, responsiveness, accessibility, usability and design-system consistency of actual artifacts; read-only, no coding permission.",
+      "skill": "gstack-design-review"
+    },
+    {
+      "id": "pm.competitor-research",
+      "lifecycle": "source-implemented",
+      "purpose": "Adapted PM Skills competitive-analysis: cited, dated competitor comparison, feature and pricing findings, market assumptions, positioning, opportunities, risks and recommendations; observed facts separated from estimates.",
+      "skill": "pm-competitor-research"
+    },
+    {
+      "id": "pm.positioning",
+      "lifecycle": "planned",
+      "purpose": "(planned, not implemented) Adapted PM Skills positioning-ideas: differentiated positioning alternatives with evidence, feeding the existing marketing team recipe.",
+      "skill": null
+    },
+    {
+      "id": "kit.operational-analysis",
+      "lifecycle": "planned",
+      "purpose": "(planned, not implemented) Original workflow: process diagnosis from approved baseline data, at least two alternatives with control risks, and a bounded measurable pilot plan; improvement is claimed only from actual pilot data.",
+      "skill": null
+    },
+    {
+      "id": "existing.engineering-path",
+      "lifecycle": "existing",
+      "purpose": "The shipped coordinator engineering loop: reproduce and investigate, sole Claude coding route fix, real regression tests, independent review and approved feature-branch handoff, with exact-SHA platform lanes when needed. Bugs and typos go here directly.",
+      "skill": null
+    },
+    {
+      "id": "existing.marketing-team",
+      "lifecycle": "existing",
+      "purpose": "The shipped marketing recipe (research, positioning, channel plan, strategy review) using the existing marketing profile; produces an actionable marketing plan. Publishing and spend stay separately approved.",
+      "skill": null
+    }
+  ],
+  "guidance": [
+    "Decide whether a new product idea is worth pursuing: kit.problem-definition, pm.product-discovery, pm.competitor-research",
+    "Turn an accepted feature into requirements and an engineering plan review: pm.lean-prd, gstack.plan-eng-review",
+    "Fix a known coding bug or typo: existing.engineering-path",
+    "Improve an existing user interface: gstack.design-review, existing.engineering-path, gstack.qa",
+    "Compare competitors from public sources: pm.competitor-research",
+    "Produce an actionable marketing plan: existing.marketing-team",
+    "Diagnose a business process and plan a measurable pilot: kit.operational-analysis"
+  ],
+  "kind": "agent-ops-kit/capability-routing-catalog",
+  "schema_version": 1,
+  "sources": {
+    "hermes/capabilities/registry.json": "61baaa9c195d17334c5e0b9d35abfe78f8073070fede160317b46a5b603c35b1",
+    "hermes/capabilities/routing-recipes.json": "0bd461f344a57ca1c3cf3387d86f6eb81084e1e12f905fcf3a5c232b95951042"
+  }
+}

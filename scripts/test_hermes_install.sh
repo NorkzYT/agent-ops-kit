@@ -64,6 +64,72 @@ ck "delegation model = opus"              "grep -q 'model: opus' '$cfg'"
 ck "hermes .env has the real proxy key"   "grep -q '^CLAUDE_MAX_PROXY_API_KEY=secrettoken123$' '$henv'"
 ck "hermes .env not left as placeholder"  "! grep -q '^CLAUDE_MAX_PROXY_API_KEY=local$' '$henv'"
 ck "honcho.json written, rendered"        "[[ -f '$hj' ]] && ! grep -q '__[A-Z0-9_]*__' '$hj'"
+ck "capability skills are activation-gated" "[[ ! -e '$hh/skills/agent-ops-kit/gstack-qa' && ! -e '$hh/skills/agent-ops-kit/problem-definition' ]]"
+ck "other kit skills still install"       "[[ -f '$hh/skills/agent-ops-kit/kanban-workflow/SKILL.md' ]]"
+ck "installer names the gated skills"     "grep -q 'activation-gated (docs/capability-activation.md): .*gstack-qa' '$tmp/out.log'"
+
+# --- capability gate fails closed: in a private copy of the kit (never this checkout), a
+# missing, malformed, empty or incomplete activation manifest stops the installer before it
+# writes anything; a manifest whose names differ from the registry's source-implemented skills
+# is refused too.
+kit="$tmp/kit-copy"; mkdir -p "$kit"
+tar -C "$ROOT" --exclude=./.git --exclude=./data --exclude='./.env' -cf - . | tar -C "$kit" -xf -
+man="$kit/hermes/capabilities/activation/manifest.json"; cp "$man" "$tmp/manifest.orig"
+gate_case() {  # label, mutation (python: m = manifest dict, or raw text via RAW=)
+  local label="$1" hhx="$tmp/hermes-gate-$2"
+  cp "$tmp/manifest.orig" "$man"
+  case "$2" in
+    missing) rm -f "$man" ;;
+    malformed) printf '{"skills": [' > "$man" ;;
+    dupkey) python3 - "$man" <<'PY'
+import sys; p = sys.argv[1]; s = open(p).read(); open(p, "w").write(s.replace('"skills": [', '"skills": [], "skills": [', 1))
+PY
+    ;;
+    *) python3 - "$man" "$2" <<'PY'
+import json, sys
+p, case = sys.argv[1:]; m = json.load(open(p))
+if case == "noskills": del m["skills"]
+elif case == "empty": m["skills"] = []
+elif case == "dropname": m["skills"] = [s for s in m["skills"] if s != "gstack-qa"]
+elif case == "extraname": m["skills"].append("kanban-workflow")
+elif case == "notlist": m["skills"] = " ".join(m["skills"])
+json.dump(m, open(p, "w"))
+PY
+    ;;
+  esac
+  sed "s#^HERMES_HOME=.*#HERMES_HOME=$hhx#" "$envf" > "$tmp/gate.env"
+  HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$tmp/gate.env" HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+    bash "$kit/scripts/hermes-install.sh" >"$tmp/gate-$2.log" 2>&1
+  local rcg=$?
+  ck "gate refuses $label (rc=$rcg)" "[[ $rcg -ne 0 ]] && grep -q 'capability activation gate' '$tmp/gate-$2.log'"
+  ck "gate wrote nothing for $label"  "[[ ! -e '$hhx' ]]"
+}
+gate_case "a missing manifest" missing
+gate_case "a malformed manifest" malformed
+gate_case "a duplicate-key manifest" dupkey
+gate_case "a manifest without skills" noskills
+gate_case "an empty skills list" empty
+gate_case "a manifest missing a capability skill" dropname
+gate_case "a manifest gating a non-capability skill" extraname
+gate_case "a non-list skills field" notlist
+cp "$tmp/manifest.orig" "$man"
+# Review 2026-11-05: the routine installer copied the capability-seam model-router over the live
+# plugin (no backup, no approval). With capability source present it must leave the plugin alone.
+hhp="$tmp/hermes-plugin"; mkdir -p "$hhp/plugins/model-router"
+printf 'PRIOR\n' > "$hhp/plugins/model-router/specialist_hook.py"
+sed "s#^HERMES_HOME=.*#HERMES_HOME=$hhp#" "$envf" > "$tmp/gate.env"
+HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$tmp/gate.env" HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+  bash "$kit/scripts/hermes-install.sh" >"$tmp/gate-plugin.log" 2>&1
+ck "capability checkout: installer still runs (rc=$?)" "[[ -f '$hhp/config.yaml' ]]"
+ck "capability checkout: live model-router left untouched" "[[ \"\$(cat '$hhp/plugins/model-router/specialist_hook.py')\" == PRIOR ]]"
+ck "capability checkout: no model-router copied into a fresh home" "[[ ! -e '$hh/plugins/model-router' ]]"
+ck "capability checkout: installer names the specialist-install path" "grep -q 'make specialist-install' '$tmp/gate-plugin.log'"
+rm -rf "$kit/hermes/capabilities"
+sed "s#^HERMES_HOME=.*#HERMES_HOME=$tmp/hermes-precap#" "$envf" > "$tmp/gate.env"
+HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$tmp/gate.env" HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+  bash "$kit/scripts/hermes-install.sh" >"$tmp/gate-precap.log" 2>&1
+ck "no capability source: installer still runs (rc=$?)" "[[ -f '$tmp/hermes-precap/config.yaml' ]]"
+ck "no capability source: plugins install as before" "[[ -f '$tmp/hermes-precap/plugins/model-router/specialist_hook.py' ]]"
 
 # --- default-model scenario: with HERMES_MODEL unset the installer must fall
 # back to the Terra starting model (gpt-6.1-terra), not luna or sol. Luna stays

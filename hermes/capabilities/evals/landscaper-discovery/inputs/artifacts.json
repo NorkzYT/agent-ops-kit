@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "artifact_id": "pack-landscaper-idea",
+      "kind": "evidence-index",
+      "company_id": "example-a",
+      "project_id": null,
+      "task_id": "t-landscaper-invoicing",
+      "content_digest": "bc804818459a6fc358c7da9e1c3e36f456066b17290f936675f022cec2fb4d85",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "evidence-pack.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-landscaper-invoicing.decision-brief",
+      "kind": "decision-brief",
+      "company_id": "example-a",
+      "project_id": null,
+      "task_id": "t-landscaper-invoicing",
+      "content_digest": "3aadb3351d52ccb8b4e7a02dbcffdb1daca0ad65317aa323a34e9b7ff4cb1e04",
+      "produced_by": {
+        "capability_id": "kit.problem-definition",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-landscaper-invoicing-unknowns",
+        "implementation_digest": "50bc8289a203f7b93f389bd9c3e2cbdc102605710b8b31205453cc39c4b6062a"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "decision-brief.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-landscaper-idea",
+          "digest": "bc804818459a6fc358c7da9e1c3e36f456066b17290f936675f022cec2fb4d85"
+        }
+      ],
+      "review_status": "accepted",
+      "accepted_by_ref": "review:synthetic-fixture-acceptance"
+    },
+    {
+      "artifact_id": "t-landscaper-invoicing.assumption-register",
+      "kind": "assumption-register",
+      "company_id": "example-a",
+      "project_id": null,
+      "task_id": "t-landscaper-invoicing",
+      "content_digest": "868ea18b73b07aec7754cc212a8012f65b953b3fd767e84af9e41df5c1d4e9e5",
+      "produced_by": {
+        "capability_id": "kit.problem-definition",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-landscaper-invoicing-unknowns",
+        "implementation_digest": "50bc8289a203f7b93f389bd9c3e2cbdc102605710b8b31205453cc39c4b6062a"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "assumption-register.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-landscaper-idea",
+          "digest": "bc804818459a6fc358c7da9e1c3e36f456066b17290f936675f022cec2fb4d85"
+        }
+      ],
+      "review_status": "draft"
+    }
+  ]
+}

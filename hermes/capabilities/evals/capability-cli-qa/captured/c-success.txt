@@ -1,0 +1,9 @@
+$ python3 scripts/capability_workflow.py validate --analysis hermes/capabilities/evals/support-billing-spec/analysis-feature.json --evidence hermes/capabilities/evals/support-billing-spec/evidence-pack.json --artifacts hermes/capabilities/evals/support-billing-spec/inputs/artifacts.json
+--- stdout
+{
+  "ok": true,
+  "kind": "spec",
+  "errors": []
+}
+--- stderr
+exit=0

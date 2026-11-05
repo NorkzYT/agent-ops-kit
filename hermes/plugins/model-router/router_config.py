@@ -123,6 +123,13 @@ class RouterSettings:
     # Repo hermes/profiles (knowledge-assignments.json specs of created profiles); optional.
     # Without it a dynamic profile's purpose comes from its installed SOUL.md.
     specialist_seeds_root: str = ""
+    # Opt-in capability catalog (agent-ops-kit capability registry). A kit checkout or the
+    # activated $HERMES_HOME/agent-ops-kit/capability-root holding
+    # hermes/capabilities/routing-catalog.json, and that file's pinned SHA-256. Both set:
+    # the live hook offers the catalog to the same classifier call (ai mode). Either unset,
+    # or the catalog absent/malformed/drifted: no capability is offered or selected.
+    specialist_capability_root: str = ""
+    specialist_capability_catalog_sha256: str = ""
 
 
     def local_model(self, role: str) -> str:
@@ -218,4 +225,9 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         specialist_orchestrators=_split(val("specialist_orchestrators", "MODEL_ROUTER_SPECIALIST_ORCHESTRATORS", ["default"])) or ["default"],
         specialist_profiles_root=str(val("specialist_profiles_root", "MODEL_ROUTER_SPECIALIST_PROFILES_ROOT", "") or ""),
         specialist_seeds_root=str(val("specialist_seeds_root", "MODEL_ROUTER_SPECIALIST_SEEDS_ROOT", "") or ""),
+        specialist_capability_root=str(val("specialist_capability_root",
+                                           "MODEL_ROUTER_SPECIALIST_CAPABILITY_ROOT", "") or ""),
+        specialist_capability_catalog_sha256=str(val("specialist_capability_catalog_sha256",
+                                                     "MODEL_ROUTER_SPECIALIST_CAPABILITY_CATALOG_SHA256", "")
+                                                 or "").strip(),
     )

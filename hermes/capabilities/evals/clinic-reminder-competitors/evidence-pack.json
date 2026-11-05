@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-clinic-reminders",
+  "binding": {
+    "task_id": "t-clinic-reminders",
+    "company_id": "example-b",
+    "project_id": "example-ops",
+    "data_classification": "synthetic"
+  },
+  "as_of": "2026-09-15",
+  "items": [
+    {
+      "source_id": "P1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Pingwell home page (synthetic fixture)",
+      "ref": "https://pingwell.example/",
+      "retrieved_at": "2026-09-14T08:00:00+01:00",
+      "captured_file": "captured/pingwell-home.md",
+      "digest": "7c36eac5ac0227e37b9a2760108bfecd5ee0883bd8f3567064aacf8ae5f15ae5",
+      "topics": [
+        "pricing-pingwell",
+        "positioning-pingwell"
+      ],
+      "excerpt": "Clinic: €39 EUR per location per month, billed annually.\nEach reminder after the first 500 a month costs €0.05 EUR per message.",
+      "values": {
+        "clinic_location": 39,
+        "included_reminders": 500,
+        "overage_per_message": 0.05
+      }
+    },
+    {
+      "source_id": "M1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Remindly pricing page (synthetic fixture)",
+      "ref": "https://app.remindly.example/pricing",
+      "retrieved_at": "2026-09-14T08:10:00+01:00",
+      "captured_file": "captured/remindly-pricing.md",
+      "digest": "9ab49e2e2d97b2c691e1d9758529be987d54ad97648e0cf0d11a5d86d35eaaa3",
+      "topics": [
+        "pricing-remindly",
+        "positioning-remindly"
+      ],
+      "excerpt": "£25 GBP per user per month",
+      "values": {
+        "practice_per_user": 25
+      }
+    }
+  ],
+  "not_available": [],
+  "policy": {
+    "public_research": "allowed",
+    "private_terms": [
+      "Project Lantern",
+      "lantern-clinic"
+    ]
+  }
+}

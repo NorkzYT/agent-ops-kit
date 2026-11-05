@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "artifact_id": "t-rota-export.change",
+      "kind": "code-change-handoff",
+      "company_id": "example-b",
+      "project_id": "example-ops",
+      "task_id": "t-rota-export",
+      "content_digest": "0643b2302d4fd000c61febf378bebd67899616958e1bc6482899aa2409b6a5ff",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "rota-export.diff",
+      "source_refs": [],
+      "review_status": "draft"
+    }
+  ]
+}

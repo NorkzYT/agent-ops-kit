@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-ops-kit.local/schemas/capabilities/artifact.schema.json",
+  "title": "Artifact v1 index",
+  "description": "Typed task artifacts bound to company/project/task with immutable content digests and source references. 'accepted' records a reviewer decision reference; it is not a permission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "tenant": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9_./:-]{0,159}$",
+      "description": "Opaque handle (scheme:id) resolved only by a trusted broker; never a secret, path or URL with credentials."
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "capability_id": {
+      "type": "string",
+      "pattern": "^(kit|pm|gstack|existing)\\.[a-z0-9]+(-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$"
+    },
+    "data_class": {
+      "enum": [
+        "public",
+        "synthetic",
+        "company-private"
+      ]
+    },
+    "artifact_kind": {
+      "enum": [
+        "task-envelope",
+        "evidence-index",
+        "feature-brief",
+        "problem-brief",
+        "decision-brief",
+        "one-page-prd",
+        "discovery-brief",
+        "assumption-register",
+        "experiment-plan",
+        "opportunity-brief",
+        "lean-prd",
+        "acceptance-map",
+        "implementation-handoff",
+        "spec",
+        "eng-review",
+        "design-brief",
+        "design-plan-review",
+        "design-package",
+        "design-review-report",
+        "review-report",
+        "qa-report",
+        "competitor-report",
+        "evidence-ledger",
+        "positioning-brief",
+        "marketing-plan",
+        "process-assessment",
+        "pilot-plan",
+        "code-change-handoff",
+        "ui-evidence"
+      ]
+    },
+    "digest_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "digest"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "kind",
+        "company_id",
+        "project_id",
+        "task_id",
+        "content_digest",
+        "produced_by",
+        "generation",
+        "data_classification",
+        "location",
+        "source_refs",
+        "review_status"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "$ref": "#/$defs/artifact_kind"
+        },
+        "company_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/tenant"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/tenant"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "$ref": "#/$defs/id"
+        },
+        "content_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "produced_by": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "capability_id",
+                "capability_version"
+              ],
+              "properties": {
+                "capability_id": {
+                  "$ref": "#/$defs/capability_id"
+                },
+                "capability_version": {
+                  "$ref": "#/$defs/version"
+                },
+                "run_ref": {
+                  "$ref": "#/$defs/ref"
+                },
+                "implementation_digest": {
+                  "$ref": "#/$defs/sha256",
+                  "description": "Registry implementation.digest of the producer when this artifact was produced. Absent = legacy-unverified (never reusable)."
+                },
+                "source_digest": {
+                  "$ref": "#/$defs/sha256",
+                  "description": "Registry source.content_digest (locked upstream files) of the producer, for adapted capabilities. Recorded provenance, not proof of what ran."
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "data_classification": {
+          "$ref": "#/$defs/data_class"
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\\\x00-\\x1f]+$",
+          "description": "Path relative to the caller-supplied artifact root; never absolute, never '..'."
+        },
+        "source_refs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/digest_ref"
+          }
+        },
+        "review_status": {
+          "enum": [
+            "draft",
+            "accepted",
+            "rejected",
+            "superseded"
+          ]
+        },
+        "accepted_by_ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "retention_policy_ref": {
+          "$ref": "#/$defs/ref"
+        }
+      },
+      "if": {
+        "properties": {
+          "review_status": {
+            "const": "accepted"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "accepted_by_ref"
+        ]
+      }
+    }
+  }
+}

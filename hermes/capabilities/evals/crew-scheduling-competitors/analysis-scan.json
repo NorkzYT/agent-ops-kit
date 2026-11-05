@@ -1,0 +1,462 @@
+{
+  "schema_version": 1,
+  "kind": "competitor-research",
+  "capability_id": "pm.competitor-research",
+  "mode": "scan",
+  "authored_by": {
+    "kind": "coordinator-synthetic-demo",
+    "ref": "fixture:crew-scheduling-competitors"
+  },
+  "binding": {
+    "task_id": "t-crew-competitors",
+    "company_id": "example-a",
+    "project_id": "example-web",
+    "data_classification": "synthetic"
+  },
+  "evidence": {
+    "pack_id": "pack-crew-scheduling-competitors",
+    "digest": "e78c3200e85fc270c0f1c6fc8aab368d5c71420395e0afb1111cb3ff6b698904"
+  },
+  "reused_artifacts": [],
+  "research_question": "How do three crew-scheduling tools price a 5-person field crew, and where is a gap for a new entrant?",
+  "purpose": "pricing",
+  "lens": [
+    "pricing",
+    "features",
+    "positioning"
+  ],
+  "as_of": "2026-10-30",
+  "max_source_age_days": 90,
+  "subject": {
+    "name": "Hypothetical crew-scheduling entrant (synthetic demo)",
+    "statement_ids": [
+      "U-subject"
+    ]
+  },
+  "selection_basis": "The three tools named in the synthetic brief; no claim that they are the five largest.",
+  "queries": [
+    "crew scheduling software pricing per user",
+    "rotaly.example pricing",
+    "yardbook.example plans"
+  ],
+  "competitors": [
+    {
+      "id": "rotaly",
+      "name": "Rotaly",
+      "relation": "direct",
+      "domain": "rotaly.example",
+      "source_ids": [
+        "R1"
+      ],
+      "positioning": [
+        {
+          "source_id": "R1",
+          "text": "Scheduling for crews that never sit still."
+        }
+      ]
+    },
+    {
+      "id": "crewledger",
+      "name": "CrewLedger",
+      "relation": "direct",
+      "domain": "crewledger.example",
+      "source_ids": [
+        "C1"
+      ],
+      "positioning": [
+        {
+          "source_id": "C1",
+          "text": "Job sheets that work in a basement with no signal."
+        }
+      ]
+    },
+    {
+      "id": "yardbook",
+      "name": "Yardbook",
+      "relation": "indirect",
+      "domain": "yardbook.example",
+      "source_ids": [
+        "Y1"
+      ],
+      "positioning": [
+        {
+          "source_id": "Y1",
+          "text": "One flat price for the whole yard."
+        }
+      ]
+    }
+  ],
+  "price_points": [
+    {
+      "id": "p-rotaly-starter-annual",
+      "competitor_id": "rotaly",
+      "plan": "Starter",
+      "status": "stated",
+      "amount": 8,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-annually",
+      "quotes": [
+        {
+          "source_id": "R1",
+          "text": "$8 USD"
+        },
+        {
+          "source_id": "R1",
+          "text": "Per user/month if billed annually"
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-rotaly-starter-monthly",
+      "competitor_id": "rotaly",
+      "plan": "Starter",
+      "status": "stated",
+      "amount": 10,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-monthly",
+      "quotes": [
+        {
+          "source_id": "R1",
+          "text": "Per user/month if billed annually ($10 billed monthly)"
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-rotaly-team",
+      "competitor_id": "rotaly",
+      "plan": "Team",
+      "status": "stated",
+      "amount": 15,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "unstated",
+      "quotes": [
+        {
+          "source_id": "R1",
+          "text": "$15 USD per user / month"
+        }
+      ],
+      "caveats": [
+        "The Team card gives a per-user monthly price but does not say whether it is the annual or the monthly billing rate."
+      ]
+    },
+    {
+      "id": "p-rotaly-enterprise",
+      "competitor_id": "rotaly",
+      "plan": "Enterprise",
+      "status": "contact-sales",
+      "amount": null,
+      "currency": null,
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [
+        {
+          "source_id": "R1",
+          "text": "Contact sales for custom pricing"
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-crewledger",
+      "competitor_id": "crewledger",
+      "plan": "All plans",
+      "status": "unknown",
+      "amount": null,
+      "currency": null,
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [],
+      "caveats": [
+        "Pricing page unavailable at capture."
+      ],
+      "resolution": "Re-capture https://crewledger.example/pricing or ask CrewLedger sales for a written quote."
+    },
+    {
+      "id": "p-yardbook-free",
+      "competitor_id": "yardbook",
+      "plan": "Free",
+      "status": "stated",
+      "amount": 0,
+      "currency": "USD",
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [
+        {
+          "source_id": "Y1",
+          "text": "$0 for one crew of up to 2 people"
+        }
+      ],
+      "caveats": [
+        "The free plan shows '$' without a currency code; USD is read from the paid plan on the same page."
+      ]
+    },
+    {
+      "id": "p-yardbook-business",
+      "competitor_id": "yardbook",
+      "plan": "Business",
+      "status": "stated",
+      "amount": 49,
+      "currency": "USD",
+      "unit": "per-account",
+      "cadence": "billed-monthly",
+      "quotes": [
+        {
+          "source_id": "Y1",
+          "text": "$49 USD per account per month, billed monthly."
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-yardbook-sms",
+      "competitor_id": "yardbook",
+      "plan": "Business",
+      "status": "stated",
+      "amount": 0.04,
+      "currency": "USD",
+      "unit": "usage-based",
+      "cadence": "billed-monthly",
+      "quotes": [
+        {
+          "source_id": "Y1",
+          "text": "SMS reminders at $0.04 USD per message (usage-based, billed monthly in arrears)"
+        }
+      ],
+      "caveats": []
+    }
+  ],
+  "features": [
+    {
+      "id": "f-rotaly-routes",
+      "competitor_id": "rotaly",
+      "plan": "Team",
+      "feature": "Route optimisation (stop limit stated)",
+      "quotes": [
+        {
+          "source_id": "R1",
+          "text": "Route optimisation for up to 40 stops a day"
+        }
+      ]
+    },
+    {
+      "id": "f-crewledger-offline",
+      "competitor_id": "crewledger",
+      "plan": "not stated",
+      "feature": "Offline job sheets",
+      "quotes": [
+        {
+          "source_id": "C1",
+          "text": "Offline mode for job sheets, synced when the van is back in range"
+        }
+      ]
+    },
+    {
+      "id": "f-yardbook-crew",
+      "competitor_id": "yardbook",
+      "plan": "Business",
+      "feature": "Unlimited crew members on a flat price",
+      "quotes": [
+        {
+          "source_id": "Y1",
+          "text": "Unlimited crew members."
+        }
+      ]
+    }
+  ],
+  "statements": [
+    {
+      "id": "S-rotaly-cadence",
+      "class": "synthetic",
+      "source_ids": [
+        "R1"
+      ],
+      "computation_ids": [
+        "c-rotaly-annual-saving"
+      ],
+      "text": "Rotaly Starter costs $8 per user a month billed annually or $10 billed monthly: a 20% saving for annual billing."
+    },
+    {
+      "id": "S-five-crew",
+      "class": "synthetic",
+      "source_ids": [
+        "R1",
+        "Y1"
+      ],
+      "computation_ids": [
+        "c-rotaly-five-annual",
+        "c-yardbook-five"
+      ],
+      "text": "For a five-person crew, Rotaly Starter is $40 a month billed annually, against Yardbook Business at $49 per account."
+    },
+    {
+      "id": "U-crewledger-price",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "pricing-crewledger",
+      "text": "CrewLedger's prices are unknown: its pricing page was unavailable at capture.",
+      "resolution": "Re-capture the pricing page or obtain a written quote."
+    },
+    {
+      "id": "U-market-size",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "market-size",
+      "text": "The size of the crew-scheduling market is unknown; no source was supplied.",
+      "resolution": "Find a dated, cited industry source before sizing the opportunity."
+    },
+    {
+      "id": "U-subject",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "subject-offer",
+      "text": "The entrant's own price, plan structure and feature set were not supplied.",
+      "resolution": "Ask the requester for the planned offer before positioning against these tools."
+    },
+    {
+      "id": "A-buyer",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "market-buyer",
+      "text": "Crews of about 5 people compare tools on total monthly cost rather than on list price per user."
+    },
+    {
+      "id": "H-flat",
+      "class": "hypothesis",
+      "source_ids": [],
+      "topic": "market-pricing",
+      "text": "A flat per-account price is attractive to crews that add seasonal members."
+    }
+  ],
+  "computations": [
+    {
+      "id": "c-rotaly-annual-saving",
+      "expression": "(monthly - annual) / monthly * 100",
+      "round_to": 1,
+      "unit": "percent",
+      "result": 20,
+      "inputs": {
+        "monthly": {
+          "source_id": "R1",
+          "value": "starter_monthly"
+        },
+        "annual": {
+          "source_id": "R1",
+          "value": "starter_annual"
+        }
+      }
+    },
+    {
+      "id": "c-rotaly-five-annual",
+      "expression": "annual * 5",
+      "round_to": 2,
+      "unit": "USD per month",
+      "result": 40,
+      "inputs": {
+        "annual": {
+          "source_id": "R1",
+          "value": "starter_annual"
+        }
+      }
+    },
+    {
+      "id": "c-yardbook-five",
+      "expression": "flat",
+      "round_to": 2,
+      "unit": "USD per month",
+      "result": 49,
+      "inputs": {
+        "flat": {
+          "source_id": "Y1",
+          "value": "business_flat"
+        }
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-flat-gap",
+      "kind": "opportunity",
+      "class": "hypothesis",
+      "statement_ids": [
+        "S-five-crew",
+        "H-flat"
+      ],
+      "price_ids": [
+        "p-rotaly-starter-annual",
+        "p-yardbook-business"
+      ],
+      "feature_ids": [
+        "f-yardbook-crew"
+      ],
+      "computation_ids": [],
+      "text": "Per-user pricing ($40 a month for a five-person crew at Rotaly) and a flat account price ($49 at Yardbook) are close at that size; a flat price that keeps route optimisation could undercut Rotaly Team for larger crews."
+    },
+    {
+      "id": "F-offline",
+      "kind": "table-stakes",
+      "class": "assumption",
+      "statement_ids": [],
+      "price_ids": [],
+      "feature_ids": [
+        "f-crewledger-offline"
+      ],
+      "computation_ids": [],
+      "text": "Offline job sheets are advertised by CrewLedger; an entrant without them may be excluded by crews working without signal."
+    },
+    {
+      "id": "F-sms-cost",
+      "kind": "risk",
+      "class": "assumption",
+      "statement_ids": [],
+      "price_ids": [
+        "p-yardbook-sms"
+      ],
+      "feature_ids": [],
+      "computation_ids": [],
+      "text": "Yardbook charges $0.04 per SMS on top of the flat price, so its real monthly cost depends on reminder volume we do not know."
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "R-test-flat",
+      "stance": "investigate",
+      "finding_ids": [
+        "F-flat-gap",
+        "F-sms-cost"
+      ],
+      "assumption_ids": [
+        "A-buyer",
+        "H-flat"
+      ],
+      "text": "Test a flat per-crew price with route optimisation included in buyer interviews before choosing per-user pricing."
+    },
+    {
+      "id": "R-offline",
+      "stance": "close-gap",
+      "finding_ids": [
+        "F-offline"
+      ],
+      "assumption_ids": [],
+      "text": "Treat offline job sheets as table stakes in the first release scope, pending the entrant's own requirements."
+    }
+  ],
+  "questions": [
+    {
+      "topic": "subject-offer",
+      "text": "What price and plan structure does the entrant intend to launch with?"
+    }
+  ],
+  "next_action": {
+    "action": "Re-capture CrewLedger pricing and ask the requester for the entrant's planned offer.",
+    "kind": "retrieve",
+    "owner_role": "coordinator",
+    "cost": "cheap",
+    "involves_external_contact": false,
+    "approvals_needed": []
+  }
+}

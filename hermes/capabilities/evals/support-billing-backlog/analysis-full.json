@@ -1,0 +1,453 @@
+{
+  "schema_version": 1,
+  "kind": "problem-definition",
+  "capability_id": "kit.problem-definition",
+  "authored_by": {
+    "kind": "coordinator-synthetic-demo",
+    "ref": "author:hephaestus-coordinator-demo"
+  },
+  "binding": {
+    "task_id": "t-support-billing",
+    "company_id": "example-b",
+    "project_id": "example-ops",
+    "data_classification": "synthetic"
+  },
+  "evidence": {
+    "pack_id": "pack-support-billing",
+    "digest": "d42720d8320764f4e94198ab75d86e4beae1d99cbdf55e78960f113713fed14e"
+  },
+  "reused_artifacts": [],
+  "problem_type": "process",
+  "decision": {
+    "question": "Should the support lead change billing ticket coverage this quarter, and which change should be piloted first?",
+    "owner_role": "support lead"
+  },
+  "affected": {
+    "who": "Customers with billing questions and the two billing-trained agents",
+    "process": "Support ticket triage and first response"
+  },
+  "symptom_id": "s-symptom",
+  "problem_statement": "Billing tickets wait more than three times longer for a first reply than other tickets, while headcount cannot grow before 2027.",
+  "statements": [
+    {
+      "id": "s-symptom",
+      "text": "Billing tickets had a median first response of 31 hours versus 9 hours for other tickets in October 2026.",
+      "class": "synthetic",
+      "source_ids": [
+        "E1"
+      ]
+    },
+    {
+      "id": "s-share",
+      "text": "Billing was 38 percent of the 1240 October tickets.",
+      "class": "synthetic",
+      "source_ids": [
+        "E1"
+      ],
+      "computation_ids": [
+        "c-share"
+      ]
+    },
+    {
+      "id": "s-reopen",
+      "text": "23.8 percent of billing tickets were reopened.",
+      "class": "synthetic",
+      "source_ids": [
+        "E1"
+      ],
+      "computation_ids": [
+        "c-reopen"
+      ]
+    },
+    {
+      "id": "s-ratio",
+      "text": "Billing first response is 3.4 times slower than other tickets.",
+      "class": "synthetic",
+      "source_ids": [
+        "E1"
+      ],
+      "computation_ids": [
+        "c-ratio"
+      ]
+    },
+    {
+      "id": "s-staff",
+      "text": "Only 2 agents are trained on billing and both work weekday day shifts.",
+      "class": "synthetic",
+      "source_ids": [
+        "E2"
+      ]
+    },
+    {
+      "id": "s-friday",
+      "text": "Billing questions arriving on Friday after 15:00 wait until Monday.",
+      "class": "synthetic",
+      "source_ids": [
+        "E2"
+      ]
+    },
+    {
+      "id": "s-constraint",
+      "text": "No new support headcount before 2027-01-01; the Q4 2026 tooling budget is 3000 USD.",
+      "class": "synthetic",
+      "source_ids": [
+        "E3"
+      ]
+    },
+    {
+      "id": "s-a-macros",
+      "text": "Most billing questions are repetitive enough for reply macros.",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "billing-question-mix"
+    },
+    {
+      "id": "s-h-coverage",
+      "text": "Thin billing coverage outside weekday day shifts drives much of the billing delay.",
+      "class": "hypothesis",
+      "source_ids": [
+        "E2"
+      ]
+    },
+    {
+      "id": "s-h-skill",
+      "text": "Billing tickets queue behind the two trained agents because other agents cannot answer them.",
+      "class": "hypothesis",
+      "source_ids": [
+        "E2"
+      ]
+    },
+    {
+      "id": "s-u-csat",
+      "text": "Whether slow billing replies lower customer satisfaction is unknown.",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "customer-satisfaction",
+      "resolution": "Add a one-question satisfaction prompt to closed billing tickets for four weeks."
+    },
+    {
+      "id": "s-u-churn",
+      "text": "Whether billing delays contribute to cancellations is unknown.",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "churn-impact",
+      "resolution": "Ask finance for cancellation reasons tagged billing over the last two quarters."
+    }
+  ],
+  "computations": [
+    {
+      "id": "c-share",
+      "expression": "billing / total * 100",
+      "inputs": {
+        "billing": {
+          "source_id": "E1",
+          "value": "billing_tickets"
+        },
+        "total": {
+          "source_id": "E1",
+          "value": "tickets_total"
+        }
+      },
+      "result": 38.0,
+      "round_to": 0,
+      "unit": "percent"
+    },
+    {
+      "id": "c-reopen",
+      "expression": "reopened / billing * 100",
+      "inputs": {
+        "reopened": {
+          "source_id": "E1",
+          "value": "billing_reopened"
+        },
+        "billing": {
+          "source_id": "E1",
+          "value": "billing_tickets"
+        }
+      },
+      "result": 23.8,
+      "round_to": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "c-ratio",
+      "expression": "billing_h / other_h",
+      "inputs": {
+        "billing_h": {
+          "source_id": "E1",
+          "value": "median_first_response_billing_h"
+        },
+        "other_h": {
+          "source_id": "E1",
+          "value": "median_first_response_other_h"
+        }
+      },
+      "result": 3.4,
+      "round_to": 1,
+      "unit": "ratio"
+    }
+  ],
+  "alternatives": [
+    {
+      "id": "alt-crosstrain",
+      "kind": "option",
+      "summary": "Cross-train two more agents on billing with a reply macro library.",
+      "tradeoffs": "Uses training time now; reduces dependence on two people; macro quality is an assumption."
+    },
+    {
+      "id": "alt-rota",
+      "kind": "option",
+      "summary": "Add a Friday-afternoon and evening billing rota from existing agents.",
+      "tradeoffs": "Targets the arrival-time hypothesis directly; shifts existing workload and needs agent agreement."
+    },
+    {
+      "id": "alt-nothing",
+      "kind": "do-nothing",
+      "summary": "Keep current coverage and only start measuring satisfaction.",
+      "tradeoffs": "No cost now; the delay continues while the satisfaction unknown is resolved."
+    }
+  ],
+  "success_measure": {
+    "metric": "Median first response for billing tickets",
+    "baseline_statement_id": "s-symptom",
+    "target": {
+      "comparator": "<=",
+      "value": 12,
+      "unit": "hours"
+    },
+    "window_days": 28
+  },
+  "questions": [
+    {
+      "topic": "agent-availability",
+      "text": "Which agents could join a Friday-afternoon rota without overtime?"
+    }
+  ],
+  "next_action": {
+    "action": "Split the October billing tickets by arrival time before choosing a pilot: if Friday-after-15:00 arrivals do not wait materially longer, prefer cross-training over a rota.",
+    "kind": "measure",
+    "owner_role": "support lead",
+    "cost": "cheap",
+    "involves_external_contact": false,
+    "approvals_needed": []
+  },
+  "mode": "full",
+  "requested_full_exercise": true,
+  "why_tree": {
+    "nodes": [
+      {
+        "id": "n-coverage",
+        "parent": "root",
+        "statement_id": "s-h-coverage",
+        "edge": "causal-hypothesis",
+        "counter_statement_ids": [],
+        "test": "Compare median first response for billing tickets that arrive Monday-Thursday daytime with those arriving Friday after 15:00; if the gap is small, reject."
+      },
+      {
+        "id": "n-skill",
+        "parent": "root",
+        "statement_id": "s-h-skill",
+        "edge": "causal-hypothesis",
+        "counter_statement_ids": [],
+        "test": "Measure how often non-billing agents pick up and then reassign billing tickets; if reassignment is rare, reject."
+      },
+      {
+        "id": "n-staff",
+        "parent": "n-skill",
+        "statement_id": "s-staff",
+        "edge": "observed-association",
+        "counter_statement_ids": []
+      },
+      {
+        "id": "n-friday",
+        "parent": "n-coverage",
+        "statement_id": "s-friday",
+        "edge": "observed-association",
+        "counter_statement_ids": []
+      }
+    ],
+    "stop_reason": "Both branches reach a testable cause; deeper whys (why only two agents were trained) are not needed for the next decision."
+  },
+  "partition": {
+    "criterion": "Where the delay arises: when tickets arrive (time coverage) versus who can answer them (skill coverage).",
+    "overlaps": "A Friday-evening ticket is affected by both: no trained agent works then.",
+    "omitted": "Tool latency and ticket tagging errors are not covered by the supplied evidence.",
+    "interaction_assessment": "The branches interact: adding trained agents only helps off-hours tickets if they also cover those hours, so the arrival-time split decides which lever to pilot first."
+  },
+  "scqa": {
+    "situation_ids": [
+      "s-share",
+      "s-constraint"
+    ],
+    "complication_ids": [
+      "s-symptom",
+      "s-reopen"
+    ],
+    "question": "Which coverage change can bring billing first response near other tickets without new headcount?",
+    "provisional_answer": {
+      "text": "Pilot the lever the arrival-time split favors; candidate only until measured.",
+      "status": "candidate"
+    }
+  },
+  "issue_map": {
+    "criterion": "Source of the waiting time",
+    "branches": [
+      {
+        "id": "b-time",
+        "label": "Time coverage gap",
+        "node_ids": [
+          "n-coverage",
+          "n-friday"
+        ],
+        "actionable": true,
+        "priority": 1
+      },
+      {
+        "id": "b-skill",
+        "label": "Skill coverage gap",
+        "node_ids": [
+          "n-skill",
+          "n-staff"
+        ],
+        "actionable": true,
+        "priority": 2
+      }
+    ],
+    "overlaps": "Off-hours tickets sit in both branches.",
+    "omitted": "Tooling and tagging quality."
+  },
+  "causal_map": {
+    "outcome": {
+      "metric": "Billing median first response",
+      "definition": "Median hours from ticket creation to first agent reply, billing-tagged tickets.",
+      "baseline_statement_id": "s-symptom",
+      "window_days": 28
+    },
+    "leading_problems": [
+      {
+        "id": "lp-offhours",
+        "text": "Billing tickets arrive when no trained agent works",
+        "statement_ids": [
+          "s-friday"
+        ]
+      },
+      {
+        "id": "lp-skill",
+        "text": "Only two agents can answer billing",
+        "statement_ids": [
+          "s-staff"
+        ]
+      }
+    ],
+    "opportunities": [
+      {
+        "id": "op-rota",
+        "text": "Off-hours billing rota",
+        "addresses": [
+          "lp-offhours"
+        ]
+      },
+      {
+        "id": "op-train",
+        "text": "Cross-training with macros",
+        "addresses": [
+          "lp-skill"
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "from": "lp-offhours",
+        "to": "outcome",
+        "label": "causal-hypothesis",
+        "statement_ids": [
+          "s-h-coverage"
+        ],
+        "falsification": "Arrival-time split shows no material wait difference."
+      },
+      {
+        "from": "lp-skill",
+        "to": "outcome",
+        "label": "causal-hypothesis",
+        "statement_ids": [
+          "s-h-skill"
+        ],
+        "falsification": "Reassignment of billing tickets by other agents is rare."
+      }
+    ]
+  },
+  "hypothesis": {
+    "population": "Billing-tagged support tickets",
+    "behavior_or_outcome": "Median first response",
+    "threshold": {
+      "comparator": "<=",
+      "value": 12,
+      "unit": "hours"
+    },
+    "window_days": 28,
+    "intervention": "Friday-afternoon and evening billing rota from existing agents",
+    "rationale": "Off-hours arrivals wait until Monday when no trained agent works.",
+    "measurement": "Ticket export median first response, billing tag, before and after the pilot",
+    "counter_metric": "Median first response for non-billing tickets must not rise above 12 hours",
+    "failure_rule": "If billing median stays above 18 hours after 28 days, stop the rota and pilot cross-training."
+  },
+  "one_page_prd": {
+    "status": "draft",
+    "problem": "Billing questions wait far longer for a first reply than other tickets.",
+    "users": "Customers with billing questions; support agents",
+    "objective": "Bring billing first response close to other tickets without new headcount.",
+    "scope": [
+      "Off-hours billing rota pilot for 28 days",
+      "Arrival-time split of current tickets"
+    ],
+    "non_goals": [
+      "Hiring",
+      "Changing billing policy or refunds",
+      "Automated replies to customers"
+    ],
+    "constraints": [
+      "No new headcount before 2027-01-01",
+      "Q4 tooling budget 3000 USD"
+    ],
+    "acceptance_tests": [
+      "Billing median first response <= 12 hours over 28 days in the ticket export",
+      "Non-billing median first response stays <= 12 hours"
+    ],
+    "risks": [
+      "Rota fatigue among agents",
+      "Seasonal billing volume changes confound the comparison"
+    ],
+    "unknown_ids": [
+      "s-u-csat",
+      "s-u-churn"
+    ],
+    "owner_role": "support lead",
+    "next_decision": "After 28 days: keep the rota, switch to cross-training, or combine."
+  },
+  "stage_log": [
+    {
+      "stage": "scqa",
+      "status": "done"
+    },
+    {
+      "stage": "why-tree",
+      "status": "done"
+    },
+    {
+      "stage": "issue-map",
+      "status": "done"
+    },
+    {
+      "stage": "causal-map",
+      "status": "done"
+    },
+    {
+      "stage": "hypothesis",
+      "status": "done"
+    },
+    {
+      "stage": "one-page-prd",
+      "status": "done"
+    }
+  ]
+}

@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "artifact_id": "pack-support-prd",
+      "kind": "evidence-index",
+      "company_id": "example-b",
+      "project_id": "example-ops",
+      "task_id": "t-support-prd",
+      "content_digest": "d43fd3d9b878ec6dcd20ef47aae5c1622d8d1ae3f40e4577ec549f1811148d9c",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "evidence-pack.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-support-billing.problem-brief",
+      "kind": "problem-brief",
+      "company_id": "example-b",
+      "project_id": "example-ops",
+      "task_id": "t-support-billing",
+      "content_digest": "eaa6399487f22ca447c55cfa6869ab2516f288c75d1d43e54406754b598fb818",
+      "produced_by": {
+        "capability_id": "kit.problem-definition",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-support-billing-backlog",
+        "implementation_digest": "50bc8289a203f7b93f389bd9c3e2cbdc102605710b8b31205453cc39c4b6062a"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-1-problem-brief.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-support-billing",
+          "digest": "d42720d8320764f4e94198ab75d86e4beae1d99cbdf55e78960f113713fed14e"
+        }
+      ],
+      "review_status": "accepted",
+      "accepted_by_ref": "review:synthetic-fixture-acceptance"
+    },
+    {
+      "artifact_id": "pack-support-billing",
+      "kind": "evidence-index",
+      "company_id": "example-b",
+      "project_id": "example-ops",
+      "task_id": "t-support-billing",
+      "content_digest": "d42720d8320764f4e94198ab75d86e4beae1d99cbdf55e78960f113713fed14e",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-2-evidence-index.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-support-prd.lean-prd",
+      "kind": "lean-prd",
+      "company_id": "example-b",
+      "project_id": "example-ops",
+      "task_id": "t-support-prd",
+      "content_digest": "50ac43f3b048df16166030bbfeda35e601dcb38a6beaf070f581cc76d137b3f9",
+      "produced_by": {
+        "capability_id": "pm.lean-prd",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-support-billing-prd",
+        "implementation_digest": "ae87d9ab0ebe85192bd4d59ac82f11f44449c7e918fe49bdfb8ca1382025cb36",
+        "source_digest": "7751407cf54c050b6ef4752d376d1531e1f2a516c8df0a5328a774e91e2fc2c7"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "lean-prd.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-support-prd",
+          "digest": "d43fd3d9b878ec6dcd20ef47aae5c1622d8d1ae3f40e4577ec549f1811148d9c"
+        },
+        {
+          "artifact_id": "t-support-billing.problem-brief",
+          "digest": "eaa6399487f22ca447c55cfa6869ab2516f288c75d1d43e54406754b598fb818"
+        }
+      ],
+      "review_status": "accepted",
+      "accepted_by_ref": "review:synthetic-fixture-acceptance"
+    },
+    {
+      "artifact_id": "t-support-prd.acceptance-map",
+      "kind": "acceptance-map",
+      "company_id": "example-b",
+      "project_id": "example-ops",
+      "task_id": "t-support-prd",
+      "content_digest": "feea80070418d7fc1027383ef2cef39f662dd6d3814fce38595856b81f17a047",
+      "produced_by": {
+        "capability_id": "pm.lean-prd",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-support-billing-prd",
+        "implementation_digest": "ae87d9ab0ebe85192bd4d59ac82f11f44449c7e918fe49bdfb8ca1382025cb36",
+        "source_digest": "7751407cf54c050b6ef4752d376d1531e1f2a516c8df0a5328a774e91e2fc2c7"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "acceptance-map.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-support-prd",
+          "digest": "d43fd3d9b878ec6dcd20ef47aae5c1622d8d1ae3f40e4577ec549f1811148d9c"
+        },
+        {
+          "artifact_id": "t-support-billing.problem-brief",
+          "digest": "eaa6399487f22ca447c55cfa6869ab2516f288c75d1d43e54406754b598fb818"
+        }
+      ],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-support-prd.implementation-handoff",
+      "kind": "implementation-handoff",
+      "company_id": "example-b",
+      "project_id": "example-ops",
+      "task_id": "t-support-prd",
+      "content_digest": "88ddd6629af84358df38583e3cbe9bae4aa655946b600b360362ee0c42b83c40",
+      "produced_by": {
+        "capability_id": "pm.lean-prd",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-support-billing-prd",
+        "implementation_digest": "ae87d9ab0ebe85192bd4d59ac82f11f44449c7e918fe49bdfb8ca1382025cb36",
+        "source_digest": "7751407cf54c050b6ef4752d376d1531e1f2a516c8df0a5328a774e91e2fc2c7"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "implementation-handoff.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-support-prd",
+          "digest": "d43fd3d9b878ec6dcd20ef47aae5c1622d8d1ae3f40e4577ec549f1811148d9c"
+        },
+        {
+          "artifact_id": "t-support-billing.problem-brief",
+          "digest": "eaa6399487f22ca447c55cfa6869ab2516f288c75d1d43e54406754b598fb818"
+        }
+      ],
+      "review_status": "draft"
+    }
+  ]
+}

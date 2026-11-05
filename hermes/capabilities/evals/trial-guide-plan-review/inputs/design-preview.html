@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="description" content="Draft design preview for First-step guide">
+<link rel="icon" href="data:,">
+<title>First-step guide: design preview (draft)</title>
+<style>
+:root { color-scheme: light; --color-bg: #f7f7f4; --color-surface: #ffffff; --color-text: #1f2a37; --color-text-muted: #4b5563; --color-accent: #0f766e; --color-on-accent: #ffffff; --color-border: #7c8594; --color-focus: #b45309; --color-success: #15803d; --color-warning: #a16207; --color-danger: #b91c1c; --color-info: #1d4ed8; --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 24px; --space-6: 32px; --space-7: 48px; --radius-s: 2px; --radius-m: 4px; --radius-l: 8px; --font-display: "Source Sans 3", sans-serif; --font-body: "Source Sans 3", sans-serif; --font-label: "Source Sans 3", sans-serif; --font-mono: "JetBrains Mono", monospace; --fs-0: 16px; --fs-1: 20px; --fs-2: 25px; --fs-3: 31px; --fs-4: 39px; --fs-5: 49px; --dur-short: 120ms; --dur-long: 240ms; --ease-enter: cubic-bezier(0.16, 1, 0.3, 1); --ease-move: cubic-bezier(0.65, 0, 0.35, 1); --measure: 66ch; --maxw: 1120px; --lh: 1.5; }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); font-size: var(--fs-0); line-height: var(--lh); }
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 var(--space-3); }
+.skip-link { position: absolute; left: var(--space-2); top: -200px; z-index: 2; padding: var(--space-2); background: var(--color-surface); color: var(--color-text); }
+.skip-link:focus { position: static; display: inline-block; margin: var(--space-2); }
+:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+::selection { background: var(--color-accent); color: var(--color-on-accent); }
+h1, h2, h3, h4, h5 { font-family: var(--font-display); line-height: 1.2; margin: 0 0 var(--space-2); }
+h1 { font-size: clamp(var(--fs-4), 6vw + 1rem, var(--fs-5)); overflow-wrap: break-word; } h2 { font-size: clamp(var(--fs-3), 5vw + 0.5rem, var(--fs-4)); overflow-wrap: break-word; } h3 { font-size: var(--fs-3); } h4 { font-size: var(--fs-2); } h5 { font-size: var(--fs-1); }
+p, li { max-width: var(--measure); } section { margin: var(--space-6) 0; }
+a { color: var(--color-accent); text-underline-offset: 3px; }
+.site-header, .site-footer { background: var(--color-surface); color: var(--color-text); border-color: var(--color-border); border-style: solid; border-width: 0; padding: var(--space-2) 0; }
+.site-header { border-bottom-width: 1px; } .site-footer { border-top-width: 1px; margin-top: var(--space-6); }
+.product { font-family: var(--font-display); font-weight: 700; margin: 0; }
+nav ul { display: flex; flex-wrap: wrap; gap: var(--space-1); list-style: none; margin: 0; padding: 0; }
+nav a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--space-2); }
+.banner { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-m); padding: var(--space-2) var(--space-3); }
+.state-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+.state { background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-l); padding: var(--space-3); min-width: 0; }
+.state-label { font-family: var(--font-mono); font-size: var(--fs-0); color: var(--color-text-muted); margin: 0 0 var(--space-1); }
+.field { display: flex; flex-direction: column; gap: var(--space-1); margin: var(--space-2) 0; }
+label { font-weight: 600; font-family: var(--font-label); }
+input { min-height: 44px; padding: 0 var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-s); background: var(--color-bg); color: var(--color-text); font: inherit; max-width: 100%; }
+input[aria-invalid="true"] { border: 2px solid var(--color-danger); }
+.hint { color: var(--color-text-muted); margin: 0; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+.btn { min-height: 44px; min-width: 44px; padding: 0 var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-s); background: var(--color-surface); color: var(--color-text); font: inherit; font-weight: 600; cursor: pointer; transition: background-color var(--dur-short) var(--ease-move); }
+.btn:hover { text-decoration: underline; }
+.btn-primary { background: var(--color-accent); color: var(--color-on-accent); border-color: var(--color-accent); }
+.msg { padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-s); margin: var(--space-2) 0; }
+.msg-error { color: var(--color-danger); background: var(--color-bg); border-color: var(--color-danger); }
+.msg-success { color: var(--color-success); background: var(--color-bg); border-color: var(--color-success); }
+.msg-warning { color: var(--color-warning); background: var(--color-bg); border-color: var(--color-warning); }
+.msg-info { color: var(--color-info); background: var(--color-bg); border-color: var(--color-info); }
+.msg-neutral { color: var(--color-text); background: var(--color-bg); }
+.skeleton { display: block; height: var(--space-3); margin: var(--space-2) 0; border-radius: var(--radius-s); background: var(--color-border); opacity: 0.45; }
+.skeleton.short { width: 60%; }
+.metrics { display: flex; flex-wrap: wrap; gap: var(--space-3); } .metric { display: flex; flex-direction: column; min-width: 0; }
+.metric-value { font-family: var(--font-mono); font-size: var(--fs-3); font-variant-numeric: tabular-nums; }
+.src { color: var(--color-text-muted); font-size: var(--fs-0); }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+caption { text-align: left; color: var(--color-text-muted); padding-bottom: var(--space-1); }
+th, td { text-align: left; padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--color-border); }
+.mono { font-family: var(--font-mono); }
+.panel { border: 1px solid var(--color-border); border-radius: var(--radius-m); padding: var(--space-3); margin: var(--space-3) 0; }
+.swatch { display: inline-block; width: var(--space-5); height: var(--space-4); border: 1px solid var(--color-border); vertical-align: middle; }
+.spec { margin: var(--space-2) 0; }
+.bar { display: block; height: var(--space-2); background: var(--color-accent); margin: var(--space-1) 0; }
+.theme-light { --color-bg: #f7f7f4; --color-surface: #ffffff; --color-text: #1f2a37; --color-text-muted: #4b5563; --color-accent: #0f766e; --color-on-accent: #ffffff; --color-border: #7c8594; --color-focus: #b45309; --color-success: #15803d; --color-warning: #a16207; --color-danger: #b91c1c; --color-info: #1d4ed8; background: var(--color-bg); color: var(--color-text); }
+.sw-light-bg { background: #f7f7f4; }
+.sw-light-surface { background: #ffffff; }
+.sw-light-text { background: #1f2a37; }
+.sw-light-text-muted { background: #4b5563; }
+.sw-light-accent { background: #0f766e; }
+.sw-light-on-accent { background: #ffffff; }
+.sw-light-border { background: #7c8594; }
+.sw-light-focus { background: #b45309; }
+.sw-light-success { background: #15803d; }
+.sw-light-warning { background: #a16207; }
+.sw-light-danger { background: #b91c1c; }
+.sw-light-info { background: #1d4ed8; }
+.sp-1 { width: 4px; }
+.sp-2 { width: 8px; }
+.sp-3 { width: 12px; }
+.sp-4 { width: 16px; }
+.sp-5 { width: 24px; }
+.sp-6 { width: 32px; }
+.sp-7 { width: 48px; }
+.spec-display { font-family: var(--font-display); }
+.spec-body { font-family: var(--font-body); }
+.spec-label { font-family: var(--font-label); }
+.spec-mono { font-family: var(--font-mono); }
+@media (min-width: 768px) {
+  .state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 1024px) {
+  .state-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header"><div class="wrap">
+<p class="product">First-step guide</p>
+<nav aria-label="Preview sections"><ul>
+<li><a href="#journey">Journey</a></li><li><a href="#screens">Screens and states</a></li><li><a href="#tokens">Tokens</a></li><li><a href="#responsive">Responsive</a></li><li><a href="#accessibility">Accessibility</a></li>
+</ul></nav>
+</div></header>
+<main id="main" class="wrap" tabindex="-1">
+<h1>First-step guide: design preview</h1>
+<p class="banner" role="note">Draft. SYNTHETIC fixture content, not real research or customer data. Built from a coordinator-authored analysis by scripts/capability_workflow.py, which adds no facts. Not checked in a browser, with assistive technology or with users; faces render only if installed locally (no web fonts are loaded).</p>
+<section id="journey" aria-labelledby="journey-h"><h2 id="journey-h">User journey</h2>
+<ol class="journey">
+<li id="journey-j-name"><strong>Create a first project</strong> on <a href="#screen-guide">Setup guide, step 1</a>: Types a project name and selects Create project. Success: The project appears in the workspace and the guide moves to step 2. If it fails: <a href="#screen-guide-error">error state</a>.</li>
+<li id="journey-j-skip"><strong>Leave the guide for later</strong> on <a href="#screen-guide">Setup guide, step 1</a>: Selects Skip the guide. Success: The guide closes and the empty workspace stays usable. If it fails: <a href="#screen-guide-error">error state</a>.</li>
+<li id="journey-j-reopen"><strong>Pick the guide up again</strong> on <a href="#screen-help">Help menu</a>: Opens Help and selects Reopen the setup guide. Success: The guide opens at the step the user left. If it fails: <a href="#screen-help-empty">empty state</a>.</li>
+</ol>
+</section>
+<section id="screens" aria-labelledby="screens-h"><h2 id="screens-h">Screens and states</h2>
+<section class="screen" id="screen-guide" aria-labelledby="screen-guide-h">
+<h3 id="screen-guide-h">Setup guide, step 1</h3>
+<p>Name and create a first project from the guide panel at first login.</p>
+<div class="state-grid">
+<article class="state" id="screen-guide-default" data-state="default" aria-labelledby="screen-guide-default-h">
+<p class="state-label">State: Default</p>
+<h4 id="screen-guide-default-h">Setup guide, step 1: default</h4>
+<h5>Step 1 of 3: name your first project</h5>
+<p>Your workspace is empty. Give the project a name you will recognise; you can rename it later.</p>
+<div class="field"><label for="f-guide-default-2">Project name</label>
+<input id="f-guide-default-2" name="f-guide-default-2" type="text" aria-describedby="h-guide-default-2">
+<p class="hint" id="h-guide-default-2">Up to 60 characters.</p>
+</div>
+<div class="actions">
+<button type="button" class="btn btn-primary">Create project</button>
+<button type="button" class="btn">Skip the guide</button>
+</div>
+</article>
+<article class="state" id="screen-guide-empty" data-state="empty" aria-labelledby="screen-guide-empty-h">
+<p class="state-label">State: Empty</p>
+<h4 id="screen-guide-empty-h">Setup guide, step 1: empty</h4>
+<h5>Step 1 of 3: name your first project</h5>
+<p class="msg msg-neutral" id="m-guide-empty"><strong>Nothing here yet:</strong> No project yet. The guide creates your first one in three steps.</p>
+<div class="actions"><button type="button" class="btn btn-primary">Start step 1</button></div>
+</article>
+<article class="state" id="screen-guide-loading" data-state="loading" aria-labelledby="screen-guide-loading-h">
+<p class="state-label">State: Loading</p>
+<h4 id="screen-guide-loading-h">Setup guide, step 1: loading</h4>
+<h5>Step 1 of 3: name your first project</h5>
+<span class="skeleton" aria-hidden="true"></span>
+<span class="skeleton short" aria-hidden="true"></span>
+<p class="msg msg-neutral" role="status" id="m-guide-loading">Loading your workspace.</p>
+</article>
+<article class="state" id="screen-guide-error" data-state="error" aria-labelledby="screen-guide-error-h">
+<p class="state-label">State: Error</p>
+<h4 id="screen-guide-error-h">Setup guide, step 1: error</h4>
+<h5>Step 1 of 3: name your first project</h5>
+<div class="field"><label for="f-guide-error-1">Project name</label>
+<input id="f-guide-error-1" name="f-guide-error-1" type="text" aria-describedby="m-guide-error h-guide-error-1" aria-invalid="true">
+<p class="hint" id="h-guide-error-1">Up to 60 characters.</p>
+</div>
+<p class="msg msg-error" role="alert" id="m-guide-error"><strong>Error:</strong> The project was not created: that name is already used in this workspace. Choose another name and try again.</p>
+<div class="actions"><button type="button" class="btn btn-primary">Edit the name</button></div>
+</article>
+<article class="state" id="screen-guide-success" data-state="success" aria-labelledby="screen-guide-success-h">
+<p class="state-label">State: Success</p>
+<h4 id="screen-guide-success-h">Setup guide, step 1: success</h4>
+<h5>Step 1 of 3: name your first project</h5>
+<p class="msg msg-success" role="status" id="m-guide-success"><strong>Done:</strong> Project created. Next: add a first task.</p>
+
+</article>
+</div>
+</section>
+<section class="screen" id="screen-help" aria-labelledby="screen-help-h">
+<h3 id="screen-help-h">Help menu</h3>
+<p>Reopen a dismissed guide at the step the user left.</p>
+<div class="state-grid">
+<article class="state" id="screen-help-default" data-state="default" aria-labelledby="screen-help-default-h">
+<p class="state-label">State: Default</p>
+<h4 id="screen-help-default-h">Help menu: default</h4>
+<h5>Help</h5>
+<p>Reopen the setup guide at the step you left, or browse help topics.</p>
+<div class="actions">
+<button type="button" class="btn btn-primary">Reopen the setup guide</button>
+<button type="button" class="btn">Browse help topics</button>
+</div>
+</article>
+<article class="state" id="screen-help-empty" data-state="empty" aria-labelledby="screen-help-empty-h">
+<p class="state-label">State: Empty</p>
+<h4 id="screen-help-empty-h">Help menu: empty</h4>
+<h5>Help</h5>
+<p class="msg msg-neutral" id="m-help-empty"><strong>Nothing here yet:</strong> You have not dismissed the guide, so there is nothing to reopen.</p>
+<div class="actions"><button type="button" class="btn btn-primary">Browse help topics</button></div>
+</article>
+<article class="state" id="screen-help-loading" data-state="loading" aria-labelledby="screen-help-loading-h">
+<p class="state-label">State: Loading</p>
+<h4 id="screen-help-loading-h">Help menu: loading</h4>
+<h5>Help</h5>
+<span class="skeleton" aria-hidden="true"></span>
+<span class="skeleton short" aria-hidden="true"></span>
+<p class="msg msg-neutral" role="status" id="m-help-loading">Loading help topics.</p>
+</article>
+<article class="state" id="screen-help-error" data-state="error" aria-labelledby="screen-help-error-h">
+<p class="state-label">State: Error</p>
+<h4 id="screen-help-error-h">Help menu: error</h4>
+<h5>Help</h5>
+<p class="msg msg-error" role="alert" id="m-help-error"><strong>Error:</strong> Help topics did not load. Check your connection, then reload the page.</p>
+<div class="actions"><button type="button" class="btn btn-primary">Reload help</button></div>
+</article>
+</div>
+</section>
+</section>
+<section id="tokens" aria-labelledby="tokens-h"><h2 id="tokens-h">Tokens</h2>
+<div class="panel theme-light">
+<h3>Light palette</h3>
+<div class="table-wrap"><table><caption>Semantic colour tokens</caption><thead><tr><th scope="col">Token</th><th scope="col">Value</th><th scope="col">Swatch</th></tr></thead><tbody>
+<tr><td class="mono">--color-bg</td><td class="mono">#f7f7f4</td><td><span class="swatch sw-light-bg" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-surface</td><td class="mono">#ffffff</td><td><span class="swatch sw-light-surface" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-text</td><td class="mono">#1f2a37</td><td><span class="swatch sw-light-text" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-text-muted</td><td class="mono">#4b5563</td><td><span class="swatch sw-light-text-muted" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-accent</td><td class="mono">#0f766e</td><td><span class="swatch sw-light-accent" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-on-accent</td><td class="mono">#ffffff</td><td><span class="swatch sw-light-on-accent" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-border</td><td class="mono">#7c8594</td><td><span class="swatch sw-light-border" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-focus</td><td class="mono">#b45309</td><td><span class="swatch sw-light-focus" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-success</td><td class="mono">#15803d</td><td><span class="swatch sw-light-success" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-warning</td><td class="mono">#a16207</td><td><span class="swatch sw-light-warning" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-danger</td><td class="mono">#b91c1c</td><td><span class="swatch sw-light-danger" aria-hidden="true"></span></td></tr>
+<tr><td class="mono">--color-info</td><td class="mono">#1d4ed8</td><td><span class="swatch sw-light-info" aria-hidden="true"></span></td></tr>
+</tbody></table></div>
+<div class="table-wrap"><table><caption>Contrast (computed from the tokens)</caption><thead><tr><th scope="col">Pair</th><th scope="col">Ratio</th><th scope="col">Minimum</th><th scope="col">Result</th></tr></thead><tbody>
+<tr><td>text on bg</td><td class="mono">13.54:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>text on surface</td><td class="mono">14.54:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>text-muted on bg</td><td class="mono">7.04:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>text-muted on surface</td><td class="mono">7.56:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>accent on bg</td><td class="mono">5.10:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>accent on surface</td><td class="mono">5.47:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>success on bg</td><td class="mono">4.67:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>success on surface</td><td class="mono">5.02:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>warning on bg</td><td class="mono">4.59:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>warning on surface</td><td class="mono">4.92:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>danger on bg</td><td class="mono">6.03:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>danger on surface</td><td class="mono">6.47:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>info on bg</td><td class="mono">6.24:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>info on surface</td><td class="mono">6.70:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>on-accent on accent</td><td class="mono">5.47:1</td><td class="mono">4.5:1</td><td>pass</td></tr>
+<tr><td>border on bg</td><td class="mono">3.47:1</td><td class="mono">3:1</td><td>pass</td></tr>
+<tr><td>border on surface</td><td class="mono">3.72:1</td><td class="mono">3:1</td><td>pass</td></tr>
+<tr><td>focus on bg</td><td class="mono">4.68:1</td><td class="mono">3:1</td><td>pass</td></tr>
+<tr><td>focus on surface</td><td class="mono">5.02:1</td><td class="mono">3:1</td><td>pass</td></tr>
+</tbody></table></div>
+</div>
+<h3>Type</h3>
+<p class="spec spec-display">First-step guide: display in Source Sans 3 (sans-serif fallback), weights 600, 700; verified.</p>
+<p class="spec spec-body">First-step guide: body in Source Sans 3 (sans-serif fallback), weights 400, 600; verified.</p>
+<p class="spec spec-mono">First-step guide: mono in JetBrains Mono (monospace fallback), weights 400; verified.</p>
+<p>Scale (px): 16, 20, 25, 31, 39, 49; body line height 1.5; measure 66 characters.</p>
+<h3>Spacing and radius</h3>
+<ul>
+<li><span class="mono">--space-1: 4px</span><span class="bar sp-1" aria-hidden="true"></span></li>
+<li><span class="mono">--space-2: 8px</span><span class="bar sp-2" aria-hidden="true"></span></li>
+<li><span class="mono">--space-3: 12px</span><span class="bar sp-3" aria-hidden="true"></span></li>
+<li><span class="mono">--space-4: 16px</span><span class="bar sp-4" aria-hidden="true"></span></li>
+<li><span class="mono">--space-5: 24px</span><span class="bar sp-5" aria-hidden="true"></span></li>
+<li><span class="mono">--space-6: 32px</span><span class="bar sp-6" aria-hidden="true"></span></li>
+<li><span class="mono">--space-7: 48px</span><span class="bar sp-7" aria-hidden="true"></span></li>
+</ul>
+<p>Radius small 2px, medium 4px, large 8px. Motion 120ms / 240ms, enter cubic-bezier(0.16, 1, 0.3, 1), move cubic-bezier(0.65, 0, 0.35, 1); removed when reduced motion is requested.</p>
+</section>
+<section id="responsive" aria-labelledby="responsive-h"><h2 id="responsive-h">Responsive behaviour</h2>
+<div class="table-wrap"><table><caption>Breakpoints (mobile first)</caption><thead><tr><th scope="col">Name</th><th scope="col">From</th><th scope="col">Columns</th><th scope="col">Navigation</th><th scope="col">Notes</th></tr></thead><tbody>
+<tr><td>mobile</td><td class="mono">0px</td><td>1</td><td>collapsible-menu</td><td>The guide becomes a full-width sheet above the workspace; actions stack, primary first.</td></tr>
+<tr><td>tablet</td><td class="mono">768px</td><td>2</td><td>top-bar</td><td>The guide docks beside the workspace.</td></tr>
+<tr><td>desktop</td><td class="mono">1024px</td><td>2</td><td>sidebar</td><td>The guide keeps a fixed column; the workspace takes the rest.</td></tr>
+</tbody></table></div>
+<p>Content width is capped at 1120px.</p>
+</section>
+<section id="accessibility" aria-labelledby="accessibility-h"><h2 id="accessibility-h">Accessibility requirements</h2>
+<ul>
+<li><strong>contrast</strong> (static): Text and status colours meet 4.5:1 on background and surface; borders and the focus ring meet 3:1.</li>
+<li><strong>focus-visible</strong> (static): Every control shows a 3px focus ring in the focus colour; no outline is removed without a replacement.</li>
+<li><strong>keyboard</strong> (browser): The guide can be completed, skipped and reopened with the keyboard alone, in visual order.</li>
+<li><strong>target-size</strong> (browser): Buttons and inputs are at least 44 by 44 CSS pixels.</li>
+<li><strong>reduced-motion</strong> (static): With reduced motion requested, transitions are removed and the final state shows at once.</li>
+<li><strong>landmarks</strong> (static): Header, nav, main and footer landmarks; a skip link is the first focusable element.</li>
+<li><strong>form-errors</strong> (static): The project-name error is tied to the field with aria-invalid and aria-describedby and says how to fix it.</li>
+<li><strong>text-resize</strong> (browser): At 200 percent text size and 320 CSS pixels wide nothing is clipped and no horizontal scroll appears.</li>
+<li><strong>status-messages</strong> (assistive-tech): Loading and success messages are announced politely; errors are announced assertively.</li>
+</ul>
+<h3>Asset rights</h3>
+<ul>
+<li>font Source Sans 3: rights licensed (Company design kit licence (synthetic fixture))</li>
+<li>font JetBrains Mono: rights licensed (Company design kit licence (synthetic fixture))</li>
+</ul>
+</section>
+</main>
+<footer class="site-footer"><div class="wrap"><p>Generated offline by scripts/capability_workflow.py from a coordinator-authored analysis; it adds no facts. Method adapted from gstack design-consultation (MIT, Copyright (c) 2026 Garry Tan) at 622e8b1f76d2.</p></div></footer>
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "project_id": "example-ops",
+  "company_id": "example-b",
+  "manifest_version": "1",
+  "synthetic": true,
+  "repositories": [
+    {
+      "repo_id": "example-ops-repo",
+      "origin": "https://git.example.invalid/example-b/example-ops.git",
+      "checkout_root_ref": "checkout:example-b/example-ops",
+      "protected_branches": [
+        "main"
+      ]
+    }
+  ],
+  "knowledge_collection_ids": [
+    "knowledge:example-b/example-ops"
+  ],
+  "dataset_target_ids": [],
+  "browser_scope_refs": [
+    "browser:example-b-qa"
+  ],
+  "service_account_refs": [],
+  "approved_capability_ids": [
+    "kit.problem-definition",
+    "kit.operational-analysis"
+  ],
+  "environment": "test",
+  "output_root_ref": "output:example-b/example-ops",
+  "required_validation_lanes": [
+    "linux"
+  ],
+  "allowed_inference_routes": [
+    "cloud-subscription"
+  ],
+  "review_owner_refs": [
+    "requester:example-b-operator"
+  ],
+  "approval_owner_refs": [
+    "requester:example-b-operator"
+  ]
+}

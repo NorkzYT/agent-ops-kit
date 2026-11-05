@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "project_id": "example-web",
+  "company_id": "example-a",
+  "manifest_version": "1",
+  "synthetic": true,
+  "repositories": [
+    {
+      "repo_id": "example-web-repo",
+      "origin": "https://git.example.invalid/example-a/example-web.git",
+      "checkout_root_ref": "checkout:example-a/example-web",
+      "protected_branches": [
+        "main"
+      ]
+    }
+  ],
+  "knowledge_collection_ids": [
+    "knowledge:example-a/example-web"
+  ],
+  "dataset_target_ids": [],
+  "browser_scope_refs": [
+    "browser:example-a-qa"
+  ],
+  "service_account_refs": [],
+  "approved_capability_ids": [
+    "kit.problem-definition",
+    "pm.product-discovery",
+    "pm.lean-prd",
+    "pm.competitor-research",
+    "existing.engineering-path"
+  ],
+  "environment": "test",
+  "output_root_ref": "output:example-a/example-web",
+  "required_validation_lanes": [
+    "linux"
+  ],
+  "allowed_inference_routes": [
+    "cloud-subscription"
+  ],
+  "review_owner_refs": [
+    "requester:example-a-operator"
+  ],
+  "approval_owner_refs": [
+    "requester:example-a-operator"
+  ]
+}

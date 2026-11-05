@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "artifact_id": "pack-trial-design",
+      "kind": "evidence-index",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-design",
+      "content_digest": "7935bcb28c35273a529583500f40546c3cb351ca6a961504079c4ca94c0048ed",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "evidence-pack.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-prd.lean-prd",
+      "kind": "lean-prd",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-prd",
+      "content_digest": "c3a8b264d1eb8a7676313440d3d7445f8c18d51579bc7368499e4ee41065a559",
+      "produced_by": {
+        "capability_id": "pm.lean-prd",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-activation-prd",
+        "implementation_digest": "ae87d9ab0ebe85192bd4d59ac82f11f44449c7e918fe49bdfb8ca1382025cb36",
+        "source_digest": "7751407cf54c050b6ef4752d376d1531e1f2a516c8df0a5328a774e91e2fc2c7"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-1-lean-prd.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-prd",
+          "digest": "52da8867b3966e0a755af5860e325e9d133adbdb87947df620ed110e88cac529"
+        },
+        {
+          "artifact_id": "t-trial-discovery.discovery-brief",
+          "digest": "382d3ddb2ac66366be0835903caff45e4df53acbdcf9f3a576fb58ae1828dacf"
+        }
+      ],
+      "review_status": "accepted",
+      "accepted_by_ref": "review:synthetic-fixture-acceptance"
+    },
+    {
+      "artifact_id": "pack-trial-prd",
+      "kind": "evidence-index",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-prd",
+      "content_digest": "52da8867b3966e0a755af5860e325e9d133adbdb87947df620ed110e88cac529",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-2-evidence-index.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-discovery.discovery-brief",
+      "kind": "discovery-brief",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-discovery",
+      "content_digest": "382d3ddb2ac66366be0835903caff45e4df53acbdcf9f3a576fb58ae1828dacf",
+      "produced_by": {
+        "capability_id": "pm.product-discovery",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-activation-discovery",
+        "implementation_digest": "d2203270243438cf8c033cfb320cb308e4fae62db4e3b05d3f19a470d2774acf",
+        "source_digest": "1440e201fe344ca18a25492b9dcaf73b4111133734b014f804b429da6a67d0bc"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-3-discovery-brief.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-discovery",
+          "digest": "611ace1b07f67715fe29ce0f4c0dee11b8dbd65f98622845f9fd1ac95f78e099"
+        },
+        {
+          "artifact_id": "t-trial-activation.problem-brief",
+          "digest": "80a74a81d5930580697fe127384b239a8a7cbb77dd1ccdafc76d7ae64e8ef411"
+        }
+      ],
+      "review_status": "accepted",
+      "accepted_by_ref": "review:synthetic-fixture-acceptance"
+    },
+    {
+      "artifact_id": "pack-trial-discovery",
+      "kind": "evidence-index",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-discovery",
+      "content_digest": "611ace1b07f67715fe29ce0f4c0dee11b8dbd65f98622845f9fd1ac95f78e099",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-4-evidence-index.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-activation.problem-brief",
+      "kind": "problem-brief",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-activation",
+      "content_digest": "80a74a81d5930580697fe127384b239a8a7cbb77dd1ccdafc76d7ae64e8ef411",
+      "produced_by": {
+        "capability_id": "kit.problem-definition",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-activation-causes",
+        "implementation_digest": "50bc8289a203f7b93f389bd9c3e2cbdc102605710b8b31205453cc39c4b6062a"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-5-problem-brief.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-activation",
+          "digest": "23fb5d0389b18c3dc02da0599b4c624deee915646fd97a4b519e8f41328a9be7"
+        }
+      ],
+      "review_status": "accepted",
+      "accepted_by_ref": "review:synthetic-fixture-acceptance"
+    },
+    {
+      "artifact_id": "pack-trial-activation",
+      "kind": "evidence-index",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-activation",
+      "content_digest": "23fb5d0389b18c3dc02da0599b4c624deee915646fd97a4b519e8f41328a9be7",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-6-evidence-index.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-design.design-brief",
+      "kind": "design-brief",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-design",
+      "content_digest": "8e2efa33ca64f6b9e9772030315374312bed870b18b4c8a6fa56349ffd7af3da",
+      "produced_by": {
+        "capability_id": "gstack.design-consultation",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-guide-design",
+        "implementation_digest": "2563536dbe3388c9e79715f673ba04748c4456d41105f5cb70a29f5658504e1f",
+        "source_digest": "4f65d8a516bd1c57995fe21dd1b69bdeb7fdbb689a71a66688cb2dd7ad90ce04"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "design-brief.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-design",
+          "digest": "7935bcb28c35273a529583500f40546c3cb351ca6a961504079c4ca94c0048ed"
+        },
+        {
+          "artifact_id": "t-trial-prd.lean-prd",
+          "digest": "c3a8b264d1eb8a7676313440d3d7445f8c18d51579bc7368499e4ee41065a559"
+        }
+      ],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-design.design-package",
+      "kind": "design-package",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-design",
+      "content_digest": "bdc23f5e43f627ae306d031266e9ea8cb9ca4710f7d203d5196c11bce335438b",
+      "produced_by": {
+        "capability_id": "gstack.design-consultation",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-guide-design",
+        "implementation_digest": "2563536dbe3388c9e79715f673ba04748c4456d41105f5cb70a29f5658504e1f",
+        "source_digest": "4f65d8a516bd1c57995fe21dd1b69bdeb7fdbb689a71a66688cb2dd7ad90ce04"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "design-package.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-design",
+          "digest": "7935bcb28c35273a529583500f40546c3cb351ca6a961504079c4ca94c0048ed"
+        },
+        {
+          "artifact_id": "t-trial-prd.lean-prd",
+          "digest": "c3a8b264d1eb8a7676313440d3d7445f8c18d51579bc7368499e4ee41065a559"
+        }
+      ],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-design.design-tokens",
+      "kind": "design-package",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-design",
+      "content_digest": "58ddaa3c2d2ab5c263227b86e46d56e3edfde7be91839e94da1fbe6e9fa5c935",
+      "produced_by": {
+        "capability_id": "gstack.design-consultation",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-guide-design",
+        "implementation_digest": "2563536dbe3388c9e79715f673ba04748c4456d41105f5cb70a29f5658504e1f",
+        "source_digest": "4f65d8a516bd1c57995fe21dd1b69bdeb7fdbb689a71a66688cb2dd7ad90ce04"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "design-tokens.json",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-design",
+          "digest": "7935bcb28c35273a529583500f40546c3cb351ca6a961504079c4ca94c0048ed"
+        },
+        {
+          "artifact_id": "t-trial-prd.lean-prd",
+          "digest": "c3a8b264d1eb8a7676313440d3d7445f8c18d51579bc7368499e4ee41065a559"
+        }
+      ],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-design.design-preview",
+      "kind": "design-package",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-design",
+      "content_digest": "b701321dfbb4a73443df834bcea208b458664c4aabf653356d75250881e7058b",
+      "produced_by": {
+        "capability_id": "gstack.design-consultation",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-guide-design",
+        "implementation_digest": "2563536dbe3388c9e79715f673ba04748c4456d41105f5cb70a29f5658504e1f",
+        "source_digest": "4f65d8a516bd1c57995fe21dd1b69bdeb7fdbb689a71a66688cb2dd7ad90ce04"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "design-preview.html",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-design",
+          "digest": "7935bcb28c35273a529583500f40546c3cb351ca6a961504079c4ca94c0048ed"
+        },
+        {
+          "artifact_id": "t-trial-prd.lean-prd",
+          "digest": "c3a8b264d1eb8a7676313440d3d7445f8c18d51579bc7368499e4ee41065a559"
+        }
+      ],
+      "review_status": "draft"
+    }
+  ]
+}

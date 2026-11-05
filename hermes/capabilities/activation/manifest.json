@@ -1,0 +1,1282 @@
+{
+  "bundle_digest": "6f34382fed13da7f9cf7505c9c6034a85388a9b5217b5461322f87e8867d88f6",
+  "capability_ids": [
+    "gstack.design-consultation",
+    "gstack.design-review",
+    "gstack.office-hours",
+    "gstack.plan-design-review",
+    "gstack.plan-eng-review",
+    "gstack.qa",
+    "gstack.review",
+    "gstack.spec",
+    "kit.problem-definition",
+    "pm.competitor-research",
+    "pm.lean-prd",
+    "pm.product-discovery"
+  ],
+  "config_impact": "none: no config.yaml, plugin, cron or service change; Hermes lists the new skills in sessions started after the copy; no restart is performed or required by this bundle",
+  "excluded": [
+    "hermes/capabilities/evals (fixtures; tests only)",
+    "scripts/tests",
+    "hermes/plugins/model-router (installs through its existing make specialist-install path)",
+    "raw upstream files of gstack, PM Skills, SoloSquad; any RO-PNA text",
+    "gstack bin/, hooks, setup, preamble, update, telemetry, browser and ship programs",
+    "executable bits, symlinks, startup hooks, config.yaml or plugin enablement changes"
+  ],
+  "files": [
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/LICENSE",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "size": 35149,
+      "source": "LICENSE"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/registry.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "61baaa9c195d17334c5e0b9d35abfe78f8073070fede160317b46a5b603c35b1",
+      "size": 82863,
+      "source": "hermes/capabilities/registry.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/routing-catalog.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "60380f1de68140252fd67ba75e861ce25ccaeaebdcc40930b5d592ad313fb7c7",
+      "size": 6502,
+      "source": "hermes/capabilities/routing-catalog.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/routing-recipes.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "0bd461f344a57ca1c3cf3387d86f6eb81084e1e12f905fcf3a5c232b95951042",
+      "size": 2974,
+      "source": "hermes/capabilities/routing-recipes.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/activation-manifest.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "5e130ad459c46e8100706928cbedc8939e9dd86fd7e88a55e7aa70d281648fb3",
+      "size": 4033,
+      "source": "hermes/capabilities/schemas/activation-manifest.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/artifact.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "2f041bfadfc5f71ca149ca76092035b7e2b3a9a2dac2bb5a8268e0064a110efc",
+      "size": 6221,
+      "source": "hermes/capabilities/schemas/artifact.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/capability-result.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "9a4f304e0f5913d80215aa2fa628e02cd920eda03bb0b084e59b0e263de3a6d4",
+      "size": 11410,
+      "source": "hermes/capabilities/schemas/capability-result.schema.json"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation",
+        "gstack.design-review",
+        "gstack.office-hours",
+        "gstack.plan-design-review",
+        "gstack.plan-eng-review",
+        "gstack.qa",
+        "gstack.review",
+        "gstack.spec",
+        "kit.problem-definition",
+        "pm.competitor-research",
+        "pm.lean-prd",
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/evidence-pack.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "1665a93fb1691737e0f57d8132decb1c80cf013b73769257b249388506fc0fbc",
+      "size": 6228,
+      "source": "hermes/capabilities/schemas/evidence-pack.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/evidence.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "dc8eb90519377ae792b23eec0d48e563039cda08238d929a530859ddca50b9fe",
+      "size": 5098,
+      "source": "hermes/capabilities/schemas/evidence.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/plan.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "8bd8335f1929f82540600d6e97645bf0aa941f64c0b8c8e4fca4a80357ada4a0",
+      "size": 7021,
+      "source": "hermes/capabilities/schemas/plan.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/registry.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "aabc1626529250f2554e70982938193ee309d82fcee4c045da8754c60961d572",
+      "size": 11877,
+      "source": "hermes/capabilities/schemas/registry.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/routing-recipes.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "bb7ff72b2ec05bb1aa725a5fced5abfb0379137e84fd1f84b078b46b014656a2",
+      "size": 1631,
+      "source": "hermes/capabilities/schemas/routing-recipes.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/selection.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "2c52bb2d848c3f767a8315a666689ec6439767a2f467dd70d025144c80782431",
+      "size": 3385,
+      "source": "hermes/capabilities/schemas/selection.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/task-envelope.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "f0d8b353721241526a11338c3cbb9d77d8756f3a4ed61bd47c6fed86b2a8e1a5",
+      "size": 4893,
+      "source": "hermes/capabilities/schemas/task-envelope.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/upstreams-lock.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "f311cb6d345dfa9af1b26a4f087a61052d2aeb3de45ce84a6898e8ea7f653496",
+      "size": 3710,
+      "source": "hermes/capabilities/schemas/upstreams-lock.schema.json"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation",
+        "gstack.design-review",
+        "gstack.office-hours",
+        "gstack.plan-design-review",
+        "gstack.plan-eng-review",
+        "gstack.qa",
+        "gstack.review",
+        "gstack.spec",
+        "kit.problem-definition",
+        "pm.competitor-research",
+        "pm.lean-prd",
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/schemas/workflow-outputs.schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "2d14e0c1eeec1df44654825c982ec9cdbc44552387515633b880b862493f9349",
+      "size": 181790,
+      "source": "hermes/capabilities/schemas/workflow-outputs.schema.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/capabilities/upstreams.lock.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "70b265bca3224d9e75690697ac12a3614d4a2adf5b4a2291c55c5787e982244c",
+      "size": 25136,
+      "source": "hermes/capabilities/upstreams.lock.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/companies/examples/example-a.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "5cea5c9b04bd6618f938a51afd8a1aaac88312dbfe3466f8f0baf499f5c6deea",
+      "size": 2827,
+      "source": "hermes/companies/examples/example-a.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/companies/examples/example-b.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "e7d997c3d4303a8a23979b5852341397816872f3730d3b44e3e6bdd746e320aa",
+      "size": 2827,
+      "source": "hermes/companies/examples/example-b.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/companies/schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "e002618c1960fdeeead1c9eb890302b5e2362d85b9bc7fd6ef05c8f9723bd828",
+      "size": 4558,
+      "source": "hermes/companies/schema.json"
+    },
+    {
+      "capability_ids": [
+        "existing.marketing-team"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/profiles/marketing/SOUL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "9358f4e1bc4abf79c1b80995be6ac9e1ec943778d06465e19e69879c27377b41",
+      "size": 3409,
+      "source": "hermes/profiles/marketing/SOUL.md"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/projects/examples/example-ops.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "8fd85c6984622f170e72677b30f6ad0420cf063d8d1595b32da76f81c85247ee",
+      "size": 1005,
+      "source": "hermes/projects/examples/example-ops.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/projects/examples/example-web.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "aee2e688e5d004ec078cd1d9817cd3f9cc3bc1183afbeeaeef7f6d9ee10d5322",
+      "size": 1083,
+      "source": "hermes/projects/examples/example-web.json"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/hermes/projects/schema.json",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "106129707088ae48d6b508f9d8b0f200da24cb3eb6de05f9ead262e04a006d67",
+      "size": 4514,
+      "source": "hermes/projects/schema.json"
+    },
+    {
+      "capability_ids": [
+        "existing.engineering-path"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/autonomous-engineering/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "9931c662401a297d4a9f9a7fc012a84bdadb89370d097f22c701ef43c7693678",
+      "size": 3446,
+      "source": "hermes/skills/autonomous-engineering/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-design-consultation/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "00e957305a6b1fd1ba6cdca3c4a85b99f9b946744bfdb1c689f1fa9d624a385e",
+      "size": 6639,
+      "source": "hermes/skills/gstack-design-consultation/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-design-consultation/references/gstack-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "946b63445b2fe2a7f7d5e6f4b796e47cb772c78db9b493c10cc24cf55a705081",
+      "size": 1590,
+      "source": "hermes/skills/gstack-design-consultation/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-design-consultation/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "48fdd00804398def825282fd52e00cf34307645b0162aefa197a99f879a32519",
+      "size": 1717,
+      "source": "hermes/skills/gstack-design-consultation/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-design-review/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "8c0b937643ee07b9adfe2d340c8bfcdcc2bcfe82c2dd3a2386a14ce755114064",
+      "size": 5558,
+      "source": "hermes/skills/gstack-design-review/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-design-review/references/gstack-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "71ed95ac517fb44628a9869de9cf01d96056b26c17a09e2d84e15d51176512f3",
+      "size": 1569,
+      "source": "hermes/skills/gstack-design-review/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-design-review/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "eb2af8262f6bd617763fb3a38829d528dc646d360f6e02058e1b8db2f43640ec",
+      "size": 1804,
+      "source": "hermes/skills/gstack-design-review/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.office-hours"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-office-hours/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "2d955cdf5802a19332b5ee061f57af0021c3735873af4db23a859a1b22e5aa8c",
+      "size": 4289,
+      "source": "hermes/skills/gstack-office-hours/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.office-hours"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-office-hours/references/gstack-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "63a634c346cd4ffa2d31b8bc0184195de8d62298696c5d5cbce74341d56379cd",
+      "size": 1631,
+      "source": "hermes/skills/gstack-office-hours/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.office-hours"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-office-hours/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "4d4f5a74f59dd974ca11fe5972f5764f5c2de422814fe6233a2a02cec413129a",
+      "size": 1833,
+      "source": "hermes/skills/gstack-office-hours/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-design-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-plan-design-review/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "4384566fdd83638988152c70d774bb2308170808561cf5c67249fa6d44576bb0",
+      "size": 3377,
+      "source": "hermes/skills/gstack-plan-design-review/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-design-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-plan-design-review/references/gstack-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "b49feef83a0ed729e4db58bbaebd0c3f6c527e8a9eb0ba885db06a0874b4ec98",
+      "size": 1583,
+      "source": "hermes/skills/gstack-plan-design-review/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-design-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-plan-design-review/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "5fb4e4e7fac1751d89101ef920b7af7d09b586bd5f38a958dc2df9f3012d5f53",
+      "size": 1508,
+      "source": "hermes/skills/gstack-plan-design-review/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-eng-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-plan-eng-review/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "0d2464686d06c8d6f6424b47a9555c768a290e8429dccf09108e51a59c3b4ebe",
+      "size": 3685,
+      "source": "hermes/skills/gstack-plan-eng-review/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-eng-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-plan-eng-review/references/gstack-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "d10914bfc08016067f4e97bf9a7e3d3074e7d828654321c8f1593a21d4e6379a",
+      "size": 1577,
+      "source": "hermes/skills/gstack-plan-eng-review/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-eng-review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-plan-eng-review/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "924f046517f4af272e8bfa1c9bbb2b4d36365e40182b63e329ba67da3aeff848",
+      "size": 1570,
+      "source": "hermes/skills/gstack-plan-eng-review/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.qa"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-qa/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "adcad22b02aa9656ca84ec3e1eb4157508951e2f642a8e602cc1c9eae87dac4a",
+      "size": 3584,
+      "source": "hermes/skills/gstack-qa/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.qa"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-qa/references/gstack-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "2101e26dd390be176df37128a315ceaaa84419f509ead34b87f1757310fb506f",
+      "size": 1584,
+      "source": "hermes/skills/gstack-qa/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.qa"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-qa/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "04e5d40a363e8a2f4790383bcefefca474a290c1279c6e95c3a17e151f8c5a18",
+      "size": 1820,
+      "source": "hermes/skills/gstack-qa/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-review/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "fdcccf16f6963dd3684c64702be8f23e776c02081d36250ea02b436e06153489",
+      "size": 3482,
+      "source": "hermes/skills/gstack-review/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-review/references/gstack-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "cb43592d7296f892e93abe9b28167c5c693e067f7d430aa9a5861c12385c9431",
+      "size": 1544,
+      "source": "hermes/skills/gstack-review/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.review"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-review/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "515cd443b02533391984f1b2ebf553bbd48570f2dd63b5c744783b73db9f9feb",
+      "size": 1468,
+      "source": "hermes/skills/gstack-review/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.spec"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-spec/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "2569c88b17f42ac67a95807fb0659e6ae19754f5c2746746d05dd1efd53cf2b1",
+      "size": 3587,
+      "source": "hermes/skills/gstack-spec/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.spec"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-spec/references/gstack-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "1eca1fb433b3a6f9064a31b095a8fc97a55aea17ed8cc2c9527ac1b2309c8559",
+      "size": 1553,
+      "source": "hermes/skills/gstack-spec/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.spec"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/gstack-spec/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "3354ebc4226118d2117bae47bd612b781b0ad3435cd20ba8e7bb0b91683b48eb",
+      "size": 1356,
+      "source": "hermes/skills/gstack-spec/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "existing.engineering-path"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/kanban-workflow/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "0788cf83c634a30c05eadd289d437d64a2546c78f9f0b9c12e3fb6c10a49f6bb",
+      "size": 18399,
+      "source": "hermes/skills/kanban-workflow/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "pm.competitor-research"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-competitor-research/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "ba557733f999438eea0c92a46d53e1358179173751ad3a4c965cb366477612bc",
+      "size": 6884,
+      "source": "hermes/skills/pm-competitor-research/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "pm.competitor-research"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-competitor-research/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "58885267a7f578f574ac96d014b2f3222b886e52b362991f544e60242e1567ac",
+      "size": 2017,
+      "source": "hermes/skills/pm-competitor-research/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "pm.competitor-research"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-competitor-research/references/pm-skills-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "8460874c00f4fe19317b97494ed85b6ea433e2e2707827a490c9fac405790888",
+      "size": 1553,
+      "source": "hermes/skills/pm-competitor-research/references/pm-skills-license.md"
+    },
+    {
+      "capability_ids": [
+        "pm.lean-prd"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-lean-prd/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "529857665bf7cd619ce9efc1b5a22dfe109a6d00d7c573f491a0dab01a58295e",
+      "size": 5246,
+      "source": "hermes/skills/pm-lean-prd/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "pm.lean-prd"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-lean-prd/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "029cb6fc14f92c052e43735b09939872727f43f046e030be02b9d76ed94e03d3",
+      "size": 1136,
+      "source": "hermes/skills/pm-lean-prd/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "pm.lean-prd"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-lean-prd/references/pm-skills-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "6ba71f56e995a1cf5ae9dd66fd4ddff5ed2e207e4907e02afb8a2ab864cb378f",
+      "size": 1521,
+      "source": "hermes/skills/pm-lean-prd/references/pm-skills-license.md"
+    },
+    {
+      "capability_ids": [
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-product-discovery/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "b901ac1052bb0b16c1ddb52de0b86995452926111f4814a961247f1998b472bb",
+      "size": 6364,
+      "source": "hermes/skills/pm-product-discovery/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-product-discovery/references/method-map.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "a60427e49a70d9d68317388ae36a1db4808b1760dca5576d6b7281131cf6b180",
+      "size": 1881,
+      "source": "hermes/skills/pm-product-discovery/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/pm-product-discovery/references/pm-skills-license.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "e9949cd51101e22623250650b94c09321e4b5b9cc3b9244d0c01e1a03705c5e1",
+      "size": 2022,
+      "source": "hermes/skills/pm-product-discovery/references/pm-skills-license.md"
+    },
+    {
+      "capability_ids": [
+        "kit.problem-definition"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/problem-definition/SKILL.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "5322fb2f70c38c7fa64c23b8ce2e052415aaa6fc641bd3970f11724efa654427",
+      "size": 6962,
+      "source": "hermes/skills/problem-definition/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "kit.problem-definition"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/problem-definition/references/evidence-and-causality.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "3d63862a4970481a25c090b533887efd8c05c3949b5b1bbc662a2c0affb69848",
+      "size": 1583,
+      "source": "hermes/skills/problem-definition/references/evidence-and-causality.md"
+    },
+    {
+      "capability_ids": [
+        "kit.problem-definition"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/skills/problem-definition/references/methods-and-provenance.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "3fd5cd0ee8a19894a979ba1f9f16e494b843dfdf60fe443658b4dcc22001961a",
+      "size": 2066,
+      "source": "hermes/skills/problem-definition/references/methods-and-provenance.md"
+    },
+    {
+      "capability_ids": [
+        "existing.marketing-team"
+      ],
+      "destination": "agent-ops-kit/capability-root/hermes/teams/marketing-team.md",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "84f47f7accc780703e6a66303692418aa8fb2d3b034897368f1d7fd7fd612fe5",
+      "size": 1935,
+      "source": "hermes/teams/marketing-team.md"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/scripts/capability-plan.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "015c12210a4a067db7f4b3fb8d85c6d190eb18688e1acd0a254471b492cb4ca1",
+      "size": 8181,
+      "source": "scripts/capability-plan.py"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/scripts/capability-select.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "5705f48278862097e0dff0d6af314d3cdf86680b0bd3d4b970af267362148c6f",
+      "size": 5922,
+      "source": "scripts/capability-select.py"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation",
+        "gstack.design-review",
+        "gstack.office-hours",
+        "gstack.plan-design-review",
+        "gstack.plan-eng-review",
+        "gstack.qa",
+        "gstack.review",
+        "gstack.spec",
+        "kit.problem-definition",
+        "pm.competitor-research",
+        "pm.lean-prd",
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/scripts/capability_design.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "13e47fecbfeb02a608c205f944f00a9b16b1d1c27be715241bb923ebc9768a73",
+      "size": 55118,
+      "source": "scripts/capability_design.py"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation",
+        "gstack.design-review",
+        "gstack.office-hours",
+        "gstack.plan-design-review",
+        "gstack.plan-eng-review",
+        "gstack.qa",
+        "gstack.review",
+        "gstack.spec",
+        "kit.problem-definition",
+        "pm.competitor-research",
+        "pm.lean-prd",
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/scripts/capability_methods.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "3ee0762af48ff205dc7ad06ae527bf0152d6f207ebe2daa5212fb3837c7fb820",
+      "size": 6633,
+      "source": "scripts/capability_methods.py"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/scripts/capability_registry.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "921c470e2839027e89c85e95259282b75e83b3843dc3d68708e461f5ae66024a",
+      "size": 71361,
+      "source": "scripts/capability_registry.py"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation",
+        "gstack.design-review",
+        "gstack.office-hours",
+        "gstack.plan-design-review",
+        "gstack.plan-eng-review",
+        "gstack.qa",
+        "gstack.review",
+        "gstack.spec",
+        "kit.problem-definition",
+        "pm.competitor-research",
+        "pm.lean-prd",
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/scripts/capability_research.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "2efc07d043420afb1d16b2e53ed7bb28c173e891a570841d3724d1000a2d8cd3",
+      "size": 12806,
+      "source": "scripts/capability_research.py"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/scripts/capability_selection.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "7af2a6409de3387eee3c39fbdc6b239d4699a924a5d0877971d5c68caba4307f",
+      "size": 14661,
+      "source": "scripts/capability_selection.py"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation",
+        "gstack.design-review",
+        "gstack.office-hours",
+        "gstack.plan-design-review",
+        "gstack.plan-eng-review",
+        "gstack.qa",
+        "gstack.review",
+        "gstack.spec",
+        "kit.problem-definition",
+        "pm.competitor-research",
+        "pm.lean-prd",
+        "pm.product-discovery"
+      ],
+      "destination": "agent-ops-kit/capability-root/scripts/capability_workflow.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "c92ec3385a2cc2642636c4d609599a7e60f9d1316551663d98e5c7decab2db77",
+      "size": 226543,
+      "source": "scripts/capability_workflow.py"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/scripts/config-get.py",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "86d4543c59fc0491f2071f3769cb78048262fb5b74c5d465a9d42d63cdc048c8",
+      "size": 4615,
+      "source": "scripts/config-get.py"
+    },
+    {
+      "capability_ids": [],
+      "destination": "agent-ops-kit/capability-root/scripts/requirements-capabilities.txt",
+      "mode": "0644",
+      "role": "capability-root",
+      "sha256": "c0463df56a4e0f2202c435b74d4a4a1ede07b3a8351e8537182b5d5ae7aab087",
+      "size": 276,
+      "source": "scripts/requirements-capabilities.txt"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-design-consultation/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "00e957305a6b1fd1ba6cdca3c4a85b99f9b946744bfdb1c689f1fa9d624a385e",
+      "size": 6639,
+      "source": "hermes/skills/gstack-design-consultation/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-design-consultation/references/gstack-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "946b63445b2fe2a7f7d5e6f4b796e47cb772c78db9b493c10cc24cf55a705081",
+      "size": 1590,
+      "source": "hermes/skills/gstack-design-consultation/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-consultation"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-design-consultation/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "48fdd00804398def825282fd52e00cf34307645b0162aefa197a99f879a32519",
+      "size": 1717,
+      "source": "hermes/skills/gstack-design-consultation/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-design-review/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "8c0b937643ee07b9adfe2d340c8bfcdcc2bcfe82c2dd3a2386a14ce755114064",
+      "size": 5558,
+      "source": "hermes/skills/gstack-design-review/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-design-review/references/gstack-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "71ed95ac517fb44628a9869de9cf01d96056b26c17a09e2d84e15d51176512f3",
+      "size": 1569,
+      "source": "hermes/skills/gstack-design-review/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.design-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-design-review/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "eb2af8262f6bd617763fb3a38829d528dc646d360f6e02058e1b8db2f43640ec",
+      "size": 1804,
+      "source": "hermes/skills/gstack-design-review/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.office-hours"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-office-hours/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "2d955cdf5802a19332b5ee061f57af0021c3735873af4db23a859a1b22e5aa8c",
+      "size": 4289,
+      "source": "hermes/skills/gstack-office-hours/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.office-hours"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-office-hours/references/gstack-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "63a634c346cd4ffa2d31b8bc0184195de8d62298696c5d5cbce74341d56379cd",
+      "size": 1631,
+      "source": "hermes/skills/gstack-office-hours/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.office-hours"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-office-hours/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "4d4f5a74f59dd974ca11fe5972f5764f5c2de422814fe6233a2a02cec413129a",
+      "size": 1833,
+      "source": "hermes/skills/gstack-office-hours/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-design-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-plan-design-review/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "4384566fdd83638988152c70d774bb2308170808561cf5c67249fa6d44576bb0",
+      "size": 3377,
+      "source": "hermes/skills/gstack-plan-design-review/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-design-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-plan-design-review/references/gstack-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "b49feef83a0ed729e4db58bbaebd0c3f6c527e8a9eb0ba885db06a0874b4ec98",
+      "size": 1583,
+      "source": "hermes/skills/gstack-plan-design-review/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-design-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-plan-design-review/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "5fb4e4e7fac1751d89101ef920b7af7d09b586bd5f38a958dc2df9f3012d5f53",
+      "size": 1508,
+      "source": "hermes/skills/gstack-plan-design-review/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-eng-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-plan-eng-review/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "0d2464686d06c8d6f6424b47a9555c768a290e8429dccf09108e51a59c3b4ebe",
+      "size": 3685,
+      "source": "hermes/skills/gstack-plan-eng-review/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-eng-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-plan-eng-review/references/gstack-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "d10914bfc08016067f4e97bf9a7e3d3074e7d828654321c8f1593a21d4e6379a",
+      "size": 1577,
+      "source": "hermes/skills/gstack-plan-eng-review/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.plan-eng-review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-plan-eng-review/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "924f046517f4af272e8bfa1c9bbb2b4d36365e40182b63e329ba67da3aeff848",
+      "size": 1570,
+      "source": "hermes/skills/gstack-plan-eng-review/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.qa"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-qa/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "adcad22b02aa9656ca84ec3e1eb4157508951e2f642a8e602cc1c9eae87dac4a",
+      "size": 3584,
+      "source": "hermes/skills/gstack-qa/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.qa"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-qa/references/gstack-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "2101e26dd390be176df37128a315ceaaa84419f509ead34b87f1757310fb506f",
+      "size": 1584,
+      "source": "hermes/skills/gstack-qa/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.qa"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-qa/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "04e5d40a363e8a2f4790383bcefefca474a290c1279c6e95c3a17e151f8c5a18",
+      "size": 1820,
+      "source": "hermes/skills/gstack-qa/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-review/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "fdcccf16f6963dd3684c64702be8f23e776c02081d36250ea02b436e06153489",
+      "size": 3482,
+      "source": "hermes/skills/gstack-review/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-review/references/gstack-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "cb43592d7296f892e93abe9b28167c5c693e067f7d430aa9a5861c12385c9431",
+      "size": 1544,
+      "source": "hermes/skills/gstack-review/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.review"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-review/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "515cd443b02533391984f1b2ebf553bbd48570f2dd63b5c744783b73db9f9feb",
+      "size": 1468,
+      "source": "hermes/skills/gstack-review/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.spec"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-spec/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "2569c88b17f42ac67a95807fb0659e6ae19754f5c2746746d05dd1efd53cf2b1",
+      "size": 3587,
+      "source": "hermes/skills/gstack-spec/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.spec"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-spec/references/gstack-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "1eca1fb433b3a6f9064a31b095a8fc97a55aea17ed8cc2c9527ac1b2309c8559",
+      "size": 1553,
+      "source": "hermes/skills/gstack-spec/references/gstack-license.md"
+    },
+    {
+      "capability_ids": [
+        "gstack.spec"
+      ],
+      "destination": "skills/agent-ops-kit/gstack-spec/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "3354ebc4226118d2117bae47bd612b781b0ad3435cd20ba8e7bb0b91683b48eb",
+      "size": 1356,
+      "source": "hermes/skills/gstack-spec/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "pm.competitor-research"
+      ],
+      "destination": "skills/agent-ops-kit/pm-competitor-research/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "ba557733f999438eea0c92a46d53e1358179173751ad3a4c965cb366477612bc",
+      "size": 6884,
+      "source": "hermes/skills/pm-competitor-research/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "pm.competitor-research"
+      ],
+      "destination": "skills/agent-ops-kit/pm-competitor-research/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "58885267a7f578f574ac96d014b2f3222b886e52b362991f544e60242e1567ac",
+      "size": 2017,
+      "source": "hermes/skills/pm-competitor-research/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "pm.competitor-research"
+      ],
+      "destination": "skills/agent-ops-kit/pm-competitor-research/references/pm-skills-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "8460874c00f4fe19317b97494ed85b6ea433e2e2707827a490c9fac405790888",
+      "size": 1553,
+      "source": "hermes/skills/pm-competitor-research/references/pm-skills-license.md"
+    },
+    {
+      "capability_ids": [
+        "pm.lean-prd"
+      ],
+      "destination": "skills/agent-ops-kit/pm-lean-prd/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "529857665bf7cd619ce9efc1b5a22dfe109a6d00d7c573f491a0dab01a58295e",
+      "size": 5246,
+      "source": "hermes/skills/pm-lean-prd/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "pm.lean-prd"
+      ],
+      "destination": "skills/agent-ops-kit/pm-lean-prd/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "029cb6fc14f92c052e43735b09939872727f43f046e030be02b9d76ed94e03d3",
+      "size": 1136,
+      "source": "hermes/skills/pm-lean-prd/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "pm.lean-prd"
+      ],
+      "destination": "skills/agent-ops-kit/pm-lean-prd/references/pm-skills-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "6ba71f56e995a1cf5ae9dd66fd4ddff5ed2e207e4907e02afb8a2ab864cb378f",
+      "size": 1521,
+      "source": "hermes/skills/pm-lean-prd/references/pm-skills-license.md"
+    },
+    {
+      "capability_ids": [
+        "pm.product-discovery"
+      ],
+      "destination": "skills/agent-ops-kit/pm-product-discovery/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "b901ac1052bb0b16c1ddb52de0b86995452926111f4814a961247f1998b472bb",
+      "size": 6364,
+      "source": "hermes/skills/pm-product-discovery/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "pm.product-discovery"
+      ],
+      "destination": "skills/agent-ops-kit/pm-product-discovery/references/method-map.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "a60427e49a70d9d68317388ae36a1db4808b1760dca5576d6b7281131cf6b180",
+      "size": 1881,
+      "source": "hermes/skills/pm-product-discovery/references/method-map.md"
+    },
+    {
+      "capability_ids": [
+        "pm.product-discovery"
+      ],
+      "destination": "skills/agent-ops-kit/pm-product-discovery/references/pm-skills-license.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "e9949cd51101e22623250650b94c09321e4b5b9cc3b9244d0c01e1a03705c5e1",
+      "size": 2022,
+      "source": "hermes/skills/pm-product-discovery/references/pm-skills-license.md"
+    },
+    {
+      "capability_ids": [
+        "kit.problem-definition"
+      ],
+      "destination": "skills/agent-ops-kit/problem-definition/SKILL.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "5322fb2f70c38c7fa64c23b8ce2e052415aaa6fc641bd3970f11724efa654427",
+      "size": 6962,
+      "source": "hermes/skills/problem-definition/SKILL.md"
+    },
+    {
+      "capability_ids": [
+        "kit.problem-definition"
+      ],
+      "destination": "skills/agent-ops-kit/problem-definition/references/evidence-and-causality.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "3d63862a4970481a25c090b533887efd8c05c3949b5b1bbc662a2c0affb69848",
+      "size": 1583,
+      "source": "hermes/skills/problem-definition/references/evidence-and-causality.md"
+    },
+    {
+      "capability_ids": [
+        "kit.problem-definition"
+      ],
+      "destination": "skills/agent-ops-kit/problem-definition/references/methods-and-provenance.md",
+      "mode": "0644",
+      "role": "skill",
+      "sha256": "3fd5cd0ee8a19894a979ba1f9f16e494b843dfdf60fe443658b4dcc22001961a",
+      "size": 2066,
+      "source": "hermes/skills/problem-definition/references/methods-and-provenance.md"
+    }
+  ],
+  "kind": "capability-activation-manifest",
+  "prerequisites": {
+    "jsonschema": {
+      "install": "none: preflight refuses when absent or out of range",
+      "range": ">=4.10.3,<5",
+      "resolved": [
+        {
+          "interpreter": "/usr/bin/python3",
+          "jsonschema": "4.10.3",
+          "python": "3.12.3",
+          "source": "host polymath-dev only: apt python3-jsonschema 4.10.3-2ubuntu1 (observed 2026-11-05 UTC, read-only)"
+        },
+        {
+          "interpreter": "$HERMES_HOME/hermes-agent/venv/bin/python",
+          "jsonschema": "4.26.0",
+          "python": "3.12.3",
+          "source": "host polymath-dev only: Hermes agent venv (observed 2026-11-05 UTC, read-only)"
+        }
+      ]
+    },
+    "python": ">=3.10"
+  },
+  "schema_version": 1,
+  "skills": [
+    "gstack-design-consultation",
+    "gstack-design-review",
+    "gstack-office-hours",
+    "gstack-plan-design-review",
+    "gstack-plan-eng-review",
+    "gstack-qa",
+    "gstack-review",
+    "gstack-spec",
+    "pm-competitor-research",
+    "pm-lean-prd",
+    "pm-product-discovery",
+    "problem-definition"
+  ],
+  "source_root": {
+    "contract": "skills call $KIT/scripts/...; $KIT is this directory (or a reviewed checkout); scripts resolve the registry and schemas relative to themselves",
+    "destination": "agent-ops-kit/capability-root"
+  },
+  "status": "proposed (not applied to any live home)",
+  "target": "HERMES_HOME of the default profile, relative destinations only"
+}

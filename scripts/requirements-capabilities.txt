@@ -1,0 +1,4 @@
+# Capability registry validation (scripts/capability_registry.py, scripts/capability-plan.py).
+# Draft 2020-12 validator; tested with 4.10.3 (Ubuntu python3-jsonschema). Without it every
+# validation fails closed; there is no partial fallback validator.
+jsonschema>=4.10.3,<5

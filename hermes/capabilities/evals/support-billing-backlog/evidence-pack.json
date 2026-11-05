@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-support-billing",
+  "binding": {
+    "task_id": "t-support-billing",
+    "company_id": "example-b",
+    "project_id": "example-ops",
+    "data_classification": "synthetic"
+  },
+  "as_of": "2026-11-02",
+  "items": [
+    {
+      "source_id": "E1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic ticket export summary, October 2026",
+      "ref": "fixture:support-billing/ticket-export",
+      "captured_file": "captured/ticket-export-summary.txt",
+      "study_design": "descriptive",
+      "topics": [
+        "ticket-volume",
+        "response-time"
+      ],
+      "excerpt": "Synthetic fixture. October 2026 support tickets: 1240 total; 471 tagged billing. Median first response for billing tickets 31 hours; for other tickets 9 hours. Billing tickets reopened: 112.",
+      "values": {
+        "tickets_total": 1240,
+        "billing_tickets": 471,
+        "median_first_response_billing_h": 31,
+        "median_first_response_other_h": 9,
+        "billing_reopened": 112
+      },
+      "digest": "e10db214645c7d2a0a3774578fe21ae4b37ad1cb03e505ae356db365948dddb4"
+    },
+    {
+      "source_id": "E2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic staffing note",
+      "ref": "fixture:support-billing/staffing-note",
+      "study_design": "descriptive",
+      "topics": [
+        "staffing"
+      ],
+      "excerpt": "Synthetic fixture. Two agents are trained on billing; both work weekday day shifts only. Billing questions that arrive on Friday after 15:00 wait until Monday.",
+      "values": {
+        "billing_trained_agents": 2
+      }
+    },
+    {
+      "source_id": "E3",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic constraint memo",
+      "ref": "fixture:support-billing/constraint-memo",
+      "study_design": "descriptive",
+      "topics": [
+        "constraints",
+        "budget"
+      ],
+      "excerpt": "Synthetic fixture. No new support headcount before 2027-01-01. Tooling budget for Q4 2026 is 3000 USD.",
+      "values": {
+        "tooling_budget_usd": 3000
+      }
+    }
+  ],
+  "not_available": [
+    {
+      "topic": "customer-satisfaction",
+      "reason": "not-measured",
+      "detail": "No CSAT survey runs on billing tickets."
+    },
+    {
+      "topic": "churn-impact",
+      "reason": "not-supplied",
+      "detail": "No cancellation reasons were supplied."
+    }
+  ],
+  "policy": {
+    "public_research": "denied",
+    "private_terms": []
+  }
+}

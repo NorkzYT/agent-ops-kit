@@ -1,0 +1,667 @@
+{
+  "schema_version": 1,
+  "description": "Selected upstream files named by hermes/capabilities/registry.json. Hashes and sizes are copied verbatim from the verified research lock named below (not refetched); no upstream source is vendored here. Pins are fixed; auto-update is disabled for every source.",
+  "research_lock": {
+    "name": "upstreams.lock.json",
+    "sha256": "b329feb1220316a0f6af34aaf62aa72331f7c804b73834425c00b9b148025fd5",
+    "research_date": "2026-11-04",
+    "files_recorded": 518
+  },
+  "sources": {
+    "gstack": {
+      "repository": "garrytan/gstack",
+      "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+      "license_spdx": "MIT",
+      "license_scope": "Root MIT; separately licensed components under licenses/.",
+      "reuse": "adapt-with-notice",
+      "notices": [
+        "Copyright notice and MIT permission notice from LICENSE must accompany any adapted method text.",
+        "Component licenses under licenses/ apply to their components; the selected closure must be re-reviewed before any file is bundled (Milestone C/E)."
+      ],
+      "auto_update": false,
+      "update_procedure": "Reviewed pin change only: fetch the new exact revision into a disposable cache, diff every selected file, re-hash, re-review license/notices and executable dependencies, update this lock and the registry digests together, rerun make test-capabilities. Never track a floating branch.",
+      "rollback_procedure": "Revert the lock/registry commit to the previous pin; installed copies (Milestone E) roll back only through their own manifest, only where the installed hash still matches."
+    },
+    "pm-skills": {
+      "repository": "phuryn/pm-skills",
+      "revision": "2a12295a7717569baa7be181b4cfebe3ca38a6bb",
+      "license_spdx": "MIT",
+      "license_scope": "MIT for the whole tree; pm-ai-shipping holds migration stubs only.",
+      "reuse": "adapt-with-notice",
+      "notices": [
+        "Copyright notice and MIT permission notice from LICENSE must accompany any adapted skill text."
+      ],
+      "auto_update": false,
+      "update_procedure": "Reviewed pin change only: fetch the new exact revision into a disposable cache, diff every selected file, re-hash, re-review license/notices and executable dependencies, update this lock and the registry digests together, rerun make test-capabilities. Never track a floating branch.",
+      "rollback_procedure": "Revert the lock/registry commit to the previous pin; installed copies (Milestone E) roll back only through their own manifest, only where the installed hash still matches."
+    },
+    "solosquad": {
+      "repository": "Adelie-Squad/solosquad",
+      "revision": "197ddcd1032fdaf2dd58ee37d075da232bdd1db3",
+      "license_spdx": "MIT",
+      "license_scope": "MIT",
+      "reuse": "reference-only",
+      "notices": [
+        "Architecture lessons and method concepts only; nothing is copied. MIT notice applies if text is ever adapted."
+      ],
+      "auto_update": false,
+      "update_procedure": "Reviewed pin change only: fetch the new exact revision into a disposable cache, diff every selected file, re-hash, re-review license/notices and executable dependencies, update this lock and the registry digests together, rerun make test-capabilities. Never track a floating branch.",
+      "rollback_procedure": "Revert the lock/registry commit to the previous pin; installed copies (Milestone E) roll back only through their own manifest, only where the installed hash still matches."
+    },
+    "pna-builders": {
+      "repository": "RO-PNA/pna-builders",
+      "revision": "e4237f11ad1359f3e8da722f56e37962a69c0ce4",
+      "license_spdx": null,
+      "license_scope": "No license declared (research checked the tree and GitHub metadata).",
+      "reuse": "reference-only",
+      "notices": [
+        "No declared repository license: concepts may be cited; no prompt, workshop text, template, data, UI or code may be copied or translated."
+      ],
+      "auto_update": false,
+      "update_procedure": "Reviewed pin change only: fetch the new exact revision into a disposable cache, diff every selected file, re-hash, re-review license/notices and executable dependencies, update this lock and the registry digests together, rerun make test-capabilities. Never track a floating branch.",
+      "rollback_procedure": "Revert the lock/registry commit to the previous pin; installed copies (Milestone E) roll back only through their own manifest, only where the installed hash still matches."
+    },
+    "hermes": {
+      "repository": "NousResearch/hermes-agent",
+      "revision": "ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df",
+      "license_spdx": "MIT",
+      "license_scope": "MIT",
+      "reuse": "documentation-reference",
+      "notices": [
+        "MIT; documentation consulted for compatibility, nothing vendored."
+      ],
+      "auto_update": false,
+      "update_procedure": "Reviewed pin change only: fetch the new exact revision into a disposable cache, diff every selected file, re-hash, re-review license/notices and executable dependencies, update this lock and the registry digests together, rerun make test-capabilities. Never track a floating branch.",
+      "rollback_procedure": "Revert the lock/registry commit to the previous pin; installed copies (Milestone E) roll back only through their own manifest, only where the installed hash still matches."
+    },
+    "agentskills": {
+      "repository": "agentskills/agentskills",
+      "revision": "83021e2be457a9b6679148719c1f6074f0ad975e",
+      "license_spdx": "Apache-2.0",
+      "license_scope": "Apache-2.0 root and reference code; CC BY 4.0 documentation.",
+      "reuse": "documentation-reference",
+      "notices": [
+        "Code Apache-2.0 (skills-ref/), documentation CC BY 4.0 (docs/LICENSE): attribution, license link and change indication if documentation text is reused."
+      ],
+      "auto_update": false,
+      "update_procedure": "Reviewed pin change only: fetch the new exact revision into a disposable cache, diff every selected file, re-hash, re-review license/notices and executable dependencies, update this lock and the registry digests together, rerun make test-capabilities. Never track a floating branch.",
+      "rollback_procedure": "Revert the lock/registry commit to the previous pin; installed copies (Milestone E) roll back only through their own manifest, only where the installed hash still matches."
+    }
+  },
+  "files": [
+    {
+      "repo": "pm-skills",
+      "path": "pm-execution/commands/write-prd.md",
+      "sha256": "52951d61e2d80e41c43bfdec9d432e68342c484e2fda37d55cbd2e373675f099",
+      "bytes": 3505,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-execution/skills/create-prd/SKILL.md",
+      "sha256": "e3aa10a437ed7f748a957bd5d1eb06d8fa3f56dc728dcb93ce484387ecc3fa13",
+      "bytes": 7301,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-execution/skills/pre-mortem/SKILL.md",
+      "sha256": "4e5cf10a46ac1d1cdde6aa009ba2b860c532f55c0c3d9ec53a82082cad073052",
+      "bytes": 4082,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-market-research/commands/competitive-analysis.md",
+      "sha256": "115f596c577482aef6f84ecf908062713ad50a73af3051a2cde6887efed5b604",
+      "bytes": 3537,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-market-research/skills/competitor-analysis/SKILL.md",
+      "sha256": "8e627fc7fba96f223ad9f8fd23c6033a429cc28f9e9ce2d672854c6851810c2b",
+      "bytes": 4814,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-market-research/skills/market-segments/SKILL.md",
+      "sha256": "f8425da0486d844a661fe18f809de1e055d7125c74ed423ee750cf2be74a2319",
+      "bytes": 3623,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-marketing-growth/skills/positioning-ideas/SKILL.md",
+      "sha256": "8864f284e66c8bb106c46dc5e51656a47ae4792e39091eb3a49f63cde00c3850",
+      "bytes": 3002,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/commands/discover.md",
+      "sha256": "d5173f02b61c74ee88d4af4aaaf9d99de443890e98419368b9f4bdf454dd6a52",
+      "bytes": 4921,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/brainstorm-experiments-existing/SKILL.md",
+      "sha256": "d72da1f4f08d5514662d7bad37dfc3ed4ef11fcc5b5ddec6ca5a8ac0e47f45c5",
+      "bytes": 2408,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/brainstorm-experiments-new/SKILL.md",
+      "sha256": "fe66d9ba76cf6b0e156298c88f752d8e1e62549fe77a7c01c0a74d8679da9334",
+      "bytes": 2538,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/brainstorm-ideas-existing/SKILL.md",
+      "sha256": "cf950494541bd9b47e60054f1a917cef02094fe8c769d5feca86603282e2bd5b",
+      "bytes": 2951,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/brainstorm-ideas-new/SKILL.md",
+      "sha256": "400e5e0760d6dc52bfe34953d90db6223df532ce720d7e85568696ab5c3d34d2",
+      "bytes": 2437,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/identify-assumptions-existing/SKILL.md",
+      "sha256": "59d788213014552ac64f589c71ce82b135f9ef4b84fec457446ad90795fd439f",
+      "bytes": 2102,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/identify-assumptions-new/SKILL.md",
+      "sha256": "962b1e0c01e45ceb930e4d806c0ffb05e36cf25dcfef5497e7828d89d6ae474b",
+      "bytes": 3227,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/interview-script/SKILL.md",
+      "sha256": "892ca53da9852d4e6516d2305f0c0eb2db370bf39693c6c6797154b44bec9b4c",
+      "bytes": 4817,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/opportunity-solution-tree/SKILL.md",
+      "sha256": "6b23e44a5ace86aa20d64cc130322265ace6a53a29831cc403b974098a379bcc",
+      "bytes": 4281,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/prioritize-assumptions/SKILL.md",
+      "sha256": "18160a0138c788790c9dd22995ffdcfac485c1f0599c170d8668678e59766073",
+      "bytes": 2311,
+      "status": "selected"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-product-discovery/skills/summarize-interview/SKILL.md",
+      "sha256": "5a2a0c8257f5e2f7ef098d4531acbbcd3087bb07bb87d4cabfe1a97ef1ad037c",
+      "bytes": 2036,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "design-consultation/SKILL.md",
+      "sha256": "095eaba207a3666515ee874955676de132cd34cc0d299cf84c1fd53a8c859cbc",
+      "bytes": 40236,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "design-consultation/sections/manifest.json",
+      "sha256": "bdae65759579347ef0a81412a84b888421ed066340cde2a70633cd47daf160d3",
+      "bytes": 676,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "design-consultation/sections/proposal-and-preview.md",
+      "sha256": "72e5d99b6b83869788e050036bc628da224ec5c2482f0edb8f8c1409d89ec444",
+      "bytes": 42373,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "design-review/SKILL.md",
+      "sha256": "56c3dcd8b33a692f73c26fc7a3f01974cbf9c861b2c3b3f3cc5b66da14046b8e",
+      "bytes": 84869,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "design-review/sections/craft-audit.md",
+      "sha256": "cd1fcf89cc27c3ed0ac07340c980f44bbcdd8c2e23389d75862ee57c7267614c",
+      "bytes": 7067,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "design-review/sections/manifest.json",
+      "sha256": "14f11787642c946b8dc7ccc6f9d05d546a5ee3dde6ade27e607c4d4c03dfb409",
+      "bytes": 1117,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "office-hours/SKILL.md",
+      "sha256": "3567c8d98afa05e526f7dcf7157f4d52812a238aa9b821f8f7c9381311939b88",
+      "bytes": 43885,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "office-hours/sections/design-and-handoff.md",
+      "sha256": "59f2bd641c370e883206d887e863a9394a4cb69e94a06cd4291d587ffc119496",
+      "bytes": 41930,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "office-hours/sections/manifest.json",
+      "sha256": "91f8b0520d105f44de04f348392c96cafaf53947c5d8b07f8bac2b5855a709c5",
+      "bytes": 1961,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "office-hours/sections/phase-2a-startup-diagnostic.md",
+      "sha256": "35ed1e419eca359e454b9f18dddcce0aeb553a0ee519a7e635f4f0b7d484a393",
+      "bytes": 13682,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "office-hours/sections/phase-2b-builder-brainstorm.md",
+      "sha256": "05251d190b32f1da63165e8339211404963556ef5b9cf4c3e46361cbc51027e2",
+      "bytes": 3429,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "plan-design-review/SKILL.md",
+      "sha256": "a2120db2d4a34107b62a14431bf9519013dc645f9d9288f0a679a956db51d41b",
+      "bytes": 56209,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "plan-design-review/sections/checklist.md",
+      "sha256": "1844bcab2e3e9b458698af93deb6442e10ebf3ee87789497f490a3f99cbffd41",
+      "bytes": 1325,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "plan-design-review/sections/manifest.json",
+      "sha256": "941ba3c0beeb67f4aa76ffdedabf0074d5ec3e073f5240429ae5c66152ee85e9",
+      "bytes": 1353,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "plan-design-review/sections/review-sections.md",
+      "sha256": "1840c1cdbabcb61dddd4bff8afeb283d65a410d780a0ac5cdc4090a012c89b8c",
+      "bytes": 49321,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "plan-eng-review/SKILL.md",
+      "sha256": "58d96f6f3e296ccc2942e2e1a5732810b18f9f8bcd6ed9338115c99c91a88524",
+      "bytes": 41414,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "plan-eng-review/sections/checklist.md",
+      "sha256": "2e84d4d8e04fa840b0c2546525880375bba0bb55a54b984bd0e907b2626445f6",
+      "bytes": 1862,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "plan-eng-review/sections/manifest.json",
+      "sha256": "78e3e0a122f5ccdbcdfb9bbc729494a3f83441b23fc0698a59bb32fd01af6d4a",
+      "bytes": 1372,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "plan-eng-review/sections/review-sections.md",
+      "sha256": "202df94f20273ae6fb1cd4e6f65953a4dd50880d04fd5010a05d2557359f11dc",
+      "bytes": 99395,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "qa/SKILL.md",
+      "sha256": "e08f653b55f1e345890af06d25daa0d7b154f2c14af2d00b78fce77dbfa574c4",
+      "bytes": 29290,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "qa/sections/browser-verify.md",
+      "sha256": "cfa1177c175dd1acef3b943d84419dfedf6219ac5de0110b5bd9b356bf1aa04b",
+      "bytes": 1154,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "qa/sections/exploratory.md",
+      "sha256": "31e3a496c2d8ee0e35ef9c2ed1e59812e9da0c80cf8dfd00d04313dd1a61cf0e",
+      "bytes": 8032,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "qa/sections/manifest.json",
+      "sha256": "01d75e66a44151c35ff25274b0684de23452872d345276612074701ee10da981",
+      "bytes": 2393,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "qa/sections/qa-patterns.md",
+      "sha256": "8f46ba8932e9dfdb37801ced266b2a1c982d11b8396e28e9f4f95912e65b9f3a",
+      "bytes": 11411,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "qa/sections/scope.md",
+      "sha256": "dc4d1a3b6e7f90a5555860bf3cbafa47dc623a7f295428cde8a5de2043b8e245",
+      "bytes": 1590,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "qa/sections/system-functional.md",
+      "sha256": "6f957bc2c372926dd86d36b7f9b52004ee4e5179ca43cbbe2cfbf115f6dc7913",
+      "bytes": 3933,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "review/SKILL.md",
+      "sha256": "205ec3e52663cc918ad20e084bb70c3fd2b2d7a1eb60d3b63365483a9d6e9546",
+      "bytes": 60070,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "review/checklist.md",
+      "sha256": "a32963ef38d9d3613c58c805e8517cd2e593c63769b30dd7d40e2592fa48fc78",
+      "bytes": 24837,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "review/sections/manifest.json",
+      "sha256": "6b17b8b9ed9641be7e59c3f0047abbf5d6dc1cb01853679aea8c5b51f13f0b2d",
+      "bytes": 1373,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "review/sections/plan-completion.md",
+      "sha256": "aa700a4c30377314d6e65f4067a0397b36bf2362291bca6a04b21664055aae0c",
+      "bytes": 17194,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "review/sections/shared-code-reuse.md",
+      "sha256": "2f8145edacd1b704a8518efe61b234666ddae17853711e16fe3efb903b828768",
+      "bytes": 2342,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "spec/SKILL.md",
+      "sha256": "d936778e5b3cb90522abd8064ba40d44a28fc13872fd2044d661ca5b7f0b8f1c",
+      "bytes": 34965,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "spec/sections/gate-and-file.md",
+      "sha256": "5987c0237b476a4065f361abfb7b858c0a3f04b6164aa5c81ef4ac4edb349d98",
+      "bytes": 30260,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "spec/sections/manifest.json",
+      "sha256": "a8c4d10fa5081fa7dc97fbd7175f95ac95b9b0e28c1d2799c4da2e46306a5ff1",
+      "bytes": 751,
+      "status": "selected"
+    },
+    {
+      "repo": "gstack",
+      "path": "LICENSE",
+      "sha256": "e56fbb5b3d95756f3fa1cfefa24732ec79f18ece1ad08a4e79e00df57e8b198c",
+      "bytes": 1066,
+      "status": "license-notice"
+    },
+    {
+      "repo": "gstack",
+      "path": "licenses/Apache-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358,
+      "status": "license-notice"
+    },
+    {
+      "repo": "gstack",
+      "path": "licenses/MIT-elaya.txt",
+      "sha256": "5f9af6ce7083838497676a8dfa651ad8e2559fdabd4586afc73587beec476b0e",
+      "bytes": 1062,
+      "status": "license-notice"
+    },
+    {
+      "repo": "gstack",
+      "path": "licenses/MIT-hallmark.txt",
+      "sha256": "06088a8b94598626f27612dea42300154bf7be967c85d9d3eee4490cb056af7d",
+      "bytes": 1078,
+      "status": "license-notice"
+    },
+    {
+      "repo": "gstack",
+      "path": "licenses/MIT-pstack.txt",
+      "sha256": "bc957ca6bee02792566a1a028d105e02e247c6e77cf057061674273da77b200e",
+      "bytes": 1067,
+      "status": "license-notice"
+    },
+    {
+      "repo": "gstack",
+      "path": "licenses/MIT-skill-diet.txt",
+      "sha256": "2d20dfacd9742706e564470dc77438608a1e54b0ed46959f080709389209093c",
+      "bytes": 1068,
+      "status": "license-notice"
+    },
+    {
+      "repo": "gstack",
+      "path": "licenses/MIT-tstack.txt",
+      "sha256": "8095f9a9f97d074131f6a2ce09b952d12c18b36f09f4e5df0517c4e64e82c851",
+      "bytes": 1068,
+      "status": "license-notice"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "LICENSE",
+      "sha256": "a2c922f9b81b4f40347ddfa79c38eda0f1278b5a6d108bd4099b4da254c774ee",
+      "bytes": 1068,
+      "status": "license-notice"
+    },
+    {
+      "repo": "solosquad",
+      "path": "LICENSE",
+      "sha256": "272bd3123b7f9559dcdd3d1adcc9b5f65de54b86bd8897b9d4c07a98f243ad77",
+      "bytes": 1079,
+      "status": "license-notice"
+    },
+    {
+      "repo": "hermes",
+      "path": "LICENSE",
+      "sha256": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6",
+      "bytes": 1070,
+      "status": "license-notice"
+    },
+    {
+      "repo": "agentskills",
+      "path": "LICENSE",
+      "sha256": "993da3f8d330d69108e521636555f7783ef81d46b904394c59ec5ff651331fe5",
+      "bytes": 11344,
+      "status": "license-notice"
+    },
+    {
+      "repo": "agentskills",
+      "path": "docs/LICENSE",
+      "sha256": "9e5f1b3c610b9c2da5c313bf81d577a7d1acec686bdb0384edefa6df0f90cd94",
+      "bytes": 18656,
+      "status": "license-notice"
+    },
+    {
+      "repo": "agentskills",
+      "path": "skills-ref/LICENSE",
+      "sha256": "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+      "bytes": 11357,
+      "status": "license-notice"
+    },
+    {
+      "repo": "pna-builders",
+      "path": "README.md",
+      "sha256": "e5cbec9fe1211eb60ddb6f516e72850a3a0b9d560e45f4aeee4b12c870f82beb",
+      "bytes": 1575,
+      "status": "reference-only"
+    },
+    {
+      "repo": "pna-builders",
+      "path": "docs/PNA_워크샵_2_프레임워크_매칭.md",
+      "sha256": "77c0ffce61462ac089de7347cff2013d4ba8b0ba8c0f01efa669e9aab87f8460",
+      "bytes": 33878,
+      "status": "reference-only"
+    },
+    {
+      "repo": "pna-builders",
+      "path": "src/lib/chatbot/systemPrompt.ts",
+      "sha256": "6c0ab0f63b38af5de3c3c805e5d633621fabb5360775fc1c572b9e991468c7e2",
+      "bytes": 47794,
+      "status": "reference-only"
+    },
+    {
+      "repo": "solosquad",
+      "path": "skills/mece/SKILL.md",
+      "sha256": "ddbc4242afc07210dd44a7f1825d7cf891a9c9cc0b9850dab752f99e026f8fc1",
+      "bytes": 2027,
+      "status": "reference-only"
+    },
+    {
+      "repo": "solosquad",
+      "path": "skills/workflow-manager/SKILL.md",
+      "sha256": "b5fb14aac1623a828bcc5103039c049651214a387242af8e9fecce43bb99417d",
+      "bytes": 6875,
+      "status": "reference-only"
+    },
+    {
+      "repo": "solosquad",
+      "path": "skills/workflow-manager/assets/workflows/five-whys/workflow.yaml",
+      "sha256": "6d50a2dadc073a94cc6e2fbbd6d47c32622f0374a539e1bc75b197d96ec3d841",
+      "bytes": 1698,
+      "status": "reference-only"
+    },
+    {
+      "repo": "solosquad",
+      "path": "skills/workflow-manager/assets/workflows/scqa/workflow.yaml",
+      "sha256": "dbe1de4d6c1ce0d88366b9a7991134ffff54e423a07f7494a0296e0d607e1865",
+      "bytes": 1965,
+      "status": "reference-only"
+    },
+    {
+      "repo": "solosquad",
+      "path": "skills/workflow-manager/assets/workflows/tdcc/workflow.yaml",
+      "sha256": "887677220262b4c9c6065ceee680fd8feea258f5621ad87250eb0638125e8899",
+      "bytes": 1765,
+      "status": "reference-only"
+    },
+    {
+      "repo": "solosquad",
+      "path": "skills/xyz-hypothesis/SKILL.md",
+      "sha256": "688202fcdb23b4284e5d182d99396af805c09801b1481a9c8b41ed1ba4a09a07",
+      "bytes": 2023,
+      "status": "reference-only"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-ai-shipping/commands/derive-tests.md",
+      "sha256": "69fa3865f6dca20f3bad820ca81ed89c139ca90bf745538c840e789a8647a891",
+      "bytes": 1185,
+      "status": "excluded-moved-stub"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-ai-shipping/commands/document-app.md",
+      "sha256": "0e4c858c40fad546e35db4c687d10960fe704fea343bc9b552f32191269fb35c",
+      "bytes": 1161,
+      "status": "excluded-moved-stub"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-ai-shipping/commands/performance-audit-static.md",
+      "sha256": "cf975657f6a6c26f1c431281811d52a554607801581f7fcd6caa6f8ed9c41eb6",
+      "bytes": 1250,
+      "status": "excluded-moved-stub"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-ai-shipping/commands/security-audit-static.md",
+      "sha256": "580532da439980cff9c6554d89c9ae086d9e93e0867635d015117ae1be0e0b4a",
+      "bytes": 1229,
+      "status": "excluded-moved-stub"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-ai-shipping/commands/ship-check.md",
+      "sha256": "8566a3ced7854cb2123ed7d900816cc467737cf85298c3e72ad9b660136ace5b",
+      "bytes": 1166,
+      "status": "excluded-moved-stub"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-ai-shipping/skills/code-review/SKILL.md",
+      "sha256": "4641474748e578f0950695488f4cdc4e3e916adac25adfbf97d506f2c4314231",
+      "bytes": 1120,
+      "status": "excluded-moved-stub"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-ai-shipping/skills/intended-vs-implemented/SKILL.md",
+      "sha256": "4e3246da4d8e53794a627601a3d94897bfa58bc66144a4872b250cea701dd206",
+      "bytes": 1175,
+      "status": "excluded-moved-stub"
+    },
+    {
+      "repo": "pm-skills",
+      "path": "pm-ai-shipping/skills/shipping-artifacts/SKILL.md",
+      "sha256": "6a6198fb8bcfae98e49258248e0dbfd14d9b96ba944c0757580ad8509c14d6f8",
+      "bytes": 1149,
+      "status": "excluded-moved-stub"
+    }
+  ]
+}

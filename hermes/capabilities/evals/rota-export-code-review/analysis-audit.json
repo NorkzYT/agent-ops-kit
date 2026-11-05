@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "coordinator:c3-code-review-demo"},
+  "binding": {"task_id": "t-rota-export-review", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-rota-export-review", "digest": "baf5da7a46ab6aef1858a57926bedd2768ee434d67992fca885622c04ba14bf6"},
+  "reused_artifacts": [],
+  "reviewed_artifacts": [{"artifact_id": "t-rota-export.change", "kind": "code-change-handoff", "digest": "0643b2302d4fd000c61febf378bebd67899616958e1bc6482899aa2409b6a5ff"}],
+  "statements": [
+    {"id": "s-request", "class": "synthetic", "text": "The export runs nightly from the scheduler with the team name from its job configuration.", "source_ids": ["K1"]},
+    {"id": "s-u-tests", "class": "unknown", "text": "Whether the change passes any test is unknown: no test log was supplied.", "source_ids": [], "topic": "test-run", "resolution": "Run the project test suite on the change and attach the log with its exit status."}
+  ],
+  "computations": [],
+  "next_action": {"action": "Send the two critical findings to the engineering path as a repair card; re-review the new diff.", "kind": "decide", "owner_role": "engineering lead", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []},
+  "kind": "code-review",
+  "capability_id": "gstack.review",
+  "mode": "audit",
+  "pr_type": "mixed",
+  "intent": {"artifact_id": "t-rota-export.change", "text": "Add a nightly export of the billing rota to a gzip file for the support lead; no other behaviour changes."},
+  "scope_check": {
+    "scope_creep": ["scripts/billing_macros.py"],
+    "missing_requirements": ["No test covers the export or the gzip step."]
+  },
+  "categories": {
+    "sql-data-safety": {"status": "findings"},
+    "race-conditions": {"status": "clear"},
+    "llm-trust-boundary": {"status": "clear"},
+    "shell-injection": {"status": "findings"},
+    "enum-completeness": {"status": "clear"},
+    "gate-integrity": {"status": "clear"},
+    "async-sync": {"status": "clear"},
+    "field-names": {"status": "clear"},
+    "dead-code": {"status": "clear"},
+    "llm-prompts": {"status": "clear"},
+    "completeness-gaps": {"status": "findings"},
+    "time-windows": {"status": "findings"},
+    "timing-tests": {"status": "clear"},
+    "type-coercion": {"status": "clear"},
+    "view-frontend": {"status": "clear"},
+    "distribution-ci": {"status": "clear"},
+    "repo-conventions": {"status": "clear"}
+  },
+  "test_runs": [{"command": "python3 -m unittest discover -s tests", "status": "not-run"}],
+  "findings": [
+    {"id": "f-shell", "title": "Team name reaches a shell command", "section": "shell-injection", "severity": "critical", "confidence": 9,
+     "problem": "The output path contains the --team value and is interpolated into a shell=True command, so a team name such as 'x; rm -rf ~' runs as shell.",
+     "recommendation": "Call gzip with an argument list and no shell, or compress in Python with the gzip module; validate the team name against the known teams.",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-rota-export.change", "text": "subprocess.run(f\"gzip -f {out}\", shell=True, check=True)"}],
+     "location": {"file": "scripts/rota_export.py", "line": 17}, "defect_class": "trust-boundary", "fix_route": "mechanical",
+     "siblings": ["no other subprocess call in the diff"], "disposition": "pending"},
+    {"id": "f-rmtree", "title": "Every run deletes all earlier exports", "section": "sql-data-safety", "severity": "critical", "confidence": 9,
+     "problem": "rmtree on the export directory runs before each export, so last night's file and any other team's export are deleted.",
+     "recommendation": "Write into the directory without deleting it; if old files must go, remove only this team's files older than a stated retention.",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-rota-export.change", "text": "shutil.rmtree(EXPORT_DIR, ignore_errors=True)"}],
+     "location": {"file": "scripts/rota_export.py", "line": 12}, "defect_class": "data-loss", "fix_route": "needs-decision",
+     "decision_id": "d-retention", "disposition": "pending"},
+    {"id": "f-localtime", "title": "Export date uses server local time", "section": "time-windows", "severity": "informational", "confidence": 6,
+     "problem": "A naive datetime.now() names the file by the server's local date; a run near midnight on a UTC server would carry the wrong Berlin date.",
+     "recommendation": "Use the rota's time zone explicitly when naming the file.",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-rota-export.change", "text": "stamp = datetime.datetime.now().strftime(\"%Y-%m-%d\")"}],
+     "location": {"file": "scripts/rota_export.py", "line": 14}, "defect_class": "other", "fix_route": "mechanical", "disposition": "pending"},
+    {"id": "f-notests", "title": "No test for the export", "section": "completeness-gaps", "severity": "informational", "confidence": 7,
+     "problem": "The diff adds an export path with file writes and a subprocess but no test; the deletion above would have been caught by one.",
+     "recommendation": "Add a test that runs two exports for two teams into a temporary directory and checks both files remain.",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-rota-export.change", "text": "def export(team: str, rows: list) -> Path:"}],
+     "location": {"file": "scripts/rota_export.py", "line": 11}, "defect_class": "other", "fix_route": "mechanical", "disposition": "pending"}
+  ],
+  "decisions": [
+    {"id": "d-retention", "question": "How long should rota exports be kept?", "options": [
+      {"id": "keep-all", "label": "Keep every export"},
+      {"id": "keep-30-days", "label": "Delete this team's exports older than 30 days"}],
+     "recommendation": "keep-30-days", "why": "Bounded disk use without deleting other teams' files.", "status": "pending"}
+  ],
+  "handoff": {"targets": ["existing.engineering-path"], "notes": "Repair card for f-shell and f-rmtree; scripts/billing_macros.py goes back to its own change.", "carries_approval": false}
+}

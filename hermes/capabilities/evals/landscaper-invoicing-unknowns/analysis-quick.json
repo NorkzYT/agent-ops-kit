@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "kind": "problem-definition",
+  "capability_id": "kit.problem-definition",
+  "mode": "quick",
+  "authored_by": {
+    "kind": "coordinator-synthetic-demo",
+    "ref": "author:hephaestus-coordinator-demo"
+  },
+  "binding": {
+    "task_id": "t-landscaper-invoicing",
+    "company_id": "example-a",
+    "project_id": null,
+    "data_classification": "synthetic"
+  },
+  "evidence": {
+    "pack_id": "pack-landscaper-idea",
+    "digest": "bc804818459a6fc358c7da9e1c3e36f456066b17290f936675f022cec2fb4d85"
+  },
+  "reused_artifacts": [],
+  "problem_type": "business",
+  "decision": {
+    "question": "Is invoicing from job sheets a problem worth a first validation test?",
+    "owner_role": "founder"
+  },
+  "affected": {
+    "who": "Owners of small landscaping crews (assumed segment)"
+  },
+  "symptom_id": "l-founder",
+  "problem_statement": "The founder's own invoicing chore suggests an opportunity, but prevalence, market size and conversion are all unmeasured.",
+  "statements": [
+    {
+      "id": "l-founder",
+      "text": "The founder runs two landscaping crews and writes invoices from paper job sheets on Sunday evenings.",
+      "class": "synthetic",
+      "source_ids": [
+        "F1"
+      ]
+    },
+    {
+      "id": "l-a-pain",
+      "text": "Other small landscaping operators share the founder's invoicing chore.",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "problem-prevalence"
+    },
+    {
+      "id": "l-a-pay",
+      "text": "Operators would pay a monthly fee to turn job sheets into invoices.",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "willingness-to-pay"
+    },
+    {
+      "id": "l-u-interviews",
+      "text": "Whether other operators experience this problem is unknown: no interviews exist.",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "customer-interviews",
+      "resolution": "Run 8 to 10 problem interviews with operators found through the founder's own network, after outreach approval."
+    },
+    {
+      "id": "l-u-market",
+      "text": "The number of potential customers is unknown.",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "market-size",
+      "resolution": "Request approval for public research on registered landscaping businesses; until then no market size is stated."
+    },
+    {
+      "id": "l-u-conv",
+      "text": "Sign-up conversion for this offer is unknown.",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "baseline-conversion",
+      "resolution": "Measure it with a smoke-test page once outreach and publication are approved."
+    }
+  ],
+  "computations": [],
+  "alternatives": [
+    {
+      "id": "o-interviews",
+      "kind": "option",
+      "summary": "Problem interviews before any build.",
+      "tradeoffs": "Slow but direct evidence of prevalence; needs outreach approval."
+    },
+    {
+      "id": "o-concierge",
+      "kind": "option",
+      "summary": "Concierge invoicing for three operators by hand.",
+      "tradeoffs": "Tests willingness to pay with real commitment; costs founder time."
+    },
+    {
+      "id": "o-stop",
+      "kind": "do-nothing",
+      "summary": "Keep it a personal workaround.",
+      "tradeoffs": "No cost; no learning."
+    }
+  ],
+  "success_measure": {
+    "metric": "Interviewed operators who describe the same chore unprompted",
+    "baseline_statement_id": "l-u-interviews",
+    "target": {
+      "comparator": ">=",
+      "value": 5,
+      "unit": "of 10 interviews"
+    },
+    "window_days": 21
+  },
+  "questions": [
+    {
+      "topic": "outreach-scope",
+      "text": "May I contact operators from your own network for interviews?"
+    }
+  ],
+  "next_action": {
+    "action": "Draft a 10-interview problem script and recruit list; contact nobody until outreach is approved.",
+    "kind": "test",
+    "owner_role": "founder",
+    "cost": "cheap",
+    "involves_external_contact": true,
+    "approvals_needed": [
+      "outreach"
+    ]
+  }
+}

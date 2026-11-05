@@ -32,7 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner clean
+	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
 # is a section note (one paragraph per line), `##| text` lines just above a
@@ -267,6 +267,23 @@ specialist-disable: ## Set specialist_routing: false (read back); NO restart: th
 	 [[ "$${DRY_RUN:-0}" == "1" ]] && args+=(--dry-run); \
 	 PATH="$$HOME/.local/bin:$$PATH" python3 scripts/specialist-activate.py "$${args[@]}"
 
+capability-validate: ## Validate the capability registry, source lock, schemas and synthetic company/project examples (read-only; no install/runtime claim)
+	@python3 scripts/capability_registry.py validate
+
+capability-plan: ## Read-only capability plan for TASK=<envelope.json> and SELECTION=<selection.json> or CAPS="id id" (explicit offline); FORMAT=summary
+	@test -n "$(TASK)" -a \( -n "$(SELECTION)" -o -n "$(CAPS)" \) || { echo "usage: make capability-plan TASK=task.json SELECTION=selection.json | CAPS=\"pm.lean-prd ...\" [FORMAT=summary]"; exit 2; }
+	@python3 scripts/capability-plan.py --task "$(TASK)" $(if $(SELECTION),--selection "$(SELECTION)") $(foreach c,$(CAPS),--capability $(c)) $(if $(FORMAT),--format $(FORMAT))
+
+capability-select: ## Read-only capability selection through the model-router seam for TASK=<envelope.json> TEXT=<prompt file|-> with FIXTURE=<cases.json> (offline) or LIVE=1 (configured classifier)
+	@test -n "$(TASK)" -a -n "$(TEXT)" -a \( -n "$(FIXTURE)" -o -n "$(LIVE)" \) || { echo "usage: make capability-select TASK=task.json TEXT=prompt.txt FIXTURE=cases.json | LIVE=1"; exit 2; }
+	@python3 scripts/capability-select.py --task "$(TASK)" --text-file "$(TEXT)" $(if $(FIXTURE),--fixture "$(FIXTURE)",--live)
+
+capability-compat: ## Read-only: capability skills vs the installed Hermes skill rules (source parsed as text), name collisions, model-router drift
+	@h="$${HERMES_HOME:-$$HOME/.hermes}"; python3 scripts/capability_compat.py --hermes-agent "$${HERMES_AGENT_DIR:-$$h/hermes-agent}" --skills-root "$$h/skills" --installed-plugin "$$h/plugins/model-router"
+
+capability-activation-check: ## Read-only: the committed activation manifest equals the one computed from source (docs/capability-activation.md)
+	@python3 scripts/capability_activation.py check
+
 ##@ Knowledge
 ##> Flow: inventory (what is new) -> classify (writes the reviewed plan plan-<report>.json with complete new-profile specs, plus <report>.review.md and the offline <report>.review.html workspace to read, filter, edit and export the plan) -> knowledge-apply PLAN=<plan> DRY_RUN=1 (report: ready / pending review / pending profile approval / pending error / pending stale for risk labels from an earlier release: regenerate the plan) -> edit/review the plan if needed (decide assign/skip/existing, adjust any new profile spec) -> knowledge-apply PLAN=<plan> APPROVE=1 APPROVE_ALL=<plan id> [SKIP_ERRORS=1] (one command: approve proposals, create profiles, canonical copy once, references, install/sync, learn) -> knowledge-learn-status
 ##> Legacy flow (still works): classify APPLY=1 / reconcile -> refresh (stage + sync) -> learn. Books assigned through a plan are stored once under data/knowledge-canonical and referenced from each profile's knowledge/refs/ (no duplicate Markdown); refresh never copies them again.
@@ -500,6 +517,10 @@ test-knowledge-apply: ## Run the reviewed-plan / knowledge-apply / bulk-approval
 
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'
+
+test-capabilities: ## Run the capability registry/planner tests (strict JSON, schemas, lock, readiness, planning, CLIs; temp dirs, offline)
+	@python3 -m unittest discover -s scripts/tests -p 'test_capability_*.py'
+	@python3 -m unittest discover -s scripts/tests -p 'test_specialist_capability_seam.py'
 
 test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed), the repo_lease tests (leases, writers, manifests) and the completion-policy tests
 	@python3 -m unittest discover -s scripts/tests -p 'test_kanban_workflow.py'

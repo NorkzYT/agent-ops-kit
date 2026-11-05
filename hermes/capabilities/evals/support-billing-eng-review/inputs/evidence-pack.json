@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-support-spec",
+  "binding": {"task_id": "t-support-spec", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "S1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic helpdesk configuration export",
+      "ref": "fixture:support-billing-spec/helpdesk-config",
+      "topics": ["helpdesk-config"],
+      "excerpt": "Synthetic fixture. Helpdesk configuration export, 2026-11-03. Billing-tagged tickets are assigned to the queue Billing at all hours. No routing rule depends on time of day. Business hours are Monday to Friday 08:00-17:00 in the Europe/Berlin calendar. Routing rules can use a business-hours condition."
+    },
+    {
+      "source_id": "S2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic support lead note on the first release",
+      "ref": "fixture:support-billing-spec/lead-note",
+      "topics": ["release-scope"],
+      "excerpt": "Synthetic fixture. Support lead note, 2026-11-04. The off-hours rota starts with 2 agents. Billing macros follow in a later spec after question tagging. The rota calendar is kept in the existing scheduling tool."
+    },
+    {
+      "source_id": "S3",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic ticket report for a boundary defect",
+      "ref": "fixture:support-billing-spec/ticket-4812",
+      "topics": ["ticket-4812"],
+      "excerpt": "Synthetic fixture. Ticket 4812, 2026-11-02: a billing ticket created at 17:00 on Monday stayed unassigned for 15 hours."
+    }
+  ],
+  "not_available": [],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-ops-kit.local/schemas/capabilities/registry.schema.json",
+  "title": "Agent-Ops-Kit capability registry v1",
+  "description": "Catalog of reusable methods and their contracts. Data only: it never schedules, dispatches, grants tools or permissions, or records readiness. Readiness is computed from evidence (scripts/capability_registry.py).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_version", "reserved_skill_names", "capabilities"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "registry_version": {"$ref": "#/$defs/version"},
+    "description": {"type": "string", "maxLength": 1000},
+    "reserved_skill_names": {
+      "description": "Bare names no capability may expose or shadow (existing commands/skills and upstream bare names).",
+      "type": "array", "maxItems": 100, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/skill_name"}
+    },
+    "capabilities": {
+      "type": "array", "minItems": 1, "maxItems": 200,
+      "items": {"$ref": "#/$defs/capability"}
+    }
+  },
+  "$defs": {
+    "version": {"type": "string", "pattern": "^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "capability_id": {"type": "string", "pattern": "^(kit|pm|gstack|existing)\\.[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64},
+    "skill_name": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 64},
+    "text": {"type": "string", "minLength": 1, "maxLength": 600},
+    "short": {"type": "string", "minLength": 1, "maxLength": 160},
+    "repo_path": {
+      "type": "string", "minLength": 1, "maxLength": 240,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$))[^\\\\\\x00-\\x1f]+$"
+    },
+    "upstream": {"enum": ["gstack", "pm-skills", "solosquad", "pna-builders", "hermes", "agentskills"]},
+    "artifact_kind": {
+      "enum": [
+        "task-envelope", "evidence-index", "feature-brief", "problem-brief", "decision-brief",
+        "one-page-prd", "discovery-brief", "assumption-register", "experiment-plan",
+        "opportunity-brief", "lean-prd", "acceptance-map", "implementation-handoff",
+        "spec", "eng-review", "design-brief", "design-plan-review", "design-package",
+        "design-review-report", "review-report", "qa-report", "competitor-report",
+        "evidence-ledger", "positioning-brief", "marketing-plan", "process-assessment",
+        "pilot-plan", "code-change-handoff", "ui-evidence"
+      ]
+    },
+    "tool_need": {
+      "description": "A requirement the trusted policy layer must satisfy. Never a grant.",
+      "enum": [
+        "read.scoped", "search.scoped", "clarify", "artifact.write-scoped", "web.public-read",
+        "browser.approved-session", "vision", "image.generate-paid", "compute.arithmetic",
+        "code.claude-route", "tests.approved-runner", "kanban.existing", "review.restricted-path",
+        "github.approved-write"
+      ]
+    },
+    "side_effect": {
+      "enum": [
+        "none", "task-artifact-write", "network-egress-public", "source-modification",
+        "commit-push", "external-write", "publication", "spend"
+      ]
+    },
+    "approval_action": {
+      "enum": [
+        "external-research-if-private-context", "source-modification", "commit-push",
+        "issue-publication", "paid-generation", "publication", "outreach", "spend",
+        "browser-login", "outside-model-review"
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "version", "title", "domain", "milestone", "lifecycle", "exposed_skill_name",
+        "purpose", "source", "implementation", "governance", "inputs", "outputs", "tools",
+        "execution", "side_effects", "approvals", "scope", "verification", "existing_equivalents"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/capability_id"},
+        "version": {"$ref": "#/$defs/version"},
+        "title": {"$ref": "#/$defs/short"},
+        "domain": {"enum": ["product-strategy", "engineering", "design-creative", "growth-operations"]},
+        "milestone": {"enum": ["A", "B", "C", "D", "E", "later"]},
+        "lifecycle": {
+          "description": "planned: contract only, adapter not written; source-implemented: kit adapter files exist; existing: an already-shipped kit path. Never an install or runtime claim.",
+          "enum": ["planned", "source-implemented", "existing"]
+        },
+        "exposed_skill_name": {"oneOf": [{"$ref": "#/$defs/skill_name"}, {"type": "null"}]},
+        "purpose": {"$ref": "#/$defs/text"},
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "upstream", "revision", "paths", "content_digest", "license", "notices", "inspiration_refs"],
+          "properties": {
+            "kind": {"enum": ["original", "adapted", "existing-kit"]},
+            "upstream": {"oneOf": [{"$ref": "#/$defs/upstream"}, {"type": "null"}]},
+            "revision": {"oneOf": [{"$ref": "#/$defs/revision"}, {"type": "null"}]},
+            "paths": {"type": "array", "maxItems": 30, "uniqueItems": true, "items": {"$ref": "#/$defs/repo_path"}},
+            "content_digest": {
+              "description": "files_digest over the locked upstream (repo, path, sha256) entries of `paths`; null when no upstream file is adapted.",
+              "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+            },
+            "license": {"type": "string", "enum": ["MIT", "GPL-3.0", "Apache-2.0", "CC-BY-4.0"]},
+            "notices": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/text"}},
+            "inspiration_refs": {
+              "description": "Concept references only: nothing from these files is copied.",
+              "type": "array", "maxItems": 20,
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["upstream", "path"],
+                "properties": {"upstream": {"$ref": "#/$defs/upstream"}, "path": {"$ref": "#/$defs/repo_path"}}
+              }
+            }
+          }
+        },
+        "implementation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["paths", "digest"],
+          "properties": {
+            "paths": {"type": "array", "maxItems": 30, "uniqueItems": true, "items": {"$ref": "#/$defs/repo_path"}},
+            "digest": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+          }
+        },
+        "governance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["local_modifications", "tool_dependencies", "network_behavior", "filesystem_effects", "installation_scope", "auto_update"],
+          "properties": {
+            "local_modifications": {"$ref": "#/$defs/text"},
+            "tool_dependencies": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/short"}},
+            "network_behavior": {"$ref": "#/$defs/text"},
+            "filesystem_effects": {"$ref": "#/$defs/text"},
+            "installation_scope": {"$ref": "#/$defs/text"},
+            "auto_update": {"const": false},
+            "disabled_upstream_behaviors": {"type": "array", "maxItems": 30, "items": {"$ref": "#/$defs/short"}}
+          }
+        },
+        "inputs": {
+          "type": "array", "maxItems": 12,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["name", "kinds", "required", "producer"],
+            "properties": {
+              "name": {"$ref": "#/$defs/skill_name"},
+              "kinds": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"$ref": "#/$defs/artifact_kind"}},
+              "required": {"type": "boolean"},
+              "producer": {
+                "description": "Capability added to a plan when this required input has no accepted, current artifact; null means the requester must supply it.",
+                "oneOf": [{"$ref": "#/$defs/capability_id"}, {"type": "null"}]
+              },
+              "producer_mode": {"$ref": "#/$defs/skill_name"},
+              "description": {"$ref": "#/$defs/short"}
+            }
+          }
+        },
+        "outputs": {
+          "type": "array", "minItems": 1, "maxItems": 12,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["kind", "description"],
+            "properties": {"kind": {"$ref": "#/$defs/artifact_kind"}, "description": {"$ref": "#/$defs/text"}}
+          }
+        },
+        "tools": {
+          "type": "object", "additionalProperties": false, "required": ["required", "optional"],
+          "properties": {
+            "required": {"type": "array", "maxItems": 14, "uniqueItems": true, "items": {"$ref": "#/$defs/tool_need"}},
+            "optional": {"type": "array", "maxItems": 14, "uniqueItems": true, "items": {"$ref": "#/$defs/tool_need"}}
+          }
+        },
+        "execution": {
+          "type": "object", "additionalProperties": false, "required": ["method", "modes", "default_mode", "writer"],
+          "properties": {
+            "method": {"enum": ["hermes-native", "hermes-native-adapted", "existing-kit-path"]},
+            "modes": {"type": "array", "minItems": 1, "maxItems": 6, "uniqueItems": true, "items": {"$ref": "#/$defs/skill_name"}},
+            "default_mode": {"$ref": "#/$defs/skill_name"},
+            "writer": {
+              "description": "Who may change source. Audits and advice are 'none'; code changes only via the existing coordinator Claude route.",
+              "enum": ["none", "existing-claude-route"]
+            }
+          }
+        },
+        "side_effects": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"$ref": "#/$defs/side_effect"}},
+        "approvals": {
+          "type": "array", "maxItems": 10,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["action", "when"],
+            "properties": {"action": {"$ref": "#/$defs/approval_action"}, "when": {"$ref": "#/$defs/short"}}
+          }
+        },
+        "scope": {
+          "type": "object", "additionalProperties": false,
+          "required": ["company", "project", "state_scope", "data_classes", "requires_learned_knowledge"],
+          "properties": {
+            "company": {"enum": ["required", "optional"]},
+            "project": {"enum": ["required", "optional"]},
+            "state_scope": {"enum": ["company-project-task", "company-task", "task"]},
+            "data_classes": {
+              "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true,
+              "items": {"enum": ["public", "synthetic", "company-private"]}
+            },
+            "requires_learned_knowledge": {"type": "boolean"}
+          }
+        },
+        "verification": {
+          "type": "object", "additionalProperties": false, "required": ["rubric_id", "criteria", "acceptance_tests"],
+          "properties": {
+            "rubric_id": {"$ref": "#/$defs/skill_name"},
+            "criteria": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/text"}},
+            "acceptance_tests": {
+              "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[A-Z]{2,4}-[0-9]{2}$"}
+            }
+          }
+        },
+        "handoff_to": {
+          "description": "Capabilities that may follow when separately selected/authorized. Never added automatically.",
+          "type": "array", "maxItems": 6, "uniqueItems": true, "items": {"$ref": "#/$defs/capability_id"}
+        },
+        "existing_equivalents": {"type": "array", "maxItems": 10, "items": {"$ref": "#/$defs/short"}}
+      }
+    }
+  }
+}

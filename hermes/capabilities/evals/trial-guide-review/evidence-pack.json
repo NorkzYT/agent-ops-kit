@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-trial-review",
+  "binding": {"task_id": "t-trial-review", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "R1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic review request for the draft guide design",
+      "ref": "fixture:trial-guide-review/request",
+      "topics": ["review-scope"],
+      "excerpt": "Synthetic fixture. The product designer asked for a design audit of the draft guide preview and tokens before any usability session is requested."
+    }
+  ],
+  "not_available": [
+    {"topic": "browser-render", "reason": "not-measured", "detail": "No browser render or screenshot of the preview is available to this review."},
+    {"topic": "assistive-tech", "reason": "not-measured", "detail": "No screen reader or accessibility-scanner run is available."},
+    {"topic": "usability-test", "reason": "not-measured", "detail": "Nobody has used the guide design."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

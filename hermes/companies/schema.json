@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-ops-kit.local/schemas/companies/schema.json",
+  "title": "Company manifest v1",
+  "description": "Company identity and the boundaries its private execution requires. Defines requirements, grants nothing, and cannot mark any boundary enforced.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "company_id",
+    "manifest_version",
+    "synthetic",
+    "authorized_requesters",
+    "authorized_destinations",
+    "project_ids",
+    "knowledge_scope",
+    "memory_scope",
+    "execution_policy_ref",
+    "service_account_refs",
+    "default_egress",
+    "retention_policy_ref",
+    "boundaries"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "company_id": {
+      "$ref": "#/$defs/tenant"
+    },
+    "manifest_version": {
+      "type": "string",
+      "pattern": "^[0-9]{1,6}$"
+    },
+    "synthetic": {
+      "type": "boolean",
+      "description": "true for public examples. Real manifests live outside Git in an administrator-controlled registry."
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "authorized_requesters": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/ref"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "authorized_destinations": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/ref"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "project_ids": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/tenant"
+      },
+      "uniqueItems": true
+    },
+    "knowledge_scope": {
+      "type": "string",
+      "pattern": "^company/[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "memory_scope": {
+      "type": "string",
+      "pattern": "^company/[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "execution_policy_ref": {
+      "$ref": "#/$defs/ref"
+    },
+    "service_account_refs": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "pattern": "^vault-ref:[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$"
+      },
+      "uniqueItems": true
+    },
+    "default_egress": {
+      "const": "deny"
+    },
+    "retention_policy_ref": {
+      "$ref": "#/$defs/ref"
+    },
+    "boundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repositories",
+        "documents",
+        "memory",
+        "connected_apps",
+        "browser_sessions",
+        "credentials",
+        "outputs",
+        "network",
+        "model_inference",
+        "cross_company_sharing"
+      ],
+      "properties": {
+        "repositories": {
+          "$ref": "#/$defs/boundary"
+        },
+        "documents": {
+          "$ref": "#/$defs/boundary"
+        },
+        "memory": {
+          "$ref": "#/$defs/boundary"
+        },
+        "connected_apps": {
+          "$ref": "#/$defs/boundary"
+        },
+        "browser_sessions": {
+          "$ref": "#/$defs/boundary"
+        },
+        "credentials": {
+          "$ref": "#/$defs/boundary"
+        },
+        "outputs": {
+          "$ref": "#/$defs/boundary"
+        },
+        "network": {
+          "$ref": "#/$defs/boundary"
+        },
+        "model_inference": {
+          "$ref": "#/$defs/boundary"
+        },
+        "cross_company_sharing": {
+          "$ref": "#/$defs/boundary"
+        }
+      },
+      "description": "Future enforcement contract, one entry per boundary. A manifest states requirements only; enforcement status comes from an accepted protected runtime, never from this file."
+    }
+  },
+  "$defs": {
+    "tenant": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,47}$"
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9_./:-]{0,159}$",
+      "description": "Opaque handle resolved by a trusted broker; never a secret value, filesystem path or credentialed URL."
+    },
+    "boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_ref",
+        "default",
+        "requirement"
+      ],
+      "properties": {
+        "policy_ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "default": {
+          "enum": [
+            "deny",
+            "allow-listed-only"
+          ]
+        },
+        "requirement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        }
+      }
+    }
+  }
+}

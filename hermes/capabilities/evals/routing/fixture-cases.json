@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "label": "FIXTURE: coordinator-authored natural-language tasks and raw classifier answers for offline routing evaluation. The answers were written by the coordinator, not produced by a model. Exercised for real: the router's current-task, privacy and envelope gates, the classifier answer parser and caps, closed-catalog validation, selection schema and the planner's dependency closure. Not exercised: model judgement on natural language (needs the live classifier, unavailable in this environment).",
+  "cases": [
+    {
+      "case_id": "rou-new-saas",
+      "recipe_id": "new-saas-idea",
+      "task_text": "I'm thinking about a SaaS that helps independent physiotherapy clinics fill last-minute cancellations. Help me decide whether the problem is real, who would pay, and who already sells something like it.",
+      "fixture_answer": "business, kit.problem-definition, pm.product-discovery, pm.competitor-research",
+      "envelope": {"egress_class": "public-read"},
+      "expected": {"capability_ids": ["kit.problem-definition", "pm.product-discovery", "pm.competitor-research"],
+                   "stage_ids": ["kit.problem-definition", "pm.product-discovery", "pm.competitor-research"],
+                   "profiles_offered_answer": ["business"]}
+    },
+    {
+      "case_id": "rou-defined-feature",
+      "recipe_id": "defined-feature",
+      "task_text": "The CSV export for finance users is approved. Please write the requirements for it and have engineering review the plan before anyone builds it.",
+      "fixture_answer": "pm.lean-prd, gstack.plan-eng-review",
+      "envelope": {},
+      "expected": {"capability_ids": ["pm.lean-prd", "gstack.plan-eng-review"],
+                   "stage_ids": ["kit.problem-definition", "pm.lean-prd", "gstack.plan-eng-review"],
+                   "profiles_offered_answer": []}
+    },
+    {
+      "case_id": "rou-coding-bug",
+      "recipe_id": "coding-bug",
+      "task_text": "The invoice total is off by one cent whenever a percentage discount is applied. Please fix it.",
+      "fixture_answer": "existing.engineering-path",
+      "envelope": {},
+      "expected": {"capability_ids": ["existing.engineering-path"], "stage_ids": ["existing.engineering-path"],
+                   "profiles_offered_answer": []}
+    },
+    {
+      "case_id": "rou-ui-improvement",
+      "recipe_id": "ui-improvement",
+      "task_text": "Our settings page feels cramped on phones. Audit it, fix what is wrong, then check it visually on a small screen.",
+      "fixture_answer": "gstack.design-review, existing.engineering-path, gstack.qa",
+      "envelope": {},
+      "expected": {"capability_ids": ["gstack.design-review", "existing.engineering-path", "gstack.qa"],
+                   "stage_ids": ["gstack.design-review", "existing.engineering-path", "gstack.qa"],
+                   "profiles_offered_answer": []}
+    },
+    {
+      "case_id": "rou-competitors",
+      "recipe_id": "competitor-research",
+      "task_text": "Compare the public pricing pages of the three best-known crew-scheduling tools and tell me where we could position.",
+      "fixture_answer": "pm.competitor-research",
+      "envelope": {"egress_class": "public-read"},
+      "expected": {"capability_ids": ["pm.competitor-research"], "stage_ids": ["pm.competitor-research"],
+                   "profiles_offered_answer": []}
+    },
+    {
+      "case_id": "rou-marketing",
+      "recipe_id": "marketing-plan",
+      "task_text": "Put together a launch marketing plan for our bookkeeping course, including how we should position it.",
+      "fixture_answer": "marketing, existing.marketing-team",
+      "envelope": {},
+      "expected": {"capability_ids": ["existing.marketing-team"],
+                   "stage_ids": ["existing.marketing-team"],
+                   "profiles_offered_answer": ["marketing"]}
+    },
+    {
+      "case_id": "rou-operations",
+      "recipe_id": "operational-improvement",
+      "task_text": "Month-end invoicing takes our office four days. Work out why and propose a pilot that would shorten it measurably.",
+      "fixture_answer": "kit.operational-analysis",
+      "envelope": {},
+      "expected": {"capability_ids": ["kit.operational-analysis"], "stage_ids": ["kit.operational-analysis"],
+                   "profiles_offered_answer": []}
+    }
+  ]
+}

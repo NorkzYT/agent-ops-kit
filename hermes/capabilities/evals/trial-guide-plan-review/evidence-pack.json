@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-trial-plan-design-review",
+  "binding": {"task_id": "t-trial-plan-design-review", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "R1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic plan design review request",
+      "ref": "fixture:trial-guide-plan-review/request",
+      "topics": ["review-request"],
+      "excerpt": "Synthetic fixture. Review request 2026-11-04: review the first-step guide plan (lean PRD, design brief and design package) before engineering starts. Workspace members who are not owners can open a trial workspace."
+    }
+  ],
+  "not_available": [],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

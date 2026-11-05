@@ -96,6 +96,16 @@ CLASSIFIER_SENDER_CHARS = 4000
 CLASSIFIER_DOC_CHARS = 6000
 CLASSIFIER_CONTEXT_CHARS = 16000
 ROUTE_BUDGET = 25.0
+# Capability catalog seam (the kit's scripts/capability_selection.py). In ai mode the
+# caller may offer namespaced capability IDs (``pm.lean-prd``) to the SAME classifier
+# call that picks profiles; picks come back in ``trace["capability_selection"]``, never
+# as routes. Profile names cannot contain a dot, so the two sets cannot collide. Without
+# a catalog nothing here changes. A capability is a closed catalog ID, not a permission.
+CAPABILITY_ID_RE = re.compile(r"^(?:kit|pm|gstack|existing)\.[a-z0-9]+(?:-[a-z0-9]+)*$")
+MAX_CAPABILITY_PICKS = 4
+MAX_CAPABILITY_CATALOG = 32
+CAPABILITY_TEXT_CHARS = 400
+CAPABILITY_GUIDANCE_CHARS = 2000
 
 
 def _rx(pattern: str) -> "re.Pattern[str]":
@@ -563,6 +573,9 @@ class ClassifierText(str):
     deadline: Optional[float] = None
     catalog: Optional[Dict[str, str]] = None   # {profile: purpose} for the eligible pool (ai mode)
     max_picks: Optional[int] = None            # names the classifier may return (ai mode: max_profiles)
+    capability_catalog: Optional[Dict[str, str]] = None  # {capability id: purpose} (capability seam only)
+    max_capability_picks: Optional[int] = None
+    capability_guidance: Optional[str] = None  # registry-authored smallest-set recipes (data, not task text)
 
 
 # Control tags (task_intent, privacy) inside attached content carry no
@@ -720,12 +733,69 @@ def _execution(tier: str, spec: Specialist) -> str:
     return "short"
 
 
+def _single_line(value: Any, limit: int, what: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > limit or any(
+            ord(c) < 32 or c in "\u2028\u2029" for c in value):
+        raise ValueError(f"capability catalog: {what} must be one line of at most {limit} characters")
+    return value.strip()
+
+
+def capability_catalog(capabilities: Any, guidance: Any = None) -> Tuple[Dict[str, str], str]:
+    """Validated ``({id: purpose}, guidance)`` for the capability seam; raises ValueError.
+    IDs must be namespaced; purposes and guidance lines are bounded single lines so the
+    catalog cannot inject list entries or instructions into the classifier prompt."""
+    if not isinstance(capabilities, dict) or len(capabilities) > MAX_CAPABILITY_CATALOG:
+        raise ValueError(f"capability catalog: a mapping of at most {MAX_CAPABILITY_CATALOG} ids")
+    out: Dict[str, str] = {}
+    for cid, purpose in capabilities.items():
+        if not isinstance(cid, str) or not CAPABILITY_ID_RE.match(cid) or len(cid) > 64:
+            raise ValueError("capability catalog: ids must be namespaced (kit|pm|gstack|existing).<name>")
+        out[cid] = _single_line(purpose, CAPABILITY_TEXT_CHARS, f"purpose of {cid}")
+    text = ""
+    if guidance is not None:
+        if not isinstance(guidance, (list, tuple)):
+            raise ValueError("capability catalog: guidance must be a list of lines")
+        text = "\n".join(_single_line(g, CAPABILITY_TEXT_CHARS, "guidance line") for g in guidance)
+        if len(text) > CAPABILITY_GUIDANCE_CHARS:
+            raise ValueError(f"capability catalog: guidance exceeds {CAPABILITY_GUIDANCE_CHARS} characters")
+    return out, text
+
+
 def route_text(
     raw_text: str,
     settings: SpecialistSettings,
     *,
     classifier: Optional[Classifier] = None,
     readiness: Optional[Callable[[str], Readiness]] = None,
+    capabilities: Optional[Dict[str, str]] = None,
+    capability_guidance: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """Route one current-turn user message (see :func:`_route_text`). With ``capabilities``
+    (ai mode only) the same classifier call also picks namespaced capability IDs, reported
+    content-free in ``trace["capability_selection"]`` (outcome ok | failed | unconfigured |
+    skipped, reason, offered, picks, dropped). Every early exit (no current task, runtime
+    envelope, privacy, not substantive, other mode) selects no capability."""
+    caps: Optional[Tuple[Dict[str, str], str]] = None
+    if capabilities is not None:
+        caps = capability_catalog(capabilities, capability_guidance)
+    trace = _route_text(raw_text, settings, classifier=classifier, readiness=readiness, caps=caps)
+    if caps is not None:
+        cs = trace.setdefault("capability_selection", {"outcome": "skipped", "reason": "-", "offered": len(caps[0]),
+                                                       "picks": [], "dropped": []})
+        if trace["selection_mode"] != "ai":
+            cs["reason"] = f"selection-mode:{trace['selection_mode']}"
+        elif cs["outcome"] != "ok":
+            cs["reason"] = trace.get("reason") or "-"
+    return trace
+
+
+def _route_text(
+    raw_text: str,
+    settings: SpecialistSettings,
+    *,
+    classifier: Optional[Classifier] = None,
+    readiness: Optional[Callable[[str], Readiness]] = None,
+    caps: Optional[Tuple[Dict[str, str], str]] = None,
 ) -> Dict[str, Any]:
     """Route one current-turn user message. Returns a content-free trace dict.
 
@@ -751,6 +821,9 @@ def route_text(
         "unknown_allowed": list(settings.unknown),
         "selection_mode": selection_mode(settings.selection_mode),
     }
+    if caps is not None:
+        trace["capability_selection"] = {"outcome": "skipped", "reason": "-", "offered": len(caps[0]),
+                                         "picks": [], "dropped": []}
     mode = trace["selection_mode"]
     if mode == "keywords":
         classifier = None
@@ -822,7 +895,7 @@ def route_text(
         name, settings.profiles_root if settings.profiles_root is not None else default_profiles_root()))
     if mode == "ai":
         return _ai_select(trace, task, decision, source, sep, raw_text or "", settings, classifier, rdy, pdec,
-                          started)
+                          started, caps)
 
     allowed = set(settings.allowed) if settings.allowed else set(BY_NAME)
     candidates: List[Tuple[int, int, Specialist, List[str]]] = []
@@ -953,7 +1026,7 @@ def _finish(trace: Dict[str, Any], selected: Sequence[Tuple[Specialist, int, Lis
 def _ai_select(trace: Dict[str, Any], task: "ti.CurrentTask", decision: "ti.Decision", source: str,
                sep: "att.Separation", raw_text: str, settings: SpecialistSettings,
                classifier: Optional[Classifier], rdy: Callable[[str], Readiness], pdec: pv.PrivacyDecision,
-               started: float) -> Dict[str, Any]:
+               started: float, caps: Optional[Tuple[Dict[str, str], str]] = None) -> Dict[str, Any]:
     """AI-only selection. Deterministic code decides WHO MAY be selected (allowlist, privacy,
     installed/readiness, caps) and HOW a selection runs (advisory, short+skills by tier); the
     configured classifier decides WHICH of the eligible profiles the task needs.
@@ -978,6 +1051,9 @@ def _ai_select(trace: Dict[str, Any], task: "ti.CurrentTask", decision: "ti.Deci
         pool.append(name)
     trace["catalog"] = {"profiles": len(cat), "dynamic": sum(1 for n in cat if n not in BY_NAME),
                         "eligible": len(pool)}
+    cs = trace.get("capability_selection") if caps is not None else None
+    if cs is not None:
+        trace["catalog"]["capabilities"] = len(caps[0])
     if pdec.private and settings.classifier != "local":
         trace["classifier"] = "skipped:private"
         trace["reason"] = "privacy:local-only"
@@ -985,12 +1061,16 @@ def _ai_select(trace: Dict[str, Any], task: "ti.CurrentTask", decision: "ti.Deci
     if settings.classifier == "none" or classifier is None:
         trace["classifier"] = "unconfigured"
         trace["reason"] = "classifier-unconfigured"
+        if cs is not None:
+            cs["outcome"] = "unconfigured"
         return trace
-    if not pool:
+    if not pool and cs is None:
         trace["classifier"] = "skipped:empty-pool"
         trace["reason"] = "no-eligible-profile"
         return trace
-    documents = None
+    # A private turn reads no attachment for routing: an explicit empty result, never None
+    # (None would make classifier_context read and extract the documents itself).
+    documents: Tuple[List[Tuple[str, str]], Dict[str, Any]] = ([], {})
     if sep.attachment and sep.proven and not pdec.private:
         documents = verified_documents(sep, raw_text, deadline=started + ROUTE_BUDGET)
     context, trace["classifier_context"] = classifier_context(
@@ -1001,9 +1081,15 @@ def _ai_select(trace: Dict[str, Any], task: "ti.CurrentTask", decision: "ti.Deci
         return trace
     context.catalog = {n: cat[n].purpose for n in pool}
     context.max_picks = settings.max_profiles
+    offered = list(pool)
+    if cs is not None:
+        context.capability_catalog = dict(caps[0])
+        context.max_capability_picks = MAX_CAPABILITY_PICKS
+        context.capability_guidance = caps[1] or None
+        offered += list(caps[0])
     trace["classifier_gate"] = "ai"
     try:
-        result = classifier(context, pool)
+        result = classifier(context, offered)
         picked = [str(p).strip().lower() for p in (result or ())]
         trace["classifier"] = "used"
         meta = getattr(result, "meta", None)
@@ -1014,10 +1100,27 @@ def _ai_select(trace: Dict[str, Any], task: "ti.CurrentTask", decision: "ti.Deci
     except Exception as exc:  # the selector is the only source of routes: a failure selects none
         trace["classifier"] = f"error:{type(exc).__name__}"
         trace["reason"] = "classifier-failed"
+        if cs is not None:
+            cs["outcome"] = "failed"
         return trace
     if outcome != "ok" and outcome != "empty-pool":
         trace["reason"] = "classifier-failed"
+        if cs is not None:
+            cs["outcome"] = "failed"
         return trace
+    if cs is not None:
+        # Namespaced picks are capabilities, never profiles (and never "unknown profile").
+        cs["outcome"] = "ok"
+        for p in [p for p in picked if "." in p]:
+            if p not in caps[0]:
+                cs["dropped"].append({"id": "?", "reason": "capability:unknown"})
+            elif p in cs["picks"]:
+                cs["dropped"].append({"id": p, "reason": "capability:duplicate"})
+            elif len(cs["picks"]) >= MAX_CAPABILITY_PICKS:
+                cs["dropped"].append({"id": p, "reason": "capability:cap"})
+            else:
+                cs["picks"].append(p)
+        picked = [p for p in picked if "." not in p]
     selected: List[Tuple[Specialist, int, List[str], Readiness]] = []
     seen: set = set()
     for p in picked:

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-queue-review",
+  "binding": {"task_id": "t-queue-review", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "Q1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic review request for the current billing queue page",
+      "ref": "fixture:queue-page-review/request",
+      "topics": ["review-scope"],
+      "excerpt": "Synthetic fixture. The support lead supplied a saved copy of the current billing queue page and asked for a design audit before the rota pilot. Rota agents use it at night on laptops and phones."
+    }
+  ],
+  "not_available": [
+    {"topic": "browser-render", "reason": "not-measured", "detail": "No browser render or screenshot of the page is available to this review."},
+    {"topic": "assistive-tech", "reason": "not-measured", "detail": "No screen reader or accessibility-scanner run is available."},
+    {"topic": "usability-test", "reason": "not-measured", "detail": "No agent has been observed using the page."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

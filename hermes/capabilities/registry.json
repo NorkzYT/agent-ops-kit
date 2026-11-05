@@ -1,0 +1,2326 @@
+{
+  "schema_version": 1,
+  "registry_version": "0.1.0",
+  "description": "Agent-Ops-Kit capability catalog. Data only: no scheduling, dispatch, tool or permission grants. Readiness is computed (scripts/capability_registry.py), never stored. Specialist selection stays in the model-router plugin.",
+  "reserved_skill_names": [
+    "claude-code",
+    "competitive-analysis",
+    "competitor-analysis",
+    "competitor-news-monitor",
+    "create-prd",
+    "design-consultation",
+    "design-review",
+    "discover",
+    "dogfood",
+    "github",
+    "grounded-citations",
+    "gstack-upgrade",
+    "hermes-agent",
+    "humanizer",
+    "investigate",
+    "learn",
+    "office-hours",
+    "plan-ceo-review",
+    "plan-design-review",
+    "plan-eng-review",
+    "qa",
+    "requesting-code-review",
+    "retro",
+    "review",
+    "screen-recording-qa",
+    "setup-browser-cookies",
+    "ship",
+    "spec",
+    "systematic-debugging",
+    "test-driven-development",
+    "verify",
+    "write-prd"
+  ],
+  "capabilities": [
+    {
+      "id": "kit.problem-definition",
+      "version": "0.1.0",
+      "title": "Original evidence-led problem definition",
+      "domain": "product-strategy",
+      "milestone": "B",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "problem-definition",
+      "purpose": "Turn a vague business, product or process problem into an evidenced decision frame: quick brief, causal why-tree, or full SCQA, why tree, MECE issue map, customer/process causal map, measurable hypothesis and one-page draft PRD. Not for known code bugs.",
+      "source": {
+        "kind": "original",
+        "upstream": null,
+        "revision": null,
+        "paths": [],
+        "content_digest": null,
+        "license": "GPL-3.0",
+        "notices": [
+          "Original Agent-Ops-Kit wording and procedure. RO-PNA has no declared license: its prompt, workshop text, templates and data are cited as inspiration and never copied or translated."
+        ],
+        "inspiration_refs": [
+          {
+            "upstream": "pna-builders",
+            "path": "src/lib/chatbot/systemPrompt.ts"
+          },
+          {
+            "upstream": "pna-builders",
+            "path": "docs/PNA_워크샵_2_프레임워크_매칭.md"
+          },
+          {
+            "upstream": "solosquad",
+            "path": "skills/workflow-manager/SKILL.md"
+          },
+          {
+            "upstream": "solosquad",
+            "path": "skills/mece/SKILL.md"
+          },
+          {
+            "upstream": "solosquad",
+            "path": "skills/xyz-hypothesis/SKILL.md"
+          },
+          {
+            "upstream": "solosquad",
+            "path": "skills/workflow-manager/assets/workflows/scqa/workflow.yaml"
+          },
+          {
+            "upstream": "solosquad",
+            "path": "skills/workflow-manager/assets/workflows/five-whys/workflow.yaml"
+          },
+          {
+            "upstream": "solosquad",
+            "path": "skills/workflow-manager/assets/workflows/tdcc/workflow.yaml"
+          }
+        ]
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/problem-definition/SKILL.md",
+          "hermes/skills/problem-definition/references/evidence-and-causality.md",
+          "hermes/skills/problem-definition/references/methods-and-provenance.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "50bc8289a203f7b93f389bd9c3e2cbdc102605710b8b31205453cc39c4b6062a"
+      },
+      "governance": {
+        "local_modifications": "Original procedure; no third-party text.",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None; public research is a separate capability.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "evidence",
+          "kinds": [
+            "evidence-index"
+          ],
+          "required": false,
+          "producer": null,
+          "description": "Supplied evidence; absent evidence stays unknown, never generated."
+        },
+        {
+          "name": "prior-problem",
+          "kinds": [
+            "problem-brief"
+          ],
+          "required": false,
+          "producer": null,
+          "description": "An accepted current brief is reused instead of re-interviewing."
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "problem-brief",
+          "description": "Decision, affected users/process, symptom vs candidate causes, evidence/counterevidence, unknowns, next action."
+        },
+        {
+          "kind": "decision-brief",
+          "description": "Quick-mode or full-mode decision frame with alternatives and the cheapest next test."
+        },
+        {
+          "kind": "assumption-register",
+          "description": "Assumptions and hypotheses kept separate from observations."
+        },
+        {
+          "kind": "one-page-prd",
+          "description": "Full mode only: draft one-page PRD; never approved implementation."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "clarify",
+          "compute.arithmetic"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native",
+        "modes": [
+          "quick",
+          "causal",
+          "full"
+        ],
+        "default_mode": "quick",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "problem-definition-rubric-v1",
+        "criteria": [
+          "Names the decision and the affected user or process.",
+          "Separates symptom from candidate causes; causal edges are labeled observed-association, causal-hypothesis or experiment-supported.",
+          "Every factual claim cites evidence or is labeled assumption, hypothesis or unknown; no simulated customer data.",
+          "Hypothesis uses semantic fields (population, behavior_or_outcome, threshold, window, intervention, measurement, counter_metric, failure_rule).",
+          "Quick mode stays short; full mode explains skipped or reordered stages."
+        ],
+        "acceptance_tests": [
+          "PD-01",
+          "PD-02",
+          "PD-03",
+          "PD-04",
+          "PD-05",
+          "PD-06",
+          "ROU-01"
+        ]
+      },
+      "existing_equivalents": [
+        "strategy/business advisory profiles",
+        "systematic-debugging for code bugs"
+      ]
+    },
+    {
+      "id": "pm.product-discovery",
+      "version": "0.1.0",
+      "title": "Product discovery for new and existing products",
+      "domain": "product-strategy",
+      "milestone": "B",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "pm-product-discovery",
+      "purpose": "Hermes workflow adapted from the PM Skills discover command: new/existing branch, ideas, assumption register, impact x uncertainty ranking, experiment plan and recommended next decision, with explicit checkpoints.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "pm-skills",
+        "revision": "2a12295a7717569baa7be181b4cfebe3ca38a6bb",
+        "paths": [
+          "pm-product-discovery/commands/discover.md",
+          "pm-product-discovery/skills/brainstorm-ideas-new/SKILL.md",
+          "pm-product-discovery/skills/brainstorm-ideas-existing/SKILL.md",
+          "pm-product-discovery/skills/identify-assumptions-new/SKILL.md",
+          "pm-product-discovery/skills/identify-assumptions-existing/SKILL.md",
+          "pm-product-discovery/skills/prioritize-assumptions/SKILL.md",
+          "pm-product-discovery/skills/brainstorm-experiments-new/SKILL.md",
+          "pm-product-discovery/skills/brainstorm-experiments-existing/SKILL.md",
+          "pm-product-discovery/skills/opportunity-solution-tree/SKILL.md"
+        ],
+        "content_digest": "1440e201fe344ca18a25492b9dcaf73b4111133734b014f804b429da6a67d0bc",
+        "license": "MIT",
+        "notices": [
+          "Adapted PM Skills text must carry the PM Skills LICENSE copyright and MIT permission notice."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/pm-product-discovery/SKILL.md",
+          "hermes/skills/pm-product-discovery/references/method-map.md",
+          "hermes/skills/pm-product-discovery/references/pm-skills-license.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "d2203270243438cf8c033cfb320cb308e4fae62db4e3b05d3f19a470d2774acf"
+      },
+      "governance": {
+        "local_modifications": "Claude command orchestration rewritten as an explicit Hermes workflow; namespaced pm- names; evidence/unknown labels added; no simulated results.",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None by default; public research only through a separately selected research capability.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "Claude plugin command expansion",
+          "Literal /discover one-shot text"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "problem",
+          "kinds": [
+            "problem-brief",
+            "decision-brief",
+            "feature-brief"
+          ],
+          "required": true,
+          "producer": "kit.problem-definition",
+          "producer_mode": "quick",
+          "description": "Accepted problem/segment frame."
+        },
+        {
+          "name": "evidence",
+          "kinds": [
+            "evidence-index"
+          ],
+          "required": false,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "discovery-brief",
+          "description": "Problem/customer definition, opportunity assessment, alternatives, evidence gaps and recommended next decision."
+        },
+        {
+          "kind": "assumption-register",
+          "description": "Value/usability/feasibility/viability (and GTM for new products) assumptions ranked by impact and uncertainty."
+        },
+        {
+          "kind": "experiment-plan",
+          "description": "Experiments with threshold, window, failure rule; results stay unknown until measured."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "clarify",
+          "web.public-read"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "new",
+          "existing"
+        ],
+        "default_mode": "new",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [
+        {
+          "action": "external-research-if-private-context",
+          "when": "Public web research about a private company context."
+        }
+      ],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "discovery-rubric-v1",
+        "criteria": [
+          "New and existing branches use their matching assumption and experiment methods.",
+          "Declined ideas never reappear as accepted scope.",
+          "Every experiment names threshold, window and failure rule; no fabricated results.",
+          "Evidence gaps stay visible when research is denied."
+        ],
+        "acceptance_tests": [
+          "PM-01",
+          "PD-06",
+          "ROU-01",
+          "CAT-01"
+        ]
+      },
+      "handoff_to": [
+        "pm.lean-prd"
+      ],
+      "existing_equivalents": [
+        "strategy/business advisory profiles",
+        "grounded-citations"
+      ]
+    },
+    {
+      "id": "pm.lean-prd",
+      "version": "0.1.0",
+      "title": "Lean PRD from an accepted opportunity or feature",
+      "domain": "product-strategy",
+      "milestone": "B",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "pm-lean-prd",
+      "purpose": "Convert an accepted problem, discovery result or feature brief into a lean PRD: target users, problem/value, goals and metrics, functional requirements, non-goals, constraints, risks, testable acceptance criteria and an implementation handoff. Never edits source.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "pm-skills",
+        "revision": "2a12295a7717569baa7be181b4cfebe3ca38a6bb",
+        "paths": [
+          "pm-execution/commands/write-prd.md",
+          "pm-execution/skills/create-prd/SKILL.md"
+        ],
+        "content_digest": "7751407cf54c050b6ef4752d376d1531e1f2a516c8df0a5328a774e91e2fc2c7",
+        "license": "MIT",
+        "notices": [
+          "Adapted PM Skills text must carry the PM Skills LICENSE copyright and MIT permission notice."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/pm-lean-prd/SKILL.md",
+          "hermes/skills/pm-lean-prd/references/method-map.md",
+          "hermes/skills/pm-lean-prd/references/pm-skills-license.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "ae87d9ab0ebe85192bd4d59ac82f11f44449c7e918fe49bdfb8ca1382025cb36"
+      },
+      "governance": {
+        "local_modifications": "write-prd command rewritten as a Hermes workflow; acceptance criteria made traceable; handoff is a draft, not authorization.",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "Automatic implementation after PRD",
+          "Issue publication"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "opportunity",
+          "kinds": [
+            "discovery-brief",
+            "problem-brief",
+            "decision-brief",
+            "feature-brief"
+          ],
+          "required": true,
+          "producer": "kit.problem-definition",
+          "producer_mode": "quick",
+          "description": "Reused by ID/digest when accepted and current; otherwise a quick problem definition runs first."
+        },
+        {
+          "name": "evidence",
+          "kinds": [
+            "evidence-index"
+          ],
+          "required": false,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "lean-prd",
+          "description": "Lean PRD with segment, value, scope/non-goals, constraints, risks and measurable outcome."
+        },
+        {
+          "kind": "acceptance-map",
+          "description": "Each acceptance criterion traced to evidence or an explicitly chosen requirement."
+        },
+        {
+          "kind": "implementation-handoff",
+          "description": "Draft handoff for the existing engineering path; carries no approval."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "clarify"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "lean",
+          "full"
+        ],
+        "default_mode": "lean",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "lean-prd-rubric-v1",
+        "criteria": [
+          "Includes target segment, value, scope and non-goals, measurable outcome.",
+          "Acceptance criteria are executable/testable and traced.",
+          "Does not authorize implementation or publish issues."
+        ],
+        "acceptance_tests": [
+          "PM-02",
+          "PD-06",
+          "ROU-01"
+        ]
+      },
+      "handoff_to": [
+        "gstack.plan-eng-review",
+        "gstack.plan-design-review",
+        "existing.engineering-path"
+      ],
+      "existing_equivalents": [
+        "existing code-card acceptance criteria",
+        "document-to-action-items"
+      ]
+    },
+    {
+      "id": "gstack.office-hours",
+      "version": "0.1.0",
+      "title": "Office-hours product interrogation",
+      "domain": "product-strategy",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "gstack-office-hours",
+      "purpose": "Adapted gstack office-hours: interrogate demand, users and alternatives to produce an opportunity brief with open decisions; skips questions whose answers are already in accepted artifacts.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "gstack",
+        "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+        "paths": [
+          "office-hours/SKILL.md",
+          "office-hours/sections/phase-2a-startup-diagnostic.md",
+          "office-hours/sections/design-and-handoff.md"
+        ],
+        "content_digest": "6c66efe3c3c3684c97447b6f3caa7915b125748b1514b137f112a5b8e367a3b3",
+        "license": "MIT",
+        "notices": [
+          "Adapted gstack method text must carry the gstack LICENSE copyright and MIT permission notice (hermes/capabilities/upstreams.lock.json)."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/gstack-office-hours/SKILL.md",
+          "hermes/skills/gstack-office-hours/references/gstack-license.md",
+          "hermes/skills/gstack-office-hours/references/method-map.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "5abf86b9e76275c7a2d7869d4ebcc1228d4da05001b99ce9fde574a753c13ced"
+      },
+      "governance": {
+        "local_modifications": "Method-only adapter: stage-routed forcing questions answered, covered by a verbatim quote of an accepted artifact, or asked once; demand evidence separate from opinion; premises and the approach decision settle only through a supplied, recorded requester answer; opportunity brief rendered as a draft. phase-2b-builder-brainstorm and sections/manifest.json dropped (not in the verified evidence bundle).",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None from the adapter; Browser Use/web needs are declared tool needs only.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "gstack preamble/skill-start helper",
+          "update_check and auto_upgrade",
+          "telemetry and global learnings",
+          "outside-model reviewers and outside voices",
+          "co-author commit trailer",
+          "second-opinion outside voice (Phase 3.5)",
+          "landscape web search through Aside",
+          "visual mockups (Phase 4.25)",
+          "builder profile, founder signals and brain write-back",
+          "spec review loop",
+          "design doc writes into a gstack state directory"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "problem",
+          "kinds": [
+            "problem-brief",
+            "feature-brief",
+            "decision-brief",
+            "discovery-brief"
+          ],
+          "required": false,
+          "producer": null
+        },
+        {
+          "name": "evidence",
+          "kinds": [
+            "evidence-index"
+          ],
+          "required": false,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "opportunity-brief",
+          "description": "Demand evidence, alternatives and open decisions; documents only."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "clarify",
+          "web.public-read"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "startup",
+          "builder"
+        ],
+        "default_mode": "startup",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "office-hours-rubric-v1",
+        "criteria": [
+          "Routed forcing questions are answered, covered by a verbatim quote of an accepted artifact, or asked once; never re-asked.",
+          "Demand evidence is observed behaviour; interest, waitlists and surveys are listed as opinion.",
+          "Premises and the approach decision settle only through a supplied, recorded requester answer.",
+          "Exactly one minimal-viable and one ideal-architecture approach; measurable success criteria."
+        ],
+        "acceptance_tests": [
+          "ROU-01",
+          "CAT-01"
+        ]
+      },
+      "existing_equivalents": [
+        "strategy/business advice",
+        "grounded-citations"
+      ],
+      "handoff_to": [
+        "pm.lean-prd"
+      ]
+    },
+    {
+      "id": "gstack.spec",
+      "version": "0.1.0",
+      "title": "Spec: scoped requirements and acceptance tests",
+      "domain": "engineering",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "gstack-spec",
+      "purpose": "Adapted gstack spec: turn intent into a scoped local spec with acceptance tests and a task handoff. Issue filing is an external write that needs exact approval.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "gstack",
+        "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+        "paths": [
+          "spec/SKILL.md",
+          "spec/sections/gate-and-file.md"
+        ],
+        "content_digest": "ce3434caed615dcdf5854c44ecd1858d4904dc86b6415fac0fd94923346d4dc9",
+        "license": "MIT",
+        "notices": [
+          "Adapted gstack method text must carry the gstack LICENSE copyright and MIT permission notice (hermes/capabilities/upstreams.lock.json)."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/gstack-spec/SKILL.md",
+          "hermes/skills/gstack-spec/references/gstack-license.md",
+          "hermes/skills/gstack-spec/references/method-map.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "fcadb3b7862f959a7de167e274019d7b118ff0469e91d8c3ec135da63849c6fc"
+      },
+      "governance": {
+        "local_modifications": "Method-only adapter: local spec and issue draft with verified current state, scope and do-not-touch, testable criteria traced to requirement IDs of the reused accepted PRD (or statements), a testing plan covering every criterion, acyclic dependencies, rollback and effort; bug framing needs only root cause and a regression criterion; fail-closed redaction gate; filing stays local. sections/manifest.json dropped (not in the verified evidence bundle).",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None from the adapter; Browser Use/web needs are declared tool needs only.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "gstack preamble/skill-start helper",
+          "update_check and auto_upgrade",
+          "telemetry and global learnings",
+          "outside-model reviewers and outside voices",
+          "co-author commit trailer",
+          "automatic GitHub issue filing",
+          "--dedupe issue search through gh/glab",
+          "codex semantic review",
+          "--execute agent spawn and worktree creation",
+          "spec archive writes into a gstack state directory"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "requirements",
+          "kinds": [
+            "lean-prd",
+            "feature-brief",
+            "problem-brief"
+          ],
+          "required": false,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "spec",
+          "description": "Scoped requirements, acceptance tests and local issue draft."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "clarify",
+          "search.scoped"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "draft"
+        ],
+        "default_mode": "draft",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [
+        {
+          "action": "issue-publication",
+          "when": "Filing the drafted issue on GitHub."
+        }
+      ],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "spec-rubric-v1",
+        "criteria": [
+          "Every acceptance criterion is observable, traced to an accepted requirement ID or statement and covered by the testing plan.",
+          "A bug spec needs a root cause and a regression criterion, not a PRD or discovery.",
+          "Local draft by default; publication needs its own approval; secret-shaped text fails the redaction gate."
+        ],
+        "acceptance_tests": [
+          "ROU-01",
+          "APR-01"
+        ]
+      },
+      "existing_equivalents": [
+        "issue-lifecycle",
+        "existing code-card criteria"
+      ]
+    },
+    {
+      "id": "gstack.plan-eng-review",
+      "version": "0.1.0",
+      "title": "Engineering plan review",
+      "domain": "engineering",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "gstack-plan-eng-review",
+      "purpose": "Adapted gstack plan-eng-review checklists: architecture, failure modes, test plan and delivery risks recorded as an engineering review/ADR feeding the existing engineering path.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "gstack",
+        "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+        "paths": [
+          "plan-eng-review/SKILL.md",
+          "plan-eng-review/sections/review-sections.md"
+        ],
+        "content_digest": "f8a9042d82362c6ac0b773c42e8024252e80acdad20c2b537698d2a45d3f43e7",
+        "license": "MIT",
+        "notices": [
+          "Adapted gstack method text must carry the gstack LICENSE copyright and MIT permission notice (hermes/capabilities/upstreams.lock.json)."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/gstack-plan-eng-review/SKILL.md",
+          "hermes/skills/gstack-plan-eng-review/references/gstack-license.md",
+          "hermes/skills/gstack-plan-eng-review/references/method-map.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "140c066dbf6f21f1d6dd237a5b7d21bde3a3cee2ef9866288cc95a43a6e3063f"
+      },
+      "governance": {
+        "local_modifications": "Method-only audit adapter over current plan artifacts re-read by digest: scope challenge with the complexity gate, all four review sections, calibrated findings quoting the plan, failure modes with the critical-gap rule, a test plan for QA, decisions that only a recorded answer settles; approval readiness computed. sections/checklist.md and manifest.json dropped (not in the verified evidence bundle).",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None from the adapter; Browser Use/web needs are declared tool needs only.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "gstack preamble/skill-start helper",
+          "update_check and auto_upgrade",
+          "telemetry and global learnings",
+          "outside-model reviewers and outside voices",
+          "co-author commit trailer",
+          "gstack-plan-reality binary",
+          "Aside web research",
+          "TODOS.md, plan-file, review-log and JSONL task writes",
+          "ExitPlanMode"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "plan",
+          "kinds": [
+            "lean-prd",
+            "spec",
+            "feature-brief",
+            "implementation-handoff"
+          ],
+          "required": true,
+          "producer": null,
+          "description": "The plan to review must be supplied or produced by a selected capability."
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "eng-review",
+          "description": "Architecture review, error map, test plan, delivery risks."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "search.scoped",
+          "clarify"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "review"
+        ],
+        "default_mode": "review",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "eng-review-rubric-v1",
+        "criteria": [
+          "All four sections evaluated; findings quote the reviewed plan with calibrated confidence.",
+          "Every failure mode has a test, a planned test or a recorded acceptance; silent untested unhandled failures are critical.",
+          "Review agreement is not approval: dispositions need answered decisions."
+        ],
+        "acceptance_tests": [
+          "ROU-01",
+          "ENG-01"
+        ]
+      },
+      "existing_equivalents": [
+        "software-engineering advisory profile",
+        "architecture-patterns",
+        "requesting-code-review"
+      ],
+      "handoff_to": [
+        "existing.engineering-path"
+      ]
+    },
+    {
+      "id": "gstack.plan-design-review",
+      "version": "0.1.0",
+      "title": "Design plan review",
+      "domain": "design-creative",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "gstack-plan-design-review",
+      "purpose": "Adapted gstack plan-design-review: information architecture, journeys, interaction-state coverage, accessibility risks and unresolved design decisions for a plan, before implementation.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "gstack",
+        "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+        "paths": [
+          "plan-design-review/SKILL.md",
+          "plan-design-review/sections/review-sections.md"
+        ],
+        "content_digest": "f6ae1695b1f018f9afdc7f5d98c0843a4d4a703c58548d7ac311ff66676dbc21",
+        "license": "MIT",
+        "notices": [
+          "Adapted gstack method text must carry the gstack LICENSE copyright and MIT permission notice (hermes/capabilities/upstreams.lock.json)."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/gstack-plan-design-review/SKILL.md",
+          "hermes/skills/gstack-plan-design-review/references/gstack-license.md",
+          "hermes/skills/gstack-plan-design-review/references/method-map.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "2b0dc2ba1bb7a5d292c242169191f6b730bc36c3c769ab9b29c6e6fca862e337"
+      },
+      "governance": {
+        "local_modifications": "Method-only audit adapter over current plan artifacts: initial rating, seven rated passes with gaps, interaction-state table including partial and permission-denied, journey storyboard bound to verbatim plan text, AI-slop cap, decisions settled only by recorded answers. sections/checklist.md and manifest.json dropped (not in the verified evidence bundle).",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None from the adapter; Browser Use/web needs are declared tool needs only.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "gstack preamble/skill-start helper",
+          "update_check and auto_upgrade",
+          "telemetry and global learnings",
+          "outside-model reviewers and outside voices",
+          "co-author commit trailer",
+          "automatic mockup generation (design binary, Step 0.5, comparison boards)",
+          "plan-file and DESIGN.md edits",
+          "TODOS.md, JSONL task, review-log and dashboard writes",
+          "ExitPlanMode"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "plan",
+          "kinds": [
+            "lean-prd",
+            "design-brief",
+            "design-package",
+            "spec"
+          ],
+          "required": true,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "design-plan-review",
+          "description": "IA/journey/state audit, accessibility risks and design decision list."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "vision",
+          "clarify"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "review"
+        ],
+        "default_mode": "review",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [
+        {
+          "action": "paid-generation",
+          "when": "Any mockup image generation."
+        }
+      ],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "design-plan-review-rubric-v1",
+        "criteria": [
+          "All seven passes rated; below 10 names the gap; missing states and unsupported journey steps keep their pass below 10.",
+          "Covers loading/empty/error/success/partial and permission-denied states.",
+          "Mockup spend only with approval; none generated here."
+        ],
+        "acceptance_tests": [
+          "DES-01",
+          "ROU-01"
+        ]
+      },
+      "existing_equivalents": [
+        "dogfood",
+        "screen-recording-qa"
+      ]
+    },
+    {
+      "id": "gstack.design-consultation",
+      "version": "0.1.0",
+      "title": "Design consultation",
+      "domain": "design-creative",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "gstack-design-consultation",
+      "purpose": "Adapted gstack design-consultation: design brief, user journey, semantic tokens, interaction states, responsive behavior, accessibility requirements and a preview artifact, with asset rights recorded.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "gstack",
+        "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+        "paths": [
+          "design-consultation/SKILL.md",
+          "design-consultation/sections/proposal-and-preview.md"
+        ],
+        "content_digest": "4f65d8a516bd1c57995fe21dd1b69bdeb7fdbb689a71a66688cb2dd7ad90ce04",
+        "license": "MIT",
+        "notices": [
+          "Adapted gstack method text must carry the gstack LICENSE copyright and MIT permission notice (hermes/capabilities/upstreams.lock.json)."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/gstack-design-consultation/SKILL.md",
+          "hermes/skills/gstack-design-consultation/references/gstack-license.md",
+          "hermes/skills/gstack-design-consultation/references/method-map.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "2563536dbe3388c9e79715f673ba04748c4456d41105f5cb70a29f5658504e1f"
+      },
+      "governance": {
+        "local_modifications": "Method-only adapter: proposal, type and anti-slop rules enforced by a validator; semantic tokens with computed contrast; designed states, journey and accessibility requirements; offline preview rendered from the analysis. No preamble/startup helper, scripts, hooks, telemetry, global state or update checks.",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None from the adapter; Browser Use/web needs are declared tool needs only.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "gstack preamble/skill-start helper",
+          "update_check and auto_upgrade",
+          "telemetry and global learnings",
+          "outside-model reviewers and design voices",
+          "co-author commit trailer",
+          "DESIGN.md extract/update of a repository",
+          "web font <link> loading in the preview",
+          "JavaScript light/dark toggle",
+          "design binary and AI mockups",
+          "browser setup and opening the preview",
+          "web research inside the consultation"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "product",
+          "kinds": [
+            "lean-prd",
+            "opportunity-brief",
+            "feature-brief",
+            "design-brief"
+          ],
+          "required": true,
+          "producer": null,
+          "description": "Accepted product/brand brief."
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "design-brief",
+          "description": "Brief, use scene, memorable thing, direction and user journey."
+        },
+        {
+          "kind": "design-package",
+          "description": "Semantic tokens with computed contrast, type scale, states, responsive and accessibility requirements, asset rights, machine-readable tokens and a self-contained offline preview."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "vision",
+          "browser.approved-session"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "consult"
+        ],
+        "default_mode": "consult",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [
+        {
+          "action": "paid-generation",
+          "when": "Paid image generation for previews."
+        }
+      ],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "design-package-rubric-v1",
+        "criteria": [
+          "Preview renders offline from the analysis: no script, no remote asset, every state/token/breakpoint present, supplied text escaped.",
+          "Tokens are semantic and meet the computed WCAG contrast minimums.",
+          "Every screen has default/empty/loading/error states and is on the journey.",
+          "Fonts verified only by a supplied licence source; asset rights recorded; pending items need input.",
+          "Research claims need supplied research; synthetic data stays labeled."
+        ],
+        "acceptance_tests": [
+          "DES-01"
+        ]
+      },
+      "existing_equivalents": [
+        "marketing brand advice",
+        "media tools"
+      ],
+      "handoff_to": [
+        "gstack.design-review"
+      ]
+    },
+    {
+      "id": "gstack.review",
+      "version": "0.1.0",
+      "title": "Code review checklist (audit only)",
+      "domain": "engineering",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "gstack-review",
+      "purpose": "gstack review checklists applied as an independent, input-bound audit through the existing restricted review path; fix-first behavior is split out to the existing coordinator writer.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "gstack",
+        "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+        "paths": [
+          "review/SKILL.md",
+          "review/checklist.md"
+        ],
+        "content_digest": "061d2a76920a8bb381a59acf8956dc190ebfb40a7281ffece7d6fa4cc18085c5",
+        "license": "MIT",
+        "notices": [
+          "Adapted gstack method text must carry the gstack LICENSE copyright and MIT permission notice (hermes/capabilities/upstreams.lock.json)."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/gstack-review/SKILL.md",
+          "hermes/skills/gstack-review/references/gstack-license.md",
+          "hermes/skills/gstack-review/references/method-map.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "fba52dab70d1186b01d3e08874e9591a8c9fdc1835fd30241b808715be9cdd80"
+      },
+      "governance": {
+        "local_modifications": "Method-only audit adapter over an exact diff: PR type from paths, category coverage per type, findings bound to the quoted new-file line with calibrated confidence and forced-critical classes, scope drift, prose recommendations with a fix route, test results only from captured logs. sections/manifest.json, plan-completion.md and shared-code-reuse.md dropped (not in the verified evidence bundle).",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None from the adapter; Browser Use/web needs are declared tool needs only.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "gstack preamble/skill-start helper",
+          "update_check and auto_upgrade",
+          "telemetry and global learnings",
+          "outside-model reviewers and outside voices",
+          "co-author commit trailer",
+          "fix-first auto-edit and approved-fix application",
+          "review army specialist dispatch",
+          "adversarial red-team dispatch",
+          "review bot comment resolution",
+          "git/gh diff, merge-base and PR commands"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "change",
+          "kinds": [
+            "code-change-handoff"
+          ],
+          "required": true,
+          "producer": null,
+          "description": "Exact diff/SHA to review."
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "review-report",
+          "description": "Independent ranked findings bound to the reviewed content."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "review.restricted-path",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "search.scoped"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "audit"
+        ],
+        "default_mode": "audit",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "review-rubric-v1",
+        "criteria": [
+          "Findings bind to the exact quoted diff line of the digest-verified change.",
+          "Every applicable category is assessed; not-applicable never counts as passed.",
+          "No fixes in the review; test claims only from captured logs."
+        ],
+        "acceptance_tests": [
+          "ENG-01",
+          "ROU-01"
+        ]
+      },
+      "existing_equivalents": [
+        "reviewer",
+        "requesting-code-review",
+        "restricted-review repair"
+      ]
+    },
+    {
+      "id": "gstack.qa",
+      "version": "0.1.0",
+      "title": "Functional QA (audit only)",
+      "domain": "engineering",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "gstack-qa",
+      "purpose": "Adapted gstack qa audit half: functional QA charter for site/API/CLI with reproduced bugs and evidence; repairs go to the existing writer, never from this capability.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "gstack",
+        "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+        "paths": [
+          "qa/SKILL.md",
+          "qa/sections/qa-patterns.md",
+          "qa/sections/system-functional.md"
+        ],
+        "content_digest": "53b564dfc3505b497531d639b4f309e5f93a54c7bc74869549588179fe51029d",
+        "license": "MIT",
+        "notices": [
+          "Adapted gstack method text must carry the gstack LICENSE copyright and MIT permission notice (hermes/capabilities/upstreams.lock.json)."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/gstack-qa/SKILL.md",
+          "hermes/skills/gstack-qa/references/gstack-license.md",
+          "hermes/skills/gstack-qa/references/method-map.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "94feb4224423cde6e49e79a059fa240c8ced6fd0e2536ed9ed5393dc69b674f2"
+      },
+      "governance": {
+        "local_modifications": "Method-only audit adapter: contract charter scaled by full/quick/regression mode; pass/fail recomputed from supplied command captures (exact probe, exit status) or screenshots; untested contracts not run; bugs bound to failed probes. scope.md, exploratory.md, browser-verify.md and manifest.json dropped (not in the verified evidence bundle).",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None from the adapter; Browser Use/web needs are declared tool needs only.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "gstack preamble/skill-start helper",
+          "update_check and auto_upgrade",
+          "telemetry and global learnings",
+          "outside-model reviewers and outside voices",
+          "co-author commit trailer",
+          "auto-fix loop and regression-test writes",
+          "commits",
+          "gstack browser setup and local port probing",
+          "browser cookie import",
+          "test bootstrap writes",
+          "TODOS.md updates and report copies into a gstack state directory"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "target",
+          "kinds": [
+            "code-change-handoff",
+            "spec",
+            "eng-review",
+            "design-package",
+            "ui-evidence"
+          ],
+          "required": true,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "qa-report",
+          "description": "Charter, reproduced bugs, evidence and repair handoff."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "browser.approved-session",
+          "vision",
+          "tests.approved-runner"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "audit"
+        ],
+        "default_mode": "audit",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [
+        {
+          "action": "browser-login",
+          "when": "Any authenticated target; direct human login only."
+        }
+      ],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "qa-rubric-v1",
+        "criteria": [
+          "Each bug has a failed probe with captured reproduction evidence.",
+          "Pass/fail only from captures whose command and exit status match.",
+          "Audit mode never edits or commits."
+        ],
+        "acceptance_tests": [
+          "ROU-01",
+          "ENG-01"
+        ]
+      },
+      "existing_equivalents": [
+        "dogfood",
+        "browser-automation",
+        "exact-sha validation"
+      ],
+      "handoff_to": [
+        "existing.engineering-path"
+      ]
+    },
+    {
+      "id": "gstack.design-review",
+      "version": "0.1.0",
+      "title": "Visual design review (audit only)",
+      "domain": "design-creative",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "gstack-design-review",
+      "purpose": "Adapted gstack design-review audit half: visual consistency, missing states, responsiveness, accessibility, usability and design-system consistency of actual artifacts; read-only, no coding permission.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "gstack",
+        "revision": "622e8b1f76d293b647eca7b33d9dd060ab618b21",
+        "paths": [
+          "design-review/SKILL.md",
+          "design-review/sections/craft-audit.md"
+        ],
+        "content_digest": "136d23995975ace6ac25754a61951b13f1d6bdb4005d1c569057ee4202853e9d",
+        "license": "MIT",
+        "notices": [
+          "Adapted gstack method text must carry the gstack LICENSE copyright and MIT permission notice (hermes/capabilities/upstreams.lock.json)."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/gstack-design-review/SKILL.md",
+          "hermes/skills/gstack-design-review/references/gstack-license.md",
+          "hermes/skills/gstack-design-review/references/method-map.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "c50be0c433e8f2fecb61358d372718dbb362ed885693e94486e2b1a65fbc07c8"
+      },
+      "governance": {
+        "local_modifications": "Method-only audit adapter: static checks over digest-verified artifacts, evidence-bound findings, grades only for assessed categories; captured browser/assistive/usability evidence only as supplied files. No preamble/startup helper, scripts, hooks, telemetry, global state or update checks.",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None from the adapter; Browser Use/web needs are declared tool needs only.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "gstack preamble/skill-start helper",
+          "update_check and auto_upgrade",
+          "telemetry and global learnings",
+          "outside-model reviewers and outside voices",
+          "co-author commit trailer",
+          "source fix phase, commits and regression tests",
+          "Aside/gstack browser setup and DOM dump",
+          "browser cookie import",
+          "design lint binary",
+          "test bootstrap",
+          "design-baseline and TODOS.md writes",
+          "diff-aware git/gh commands"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "artifact",
+          "kinds": [
+            "design-package",
+            "ui-evidence"
+          ],
+          "required": true,
+          "producer": null,
+          "description": "Exact design package or UI evidence artifacts, re-read by digest (any review status)."
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "design-review-report",
+          "description": "Report and static-check record bound to the reviewed artifact digests: evidence-cited findings, grades for assessed categories and an explicit not-verified list."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "vision",
+          "browser.approved-session"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "audit"
+        ],
+        "default_mode": "audit",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "design-review-rubric-v1",
+        "criteria": [
+          "Every finding cites a failing static check, a verbatim excerpt or a supplied capture.",
+          "Failing checks are covered or waived; visual, assistive-technology and usability results never inferred.",
+          "Never edits source; recommendations are prose and the handoff carries no approval."
+        ],
+        "acceptance_tests": [
+          "DES-01",
+          "ROU-01"
+        ]
+      },
+      "existing_equivalents": [
+        "dogfood",
+        "screen-recording-qa"
+      ],
+      "handoff_to": [
+        "existing.engineering-path"
+      ]
+    },
+    {
+      "id": "pm.competitor-research",
+      "version": "0.1.0",
+      "title": "Source-backed competitor and market research",
+      "domain": "growth-operations",
+      "milestone": "C",
+      "lifecycle": "source-implemented",
+      "exposed_skill_name": "pm-competitor-research",
+      "purpose": "Adapted PM Skills competitive-analysis: cited, dated competitor comparison, feature and pricing findings, market assumptions, positioning, opportunities, risks and recommendations; observed facts separated from estimates.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "pm-skills",
+        "revision": "2a12295a7717569baa7be181b4cfebe3ca38a6bb",
+        "paths": [
+          "pm-market-research/commands/competitive-analysis.md",
+          "pm-market-research/skills/competitor-analysis/SKILL.md"
+        ],
+        "content_digest": "cde7dddc0092f8451be995762d91948f97d0653729e5b0cad28c6731a768c167",
+        "license": "MIT",
+        "notices": [
+          "Adapted PM Skills text must carry the PM Skills LICENSE copyright and MIT permission notice."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/pm-competitor-research/SKILL.md",
+          "hermes/skills/pm-competitor-research/references/method-map.md",
+          "hermes/skills/pm-competitor-research/references/pm-skills-license.md",
+          "scripts/capability_workflow.py",
+          "hermes/capabilities/schemas/workflow-outputs.schema.json",
+          "hermes/capabilities/schemas/evidence-pack.schema.json",
+          "scripts/capability_design.py",
+          "scripts/capability_methods.py",
+          "scripts/capability_research.py"
+        ],
+        "digest": "8031b95d9bf0d4c8321f8e4bfedf88ecf41741d259cf4b019cc3d01ed25692fd"
+      },
+      "governance": {
+        "local_modifications": "competitive-analysis command and competitor-analysis skill rewritten as a validated workflow: verbatim quotes checked against captured pages (and full snapshots by SHA-256), price status/unit/billing cadence checked against the quoted words, primary-source host and freshness checks, labeled assumptions/findings/recommendations with citations, instruction-like source text listed as data. market-segments dropped (not in the verified evidence bundle).",
+        "tool_dependencies": [
+          "Hermes skill loader",
+          "existing web extract or Hermes browser for public pages (coordinator, before validation)",
+          "existing grounded-citations"
+        ],
+        "network_behavior": "Validator and renderer: none. The coordinator captures public pages with the existing approved public-read tools before validation; no login, scraping bypass, purchase or private query.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false,
+        "disabled_upstream_behaviors": [
+          "Claude plugin command expansion",
+          "$ARGUMENTS templating",
+          "web search or fetch inside the validator",
+          "unattributed market size/share/growth estimates",
+          "customer complaint or satisfaction claims without supplied research",
+          "saving files to the user's workspace",
+          "follow-up offers that start other commands (battlecards, positioning, roadmap edits)"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "question",
+          "kinds": [
+            "discovery-brief",
+            "decision-brief",
+            "problem-brief",
+            "opportunity-brief",
+            "feature-brief"
+          ],
+          "required": false,
+          "producer": null
+        },
+        {
+          "name": "evidence",
+          "kinds": [
+            "evidence-index"
+          ],
+          "required": false,
+          "producer": null,
+          "description": "Captured, dated competitor pages, usually assembled by the coordinator during the run; the validator refuses an analysis without them."
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "competitor-report",
+          "description": "Dated, cited comparison: sources, landscape, pricing with billing cadence and caveats, quoted features, computed comparisons, market assumptions, opportunities/risks, recommendations, unknowns, source-content safety and limits."
+        },
+        {
+          "kind": "evidence-ledger",
+          "description": "Per claim: classification, verbatim quotes, URL, retrieval time, capture and snapshot digests."
+        }
+      ],
+      "tools": {
+        "required": [
+          "web.public-read",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "browser.approved-session",
+          "compute.arithmetic"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "scan"
+        ],
+        "default_mode": "scan",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write",
+        "network-egress-public"
+      ],
+      "approvals": [
+        {
+          "action": "external-research-if-private-context",
+          "when": "Any query that would reveal a private product or company."
+        }
+      ],
+      "scope": {
+        "company": "optional",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "competitor-research-rubric-v1",
+        "criteria": [
+          "Every price, feature and positioning quote is verbatim text of the competitor's own captured page; prices carry URL and retrieval date.",
+          "Price amount, currency, unit and billing cadence are supported by the quoted words; ambiguous cadence is 'unstated' with a caveat.",
+          "Unavailable pages and facts stay unknown with a resolution; stale or future-dated sources are refused.",
+          "Findings and recommendations are labeled judgment citing evidence; market size/share and customer claims need cited sources.",
+          "Instructions inside sources are treated as data, listed and never usable as evidence; private terms never enter public queries."
+        ],
+        "acceptance_tests": [
+          "RES-01",
+          "ROU-01"
+        ]
+      },
+      "existing_equivalents": [
+        "grounded-citations",
+        "competitor-news-monitor",
+        "strategy advisory profile"
+      ]
+    },
+    {
+      "id": "pm.positioning",
+      "version": "0.1.0",
+      "title": "Positioning alternatives for a marketing plan",
+      "domain": "growth-operations",
+      "milestone": "later",
+      "lifecycle": "planned",
+      "exposed_skill_name": "pm-positioning",
+      "purpose": "Adapted PM Skills positioning-ideas: differentiated positioning alternatives with evidence, feeding the existing marketing team recipe.",
+      "source": {
+        "kind": "adapted",
+        "upstream": "pm-skills",
+        "revision": "2a12295a7717569baa7be181b4cfebe3ca38a6bb",
+        "paths": [
+          "pm-marketing-growth/skills/positioning-ideas/SKILL.md"
+        ],
+        "content_digest": "e6ea6ce2366fcbee60dc1d27f7e824b6a50cf97da3765f0a9e3e86d8cafb4a82",
+        "license": "MIT",
+        "notices": [
+          "Adapted PM Skills text must carry the PM Skills LICENSE copyright and MIT permission notice."
+        ],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [],
+        "digest": null
+      },
+      "governance": {
+        "local_modifications": "Namespaced selected-file skill; evidence labels added.",
+        "tool_dependencies": [
+          "Hermes skill loader"
+        ],
+        "network_behavior": "None.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "context",
+          "kinds": [
+            "competitor-report",
+            "discovery-brief",
+            "lean-prd"
+          ],
+          "required": false,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "positioning-brief",
+          "description": "Positioning alternatives with evidence and trade-offs."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "clarify"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native-adapted",
+        "modes": [
+          "ideas"
+        ],
+        "default_mode": "ideas",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "positioning-rubric-v1",
+        "criteria": [
+          "Each alternative cites evidence or is labeled assumption."
+        ],
+        "acceptance_tests": [
+          "GTM-01",
+          "ROU-01"
+        ]
+      },
+      "handoff_to": [
+        "existing.marketing-team"
+      ],
+      "existing_equivalents": [
+        "marketing advisory profile"
+      ]
+    },
+    {
+      "id": "kit.operational-analysis",
+      "version": "0.1.0",
+      "title": "Operational improvement analysis",
+      "domain": "growth-operations",
+      "milestone": "later",
+      "lifecycle": "planned",
+      "exposed_skill_name": "operational-analysis",
+      "purpose": "Original workflow: process diagnosis from approved baseline data, at least two alternatives with control risks, and a bounded measurable pilot plan; improvement is claimed only from actual pilot data.",
+      "source": {
+        "kind": "original",
+        "upstream": null,
+        "revision": null,
+        "paths": [],
+        "content_digest": null,
+        "license": "GPL-3.0",
+        "notices": [],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [],
+        "digest": null
+      },
+      "governance": {
+        "local_modifications": "Original procedure.",
+        "tool_dependencies": [
+          "Hermes skill loader",
+          "approved code path for arithmetic"
+        ],
+        "network_behavior": "None.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Not installed. Milestone E proposes exact selected files for the default profile only after rehearsal and approval.",
+        "auto_update": false
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "baseline",
+          "kinds": [
+            "evidence-index"
+          ],
+          "required": true,
+          "producer": null,
+          "description": "Approved process map and baseline data."
+        },
+        {
+          "name": "problem",
+          "kinds": [
+            "problem-brief"
+          ],
+          "required": false,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "process-assessment",
+          "description": "Reproducible baseline, bottleneck, uncertainty and alternatives."
+        },
+        {
+          "kind": "pilot-plan",
+          "description": "Bounded pilot with guardrails, rollback and measurement."
+        }
+      ],
+      "tools": {
+        "required": [
+          "read.scoped",
+          "compute.arithmetic",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "clarify"
+        ]
+      },
+      "execution": {
+        "method": "hermes-native",
+        "modes": [
+          "diagnose"
+        ],
+        "default_mode": "diagnose",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "operational-analysis-rubric-v1",
+        "criteria": [
+          "Baseline computed by code from supplied data.",
+          "Forecasts never reported as measured improvement."
+        ],
+        "acceptance_tests": [
+          "OPS-01",
+          "ROU-01"
+        ]
+      },
+      "existing_equivalents": [
+        "business, data-science and leadership-teamwork advisory profiles"
+      ]
+    },
+    {
+      "id": "existing.engineering-path",
+      "version": "1.0.0",
+      "title": "Existing engineering path (investigate, fix, test, review, handoff)",
+      "domain": "engineering",
+      "milestone": "A",
+      "lifecycle": "existing",
+      "exposed_skill_name": null,
+      "purpose": "The shipped coordinator engineering loop: reproduce and investigate, sole Claude coding route fix, real regression tests, independent review and approved feature-branch handoff, with exact-SHA platform lanes when needed. Bugs and typos go here directly.",
+      "source": {
+        "kind": "existing-kit",
+        "upstream": null,
+        "revision": null,
+        "paths": [],
+        "content_digest": null,
+        "license": "GPL-3.0",
+        "notices": [],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/skills/autonomous-engineering/SKILL.md",
+          "hermes/skills/kanban-workflow/SKILL.md"
+        ],
+        "digest": "9bd7185edddbf9adbbe0cbc3966fa2e6ec5118a08cb82facff327e5b71d6f61a"
+      },
+      "governance": {
+        "local_modifications": "Existing kit skills; this record only catalogs them.",
+        "tool_dependencies": [
+          "kanban-workflow scripts",
+          "Claude coding route"
+        ],
+        "network_behavior": "As documented by the existing skills; unchanged by the registry.",
+        "filesystem_effects": "Source changes only in the owned checkout through the coordinator writer.",
+        "installation_scope": "Already part of the kit install (make hermes-install); the registry adds nothing.",
+        "auto_update": false
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "handoff",
+          "kinds": [
+            "implementation-handoff",
+            "spec",
+            "eng-review",
+            "design-review-report",
+            "qa-report"
+          ],
+          "required": false,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "code-change-handoff",
+          "description": "Exact SHA, tests and review evidence for the change."
+        }
+      ],
+      "tools": {
+        "required": [
+          "code.claude-route",
+          "tests.approved-runner",
+          "kanban.existing"
+        ],
+        "optional": [
+          "review.restricted-path"
+        ]
+      },
+      "execution": {
+        "method": "existing-kit-path",
+        "modes": [
+          "fix"
+        ],
+        "default_mode": "fix",
+        "writer": "existing-claude-route"
+      },
+      "side_effects": [
+        "source-modification",
+        "commit-push"
+      ],
+      "approvals": [
+        {
+          "action": "commit-push",
+          "when": "Feature-branch commit/push under the existing completion gates."
+        }
+      ],
+      "scope": {
+        "company": "required",
+        "project": "required",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": false
+      },
+      "verification": {
+        "rubric_id": "engineering-completion",
+        "criteria": [
+          "Regression test fails before and passes after.",
+          "Independent review binds to final content.",
+          "Platform lanes consume the exact verified SHA."
+        ],
+        "acceptance_tests": [
+          "ENG-01",
+          "REL-01",
+          "ROU-01"
+        ]
+      },
+      "existing_equivalents": [
+        "kanban-workflow",
+        "autonomous-engineering",
+        "systematic-debugging"
+      ]
+    },
+    {
+      "id": "existing.marketing-team",
+      "version": "1.0.0",
+      "title": "Existing marketing team recipe",
+      "domain": "growth-operations",
+      "milestone": "A",
+      "lifecycle": "existing",
+      "exposed_skill_name": null,
+      "purpose": "The shipped marketing recipe (research, positioning, channel plan, strategy review) using the existing marketing profile; produces an actionable marketing plan. Publishing and spend stay separately approved.",
+      "source": {
+        "kind": "existing-kit",
+        "upstream": null,
+        "revision": null,
+        "paths": [],
+        "content_digest": null,
+        "license": "GPL-3.0",
+        "notices": [],
+        "inspiration_refs": []
+      },
+      "implementation": {
+        "paths": [
+          "hermes/profiles/marketing/SOUL.md",
+          "hermes/teams/marketing-team.md"
+        ],
+        "digest": "72fe55605ded06ee1d1b6d273b66e7199fee2b7ee7d212a6501e98bac63fc33f"
+      },
+      "governance": {
+        "local_modifications": "Existing kit team recipe; this record only catalogs it.",
+        "tool_dependencies": [
+          "marketing profile",
+          "Kanban"
+        ],
+        "network_behavior": "As documented by the recipe.",
+        "filesystem_effects": "Writes only typed artifacts in the task output area; reads only inputs the trusted scope resolves.",
+        "installation_scope": "Already part of the kit install; the registry adds nothing.",
+        "auto_update": false
+      },
+      "inputs": [
+        {
+          "name": "task",
+          "kinds": [
+            "task-envelope"
+          ],
+          "required": true,
+          "producer": null
+        },
+        {
+          "name": "positioning",
+          "kinds": [
+            "positioning-brief",
+            "competitor-report",
+            "discovery-brief"
+          ],
+          "required": false,
+          "producer": null
+        }
+      ],
+      "outputs": [
+        {
+          "kind": "marketing-plan",
+          "description": "Actionable plan with ICP, channels, owners, targets and stop rules; nothing published."
+        }
+      ],
+      "tools": {
+        "required": [
+          "kanban.existing",
+          "artifact.write-scoped"
+        ],
+        "optional": [
+          "web.public-read"
+        ]
+      },
+      "execution": {
+        "method": "existing-kit-path",
+        "modes": [
+          "plan"
+        ],
+        "default_mode": "plan",
+        "writer": "none"
+      },
+      "side_effects": [
+        "task-artifact-write"
+      ],
+      "approvals": [
+        {
+          "action": "publication",
+          "when": "Any post or message."
+        },
+        {
+          "action": "spend",
+          "when": "Any paid campaign."
+        }
+      ],
+      "scope": {
+        "company": "required",
+        "project": "optional",
+        "state_scope": "company-project-task",
+        "data_classes": [
+          "public",
+          "synthetic",
+          "company-private"
+        ],
+        "requires_learned_knowledge": true
+      },
+      "verification": {
+        "rubric_id": "marketing-plan-rubric-v1",
+        "criteria": [
+          "Targets are not reported as outcomes.",
+          "Zero posts/spend without approval."
+        ],
+        "acceptance_tests": [
+          "GTM-01",
+          "ROU-01"
+        ]
+      },
+      "existing_equivalents": [
+        "marketing-team recipe"
+      ]
+    }
+  ]
+}
