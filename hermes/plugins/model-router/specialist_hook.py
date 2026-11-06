@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import stat
 import time
 import urllib.error
@@ -271,9 +272,30 @@ def load_capability_catalog(root: str, pin: str) -> CapabilityCatalog:
     return CapabilityCatalog(caps, guide.split("\n") if guide else [], skills, lifecycle)
 
 
-def render_capability_lines(trace: dict, catalog: Optional[CapabilityCatalog]) -> List[str]:
+CAPABILITY_PLANNER_REL = "scripts/capability-plan.py"
+_PLANNER_MAX_BYTES = 1024 * 1024
+
+
+def planner_command(root: str) -> Optional[str]:
+    """``python3 <root>/scripts/capability-plan.py`` for the configured capability root, the
+    path shell-quoted (POSIX ``sh``), or None when the root is not absolute, has a backtick or
+    a non-printable character (it would break the note's code span or line), or the planner
+    is not a regular file reached without symlinks below the root. ``python3``, not a bare
+    path: installed root scripts are mode 0644."""
+    if not root or not os.path.isabs(root) or any(c == "`" or not c.isprintable() for c in root):
+        return None
+    try:
+        _read_under(root, CAPABILITY_PLANNER_REL, _PLANNER_MAX_BYTES)
+    except OSError:
+        return None
+    return "python3 " + shlex.quote(os.path.join(root, *CAPABILITY_PLANNER_REL.split("/")))
+
+
+def render_capability_lines(trace: dict, catalog: Optional[CapabilityCatalog], root: str = "") -> List[str]:
     """Routing-note lines for the capability IDs this turn's classifier picked: pending
-    coordinator input with each ID's skill, never a plan, a grant or a claim that it ran."""
+    coordinator input with each ID's skill, never a plan, a grant or a claim that it ran.
+    ``root`` is the configured capability root; the planning hint names it only via
+    ``planner_command`` and otherwise carries no path."""
     cs = trace.get("capability_selection") or {}
     picks = [p for p in (cs.get("picks") or []) if catalog is not None and p in catalog.capabilities]
     if cs.get("outcome") != "ok" or not picks:
@@ -289,9 +311,12 @@ def render_capability_lines(trace: dict, catalog: Optional[CapabilityCatalog]) -
             lines.append(f"- {cid}: no capability skill (existing {cid.split('.', 1)[1].replace('-', ' ')})")
         else:
             lines.append(f"- {cid}: no capability skill (planned, not implemented; a plan reports it blocked)")
+    command = planner_command(root)
+    plan_hint = (f"To plan: `{command} --task <envelope> --capability <id> ...`" if command else
+                 "The capability planner is not available under the configured capability root; "
+                 "report planning as unavailable")
     lines.append(
-        "Check the IDs fit the request and skip any that do not. To plan: "
-        "`$KIT/scripts/capability-plan.py --task <envelope> --capability <id> ...`; to run one, load its "
+        f"Check the IDs fit the request and skip any that do not. {plan_hint}; to run one, load its "
         "skill with skill_view if installed. A capability grants no tool, permission or data access; "
         "review-only skills stay review-only; company-private data stays refused until company "
         "isolation is enforced. Report only results that actually ran."
@@ -553,7 +578,7 @@ class SpecialistHook:
                 _capability_log(trace),
             )
             plan = sp.render_plan(trace)
-            extra = render_capability_lines(trace, catalog)
+            extra = render_capability_lines(trace, catalog, self.capability_root)
             if extra:
                 plan = (plan[: -len(sp.PLAN_CLOSE)] if plan else sp.PLAN_OPEN + "\n") + "\n".join(extra) \
                     + "\n" + sp.PLAN_CLOSE
