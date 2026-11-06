@@ -18,7 +18,9 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -68,7 +70,7 @@ def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-class CapabilityHookTest(unittest.TestCase):
+class HookFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="caphook-"))
         os.chmod(self.tmp, 0o700)
@@ -105,6 +107,8 @@ class CapabilityHookTest(unittest.TestCase):
             out = h.on_pre_llm_call(session_id="s", user_message=text, **kw)
         return out, "\n".join(logs.output)
 
+
+class CapabilityHookTest(HookFixture):
     # ------------------------------------------------------------ the requested prompts
 
     def test_requested_prompts_select_capabilities_in_one_call_and_map_skills(self):
@@ -327,6 +331,130 @@ class CapabilityHookTest(unittest.TestCase):
         self.assertIn("- strategy:", outs[False]["context"])
         self.assertEqual(outs[False], outs[True], "no capability picked: identical note")
         self.assertEqual(config_mod.RouterSettings().specialist_capability_root, "")
+
+
+def _load_script(name, mod):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(mod, REPO / "scripts" / name)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+class PlannerCommandTest(HookFixture):
+    """The routing note's planning hint must be a command that runs: ``python3`` (the activation
+    manifest installs scripts mode 0644, so no exec bit) plus the configured
+    ``specialist_capability_root``, shell-quoted; never an unbound ``$KIT``. Anything doubtful
+    renders no path at all."""
+
+    PLANNER = Path("scripts/capability-plan.py")
+
+    def install_planner(self, root=None):
+        root = Path(root or self.root)
+        (root / "scripts").mkdir(exist_ok=True)
+        dest = root / self.PLANNER
+        shutil.copy2(REPO / self.PLANNER, dest)
+        os.chmod(dest, 0o644)
+        return dest
+
+    def install_root_like_activation(self, root):
+        ca = _load_script("capability_activation.py", "capability_activation_for_hook_test")
+        (root / "scripts").mkdir(parents=True, exist_ok=True)
+        for name in ca.ROOT_SCRIPTS:
+            shutil.copy2(REPO / "scripts" / name, root / "scripts" / name)
+            os.chmod(root / "scripts" / name, ca.FILE_MODE)
+        rels = list(ca.ROOT_DATA) + [f.relative_to(REPO).as_posix() for g in ca.ROOT_GLOBS for f in REPO.glob(g)]
+        registry = json.loads((REPO / "hermes/capabilities/registry.json").read_text())
+        rels += [rel for c in registry["capabilities"] if c["lifecycle"] != "planned"
+                 for rel in c["implementation"]["paths"]]  # as the activation manifest does
+        for rel in rels:
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / rel, root / rel)
+            os.chmod(root / rel, ca.FILE_MODE)
+
+    @staticmethod
+    def plan_command(ctx):
+        cmds = [seg for line in ctx.splitlines() if "To plan:" in line for seg in line.split("`")[1::2]]
+        return cmds[0] if cmds else None
+
+    def test_plan_hint_is_python3_with_the_configured_root(self):
+        script = self.install_planner()
+        out, _ = self.call(self.hook(FakeOpener("pm.lean-prd")), "Create a PRD.")
+        ctx = out["context"]
+        self.assertNotIn("$KIT", ctx)
+        self.assertEqual(shlex.split(self.plan_command(ctx)),
+                         ["python3", str(script), "--task", "<envelope>", "--capability", "<id>", "..."])
+
+    def test_rendered_command_runs_from_a_root_with_shell_metacharacters(self):
+        root = self.tmp / "cap root;$(touch PWNED) 'q' & x"
+        self.root = root
+        (root / "hermes" / "capabilities").mkdir(parents=True)
+        self.install_root_like_activation(root)
+        self.pin = sha256(root / CATALOG_REL)
+        out, _ = self.call(self.hook(FakeOpener("pm.lean-prd")), "Create a PRD.")
+        cmd = self.plan_command(out["context"])
+        self.assertIsNotNone(cmd)
+        task = self.tmp / "task.json"
+        task.write_text(json.dumps({
+            "schema_version": 1, "task_id": "t-r", "request_id": "r-r",
+            "requester_ref": "requester:example-a-operator", "destination_ref": "discord-thread:example-a-ops",
+            "company_id": "example-a", "project_id": "example-web", "companies_involved": ["example-a"],
+            "intent": "router fixture", "requested_outcome": "A plan.", "data_classification": "synthetic",
+            "egress_class": "deny", "input_artifacts": [], "acceptance_criteria": ["ok"],
+            "workflow_version": "0.1.0", "recovery_generation": 0}))
+        line = (cmd.replace("<envelope>", shlex.quote(str(task))).replace("<id>", "pm.lean-prd")
+                .replace(" ...", " --format summary"))
+        work = self.tmp / "cwd"
+        work.mkdir()
+        r = subprocess.run(["bash", "-c", line], capture_output=True, text=True, timeout=120, cwd=str(work),
+                           env={"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"], "LANG": "C.UTF-8",
+                                "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("kit.problem-definition", r.stdout)
+        self.assertEqual(list(self.tmp.rglob("PWNED")), [], "no shell expansion of the root")
+
+    def test_missing_or_symlinked_planner_renders_no_path(self):
+        for case in ("missing", "symlink", "directory"):
+            with self.subTest(case):
+                shutil.rmtree(self.root / "scripts", ignore_errors=True)
+                if case == "symlink":
+                    (self.root / "scripts").mkdir()
+                    (self.root / self.PLANNER).symlink_to(REPO / self.PLANNER)
+                elif case == "directory":
+                    (self.root / self.PLANNER).mkdir(parents=True)
+                out, _ = self.call(self.hook(FakeOpener("pm.lean-prd")), "Create a PRD.")
+                ctx = out["context"]
+                self.assertIn("- pm.lean-prd: skill pm-lean-prd", ctx, "selection unchanged")
+                self.assertNotIn(str(self.root), ctx)
+                self.assertNotIn("$KIT", ctx)
+                self.assertIsNone(self.plan_command(ctx))
+                self.assertIn("planner is not available", ctx)
+
+    def test_render_refuses_unsafe_or_relative_roots(self):
+        self.install_planner()
+        catalog = hook_mod.load_capability_catalog(str(self.root), self.pin)
+        trace = {"task": "t", "privacy": "public",
+                 "capability_selection": {"outcome": "ok", "picks": ["pm.lean-prd"]}}
+        good = hook_mod.render_capability_lines(trace, catalog, str(self.root))
+        self.assertEqual(shlex.split(self.plan_command("\n".join(good)))[:2],
+                         ["python3", str(self.root / self.PLANNER)])
+        for name in ("tick`id`", "new\nline", "esc\x1b[0m", "tab\tx"):
+            with self.subTest(name=name):
+                bad = self.tmp / name
+                shutil.copytree(self.root, bad, symlinks=True)
+                lines = hook_mod.render_capability_lines(trace, catalog, str(bad))
+                text = "\n".join(lines)
+                self.assertNotIn(name, text)
+                self.assertIsNone(self.plan_command(text))
+                self.assertIn("planner is not available", text)
+        for root in ("", "capability-root", "~/capability-root"):
+            with self.subTest(root=root):
+                text = "\n".join(hook_mod.render_capability_lines(trace, catalog, root))
+                self.assertIsNone(self.plan_command(text))
+                self.assertNotIn("capability-root", text)
+        self.assertEqual(hook_mod.render_capability_lines({"capability_selection": {"outcome": "ok", "picks": []}},
+                                                          catalog, str(self.root)), [], "no picks: no note")
+        self.assertEqual(hook_mod.render_capability_lines(trace, None, str(self.root)), [], "no catalog: no note")
 
 
 class CatalogSourceTest(unittest.TestCase):
