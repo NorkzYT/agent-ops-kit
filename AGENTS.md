@@ -47,6 +47,7 @@ the Hermes templates and an offline render of `scripts/stack-init.sh`.
   and are referenced as `${VAR}`. Apply `.env` changes with
   `make hermes-config-apply` (forced render, no restart), then
   `make hermes-restart` from the operator's terminal (docs/install.md).
+- **Hermes source separation** (docs/hermes-source-management.md). Agent-Ops-Kit is the canonical home of Hermes config, prompts, skills, templates, infrastructure and reviewed runtime patches. The installed runtime (`~/.hermes/hermes-agent`, however reached: shell, direct file tools, symlinks or aliases) is read-only for diagnostics and is never a coding, test or patch workspace. Classify first: config/skill/supported extension point → kit only; native Hermes defect → narrow patch in a separate isolated checkout pinned to an exact upstream revision; privileged/infra change → reviewed kit artifacts, installed only with separate authorization. Never overwrite, reset, stash or fold unrelated dirty files into a patch. Review and authorized deployment are separate steps; never auto-apply patches or auto-restart the gateway (restarts follow the existing operator approval).
 - **Docs:** short, one path per task, commands in fenced blocks. `README.md` is
   the fast path; detail lives in `docs/`.
 - **Commits:** Conventional Commits (`feat(hermes): …`, `fix(compose): …`,
@@ -82,9 +83,13 @@ the job id. If scheduling fails, say so and ask to be pinged.
 ## Model routing
 
 - Orchestrator: ChatGPT subscription through CLIProxyAPI (`HERMES_MODEL`,
-  `gpt-5.6-luna` default). Task-scoped routing (current user task only, never
-  history/tool output): status→luna low effort, ordinary work→luna medium,
-  ambiguous/planning→terra, genuinely hard→sol; `gpt-6-astra` only with a
+  `gpt-6.1-terra` default: the configured starting model in
+  `model.default`, used as-is when the router leaves a request alone).
+  Task-scoped routing rewrites each request per task (current user task only, never
+  history/tool output): status→luna low effort, ordinary work→terra medium,
+  ambiguous/planning→terra, genuinely hard or a leading standalone `#sol`
+  line→`gpt-6.1-sol` (`gpt-5.6-sol` only as fallback when 6.1 is not
+  advertised); `gpt-6-astra` only with a
   leading standalone `#max`/`#astra` line in the current task. Reasoning
   effort is rewritten per task up to the `agent.reasoning_effort` ceiling
   (`high`); auxiliary entries keep their own `reasoning_effort`.
@@ -115,7 +120,7 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - Native fallback chains (non-private only): orchestrator CLIProxyAPI →
   claude-max-proxy → Ollama agent → Ollama fallback; delegation
   claude-max-proxy → Ollama agent → Ollama fallback.
-- Compression: CLIProxyAPI `gpt-5.6-terra`, fallback `gpt-5.6-luna`
+- Compression: CLIProxyAPI `gpt-6.1-terra`, fallback `gpt-5.6-luna`
   (`AUX_COMPRESSION_*`; `AUX_COMPRESSION_ROUTE=aux` pins it to the title route).
   The plugin's aux guard refuses `#privacy`/`#private` payloads to it.
 - Session titles: the main route (CLIProxyAPI, luna); no `AUX_*` title vars.
@@ -124,7 +129,7 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - Full reference: `docs/model-routing.md`. Verify: `make route-smoke`,
   `make test-router`.
 - Specialist routing (pilot; plugin default off, `.env.example` on with the
-  `cliproxy` classifier, `gpt-5.6-terra`): `specialist_routing` in the same
+  `cliproxy` classifier, `gpt-6.1-terra`): `specialist_routing` in the same
   plugin suggests 0-15 book-backed profiles per current task (15 is the hard
   cap; verified attachment signals count before it); private tasks never
   reach cloud-backed profiles; every profile is advisory, none is labelled

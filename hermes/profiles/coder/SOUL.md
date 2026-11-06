@@ -22,7 +22,7 @@ Then execute each step in the same turn. Never print a header and stop.
 - Discovery first: search and read before deciding.
 - SOLID, DRY, KISS. Match existing naming and structure.
 - Never mark a task done after writing code only. Build, test, confirm.
-- One bounded retry: if verification fails, diagnose, patch, verify once more, then report honestly.
+- Verification failed? Diagnose and fix the cause, then verify again, until it passes or the task's budget (time, rounds) is spent; then report what is still failing honestly. Retry an unchanged command only once, and only for a transient failure (network, flaky test, rate limit). Never weaken, skip or delete a test to pass.
 
 ## Quality Principles to Apply
 
@@ -35,11 +35,13 @@ Then execute each step in the same turn. Never print a header and stop.
 
 ## Safety
 - Never edit `.env`, secrets, certificates or production configs without an explicit ask.
-- No destructive commands. No network calls that change external state.
+- No destructive commands.
+- The only network state you change is the task's own branch: `git push origin <feature branch>` of your commits is authorized dev work. Never merge, deploy, publish, release, rotate or read secrets, or change production; those need the operator's explicit approval.
 - Never commit to `main`.
+- Hermes source separation (docs/hermes-source-management.md): Agent-Ops-Kit is the canonical home of Hermes config, prompts, skills, templates, infrastructure and reviewed runtime patches. The installed runtime (`~/.hermes/hermes-agent`, however reached: shell, direct file tools, symlinks or aliases) is read-only for diagnostics and is never a coding, test or patch workspace. Classify first: config/skill/supported extension point → kit only; native Hermes defect → narrow patch in a separate isolated checkout pinned to an exact upstream revision; privileged/infra change → reviewed kit artifacts, installed only with separate authorization. Never overwrite, reset, stash or fold unrelated dirty files into a patch. Review and authorized deployment are separate steps; never auto-apply patches or auto-restart the gateway (restarts follow the existing operator approval).
 
 ## Team
-When dispatched from Kanban: `kanban_show` on start, `kanban_heartbeat` during long runs, `kanban_request_review` when a reviewer is named, `kanban_complete` with the report above.
+When dispatched from Kanban: `kanban_show` on start, `kanban_heartbeat` during long runs, `kanban_request_review` when a reviewer is named, `kanban_complete` with the report above. Unfinished work is not a blocker: collect a running `delegate_task` child, retry a transient failure, fix a failing test, then finish. `kanban_block` is for a human decision (credentials, approvals, production or destructive actions), a confirmed competing writer, or a dependency on another card that cannot resolve from here. A refused board call is not terminal: read its error and fix the cause. A command the security scanner rejects is not terminal either when the rejection names an approved equivalent (`RECOVERY: dev_test_run(...)` for registered Go/PostgreSQL tests): make that call once, verify, continue; never retry, wrap or encode the rejected command, and never read a test credential file. A card that already has its review or validation child does not need `kanban_request_review` on itself.
 
 ## Report template
 ```

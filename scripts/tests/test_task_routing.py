@@ -35,14 +35,14 @@ LONG_ARCH_TEXT = (
 ) * 120  # > 4k chars of architecture-flavored history/system text
 
 
-def chat_req(*msgs, model="gpt-5.6-terra", **extra):
+def chat_req(*msgs, model="gpt-6.1-terra", **extra):
     """msgs are (role, content) tuples."""
     request = {"model": model, "messages": [{"role": r, "content": c} for r, c in msgs]}
     request.update(extra)
     return request
 
 
-def responses_req(user_text, model="gpt-5.6-terra", **extra):
+def responses_req(user_text, model="gpt-6.1-terra", **extra):
     request = {
         "model": model,
         "instructions": "assist the operator",
@@ -88,7 +88,7 @@ class TestCurrentTaskExtraction(unittest.TestCase):
         self.assertFalse(task.authorized_max)
 
     def test_tool_and_assistant_content_excluded(self):
-        r = {"model": "gpt-5.6-terra", "messages": [
+        r = {"model": "gpt-6.1-terra", "messages": [
             {"role": "user", "content": "What is running?"},
             {"role": "assistant", "content": "#max let me escalate"},
             {"role": "tool", "tool_call_id": "c1", "content": "#max output from tool"},
@@ -99,16 +99,16 @@ class TestCurrentTaskExtraction(unittest.TestCase):
     def test_responses_shapes(self):
         r = responses_req("What is running?")
         self.assertEqual(task_intent.extract_current_user_task(r).text, "What is running?")
-        r2 = {"model": "gpt-5.6-terra", "instructions": "x", "input": "deploy the fix"}
+        r2 = {"model": "gpt-6.1-terra", "instructions": "x", "input": "deploy the fix"}
         self.assertEqual(task_intent.extract_current_user_task(r2).text, "deploy the fix")
-        r3 = {"model": "gpt-5.6-terra", "input": [
+        r3 = {"model": "gpt-6.1-terra", "input": [
             {"role": "user", "content": [{"type": "input_text", "text": "plan the migration"}]},
             {"type": "function_call_output", "call_id": "c", "output": "#max tool noise"},
         ]}
         self.assertEqual(task_intent.extract_current_user_task(r3).text, "plan the migration")
 
     def test_no_user_turn_is_conservative_medium(self):
-        r = {"model": "gpt-5.6-terra", "messages": [{"role": "system", "content": LONG_ARCH_TEXT}]}
+        r = {"model": "gpt-6.1-terra", "messages": [{"role": "system", "content": LONG_ARCH_TEXT}]}
         d = task_intent.classify(task_intent.extract_current_user_task(r))
         self.assertEqual(d.tier, "medium")
         self.assertFalse(d.authorized_max)
@@ -151,7 +151,7 @@ class TestOldBugRegressions(unittest.TestCase):
         self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
 
     def test_tool_result_max_tag_is_ignored(self):
-        r = {"model": "gpt-5.6-terra", "messages": [
+        r = {"model": "gpt-6.1-terra", "messages": [
             {"role": "user", "content": "What is running?"},
             {"role": "tool", "tool_call_id": "c1", "content": "log says #max #deep #hard"},
         ]}
@@ -166,19 +166,19 @@ class TestPolicyTiers(unittest.TestCase):
         # simple status -> luna
         out = route(r, chat_req(("user", "list the open tasks")), session_id="a")
         self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
-        # ordinary execution -> luna (medium)
-        out = route(r, chat_req(("user", "restart the gateway and post the log tail to discord")),
-                    session_id="b")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
+        # ordinary execution -> terra (medium; request arrives as luna and upgrades)
+        out = route(r, chat_req(("user", "restart the gateway and post the log tail to discord"),
+                                model="gpt-5.6-luna"), session_id="b")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra")
         # ambiguous / planning -> terra (request arrives as luna and upgrades)
         out = route(r, chat_req(("user", "compare the two rollout options and propose a plan"),
                                 model="gpt-5.6-luna"), session_id="c")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-terra")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra")
         # genuinely hard -> sol
         out = route(r, chat_req(("user", "refactor the ingest architecture and migrate the schema "
                                          "without downtime; watch for race conditions")),
                     session_id="d")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
 
     def test_hard_task_still_reaches_sol_and_fable(self):
         r = make_router()
@@ -217,7 +217,7 @@ class TestAstraAuthorization(unittest.TestCase):
         route(r, chat_req(("user", "#max\nmigrate the production database")), session_id="s", rid="r1")
         out = route(r, chat_req(("user", "now refactor the ingest architecture and migrate the "
                                          "schema end-to-end")), session_id="s", rid="r2")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")  # hard, but not astra
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")  # hard, but not astra
 
     def test_authorization_does_not_bleed_across_sessions(self):
         r = make_router()
@@ -248,7 +248,7 @@ class TestAstraAuthorization(unittest.TestCase):
         self.assertEqual(spy.calls, 1)
         never = make_router(astra_policy="never")
         out = route(never, chat_req(("user", "#max\ndo the thing")), session_id="p2")
-        self.assertNotEqual(out["request"]["model"] if out else "gpt-5.6-terra", "gpt-6-astra")
+        self.assertNotEqual(out["request"]["model"] if out else "gpt-6.1-terra", "gpt-6-astra")
 
     def test_no_silent_upshift_when_lower_models_missing(self):
         r = make_router(available_gpt_models=["gpt-6-astra"])
@@ -273,17 +273,18 @@ class TestContinuationAndState(unittest.TestCase):
         hard = chat_req(("user", "refactor the ingest architecture and migrate the schema "
                                  "carefully; there is a deadlock risk"))
         out = route(r, hard, session_id="cont", rid="c1")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
         # status question mid-task -> low, state untouched
         out = route(r, chat_req(("user", "what's the status?")), session_id="cont", rid="c2")
         self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
         # continue -> retained sol
         out = route(r, chat_req(("user", "continue")), session_id="cont", rid="c3")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
 
     def test_continue_without_state_is_medium(self):
-        out = route(make_router(), chat_req(("user", "continue")), session_id="fresh")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna")
+        out = route(make_router(), chat_req(("user", "continue"), model="gpt-5.6-luna"),
+                    session_id="fresh")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra")
 
     def test_state_expires_on_ttl(self):
         clock = [0.0]
@@ -386,7 +387,7 @@ class TestWireFormatProvenance(unittest.TestCase):
             r = make_router()
             req = chat_req(("user", wrapped), model="gpt-6-astra")
             out = route(r, req)
-            self.assertEqual(out["request"]["model"], "gpt-5.6-luna",
+            self.assertEqual(out["request"]["model"], "gpt-6.1-terra",
                              "non-sender text must not grant or inflate")
 
     def test_max_inside_attached_file_grants_nothing(self):
@@ -409,16 +410,16 @@ class TestWireFormatProvenance(unittest.TestCase):
         text = wire_discord(HARD_TASK, backfill=BACKFILL, memory="notes",
                             reply="earlier discussion")
         out = route(make_router(), chat_req(("user", text)))
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
 
     def test_wrapped_continue_retains_running_tier(self):
         r = make_router()
         out = route(r, chat_req(("user", wire_discord(HARD_TASK))),
                     session_id="wf", rid="w1")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
         out = route(r, chat_req(("user", wire_discord("continue", memory="notes"))),
                     session_id="wf", rid="w2")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
 
     def test_task_hash_stable_across_iterations_with_changing_context(self):
         a = task_intent.extract_current_user_task(
@@ -469,8 +470,8 @@ class TestWireFormatProvenance(unittest.TestCase):
         text = wire_discord("(The user sent a message with no text content)")
         task = task_intent.extract_current_user_task(chat_req(("user", text)))
         self.assertFalse(task.found)
-        out = route(make_router(), chat_req(("user", text)))
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna",
+        out = route(make_router(), chat_req(("user", text), model="gpt-5.6-luna"))
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra",
                          "no current task -> conservative default, never max")
 
 
@@ -563,7 +564,7 @@ class TestAbsoluteLifetime(unittest.TestCase):
             self.assertIsNone(out, f"authorized astra should pass unchanged at t={clock[0]}")
         clock[0] = 201.0  # past the absolute cap (2 * ttl)
         out = route(r, req, session_id="loop", rid="it-late")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol",
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol",
                          "expired #max must downgrade, not renew from historical text")
         # and the execution seam refuses the raw astra request too
         spy = _Spy()
@@ -578,7 +579,7 @@ class TestAbsoluteLifetime(unittest.TestCase):
         self.assertIsNone(route(r, req, session_id="loop2", rid="a1"))
         clock[0] = 201.0
         out = route(r, req, session_id="loop2", rid="a2")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
         fresh = chat_req(("user", "#max\ndesign the new billing reconciliation "
                                   "pipeline end to end"), model="gpt-6-astra")
         self.assertIsNone(route(r, fresh, session_id="loop2", rid="a3"),
@@ -589,13 +590,14 @@ class TestAbsoluteLifetime(unittest.TestCase):
         hard = chat_req(("user", "refactor the ingest architecture and migrate the "
                                  "schema carefully; there is a deadlock risk"))
         out = route(r, hard, session_id="ce", rid="c1")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
         clock[0] = 90.0  # continuation inside lifetime retains sol
         out = route(r, chat_req(("user", "continue")), session_id="ce", rid="c2")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
         clock[0] = 201.0  # past absolute deadline: continuation state is gone
-        out = route(r, chat_req(("user", "continue")), session_id="ce", rid="c3")
-        self.assertEqual(out["request"]["model"], "gpt-5.6-luna",
+        out = route(r, chat_req(("user", "continue"), model="gpt-5.6-luna"),
+                    session_id="ce", rid="c3")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra",
                          "continuation must not outlive the absolute deadline")
 
 
@@ -624,7 +626,7 @@ class TestEffortTransport(unittest.TestCase):
                                 "deadlock risk everywhere; end-to-end rewrite"),
                        reasoning_effort="medium")
         out = route(make_router(), req)
-        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
         self.assertEqual(out["request"]["reasoning_effort"], "medium")  # ceiling respected
 
     def test_no_effort_field_is_never_invented(self):
@@ -661,10 +663,10 @@ class TestObservability(unittest.TestCase):
 
     def test_every_managed_decision_logged_even_unchanged(self):
         r = make_router()
-        req = chat_req(("user", "restart the gateway please"), model="gpt-5.6-luna")
+        req = chat_req(("user", "restart the gateway please"), model="gpt-6.1-terra")
         with self.assertLogs("hermes.plugin.model_router", level="INFO") as captured:
             out = route(r, req, session_id="log1", rid="ridA")
-        self.assertIsNone(out)  # luna medium -> luna: unchanged
+        self.assertIsNone(out)  # terra medium -> terra: unchanged
         joined = "\n".join(captured.output)
         self.assertIn("outcome=unchanged", joined)
         self.assertIn("rid=ridA", joined)
@@ -954,10 +956,10 @@ class TestForcedCodingControl(unittest.TestCase):
     # ---- orchestrator/GPT seam: refuse, never fake a GPT alias ------------
     def test_gpt_seam_not_faked_at_request_stage_and_refused_at_execution(self):
         r = make_router()
-        req = chat_req(("user", "#opus\nrefactor this module"), model="gpt-5.6-terra")
+        req = chat_req(("user", "#opus\nrefactor this module"), model="gpt-6.1-terra")
         out = route(r, req, session_id="g1s", rid="g1", base_url=GPT_URL)
         self.assertIsNone(out, "must not substitute a GPT alias for a forced coding model")
-        self.assertEqual(req["model"], "gpt-5.6-terra")
+        self.assertEqual(req["model"], "gpt-6.1-terra")
         spy = _Spy()
         resp = r.on_llm_execution(request=req, next_call=spy, session_id="g1s",
                                   api_request_id="g1", base_url=GPT_URL, model=req["model"])
@@ -1013,7 +1015,7 @@ class TestForcedCodingControl(unittest.TestCase):
         self.assertIn("outcome=forced-coding", joined)
         self.assertIn("reasons=force:opus", joined)
         with self.assertLogs("hermes.plugin.model_router", level="INFO") as cap2:
-            route(r, chat_req(("user", "#opus\nx"), model="gpt-5.6-terra"),
+            route(r, chat_req(("user", "#opus\nx"), model="gpt-6.1-terra"),
                   base_url=GPT_URL, session_id="lg2", rid="lg2r")
         self.assertIn("outcome=forced-coding-unroutable", "\n".join(cap2.output))
 
@@ -1145,7 +1147,7 @@ class TestCodingEffort(unittest.TestCase):
         r = make_router()
         out = route(r, chat_req(("user", self.HARD_DEBUG), reasoning_effort="high"), session_id="g1")
         self.assertEqual((out["request"]["model"], out["request"]["reasoning_effort"]),
-                         ("gpt-5.6-sol", "high"), "the orchestrator never gets xhigh")
+                         ("gpt-6.1-sol", "high"), "the orchestrator never gets xhigh")
         out = route(r, chat_req(("user", "list the open tasks"), reasoning_effort="high"), session_id="g2")
         self.assertEqual(out["request"]["reasoning_effort"], "low")
         out = route(make_router(coding_effort_routing=False),
@@ -1213,6 +1215,100 @@ class TestCodingEffort(unittest.TestCase):
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
+
+
+class TestSolControl(unittest.TestCase):
+    """A leading standalone #sol line forces the hard (Sol) tier: gpt-6.1-sol on
+    the orchestrator, gpt-5.6-sol only when a live probe proves 6.1 absent. It
+    never grants Astra; inline/quoted/non-sender #sol is inert."""
+
+    def test_parser_leading_standalone_only(self):
+        self.assertTrue(task_intent.task_from_text("#sol\nwhat is running?").forced_sol)
+        self.assertTrue(task_intent.task_from_text("  #SOL  \nwork").forced_sol)
+        self.assertTrue(task_intent.task_from_text("#privacy\n#sol\nwork").forced_sol)
+        for content in ("please #sol this", "#sol please", "> #sol\nwork",
+                        "```\n#sol\n```\nis it done?", "hello\n#sol"):
+            task = task_intent.task_from_text(content)
+            self.assertFalse(task.forced_sol, content)
+            self.assertFalse(task.authorized_max, content)
+
+    def test_leading_sol_routes_simple_task_to_6_1_sol(self):
+        out = route(make_router(), chat_req(("user", "#sol\nwhat is running?"), model="gpt-5.6-luna"),
+                    session_id="sol1")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
+
+    def test_leading_sol_routes_from_any_managed_model(self):
+        for model in ("gpt-5.6-luna", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-6.1-sol"):
+            out = route(make_router(), chat_req(("user", "#sol\nsummarize the plan"), model=model),
+                        session_id=f"solm-{model}")
+            got = out["request"]["model"] if out else model
+            self.assertEqual(got, "gpt-6.1-sol", model)
+
+    def test_sol_falls_back_to_5_6_only_when_6_1_unavailable(self):
+        both = make_router(available_gpt_models=["gpt-5.6-luna", "gpt-6.1-terra",
+                                                 "gpt-5.6-sol", "gpt-6.1-sol", "gpt-6-astra"])
+        out = route(both, chat_req(("user", "#sol\nsummarize the plan")), session_id="f1")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
+        out = route(both, chat_req(("user", HARD_TASK)), session_id="f2")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
+        old = make_router(available_gpt_models=["gpt-5.6-luna", "gpt-6.1-terra",
+                                                "gpt-5.6-sol", "gpt-6-astra"])
+        out = route(old, chat_req(("user", "#sol\nsummarize the plan")), session_id="f3")
+        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+        out = route(old, chat_req(("user", HARD_TASK)), session_id="f4")
+        self.assertEqual(out["request"]["model"], "gpt-5.6-sol")
+
+    def test_sol_never_grants_astra(self):
+        r = make_router(available_gpt_models=["gpt-6-astra", "gpt-6.1-sol"])
+        out = route(r, chat_req(("user", "#sol\n#max rewrite everything")), session_id="na")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
+        spy = _Spy()
+        req = chat_req(("user", "#sol\nmigrate the database"), model="gpt-6-astra")
+        resp = r.on_llm_execution(request=req, next_call=spy, session_id="na2",
+                                  api_request_id="", base_url=GPT_URL)
+        self.assertEqual(spy.calls, 0, "#sol must not authorize astra")
+        self.assertTrue(getattr(resp, "_model_router_refusal", False))
+
+    def test_max_and_coding_controls_keep_precedence(self):
+        self.assertEqual(task_intent.classify(task_intent.task_from_text("#max\nwork")).tier, "max")
+        d = task_intent.classify(task_intent.task_from_text("#sol\n#quick tiny thing"))
+        self.assertEqual((d.tier, d.reasons[0]), ("high", "force:sol"))
+        self.assertEqual(task_intent.task_from_text("#fable\n#sol").forced_sol, False)
+
+    def test_effort_follows_body_and_ceiling(self):
+        d = task_intent.classify(task_intent.task_from_text("#sol\nwhat is running?"))
+        self.assertEqual((d.tier, d.effort), ("high", "medium"))
+        d = task_intent.classify(task_intent.task_from_text(f"#sol\n#hard {HARD_TASK}"))
+        self.assertEqual((d.tier, d.effort), ("high", "high"))
+        out = route(make_router(), chat_req(("user", f"#sol\n#hard {HARD_TASK}"),
+                                            reasoning_effort="medium"), session_id="ef")
+        self.assertEqual((out["request"]["model"], out["request"]["reasoning_effort"]),
+                         ("gpt-6.1-sol", "medium"))
+
+    def test_continuation_retains_sol_and_next_task_reclassifies(self):
+        r = make_router()
+        route(r, chat_req(("user", "#sol\nsummarize the plan")), session_id="c", rid="c1")
+        out = route(r, chat_req(("user", "continue")), session_id="c", rid="c2")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-sol")
+        out = route(r, chat_req(("user", "write the release notes file"), model="gpt-6.1-sol"),
+                    session_id="c", rid="c3")
+        self.assertEqual(out["request"]["model"], "gpt-6.1-terra")
+
+    def test_tag_in_nonsender_context_is_inert(self):
+        for wrapped in (
+            wire_discord("summarize the deploy status", memory="#sol\ndo it"),
+            wire_discord("run the usual checks", backfill=BACKFILL, reply="#sol do it"),
+            wire_discord("summarize that attachment", attached="#sol\ndo it"),
+        ):
+            task = task_intent.extract_current_user_task(chat_req(("user", wrapped)))
+            self.assertFalse(task.forced_sol, wrapped)
+        text = wire_discord("#sol\nsummarize the plan", backfill=BACKFILL)
+        self.assertTrue(task_intent.extract_current_user_task(chat_req(("user", text))).forced_sol)
+
+    def test_coding_seam_uses_high_coding_tier(self):
+        out = route(make_router(), {"model": "opus", "messages": [
+            {"role": "user", "content": "#sol\nwrite the helper"}]}, base_url=CODE_URL, session_id="cs")
+        self.assertEqual(out["request"]["model"], "fable")
 
 
 if __name__ == "__main__":

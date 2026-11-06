@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: NorkzYT <richard@pcscorp.dev>
+Date: Mon, 2 Nov 2026 14:21:05 -0500
+Subject: [PATCH] fix(approvals): honour permanent command_allowlist pattern
+ keys in -q, cron and unattended runs
+
+An operator's "Always" answer stores the dangerous-pattern key in
+command_allowlist. Interactive sessions honoured it; _unattended_deny() never
+consulted it, so a Kanban worker (`hermes chat -q`) kept denying commands the
+operator had approved for good (e.g. `python3 -c`). Permanent entries now apply
+there too; session-only approvals, the hardline floor and the tirith scan are
+unchanged.
+---
+ .../tools/test_single_query_approval_mode.py  | 66 ++++++++++++++++++-
+ tools/approval.py                             | 15 +++++
+ 2 files changed, 80 insertions(+), 1 deletion(-)
+
+diff --git a/tests/tools/test_single_query_approval_mode.py b/tests/tools/test_single_query_approval_mode.py
+index 878a363792..75982da453 100644
+--- a/tests/tools/test_single_query_approval_mode.py
++++ b/tests/tools/test_single_query_approval_mode.py
+@@ -358,4 +358,68 @@ class TestSingleQueryModeInteractions:
+         from unittest.mock import patch as mock_patch
+         with mock_patch("tools.approval_context._get_single_query_approval_mode", return_value="approve"):
+             result = check_all_command_guards("rm -rf /", "local")
+-            assert not result["approved"]
+\ No newline at end of file
++            assert not result["approved"]
++
++# ---------------------------------------------------------------------------
++# command_allowlist pattern keys apply headlessly too
++# ---------------------------------------------------------------------------
++
++class TestPermanentAllowlistHonouredHeadless:
++    """An operator's permanent "Always" answer lands in ``command_allowlist`` as a
++    dangerous-pattern key. Interactive sessions honour it; a -q worker (Kanban dispatcher
++    runs ``hermes chat -q``) used to ignore it and deny the very command the operator had
++    approved for good. The standing decision now applies in -q / cron too; session-only
++    approvals (no human present) and the hardline floor are unchanged."""
++
++    COMMAND = "python3 -c 'print(1)'"
++    KEY = "script execution via -e/-c flag"
++
++    @pytest.fixture(autouse=True)
++    def _headless(self, monkeypatch):
++        monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "1")
++        monkeypatch.setenv("HERMES_INTERACTIVE", "1")
++        monkeypatch.delenv("HERMES_GATEWAY_SESSION", raising=False)
++        monkeypatch.delenv("HERMES_YOLO_MODE", raising=False)
++        from unittest.mock import patch as mock_patch
++        with mock_patch("tools.approval_context._get_single_query_approval_mode", return_value="deny"), \
++                mock_patch("tools.approval_context._get_approval_mode", return_value="manual"), \
++                mock_patch("tools.approval._tirith_scan", return_value={"action": "allow", "findings": []}):
++            yield
++
++    def test_pattern_key_is_detected_for_the_command(self):
++        is_dangerous, key, _ = detect_dangerous_command(self.COMMAND)
++        assert is_dangerous and key == self.KEY
++
++    def test_denied_without_a_permanent_entry(self):
++        result = check_all_command_guards(self.COMMAND, "local")
++        assert not result["approved"] and "single_query_mode" in result["message"]
++
++    def test_permanent_pattern_key_approves_headlessly(self):
++        approval_module.approve_permanent(self.KEY)
++        assert check_all_command_guards(self.COMMAND, "local")["approved"]
++        assert check_dangerous_command(self.COMMAND, "local")["approved"]
++
++    def test_session_only_approval_does_not_count(self):
++        approval_module.approve_session("default", self.KEY)
++        approval_module.approve_session("test-session", self.KEY)
++        assert not check_all_command_guards(self.COMMAND, "local")["approved"]
++
++    def test_other_pattern_keys_stay_denied(self):
++        approval_module.approve_permanent(self.KEY)
++        result = check_all_command_guards("rm -rf /tmp/stuff", "local")
++        assert not result["approved"] and "dangerous" in result["message"].lower()
++
++    def test_hardline_floor_ignores_the_allowlist(self):
++        approval_module.approve_permanent(self.KEY)
++        approval_module.approve_permanent("recursive delete")
++        result = check_all_command_guards("rm -rf /", "local")
++        assert not result["approved"]
++
++    def test_cron_context_honours_it_too(self, monkeypatch):
++        monkeypatch.delenv("HERMES_SINGLE_QUERY_SESSION", raising=False)
++        monkeypatch.setenv("HERMES_CRON_SESSION", "1")
++        from unittest.mock import patch as mock_patch
++        with mock_patch("tools.approval_context._get_cron_approval_mode", return_value="deny"):
++            assert not check_all_command_guards(self.COMMAND, "local")["approved"]
++            approval_module.approve_permanent(self.KEY)
++            assert check_all_command_guards(self.COMMAND, "local")["approved"]
+diff --git a/tools/approval.py b/tools/approval.py
+index c66f64c031..d8f01e1440 100644
+--- a/tools/approval.py
++++ b/tools/approval.py
+@@ -312,6 +312,16 @@ def _permanent_set() -> set:
+     return approved
+ 
+ 
++def _permanently_approved_pattern(pattern_key: str) -> bool:
++    """``command_allowlist`` (the operator's "Always" answers) holds this dangerous-pattern
++    key or a legacy alias. Permanent entries only: session approvals need a human present,
++    which the headless contexts that call this never have."""
++    aliases = _approval_key_aliases(pattern_key)
++    with _lock:
++        approved = set(_permanent_set())
++    return any(alias in approved for alias in aliases)
++
++
+ def is_approved(session_key: str, pattern_key: str) -> bool:
+     """Session-scoped or permanent approval. Accepts the canonical key and the legacy
+     regex-derived key so existing command_allowlist entries survive key migrations."""
+@@ -548,6 +558,11 @@ def _unattended_deny(command: str, ctx: _Unattended) -> dict | None:
+             advice="Find an alternative approach that avoids this command.")}
+ 
+     is_dangerous, _pk, description = detect_dangerous_command(command)
++    # The operator's permanent "Always" answer (command_allowlist pattern key) is a standing
++    # decision, so it applies to -q / cron / unattended runs as it does interactively; the
++    # hardline floor already ran before this gate and tirith still scans the command below.
++    if is_dangerous and _permanently_approved_pattern(_pk):
++        is_dangerous = False
+     if is_dangerous:
+         result = block(f"Command flagged as dangerous ({description})")
+         if ctx.name == "single_query":

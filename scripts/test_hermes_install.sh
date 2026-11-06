@@ -49,6 +49,9 @@ ck "installer exits 0 (rc=$rc)" "[[ $rc -eq 0 ]]"
 cfg="$hh/config.yaml"; henv="$hh/.env"; hj="$hh/honcho.json"
 ck "config.yaml written"                 "[[ -f '$cfg' ]]"
 ck "config.yaml has no unrendered tokens" "! grep -q '__[A-Z0-9_]*__' '$cfg'"
+ck "tirith scanner enabled"               "grep -qE '^  tirith_enabled: true\$' '$cfg'"
+ck "tirith scanner fails closed"          "grep -qE '^  tirith_fail_open: false\$' '$cfg'"
+ck "tirith never fail-open in template"   "! grep -qE 'tirith_fail_open: true' '$cfg'"
 ck "orchestrator model = gpt-5.6-sol"     "grep -q 'default: gpt-5.6-sol' '$cfg'"
 ck "orchestrator reasoning effort = high" "grep -qE '^  reasoning_effort: high\$' '$cfg'"
 ck "title reasoning effort = low"         "grep -A4 '^  title_generation:' '$cfg' | grep -qE '^    reasoning_effort: low\$'"
@@ -63,9 +66,10 @@ ck "hermes .env not left as placeholder"  "! grep -q '^CLAUDE_MAX_PROXY_API_KEY=
 ck "honcho.json written, rendered"        "[[ -f '$hj' ]] && ! grep -q '__[A-Z0-9_]*__' '$hj'"
 
 # --- default-model scenario: with HERMES_MODEL unset the installer must fall
-# back to the corrected routine-tier floor (gpt-5.6-luna), not sol. The fixture
-# above keeps proving an explicit HERMES_MODEL renders through; this proves the
-# install DEFAULT.
+# back to the Terra starting model (gpt-6.1-terra), not luna or sol. Luna stays
+# the per-task routine floor the router rewrites to; that is not the configured
+# default. The fixture above keeps proving an explicit HERMES_MODEL renders
+# through; this proves the install DEFAULT.
 hh2="$tmp/hermes-default"
 envf2="$tmp/fixture-default.env"
 grep -v '^HERMES_MODEL=' "$envf" | sed "s#^HERMES_HOME=.*#HERMES_HOME=$hh2#" > "$envf2"
@@ -75,7 +79,8 @@ HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf2" \
 rc2=$?
 cfg2="$hh2/config.yaml"
 ck "default installer exits 0 (rc=$rc2)"  "[[ $rc2 -eq 0 ]]"
-ck "default orchestrator model = luna"    "grep -q 'default: gpt-5.6-luna' '$cfg2'"
+ck "default orchestrator model = terra"   "grep -qE '^  default: gpt-6.1-terra\$' '$cfg2'"
+ck "default model is not luna"            "! grep -qE '^  default: gpt-5.6-luna' '$cfg2'"
 # Router knobs unset in .env must default to ON (privacy is fail-closed by
 # default; complexity rewrite on by default). Both fixtures above omit them.
 ck "default complexity_routing = true"    "grep -qE '^        complexity_routing: true\$' '$cfg2'"
@@ -128,6 +133,27 @@ ck "explicit specialist_routing = true"       "grep -qE '^        specialist_rou
 ck "explicit specialist_max_profiles = 2"     "grep -qE '^        specialist_max_profiles: 2\$' '$cfg3'"
 ck "explicit specialist_selection_mode = hybrid" "grep -qE '^        specialist_selection_mode: hybrid\$' '$cfg3'"
 ck "routing-off leaves no unrendered tokens"  "! grep -q '__[A-Z0-9_]*__' '$cfg3'"
+
+# --- approvals: documented deny defaults render; a fresh install has an empty
+# command_allowlist; a --force re-render keeps the operator's live "Always"
+# pattern keys instead of wiping them.
+ck "approvals single_query_mode = deny"   "grep -qE '^  single_query_mode: deny\$' '$cfg'"
+ck "approvals cron_mode = deny"           "grep -qE '^  cron_mode: deny\$' '$cfg'"
+ck "fresh command_allowlist is empty"     "grep -qE '^command_allowlist: \[\]\$' '$cfg'"
+ck "no yolo / approve mode rendered"      "! grep -qE '^ *[a-z_]*mode: approve\$|^ *yolo' '$cfg'"
+python3 - "$cfg" <<'PY'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r"^command_allowlist: \[\]$", "command_allowlist:\n  - script execution via -e/-c flag\n  - git push *", s, flags=re.M)
+open(p, "w").write(s)
+PY
+HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf" \
+  HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+  bash scripts/hermes-install.sh --force >"$tmp/out-force.log" 2>&1
+rc4=$?
+ck "--force installer exits 0 (rc=$rc4)"  "[[ $rc4 -eq 0 ]]"
+ck "--force keeps live allowlist entries" "grep -qF 'command_allowlist: [\"script execution via -e/-c flag\", \"git push *\"]' '$cfg'"
+ck "--force logged the kept entries"      "grep -q 'command_allowlist: keeping' '$tmp/out-force.log'"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || { echo '--- installer output ---'; cat "$tmp/out.log"; }

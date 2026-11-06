@@ -62,7 +62,7 @@ if [[ -z "$RENDER_ONLY" ]]; then
 fi
 
 # --------------------------------------------------------- 2. config.yaml ---
-HERMES_MODEL="$(getenv HERMES_MODEL gpt-5.6-luna)"; export HERMES_MODEL
+HERMES_MODEL="$(getenv HERMES_MODEL gpt-6.1-terra)"; export HERMES_MODEL
 HERMES_CODING_MODEL="$(getenv HERMES_CODING_MODEL opus)"; export HERMES_CODING_MODEL
 CLIPROXY_BASE_URL="http://127.0.0.1:$(getenv CLIPROXY_PORT 8317)/v1"; export CLIPROXY_BASE_URL
 CLAUDE_MAX_PROXY_BASE_URL="http://127.0.0.1:$(getenv CLAUDE_MAX_PROXY_PORT 3456)/v1"; export CLAUDE_MAX_PROXY_BASE_URL
@@ -122,7 +122,7 @@ aux_fallback_chain() {
 }
 AUX_FALLBACK_CHAIN="$(aux_fallback_chain)"; export AUX_FALLBACK_CHAIN
 # Compression route. AUX_COMPRESSION_ROUTE=cliproxy (default): CLIProxyAPI,
-# AUX_COMPRESSION_MODEL (gpt-5.6-terra) then AUX_COMPRESSION_FALLBACK_MODEL
+# AUX_COMPRESSION_MODEL (gpt-6.1-terra) then AUX_COMPRESSION_FALLBACK_MODEL
 # (gpt-5.6-luna, `none` = no fallback) on the same proxy. The key stays in .env
 # (${CLIPROXY_API_KEY} / key_env). The model-router plugin's aux guard refuses
 # #privacy/#private payloads on this route. AUX_COMPRESSION_ROUTE=aux: the
@@ -136,7 +136,7 @@ esac
 if [[ "$AUX_COMPRESSION_ROUTE" == "cliproxy" ]]; then
   AUX_COMPRESSION_PROVIDER=custom; AUX_COMPRESSION_BASE_URL="$CLIPROXY_BASE_URL"
   AUX_COMPRESSION_API_KEY='${CLIPROXY_API_KEY}'
-  AUX_COMPRESSION_MODEL="$(getenv AUX_COMPRESSION_MODEL gpt-5.6-terra)"
+  AUX_COMPRESSION_MODEL="$(getenv AUX_COMPRESSION_MODEL gpt-6.1-terra)"
   aux_comp_fb="$(getenv AUX_COMPRESSION_FALLBACK_MODEL gpt-5.6-luna)"
   if [[ "$aux_comp_fb" != "none" && "$aux_comp_fb" != "$AUX_COMPRESSION_MODEL" ]]; then
     AUX_COMPRESSION_FALLBACK_CHAIN="$(printf '[{provider: custom, model: "%s", base_url: "%s", key_env: CLIPROXY_API_KEY}]' \
@@ -261,6 +261,19 @@ log "specialist_routing=$MODEL_ROUTER_SPECIALISTS ($MODEL_ROUTER_SPECIALISTS_SOU
   warn "specialist_selection_mode=ai with specialist_classifier=none selects no specialist (fail-closed); set MODEL_ROUTER_SPECIALIST_CLASSIFIER=cliproxy or local"
 [[ "$MODEL_ROUTER_PRIVACY" == "false" ]] && \
   warn "MODEL_ROUTER_PRIVACY=false: private data is NOT kept local in ordinary turns (docs/model-routing.md)"
+
+# Dangerous-command approvals the operator answered "Always" to live in the top-level
+# command_allowlist (pattern keys or command globs, docs: Hermes user-guide/security).
+# They are a standing decision: keep them verbatim across --force instead of wiping
+# them with the template. Entries holding a comma cannot round-trip through
+# config-get.py's a,b list form and are reported, never dropped silently.
+if [[ -f "$cfg" ]] && raw_allow="$(python3 "$ROOT/scripts/config-get.py" "$cfg" command_allowlist 2>/dev/null)"; then
+  COMMAND_ALLOWLIST="$(yaml_list "$raw_allow")"
+  [[ -n "$raw_allow" ]] && log "command_allowlist: keeping $(tr -cd ',' <<< "$raw_allow" | wc -c | tr -d ' ') + 1 live entr(ies)"
+else
+  COMMAND_ALLOWLIST="[]"
+fi
+export COMMAND_ALLOWLIST
 
 if [[ -n "$RENDER_ONLY" ]]; then
   render_template hermes/config.yaml.tmpl "$RENDER_ONLY"

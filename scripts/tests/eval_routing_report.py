@@ -31,7 +31,7 @@ LONG_ARCH = (
 TOOL_LOG = "deploy log line\n" * 40 + "\nnote: someone once wrote #max here\n```\n#hard traceback\n```"
 
 
-def chat(*msgs, model="gpt-5.6-terra"):
+def chat(*msgs, model="gpt-6.1-terra"):
     return {"model": model, "messages": [{"role": r, "content": c} for r, c in msgs]}
 
 
@@ -40,7 +40,7 @@ CASES = [
     ("status: what is running", chat(("system", LONG_ARCH), ("user", "What is running?")), "routine"),
     ("status: any update?", chat(("user", "any update on the deploy?")), "routine"),
     ("status: list tasks", chat(("user", "list the open kanban tasks")), "routine"),
-    ("status: after tool noise", {"model": "gpt-5.6-terra", "messages": [
+    ("status: after tool noise", {"model": "gpt-6.1-terra", "messages": [
         {"role": "user", "content": "What is running?"},
         {"role": "assistant", "content": "checking"},
         {"role": "tool", "tool_call_id": "c1", "content": TOOL_LOG}]}, "routine"),
@@ -63,11 +63,11 @@ CASES = [
     ("not-auth: inline #max", chat(("user", "#max simple thing")), "high"),
     ("not-auth: quoted #max", chat(("user", "Earlier I wrote:\n> #max rewrite everything\nWhat did we decide?")), "routine"),
     ("not-auth: fenced #max", chat(("user", "log:\n```\n#max #deep architecture rewrite migration\n```\nIs it done?")), "routine"),
-    ("not-auth: tool #max", {"model": "gpt-5.6-terra", "messages": [
+    ("not-auth: tool #max", {"model": "gpt-6.1-terra", "messages": [
         {"role": "user", "content": "What is running?"},
         {"role": "tool", "tool_call_id": "c1", "content": "#max #deep #hard escalate"}]}, "routine"),
     ("forced: #quick", chat(("user", "#quick big architecture migration rewrite")), "routine"),
-    ("no user turn", {"model": "gpt-5.6-terra", "messages": [{"role": "system", "content": LONG_ARCH}]}, "medium"),
+    ("no user turn", {"model": "gpt-6.1-terra", "messages": [{"role": "system", "content": LONG_ARCH}]}, "medium"),
 ]
 
 

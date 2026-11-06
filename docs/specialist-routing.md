@@ -262,7 +262,7 @@ list, and drops the lowest-ranked.
 
   - `cliproxy` (recommended): one call to CLIProxyAPI
     (`<base>/chat/completions`) with `specialist_classifier_model`
-    (default `gpt-5.6-terra`) at `reasoning_effort`
+    (default `gpt-6.1-terra`) at `reasoning_effort`
     `specialist_classifier_effort` (default `medium`; `minimal|low|medium|high`).
     The base URL is `specialist_classifier_base_url`, else
     `$CLIPROXY_BASE_URL`, else `http://127.0.0.1:$CLIPROXY_PORT/v1` (8317).
@@ -424,8 +424,8 @@ label), `classifier`, `classifier_gate` (`no-match` | `ambiguous` |
 
    ```
    2026-10-07 08:22:10,111 INFO hermes.plugin.model_router: model_router: specialists task=1a2b3c4d privacy=public tier=medium source=attachment routes=marketing:short:ready dropped=- classifier=off reason=-
-   2026-10-09 10:02:41,507 INFO hermes.plugin.model_router: model_router: specialists task=5e6f7a8b privacy=public tier=routine source=sender routes=negotiation-communication:short:ready,business:short:ready dropped=- classifier=used gate=no-match classifier_model=gpt-5.6-terra classifier_outcome=ok context=sender:1,docs:1,withheld:0,extract:pdf:ok reason=-
-   2026-10-09 19:40:12,031 INFO hermes.plugin.model_router: model_router: specialists task=5e6f7a8b privacy=public tier=routine source=sender routes=negotiation-communication:short:ready,software-engineering:short:ready,strategy:short:ready,business:short:ready dropped=- classifier=used gate=attachment classifier_model=gpt-5.6-terra classifier_outcome=ok context=sender:1,docs:2,withheld:0,extract:text:ok/pdf:ok reason=- attach=software-engineering,strategy
+   2026-10-09 10:02:41,507 INFO hermes.plugin.model_router: model_router: specialists task=5e6f7a8b privacy=public tier=routine source=sender routes=negotiation-communication:short:ready,business:short:ready dropped=- classifier=used gate=no-match classifier_model=gpt-6.1-terra classifier_outcome=ok context=sender:1,docs:1,withheld:0,extract:pdf:ok reason=-
+   2026-10-09 19:40:12,031 INFO hermes.plugin.model_router: model_router: specialists task=5e6f7a8b privacy=public tier=routine source=sender routes=negotiation-communication:short:ready,software-engineering:short:ready,strategy:short:ready,business:short:ready dropped=- classifier=used gate=attachment classifier_model=gpt-6.1-terra classifier_outcome=ok context=sender:1,docs:2,withheld:0,extract:text:ok/pdf:ok reason=- attach=software-engineering,strategy
    ```
 
    `source` is `sender`, `attachment` or `document`, `context` counts what
@@ -481,12 +481,12 @@ make specialist-enable                                    # restarts the gateway
 make specialist-logs                                      # mode=ai classifier=used ... in the live log
 ```
 
-The cliproxy model and effort default to `gpt-5.6-terra` and `medium` in the
+The cliproxy model and effort default to `gpt-6.1-terra` and `medium` in the
 plugin. To change them, set the plugin keys (the installer does not render
 them, so they survive `--force` only if you set them again):
 
 ```bash
-hermes config set plugins.entries.model-router.settings.specialist_classifier_model gpt-5.6-terra
+hermes config set plugins.entries.model-router.settings.specialist_classifier_model gpt-6.1-terra
 hermes config set plugins.entries.model-router.settings.specialist_classifier_effort medium
 ```
 

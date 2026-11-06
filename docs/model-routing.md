@@ -12,7 +12,7 @@ Secrets stay in `.env`; only routing knobs live in `config.yaml`.
 
 | Role | Provider | Endpoint | Models |
 |------|----------|----------|--------|
-| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.6-sol`, `gpt-6-astra` |
+| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.1-sol` (fallback `gpt-5.6-sol`), `gpt-6-astra` |
 | Coding (delegation) | claude-max-proxy (Claude Max) | `:3456/v1` | `opus`, `sonnet`, `haiku`, `fable`, `default` |
 | Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` (or a Tailscale host) | routine `qwen3.5:27b`, fallback `qwen3.6:27b`, agent `qwen3.8:27b` ([Local model roles](#local-model-roles)) |
 
@@ -51,9 +51,9 @@ templates so a Hermes upgrade that changes them fails loudly.
 | Task shape | Tier | Orchestrator (GPT) | Effort | Coding |
 |------------|------|--------------------|--------|--------|
 | status / lookup / report question | routine | `gpt-5.6-luna` | low | `opus` |
-| ordinary execution / delegation | medium | `gpt-5.6-luna` | medium | `opus` |
-| ambiguous / multi-constraint planning | elevated | `gpt-5.6-terra` | medium | `opus` |
-| genuinely hard (debug/architecture/security) | high | `gpt-5.6-sol` | medium–high | `fable` |
+| ordinary execution / delegation | medium | `gpt-6.1-terra` | medium | `opus` |
+| ambiguous / multi-constraint planning | elevated | `gpt-6.1-terra` | medium | `opus` |
+| genuinely hard (debug/architecture/security), or leading `#sol` | high | `gpt-6.1-sol` | medium–high | `fable` |
 | explicitly authorized max | max | `gpt-6-astra` | high | `fable` |
 
 Sol requires **substantive** complexity (two distinct hard categories, or one
@@ -64,12 +64,18 @@ keyword routes to Terra at most.
 
 Only the **first non-empty line** of the sender-authored task is a control line.
 Precedence when that line is exactly one tag: coding force (`#opus`/`#fable`)
-→ max authorization (`#max`/`#astra`) → routine force (`#quick`/…).
+→ max authorization (`#max`/`#astra`) → Sol force (`#sol`) → routine force
+(`#quick`/…).
 
 - A **leading standalone** `#opus` or `#fable` line **forces the Claude coding
   model** for that request, overriding complexity (see *Forced coding* below).
 - A **leading standalone** `#max` or `#astra` line (the first non-empty line of
   the task, containing only the tag) authorizes `gpt-6-astra` for that task.
+- A **leading standalone** `#sol` line forces the hard tier for that task:
+  `gpt-6.1-sol` on the orchestrator (`fable` on the coding seam). It never
+  grants Astra; effort still follows the task body (at least `medium`, never
+  above the request ceiling); a `continue` turn keeps Sol like any hard task.
+  Inline/quoted/non-sender `#sol` is inert.
 - Inline `#max`, `#deep`, `#hard` are hard-work *hints* (Sol at most) — they no
   longer grant Astra, and they are ignored entirely inside quotes/code fences,
   tool output, or older turns. Inline/quoted `#opus`/`#fable` are inert (not even
@@ -395,7 +401,7 @@ A refusal is a **final answer** (`finish_reason: stop`, typed by
 `_model_router_refusal` / `_model_router_refusal_reason`), never
 `content_filter`: Hermes answers an HTTP-200 `content_filter` with
 `handle_content_policy_refusal`, which activates the configured fallback chain
-(`gpt-5.6-luna -> opus`), so a refused private turn would restart on a cloud
+(`HERMES_MODEL` -> `opus`), so a refused private turn would restart on a cloud
 provider. An empty local answer is likewise a local failure (next local model,
 then refuse), because Hermes' empty-response ladder also ends in fallback.
 `TestHermesCoreSeam` runs the refusal through the installed Hermes middleware
@@ -410,11 +416,11 @@ Cheap, high-volume helper calls (`auxiliary.title_generation` /
 `auxiliary.compression`). Current defaults:
 
 - **Title generation** uses the main route: CLIProxyAPI with the orchestrator
-  model (`HERMES_MODEL`, `gpt-5.6-luna`). `.env.example` sets no `AUX_*` title
+  model (`HERMES_MODEL`, default `gpt-6.1-terra`). `.env.example` sets no `AUX_*` title
   variables, so the installer renders `provider: auto` with
   `reasoning_effort: low`. `make local-route-readback` accepts this route only
   while the main model points at the configured CLIProxyAPI.
-- **Compression** uses CLIProxyAPI `gpt-5.6-terra`, then `gpt-5.6-luna`
+- **Compression** uses CLIProxyAPI `gpt-6.1-terra`, then `gpt-5.6-luna`
   ([below](#compression-on-cliproxyapi-default)).
 
 The installer still reads `AUX_BASE_URL` / `AUX_MODEL` / `AUX_FALLBACK_MODEL` /
@@ -448,7 +454,7 @@ CLIProxyAPI, whatever `AUX_BASE_URL` says:
 ```yaml
 compression:
   provider: custom
-  model: gpt-5.6-terra                    # AUX_COMPRESSION_MODEL
+  model: gpt-6.1-terra                    # AUX_COMPRESSION_MODEL
   base_url: http://127.0.0.1:8317/v1      # CLIPROXY_PORT
   api_key: ${CLIPROXY_API_KEY}
   reasoning_effort: low
@@ -469,7 +475,7 @@ fallback.
 | `.env` | Default | Effect |
 |--------|---------|--------|
 | `AUX_COMPRESSION_ROUTE` | `cliproxy` | `aux` follows the title-generation route (`AUX_BASE_URL` local Ollama, else the main provider) |
-| `AUX_COMPRESSION_MODEL` | `gpt-5.6-terra` | primary model on CLIProxyAPI |
+| `AUX_COMPRESSION_MODEL` | `gpt-6.1-terra` | primary model on CLIProxyAPI |
 | `AUX_COMPRESSION_FALLBACK_MODEL` | `gpt-5.6-luna` | same-proxy fallback; `none` = no fallback |
 
 Private payloads never take this route: the model-router plugin's guard
@@ -598,7 +604,7 @@ current-task extraction and `#privacy`/`#private` marker check, and only runs in
 the `default` profile. Typed keywords and verified attachment text (PDF/DOCX
 extracted locally) add deterministic signals. For a public task with weak or no
 keyword matches, or with verified attachments, the hybrid classifier (CLIProxyAPI
-`gpt-5.6-terra` at `medium` effort, or `local`, the routine role below) may add
+`gpt-6.1-terra` at `medium` effort, or `local`, the routine role below) may add
 at most two profiles. The cap applies once, to the combined list.
 Marked turns never reach either classifier. See
 [specialist-routing.md](specialist-routing.md).
@@ -656,7 +662,7 @@ Discord turn. Nothing below restarts the gateway except step 6.
    OLLAMA_AGENT_MODEL=qwen3.8:27b
    AUX_BASE_URL=http://100.65.5.47:11434/v1
    AUX_MODEL=qwen3.5:27b
-   # compression stays on CLIProxyAPI gpt-5.6-terra unless AUX_COMPRESSION_ROUTE=aux
+   # compression stays on CLIProxyAPI gpt-6.1-terra unless AUX_COMPRESSION_ROUTE=aux
    MODEL_ROUTER_PRIVACY=true
    MODEL_ROUTER_SPECIALISTS=true
    MODEL_ROUTER_SPECIALIST_MAX=4

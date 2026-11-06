@@ -114,7 +114,7 @@ class RouterSettings:
     # cliproxy classifier: CLIProxyAPI (OpenAI-compatible, ChatGPT subscription).
     # '' base URL = $CLIPROXY_BASE_URL or http://127.0.0.1:$CLIPROXY_PORT/v1;
     # the key is read from the environment variable named here, never config.
-    specialist_classifier_model: str = "gpt-5.6-terra"
+    specialist_classifier_model: str = "gpt-6.1-terra"
     specialist_classifier_effort: str = "medium"                   # minimal | low | medium | high
     specialist_classifier_base_url: str = ""
     specialist_classifier_key_env: str = "CLIPROXY_API_KEY"
@@ -207,7 +207,7 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         specialist_classifier_timeout=_seconds(val("specialist_classifier_timeout",
                                                    "MODEL_ROUTER_SPECIALIST_CLASSIFIER_TIMEOUT", 10.0), 10.0),
         specialist_classifier_model=str(val("specialist_classifier_model", "MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL",
-                                            "gpt-5.6-terra") or "gpt-5.6-terra").strip(),
+                                            "gpt-6.1-terra") or "gpt-6.1-terra").strip(),
         specialist_classifier_effort=_effort(val("specialist_classifier_effort",
                                                  "MODEL_ROUTER_SPECIALIST_CLASSIFIER_EFFORT", "medium")),
         specialist_classifier_base_url=str(val("specialist_classifier_base_url",

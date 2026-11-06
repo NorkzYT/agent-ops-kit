@@ -22,7 +22,8 @@ requested vs served model, repeat consistency and failure rate (timeouts and
 HTTP errors are recorded, never invented, and excluded from fit scores). The
 recommendation ranks cells by lenient fit, then exact fit, then failure rate,
 then latency, and states the margin to the runner-up and to the baseline cell,
-the classifier's current default `gpt-5.6-terra/medium`.
+the classifier's current default `gpt-6.1-terra/medium` (v1 results below
+benchmarked `gpt-5.6-terra`; 6.1 has not been re-benchmarked yet).
 
 ## Rubric
 
@@ -62,7 +63,7 @@ Subjective choices (also listed in the rubric):
 ```bash
 make knowledge-benchmark                                  # all 58 sources, luna/terra/sol × medium/high, 2 repeats
 make knowledge-benchmark SOURCES=stratified REPEATS=1     # the 36-source subset, one pass
-make knowledge-benchmark MODELS=gpt-5.6-terra EFFORTS=medium OUT=data/knowledge-staging/benchmarks/smoke
+make knowledge-benchmark MODELS=gpt-6.1-terra EFFORTS=medium OUT=data/knowledge-staging/benchmarks/smoke
 python3 scripts/knowledge-benchmark.py score --rubric docs/benchmarks/knowledge-classify/rubric-v1.json \
     --results <out>/results.json --out <out>/rescored
 ```

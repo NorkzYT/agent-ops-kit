@@ -1,0 +1,661 @@
+{
+ "limit": {
+  "blocker": "fix-loop: round 1 of 1 failed at 0123456789ab on mac-worker (t_2); unblock this card to allow one more round",
+  "code": 4,
+  "graph": [
+   {
+    "assignee": "default",
+    "header": {
+     "code": "",
+     "commit": "",
+     "key": "lim",
+     "lane": "",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "code"
+    },
+    "id": "t_1",
+    "parents": [],
+    "records": [
+     [
+      "code-sha",
+      "code-sha:0123456789abcdef0123456789abcdef01234567"
+     ]
+    ],
+    "title": "[code 1] Build the iPad app"
+   },
+   {
+    "assignee": "mac-worker",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "lim",
+     "lane": "mac-worker",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "validate"
+    },
+    "id": "t_2",
+    "parents": [
+     "t_1"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_2_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_2:1"
+     ]
+    ],
+    "title": "[mac 1] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "lim",
+     "lane": "",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "round"
+    },
+    "id": "t_3",
+    "parents": [
+     "t_2"
+    ],
+    "records": [],
+    "title": "[round 1] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "",
+     "commit": "",
+     "key": "lim",
+     "lane": "",
+     "round": "",
+     "round-card": "",
+     "stage": "",
+     "workflow": "report"
+    },
+    "id": "t_4",
+    "parents": [
+     "t_3"
+    ],
+    "records": [],
+    "title": "Report: Build the iPad app"
+   }
+  ]
+ },
+ "loop": {
+  "gate": true,
+  "graph": [
+   {
+    "assignee": "default",
+    "header": {
+     "code": "",
+     "commit": "",
+     "key": "g",
+     "lane": "",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "code"
+    },
+    "id": "t_1",
+    "parents": [],
+    "records": [
+     [
+      "code-sha",
+      "code-sha:0123456789abcdef0123456789abcdef01234567"
+     ]
+    ],
+    "title": "[code 1] Build the iPad app"
+   },
+   {
+    "assignee": "mac-worker",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "g",
+     "lane": "mac-worker",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "validate"
+    },
+    "id": "t_2",
+    "parents": [
+     "t_1"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_2_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_2:1"
+     ]
+    ],
+    "title": "[mac 1] Build the iPad app"
+   },
+   {
+    "assignee": "windows-worker",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "g",
+     "lane": "windows-worker",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "validate"
+    },
+    "id": "t_3",
+    "parents": [
+     "t_1"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_3_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_3:1"
+     ]
+    ],
+    "title": "[win 1] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "g",
+     "lane": "",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "round"
+    },
+    "id": "t_4",
+    "parents": [
+     "t_2",
+     "t_3"
+    ],
+    "records": [
+     [
+      "round",
+      "round:1:0123456789abcdef0123456789abcdef01234567"
+     ]
+    ],
+    "title": "[round 1] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "",
+     "commit": "",
+     "key": "g",
+     "lane": "",
+     "round": "",
+     "round-card": "",
+     "stage": "",
+     "workflow": "report"
+    },
+    "id": "t_5",
+    "parents": [
+     "t_10",
+     "t_14",
+     "t_15",
+     "t_4",
+     "t_9"
+    ],
+    "records": [],
+    "title": "Report: Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "",
+     "commit": "",
+     "key": "g",
+     "lane": "",
+     "round": "2",
+     "round-card": "",
+     "stage": "",
+     "workflow": "code"
+    },
+    "id": "t_6",
+    "parents": [
+     "t_4"
+    ],
+    "records": [
+     [
+      "code-sha",
+      "code-sha:89abcdef0123456789abcdef0123456789abcdef"
+     ]
+    ],
+    "title": "[code 2] Build the iPad app"
+   },
+   {
+    "assignee": "mac-worker",
+    "header": {
+     "code": "t_6",
+     "commit": "",
+     "key": "g",
+     "lane": "mac-worker",
+     "round": "2",
+     "round-card": "",
+     "stage": "",
+     "workflow": "validate"
+    },
+    "id": "t_7",
+    "parents": [
+     "t_6"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_7_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_7:1"
+     ]
+    ],
+    "title": "[mac 2] Build the iPad app"
+   },
+   {
+    "assignee": "windows-worker",
+    "header": {
+     "code": "t_6",
+     "commit": "",
+     "key": "g",
+     "lane": "windows-worker",
+     "round": "2",
+     "round-card": "",
+     "stage": "",
+     "workflow": "validate"
+    },
+    "id": "t_8",
+    "parents": [
+     "t_6"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_8_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_8:1"
+     ]
+    ],
+    "title": "[win 2] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "t_6",
+     "commit": "",
+     "key": "g",
+     "lane": "",
+     "round": "2",
+     "round-card": "",
+     "stage": "",
+     "workflow": "round"
+    },
+    "id": "t_9",
+    "parents": [
+     "t_7",
+     "t_8"
+    ],
+    "records": [
+     [
+      "round",
+      "round:2:89abcdef0123456789abcdef0123456789abcdef"
+     ]
+    ],
+    "title": "[round 2] Build the iPad app"
+   },
+   {
+    "assignee": "reviewer",
+    "header": {
+     "code": "t_6",
+     "commit": "89abcdef0123456789abcdef0123456789abcdef",
+     "key": "g",
+     "lane": "",
+     "round": "2",
+     "round-card": "t_9",
+     "stage": "",
+     "workflow": "review"
+    },
+    "id": "t_10",
+    "parents": [
+     "t_9"
+    ],
+    "records": [
+     [
+      "verdict",
+      "verdict:2:89abcdef0123456789abcdef0123456789abcdef"
+     ]
+    ],
+    "title": "Review: Build the iPad app (round 2)"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "",
+     "commit": "",
+     "key": "g",
+     "lane": "",
+     "round": "3",
+     "round-card": "",
+     "stage": "",
+     "workflow": "code"
+    },
+    "id": "t_11",
+    "parents": [
+     "t_10"
+    ],
+    "records": [
+     [
+      "code-sha",
+      "code-sha:cccccccccccccccccccccccccccccccccccccccc"
+     ]
+    ],
+    "title": "[code 3] Build the iPad app"
+   },
+   {
+    "assignee": "mac-worker",
+    "header": {
+     "code": "t_11",
+     "commit": "",
+     "key": "g",
+     "lane": "mac-worker",
+     "round": "3",
+     "round-card": "",
+     "stage": "",
+     "workflow": "validate"
+    },
+    "id": "t_12",
+    "parents": [
+     "t_11"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_12_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_12:1"
+     ]
+    ],
+    "title": "[mac 3] Build the iPad app"
+   },
+   {
+    "assignee": "windows-worker",
+    "header": {
+     "code": "t_11",
+     "commit": "",
+     "key": "g",
+     "lane": "windows-worker",
+     "round": "3",
+     "round-card": "",
+     "stage": "",
+     "workflow": "validate"
+    },
+    "id": "t_13",
+    "parents": [
+     "t_11"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_13_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_13:1"
+     ]
+    ],
+    "title": "[win 3] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "t_11",
+     "commit": "",
+     "key": "g",
+     "lane": "",
+     "round": "3",
+     "round-card": "",
+     "stage": "",
+     "workflow": "round"
+    },
+    "id": "t_14",
+    "parents": [
+     "t_12",
+     "t_13"
+    ],
+    "records": [
+     [
+      "round",
+      "round:3:cccccccccccccccccccccccccccccccccccccccc"
+     ]
+    ],
+    "title": "[round 3] Build the iPad app"
+   },
+   {
+    "assignee": "reviewer",
+    "header": {
+     "code": "t_11",
+     "commit": "cccccccccccccccccccccccccccccccccccccccc",
+     "key": "g",
+     "lane": "",
+     "round": "3",
+     "round-card": "t_14",
+     "stage": "",
+     "workflow": "review"
+    },
+    "id": "t_15",
+    "parents": [
+     "t_14"
+    ],
+    "records": [
+     [
+      "verdict",
+      "verdict:3:cccccccccccccccccccccccccccccccccccccccc"
+     ]
+    ],
+    "title": "Review: Build the iPad app (round 3)"
+   }
+  ]
+ },
+ "mobile": {
+  "gate": true,
+  "graph": [
+   {
+    "assignee": "default",
+    "header": {
+     "code": "",
+     "commit": "",
+     "key": "m",
+     "lane": "",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "code"
+    },
+    "id": "t_1",
+    "parents": [],
+    "records": [
+     [
+      "code-sha",
+      "code-sha:0123456789abcdef0123456789abcdef01234567"
+     ]
+    ],
+    "title": "[code 1] Build the iPad app"
+   },
+   {
+    "assignee": "mac-worker",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "m",
+     "lane": "mac-worker",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "validate"
+    },
+    "id": "t_2",
+    "parents": [
+     "t_1"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_2_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_2:1"
+     ]
+    ],
+    "title": "[mac 1] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "m",
+     "lane": "",
+     "round": "1",
+     "round-card": "",
+     "stage": "",
+     "workflow": "round"
+    },
+    "id": "t_3",
+    "parents": [
+     "t_2"
+    ],
+    "records": [
+     [
+      "round",
+      "round:1:0123456789abcdef0123456789abcdef01234567"
+     ]
+    ],
+    "title": "[round 1] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "",
+     "commit": "",
+     "key": "m",
+     "lane": "",
+     "round": "",
+     "round-card": "",
+     "stage": "",
+     "workflow": "report"
+    },
+    "id": "t_4",
+    "parents": [
+     "t_3",
+     "t_6",
+     "t_7"
+    ],
+    "records": [],
+    "title": "Report: Build the iPad app"
+   },
+   {
+    "assignee": "mac-worker",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "m",
+     "lane": "mac-worker",
+     "round": "1",
+     "round-card": "",
+     "stage": "devices",
+     "workflow": "validate"
+    },
+    "id": "t_5",
+    "parents": [
+     "t_3"
+    ],
+    "records": [
+     [
+      "evidence",
+      "evidence:run_t_5_1"
+     ],
+     [
+      "peer-run",
+      "kanban:t_5:1"
+     ]
+    ],
+    "title": "[devices 1] Build the iPad app"
+   },
+   {
+    "assignee": "default",
+    "header": {
+     "code": "t_1",
+     "commit": "",
+     "key": "m",
+     "lane": "",
+     "round": "1",
+     "round-card": "",
+     "stage": "devices",
+     "workflow": "round"
+    },
+    "id": "t_6",
+    "parents": [
+     "t_5"
+    ],
+    "records": [
+     [
+      "round",
+      "round:1:0123456789abcdef0123456789abcdef01234567"
+     ]
+    ],
+    "title": "[devices-round 1] Build the iPad app"
+   },
+   {
+    "assignee": "reviewer",
+    "header": {
+     "code": "t_1",
+     "commit": "0123456789abcdef0123456789abcdef01234567",
+     "key": "m",
+     "lane": "",
+     "round": "1",
+     "round-card": "t_6",
+     "stage": "",
+     "workflow": "review"
+    },
+    "id": "t_7",
+    "parents": [
+     "t_6"
+    ],
+    "records": [
+     [
+      "verdict",
+      "verdict:1:0123456789abcdef0123456789abcdef01234567"
+     ]
+    ],
+    "title": "Review: Build the iPad app (round 1)"
+   }
+  ]
+ }
+}

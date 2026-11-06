@@ -140,6 +140,28 @@ discord:
     replied_user: true
 group_sessions_per_user: true
 
+# -------------------------------------------------------------- Approvals ---
+# Dangerous-command policy, documented keys only (Hermes user-guide/security).
+# Kanban workers run as `hermes chat -q` and cron jobs headless: with deny they
+# refuse a flagged command instead of waiting for nobody. The one standing
+# exception is the operator's own "Always" answers: those pattern keys live in
+# command_allowlist, apply in headless runs too (runtime patch 0002), and are
+# kept verbatim across `hermes-install.sh --force`. No yolo, no approve mode.
+approvals:
+  cron_mode: deny
+  single_query_mode: deny
+  unattended_mode: deny
+command_allowlist: __COMMAND_ALLOWLIST__
+
+# Pre-exec command scanner (tirith, installed by Hermes under $HERMES_HOME/bin).
+# It is a gate, not advice: when the binary is missing, crashes or times out the
+# command is refused (fail closed) instead of running unscanned. Hermes' own
+# default is fail-open; the kit's workers run headless, so nothing would notice
+# an absent scanner. No bypass, no yolo.
+security:
+  tirith_enabled: true
+  tirith_fail_open: false
+
 # ----------------------------------------------------------------- Kanban ---
 # Shared board for multi-profile teams (docs/profiles-and-teams.md).
 kanban:
@@ -196,7 +218,7 @@ auxiliary:
     reasoning_effort: low
     fallback_chain: __AUX_FALLBACK_CHAIN__
   # Compression (AUX_COMPRESSION_ROUTE). Default cliproxy: CLIProxyAPI
-  # gpt-5.6-terra, then gpt-5.6-luna on the same proxy, effort low, Hermes'
+  # gpt-6.1-terra, then gpt-5.6-luna on the same proxy, effort low, Hermes'
   # default 120 s timeout. The model-router plugin extends the guard above:
   # CLIProxyAPI counts as cloud even on loopback, and a #privacy/#private
   # payload is refused rather than sent. AUX_COMPRESSION_ROUTE=aux follows the
@@ -227,8 +249,9 @@ compression:
 
 # --------------------------------------------------------------- Plugins ---
 # model-router: task-scoped model + effort routing (luna/terra/sol for the
-# orchestrator, opus/fable for coding; gpt-6-astra ONLY with explicit per-task
-# authorization) + fail-closed privacy routing.
+# orchestrator, sol = gpt-6.1-sol with gpt-5.6-sol fallback, a leading #sol
+# line forces it; opus/fable for coding; gpt-6-astra ONLY with explicit
+# per-task authorization) + fail-closed privacy routing.
 # Knobs are rendered from MODEL_ROUTER_* in .env; explicit false/never values
 # are preserved. Privacy routing is ENABLED by default: a request whose current
 # user turn carries #privacy never reaches a cloud provider (local Ollama, or
@@ -258,7 +281,7 @@ compression:
 # default (orchestrator) profile and never dispatches by itself.
 # specialist_selection_mode (MODEL_ROUTER_SPECIALIST_MODE, default ai): in ai
 # mode the classifier (specialist_classifier: cliproxy, model
-# specialist_classifier_model gpt-5.6-terra at specialist_classifier_effort
+# specialist_classifier_model gpt-6.1-terra at specialist_classifier_effort
 # medium; or the routine local model) selects up to specialist_max_profiles
 # profiles from the eligible INSTALLED catalog (registry + profiles created by
 # knowledge-apply) for every substantive public task; no keyword scoring, no

@@ -573,7 +573,7 @@ FIXTURE_ENV = """CLIPROXY_PORT=8317
 CLIPROXY_API_KEY=cptest
 CLAUDE_MAX_PROXY_PORT=3456
 CLAUDE_MAX_PROXY_API_KEY=secrettoken123
-HERMES_MODEL=gpt-5.6-luna
+HERMES_MODEL=gpt-6.1-terra
 HERMES_CODING_MODEL=opus
 REPOS_DIR={tmp}/repos
 HERMES_HOME={home}
@@ -782,7 +782,7 @@ class InstallerRenderTest(_InstallerFixture):
 
     def test_compression_defaults_to_cliproxy_not_ollama(self):
         """Even with title generation pinned to Ollama, compression renders
-        CLIProxyAPI gpt-5.6-terra with a gpt-5.6-luna fallback on the same proxy."""
+        CLIProxyAPI gpt-6.1-terra with a gpt-5.6-luna fallback on the same proxy."""
         r = self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = self.home / "config.yaml"
@@ -791,7 +791,7 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(cfg, "auxiliary.title_generation.base_url"), "http://100.65.5.47:11434/v1")
         get = lambda k: self.get(cfg, f"auxiliary.compression.{k}")
         self.assertEqual((get("provider"), get("model"), get("base_url"), get("api_key")),
-                         ("custom", "gpt-5.6-terra", "http://127.0.0.1:8317/v1", "${CLIPROXY_API_KEY}"))
+                         ("custom", "gpt-6.1-terra", "http://127.0.0.1:8317/v1", "${CLIPROXY_API_KEY}"))
         self.assertEqual((get("reasoning_effort"), get("timeout")), ("low", "120"))
         comp = text.split("  compression:\n", 1)[1].split("\n\n", 1)[0]
         self.assertNotIn("11434", comp)
@@ -804,7 +804,7 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(cfg, "compression.context_total_ceiling_seconds"), "600")
         # Same render with no Ollama aux at all.
         self.install("", "--force")
-        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-5.6-terra")
+        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-6.1-terra")
         self.assertEqual(self.get(cfg, "auxiliary.title_generation.provider"), "auto")
 
     def test_compression_model_overrides_and_invalid_route(self):
@@ -820,7 +820,7 @@ class InstallerRenderTest(_InstallerFixture):
         r = self.install("AUX_COMPRESSION_ROUTE=ollama\n", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("AUX_COMPRESSION_ROUTE=ollama", r.stderr)
-        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-5.6-terra")
+        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-6.1-terra")
 
     def test_legacy_chat_model_keeps_single_model_installs_working(self):
         r = self.install("OLLAMA_CHAT_MODEL=llama3.1:8b\n", "--force")
@@ -995,7 +995,7 @@ class HermesNativeTest(_InstallerFixture):
         self.assertEqual([e["model"] for e in aux["fallback_chain"]], ["qwen3.6:27b"])
         aux = nat["auxiliary"]["compression"]
         self.assertEqual((aux["provider"], aux["model"], aux["base_url"]),
-                         ("custom", "gpt-5.6-terra", "http://127.0.0.1:8317/v1"))
+                         ("custom", "gpt-6.1-terra", "http://127.0.0.1:8317/v1"))
         self.assertEqual([(e["model"], e["base_url"]) for e in aux["fallback_chain"]],
                          [("gpt-5.6-luna", "http://127.0.0.1:8317/v1")])
 
@@ -1026,22 +1026,22 @@ class HermesNativeTest(_InstallerFixture):
         return json.loads(r.stdout.strip().splitlines()[-1])
 
     def test_cliproxy_compression_wire_and_private_refusal(self):
-        """Compression reaches CLIProxyAPI as gpt-5.6-terra with the proxy key;
+        """Compression reaches CLIProxyAPI as gpt-6.1-terra with the proxy key;
         a #privacy/#private payload is refused before any byte is sent."""
         res = self.cliproxy_wire("guard")
         self.assertEqual(res["public"], "sent", res)
         self.assertEqual([(q["model"], q["auth"]) for q in res["public_requests"]],
-                         [("gpt-5.6-terra", "Bearer cptest")])
+                         [("gpt-6.1-terra", "Bearer cptest")])
         for name in ("privacy", "private"):
             self.assertEqual(res[name], "refused", res)
             self.assertEqual(res[name + "_requests"], [], res)
 
     def test_cliproxy_compression_falls_back_to_luna(self):
-        res = self.cliproxy_wire("guard", missing=["gpt-5.6-terra"])
+        res = self.cliproxy_wire("guard", missing=["gpt-6.1-terra"])
         self.assertEqual(res["public"], "sent", res)
         chat = [q for q in res["public_requests"] if q["path"].endswith("/chat/completions")]
         self.assertEqual([(q["model"], q["auth"]) for q in chat],
-                         [("gpt-5.6-terra", "Bearer cptest"), ("gpt-5.6-luna", "Bearer cptest")])
+                         [("gpt-6.1-terra", "Bearer cptest"), ("gpt-5.6-luna", "Bearer cptest")])
         self.assertEqual((res["privacy"], res["privacy_requests"]), ("refused", []), res)
 
     def test_core_guard_alone_leaks_loopback_cloud_proxy(self):
@@ -1063,7 +1063,7 @@ class HermesNativeTest(_InstallerFixture):
         cfg = self.home / "config.yaml"
         self.install("", "--render-only", str(cfg))
         nat = self.native(cfg)
-        self.assertEqual(nat["main"], {"provider": "custom", "model": "gpt-5.6-luna",
+        self.assertEqual(nat["main"], {"provider": "custom", "model": "gpt-6.1-terra",
                                        "base_url": "http://127.0.0.1:8317/v1"})
         self.assertEqual((nat["auxiliary"]["title_generation"]["provider"],
                           nat["auxiliary"]["title_generation"]["base_url"]), ("auto", ""))
@@ -1072,7 +1072,7 @@ class HermesNativeTest(_InstallerFixture):
         ok = subprocess.run([sys.executable, "scripts/local-route.py", "readback"], cwd=REPO, env=env,
                             capture_output=True, text=True, timeout=300)
         self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
-        self.assertIn("auxiliary.title_generation follows main gpt-5.6-luna @ 127.0.0.1:8317", ok.stdout)
+        self.assertIn("auxiliary.title_generation follows main gpt-6.1-terra @ 127.0.0.1:8317", ok.stdout)
 
     def test_readback_matches_render_and_flags_drift(self):
         cfg = self.home / "config.yaml"

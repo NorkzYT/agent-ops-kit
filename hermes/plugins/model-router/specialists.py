@@ -568,7 +568,7 @@ class ClassifierText(str):
 # Control tags (task_intent, privacy) inside attached content carry no
 # authority; they are removed before the content reaches the classifier.
 _CONTROL_TAG_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9_#])#(?:max|astra|opus|fable|quick|routine|cheap|simple|low|deep|hard|local)"
+    r"(?i)(?<![A-Za-z0-9_#])#(?:max|astra|sol|opus|fable|quick|routine|cheap|simple|low|deep|hard|local)"
     r"(?![A-Za-z0-9_\-])")
 _BARE_SENDER_RE = re.compile(r"\[[^\[\]\n]{1,96}\]")
 _DOC_FENCE_RE = re.compile(r"(?:<<<|>>>)\s*DOCUMENT|DOCUMENT\s*(?:<<<|>>>)")
@@ -794,7 +794,8 @@ def route_text(
                     return trace
                 else:
                     task = dataclasses.replace(ti.task_from_sender_text(sep.attached),
-                                               authorized_max=False, forced_routine=False, forced_coding="")
+                                               authorized_max=False, forced_routine=False, forced_coding="",
+                                               forced_sol=False)
                     source = "attachment"
     if not task.found and source != "document":
         trace["reason"] = "no-current-task"

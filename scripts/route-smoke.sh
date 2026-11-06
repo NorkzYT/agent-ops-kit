@@ -66,6 +66,9 @@ degraded = cx.resolve_model("max", family="gpt", allow_max=True,
                             available=[m for m in gpt if m != "gpt-6-astra"])
 print(f"    degrade  gpt max (astra removed) -> {degraded}")
 assert degraded and degraded in gpt, "degrade did not fall back to a live tier"
+# Sol fallback: without gpt-6.1-sol the hard tier stays on Sol via gpt-5.6-sol.
+sol_fb = cx.resolve_model("high", family="gpt", available=[m for m in gpt if m != "gpt-6.1-sol"])
+print(f"    fallback gpt high (gpt-6.1-sol removed) -> {sol_fb}")
 sys.exit(0 if ok else 1)
 PY
 

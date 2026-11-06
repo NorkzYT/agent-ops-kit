@@ -583,7 +583,7 @@ class CliproxyClassifierTest(unittest.TestCase):
     def test_defaults_are_terra_at_medium_effort(self):
         s = config_mod.load_settings(lambda k, d: {"specialist_classifier": "cliproxy"}.get(k))
         self.assertEqual((s.specialist_classifier, s.specialist_classifier_model,
-                          s.specialist_classifier_effort), ("cliproxy", "gpt-5.6-terra", "medium"))
+                          s.specialist_classifier_effort), ("cliproxy", "gpt-6.1-terra", "medium"))
         self.assertEqual(s.cliproxy_base_url(), "http://127.0.0.1:8317/v1")
         with mock.patch.dict(os.environ, {"CLIPROXY_PORT": "9999"}):
             self.assertEqual(s.cliproxy_base_url(), "http://127.0.0.1:9999/v1")
@@ -592,14 +592,14 @@ class CliproxyClassifierTest(unittest.TestCase):
         fn = hook_mod.cliproxy_classifier(self.rs())
         picks = fn(LONG_NEUTRAL, ["philosophy", "strategy", "business"])
         self.assertEqual(list(picks), ["philosophy"])
-        self.assertEqual(picks.meta, {"model": "gpt-5.6-terra", "effort": "medium", "attempt": 1,
+        self.assertEqual(picks.meta, {"model": "gpt-6.1-terra", "effort": "medium", "attempt": 1,
                                       "outcome": "ok"})
         req = _CliProxy.requests[0]
         self.assertEqual(req["path"], "/v1/chat/completions")
         self.assertEqual(req["auth"], "Bearer test-key")
         body = req["body"]
         self.assertEqual((body["model"], body["reasoning_effort"], body["stream"]),
-                         ("gpt-5.6-terra", "medium", False))
+                         ("gpt-6.1-terra", "medium", False))
         self.assertNotIn("temperature", body)
         self.assertEqual(body["messages"][0]["content"], hook_mod.CLOUD_SYSTEM_PROMPT.format(cap=2))
         user = body["messages"][1]["content"]
@@ -687,7 +687,7 @@ class CliproxyClassifierTest(unittest.TestCase):
                "specialist_classifier_base_url": self.url}
         with self.assertLogs("hermes.plugin.model_router", level="INFO") as logs:
             load_plugin().register(Ctx(cfg))
-        self.assertIn("classifier=cliproxy:gpt-5.6-terra/medium", "\n".join(logs.output))
+        self.assertIn("classifier=cliproxy:gpt-6.1-terra/medium", "\n".join(logs.output))
         with mock.patch.dict(os.environ, {"CLIPROXY_API_KEY": ""}), \
                 self.assertLogs("hermes.plugin.model_router", level="INFO") as logs:
             load_plugin().register(Ctx(cfg))
@@ -734,7 +734,7 @@ class CliproxyEndToEndTest(_Cache):
         self.assertNotIn("[The user sent a document", user)  # gateway note never sent
         self.assertNotIn(str(self.cache), user)
         text = "\n".join(logs.output) + out["context"]
-        self.assertIn("classifier_model=gpt-5.6-terra classifier_outcome=ok "
+        self.assertIn("classifier_model=gpt-6.1-terra classifier_outcome=ok "
                       "context=sender:1,docs:1,withheld:0,extract:pdf:ok", text)
         for secret in ("Quuxbarian", "Zorblax", "4,000", "Retainer Agreement", str(self.cache)):
             self.assertNotIn(secret, text)

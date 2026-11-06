@@ -66,18 +66,21 @@ gateway running on the old config until `make hermes-restart`. Details:
 All of this lives in the `model-router` plugin and `.env`; see
 [docs/model-routing.md](docs/model-routing.md).
 
-- **Orchestrator** (CLIProxyAPI, ChatGPT): per task, status→`gpt-5.6-luna`
-  low effort, ordinary work→luna, planning→`gpt-5.6-terra`, hard→`gpt-5.6-sol`;
+- **Orchestrator** (CLIProxyAPI, ChatGPT): starts on `HERMES_MODEL`
+  (default `gpt-6.1-terra`, `model.default`); the router then rewrites
+  per task: status→`gpt-5.6-luna`
+  low effort, ordinary work and planning→`gpt-6.1-terra`, hard or a leading
+  `#sol` line→`gpt-6.1-sol` (`gpt-5.6-sol` only when 6.1 is not advertised);
   `gpt-6-astra` only with a leading `#max`/`#astra` line.
 - **Coding subagents** (claude-max-proxy, Claude Max): `opus`, `fable` for hard
   engineering; a leading `#opus`/`#fable` line forces one.
 - **Specialists**: the router names up to six book-backed profiles per task
   (`MODEL_ROUTER_SPECIALIST_MAX=6`, the hard cap). Keywords and verified
   attachment text (PDF/DOCX extracted locally) add deterministic signals; for
-  weak matches or attachments the classifier on CLIProxyAPI `gpt-5.6-terra`
+  weak matches or attachments the classifier on CLIProxyAPI `gpt-6.1-terra`
   (medium effort) may add up to two more, within the same cap.
-- **Compression**: CLIProxyAPI `gpt-5.6-terra`, falling back to `gpt-5.6-luna`.
-- **Session titles**: the main route (CLIProxyAPI, luna); no title variables
+- **Compression**: CLIProxyAPI `gpt-6.1-terra`, falling back to `gpt-5.6-luna`.
+- **Session titles**: the main route (CLIProxyAPI, `HERMES_MODEL`); no title variables
   are set in `.env.example`.
 - **Privacy**: `#privacy` or `#private` typed in the current turn keeps that
   request on local Ollama or refuses it (per request, not sticky; `#local`

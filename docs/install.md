@@ -128,7 +128,7 @@ inside Hermes kills that turn).
 
    ```bash
    make hermes-restart
-   make router-logs LINES=5      # model_router registered (privacy=... specialists=on) ... classifier=cliproxy:gpt-5.6-terra/medium
+   make router-logs LINES=5      # model_router registered (privacy=... specialists=on) ... classifier=cliproxy:gpt-6.1-terra/medium
    make local-route-status       # aux routes, fallback chains, privacy, specialist knobs as Hermes resolves them
    make specialist-status        # plugin vs repo, specialist_* settings, restart pending
    ```

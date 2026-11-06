@@ -1,0 +1,358 @@
+# Trusted Go/PostgreSQL dev tests for Kanban workers (`dev_test_run`)
+
+> **Status (2026-11-02): NOT INSTALLED, DISABLED, DESIGN REJECTED.** An independent review of
+> the candidate in kit commit 3e84caa / runtime d15a70ddc8 found that its same-UID Landlock
+> design does not meet the mandatory network and credential isolation requirements. The
+> candidate is kept in the kit with its tractable defects fixed and regression-tested, but it
+> **fails closed everywhere**: the runner refuses every profile whose `isolation.mode` is
+> `same-uid-landlock` (the only implemented mode), the installer refuses to plan or install
+> such a profile, `status` exits non-zero, the runtime tool is hidden and emits no `RECOVERY:`
+> directive for a rejected profile, and workers are told to block naming the missing
+> capability. Nothing below is available to a worker until a revision of the
+> [Proposed design](#proposed-design-not-approved-nothing-implemented-operator-decision-required)
+> is approved by the operator, implemented, provisioned and attested. A registry that merely
+> declares `isolation.mode: credential-broker-netns` is config validity, not readiness: the
+> tool stays hidden, no `RECOVERY:` directive is emitted, `check-config` exits 1 and the
+> installer refuses (`NOT IMPLEMENTED`). Validate card `t_12595b96` stays blocked on this.
+
+## Review findings and what was done (kit 3e84caa → this change)
+
+| # | Finding | Status |
+|---|---------|--------|
+| 1 | Tests run as the uid that owns the credential file and the docker socket group; text guards are not a boundary | **Unresolved by design** → fail-closed gate; needs a restricted worker identity or VM plus the broker in the proposed design (operator decision) |
+| 2 | `postgres` superuser lets a test escape via `COPY TO PROGRAM`, `pg_read_server_files` | **Unresolved** → proposed design requires a verified non-superuser role behind a broker-side proxy; no DB change made |
+| 3 | TCP rules granted the whole ephemeral range (any host) and were described as "loopback" | **Fixed**: database port only; `sandbox.network_limit` says any host may be reached on it |
+| 4 | seccomp left `socket()` protocol unchecked (MPTCP/SCTP) | **Fixed**: protocol 0 or `IPPROTO_TCP` only; negative test with real syscalls (SCTP, MPTCP, UDP, UNIX, raw, netlink → `EACCES`) |
+| 5 | Source grants by path (TOCTOU), hardlink aliases of `.env` granted | **Fixed**: verified `O_PATH|O_NOFOLLOW` descriptors (regular, `st_nlink == 1`, dev/ino checked) held until the rule is added |
+| 6 | Test/package names and other keys were not scrubbed; truncation before scrubbing | **Fixed**: raw streams scrubbed before parsing, then every key and value of the result (`scrub_object`); encoded leaks remain unsolvable → gate |
+| 7 | Unbounded `communicate()` after timeout, escaped `setsid` descendants, no parent-death | **Fixed (bounded, not contained)**: `PR_SET_PDEATHSIG`, group kill, `KILL_GRACE`-bounded drain, vet budget from the remaining time; escaped descendants reported, not contained |
+| 8 | Container never verified; whole `pgpass` granted | **Partly fixed**: per-run file with only the registered entry; endpoint identity still unverified (needs the broker); in the proposed design no credential reaches the test at all |
+| 9 | Malformed lease crashed the runner; TTL unbounded; board never compared | **Fixed**: typed lease fields, TTL 60..7200 s, future-skew refused, `board` compared (config `board`, default `default`) |
+| 10 | `/proc` readable (other processes' `cmdline`) | **Unresolved**: Go toolchain needs `/proc`; needs a pid namespace |
+| 11 | Zero matched tests returned `ok: true` | **Fixed**: zero tests → `ok: false`, exit 1, `error` names the filter |
+| 12 | Malformed `dev_test_run` call cleared the recovery state; state global | **Fixed (runtime f04d4adc80)**: per (task, run) state; cleared only by an actual runner start or a recorded precondition refusal |
+| 13 | `database_target_block` missed `?host=`, multi-host, `PGHOSTADDR`, `PGSERVICE` | **Fixed (additive text guard, not a boundary)** |
+| 14 | Shared build cache across profiles | **Fixed**: per-profile cache directory |
+| 15 | Installer `status` exited 0 when missing/untrusted | **Fixed**: non-zero; `plan`/`install` print `REJECTED` and exit 1 for a rejected design |
+| 16 | A registry declaring the `credential-broker-netns` mode string unhid the runtime tool, emitted `RECOVERY:` directives, made `kanban_block` refuse, and made `check-config`/`plan`/`install`/`status` report ready, while every run exited "not implemented" (second review, 2026-11-02) | **Fixed (runtime 61cbead82d, kit this change)**: readiness needs an attested backend (`backend_attested` / `IMPLEMENTED_ISOLATION`, both empty); validity and readiness are reported separately; `plan`/`install` print `NOT IMPLEMENTED`; the additive guards keep working for an older trusted registry without `isolation.mode` |
+
+## Proposed design (NOT approved; nothing implemented; operator decision required)
+
+**Status: proposed.** Nothing in this section exists, is approved, or is provisioned. The
+earlier text of this section called the design "approved"; that was wrong. Readiness is
+*not* a registry string: the runtime tool, the runner's `check-config` and the installer's
+`plan`/`install`/`status` now treat `isolation.mode: credential-broker-netns` as syntactic
+validity only and stay closed until an implemented, provisioned and attested backend exists
+(runtime `backend_attested`, runner `IMPLEMENTED_ISOLATION`, both empty). A revision of this
+proposal that the operator approves is the precondition for any implementation work.
+
+Disproven assumptions removed from the earlier draft:
+
+- **"The worker uid cannot reach the credential once a broker owns it."** False as stated:
+  `polymath-dev` is in `docker`, which is root-equivalent on this host, and in other
+  privileged groups. Any broker, test identity or namespace set up next to that uid is
+  bypassable by it. Strong separation therefore requires **either** workers running under a
+  dedicated restricted execution identity with no docker socket access and no privileged
+  groups, **or** an isolated VM boundary for workers. This proposal does **not** remove the
+  current user's groups or alter the existing worker silently; choosing one of the two is an
+  explicit operator decision and no host-wide change is made before it.
+- **"Hand the test identity the credential through a memfd `PGPASSFILE`."** Rejected: any
+  credential that reaches the editable test binary (file, memfd, environment, fd) is readable
+  by test code and can be exfiltrated or encoded past the scrubber. Credentials must never
+  enter the test process in any form.
+- **"`git archive` of HEAD is the source snapshot."** Invalid: the worker's checkpointed work
+  is a dirty working tree (uncommitted changes under the sole-writer lease); HEAD alone would
+  test the wrong code.
+- **"`status` exiting 0 is a verification milestone."** It was reachable with a mode string
+  alone; it is now unreachable without an implemented backend and is no longer a milestone by
+  itself (see step 10).
+- **"Approved" anywhere in the earlier text.** Nothing here has operator approval.
+
+Provisioning needs root and cannot run unattended: `sudo -n -l` on this host grants only
+`NOPASSWD: /usr/local/libexec/hermes-validate-cwd-scan ""`; unprivileged user namespaces are
+blocked by AppArmor (not to be relaxed). None of the steps below is executed by Hermes.
+
+1. **Worker execution identity (operator decision, prerequisite for everything else).**
+   Option A: a dedicated restricted user (proposed name `hermes-devtest-worker`, proposed uid
+   allocated by the operator, groups: its own primary group only; not `docker`, `sudo`, `adm`,
+   `lxd`, `kvm` or any other privileged group) runs the Kanban workers that may call
+   `dev_test_run`. Option B: workers run inside an isolated VM whose only ingress is the task
+   queue and whose only egress to this host is the broker endpoint in step 2. Until A or B is
+   chosen and provisioned, the proposal cannot provide the separation it claims, and the
+   current worker (`polymath-dev`) is left exactly as it is.
+2. **Credential broker with a broker-side PostgreSQL auth proxy.** A dedicated system user
+   (proposed `hermes-devtest-broker`) owns the upstream credential exclusively; no other uid
+   has read access. A small root-installed service (proposed `hermes-devtest-broker.service`
+   with `hermes-devtest-broker.socket`, UNIX socket `/run/hermes-devtest/broker.sock`,
+   `SO_PEERCRED` check against the identity from step 1) receives `(task, run_id, profile)`,
+   verifies the live board claim and the repository lease itself, and then starts the test
+   process. For the database it exposes a **password-free ephemeral endpoint** inside the
+   test's network namespace (a per-run PostgreSQL protocol proxy, proposed
+   `hermes-devtest-pgproxy`); the proxy authenticates upstream with the broker's credential.
+   The tests see only `postgresql://<role>@<netns-endpoint>/matching_test`; no `PGPASSFILE`,
+   no memfd, no environment variable, no fd carries a secret into the test.
+3. **Proxy protocol gates.** The proxy accepts only the registered database name and the
+   registered non-superuser role; it refuses startup packets naming any other database, user
+   or `options`; it refuses `COPY ... TO/FROM PROGRAM`, `pg_read_server_files`,
+   `pg_write_server_files`, `pg_execute_server_program`, `lo_import/lo_export`, `ALTER ROLE`,
+   `SET ROLE`/`SET SESSION AUTHORIZATION`, `dblink`/`postgres_fdw` and connections to any
+   other database, and it never forwards to a host other than the pinned test container
+   endpoint. The role itself (step 4) is the second gate; the proxy is defence in depth, not
+   the boundary.
+4. **Database role.** A `matching_test`-only role (proposed `matching_test_runner`:
+   `NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS NOINHERIT`, no membership
+   in any `pg_*` role, grants limited to the test schema, `CONNECT` only on `matching_test`).
+   The broker refuses to start a run unless `pg_roles`/`pg_auth_members` show exactly that.
+   **Role capabilities must be validated through a root, credential-safe admin path once the
+   operator approves**; no database change, role creation or grant is made now, and the
+   existing container and its `postgres` superuser are untouched until then.
+5. **Endpoint identity.** The broker verifies that `127.0.0.1:55443` is published by the
+   registered container (`docker inspect` run by root, never by a worker-reachable uid) and
+   pins the container id for the run.
+6. **Network namespace.** Tests run in their own network namespace (root `ip netns`, proposed
+   name `hermes-devtest-<run>`, or a `systemd` unit with `PrivateNetwork=`). Reachable: the
+   per-run proxy endpoint and the namespace's own loopback (`httptest` servers in the same
+   namespace). Nothing else: no host loopback, no internet, no DNS, no docker socket.
+7. **Source snapshot.** The snapshot is the **dirty working tree** of the claimed checkout,
+   taken by the broker under the worker's sole-writer repository lease and recorded in a
+   checkpoint manifest: every tracked file plus every authorised untracked file (as the
+   lease's checkpoint lists them), with matching identities, modes and symlink targets, into an
+   immutable read-only staging directory (proposed `/var/lib/hermes-devtest/stage/<run>`,
+   owned by the broker, read-only to the test identity, no symlink pointing outside the
+   stage, `.env*` excluded as today). The broker computes a source digest before and after the
+   run and reports both; a mismatch fails the run. `git archive HEAD` alone is not a valid
+   snapshot.
+8. **Process containment and deadlines.** A transient `systemd` scope/cgroup per run
+   (proposed `hermes-devtest-<run>.scope`, `KillMode=control-group`, `RuntimeMaxSec=` =
+   requested timeout + vet budget), a pid namespace, `RLIMIT_CORE=0`, `no_new_privs`. The
+   deadline kills the whole cgroup; nothing escapes with `setsid`.
+9. **Registry and runtime readiness probe.** `/usr/local/etc/hermes-devtest/profiles.json`
+   root-owned with `isolation.mode: credential-broker-netns`, the pinned runner digest and
+   the broker socket path. The runtime tool's `backend_attested` and the runner's
+   `IMPLEMENTED_ISOLATION` gain a real probe only together with the implementation: trusted
+   broker identity (socket owner/peer), liveness, protocol schema version and capability
+   (role, proxy gates, namespace, snapshot) are checked on every call. A mode string, a
+   registry flag or an environment variable is never accepted as attestation (regression
+   tests in both repositories enforce this today).
+10. **Verification before any resume.** Kit tests with synthetic credentials under the real
+    broker; the runner's `check-config` reporting `runnable`; installer `status` exiting 0;
+    an independent review of the implementation; then a real Kanban smoke from a claimed
+    worker of a throwaway card (`dev_test_run(profile="validate-matching", run="^TestNoSuch$")`
+    must return `ok: false` with `matched no tests`, then a real run with counts). Only after
+    that smoke does the operator decide whether `t_12595b96` is resumed. No step here is
+    complete, and none of the earlier verification runs (29 kit runner tests, 96 runtime
+    tests at the previous revision) involved a successful worker execution.
+
+### Impact and rollback (what the operator is asked to approve, exactly)
+
+| Proposed resource | Impact | Rollback |
+|---|---|---|
+| User `hermes-devtest-worker` **or** a worker VM (step 1) | New execution identity for Kanban workers that use `dev_test_run`; current `polymath-dev` worker untouched | Delete the user / VM; workers keep running as today |
+| User `hermes-devtest-broker`, `hermes-devtest-broker.service`/`.socket`, `/run/hermes-devtest/broker.sock` | New root-installed service holding the test credential | `systemctl disable --now`, remove unit files and user |
+| `hermes-devtest-pgproxy` (per run, inside the netns) | New process per run; no listener on the host | Dies with the run's cgroup |
+| Role `matching_test_runner` in the existing `validate-pgtest-door` container | New non-superuser role; **no change** to the `postgres` superuser, the container, its port or the existing `pgpass` file | `DROP ROLE`; nothing else changed |
+| `ip netns hermes-devtest-<run>`, `hermes-devtest-<run>.scope` | Transient per run | Removed when the run ends |
+| `/var/lib/hermes-devtest/stage/<run>` | Transient immutable staging | Removed when the run ends |
+| `/usr/local/libexec/hermes-devtest-runner`, `/usr/local/etc/hermes-devtest/profiles.json` | Root-owned install of the implemented runner and registry | Remove both files; `status` returns to "missing" |
+
+Preserved until the operator approves a different lifecycle: the existing `pgpass` file, the
+existing `validate-pgtest-door` container and its `postgres` user, every Validate repository
+change on the worker's checkout, the current worker uid and its groups, Tirith, approval
+modes, hardline/deny rules, AppArmor and sysctls. No real secret and no root operation is part
+of this proposal's current state.
+
+Kanban coding workers run as single-query (`-q`) sessions. In that context the unattended
+approval gate denies every Tirith `warn`, and nobody can approve one. That is intended and
+stays as is. This page describes the narrow, typed path that lets a worker run the
+operator-registered Go/PostgreSQL tests anyway, without a broad allowlist, credential exposure
+or a weaker scanner.
+
+## Incident (t_12595b96, run 370)
+
+- Rejected command (no secret in it; the password lives in the file):
+  `PGPASSFILE=/home/polymath-dev/.config/hermes-test-db/pgpass MATCHING_TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55443/matching_test?sslmode=disable' go test -race -p 1 -count=1 ./... && go vet ./...`
+  in `/opt/repos/validate/apps/matching-service-go`.
+- Layer: Tirith (`tirith check --json --non-interactive --shell posix`), action `warn`,
+  findings `raw_ip_url` and `schemeless_to_sink`, both MEDIUM (raw IP evidence `0.0.0.1`).
+  The warn reached `_unattended_deny` for the single-query context
+  (`approvals.single_query_mode` default `deny`), which blocks a warn exactly like a block.
+  Dangerous-pattern detection did not fire. `security.tirith_fail_open: false` played no part:
+  Tirith ran and answered.
+- Why the worker built that command: the skill told it to use "the exact invocation the
+  operator approved", which was that terminal command. No typed path and no recovery rule
+  existed, so the scanner rejection ended the card.
+
+## What is in place
+
+| Piece | Where | Role |
+|---|---|---|
+| `dev_test_run` tool | runtime `tools/dev_test_tool.py` (patch 0004) | Typed arguments only: `profile`, `packages` (inside the profile's approved patterns), `run` (test regex, no spaces or quotes), `race` (default true), `short`, `vet`, `timeout_seconds` (60–3600). No URL, environment or go flag can be passed. Visible only to the dispatcher-owned worker of a card (not delegate children, cron or other sessions) and only once the registry is installed. |
+| Trusted runner | kit `hermes/libexec/hermes-devtest-runner` → `/usr/local/libexec/hermes-devtest-runner` (root:root 0755) | Re-validates everything, binds the run to the live claim and lease, builds the clean environment and the sandbox, runs `go test -json -count=1 -p=1 [-race] [-short] [-run=…] -timeout=…s <packages>` (and `go vet <packages>` on request), counts and scrubs. |
+| Profile registry | kit `hermes/devtest/profiles.example.json` → `/usr/local/etc/hermes-devtest/profiles.json` (root:root 0644) | The approved target: checkout, module, source roots, package patterns, test container, and the database (`127.0.0.1:55443/matching_test`, user `postgres`, `sslmode=disable`, `MATCHING_TEST_DATABASE_URL`, credential file path). Pins the runner's SHA-256. |
+| Guards | runtime `tools/approval.py`, `agent/file_safety.py` (patch 0004) | Additive only, see below. |
+| Recovery policy | runtime (rejection text + `kanban_block` refusal), `workflow.py` code card step 7, `kanban-workflow` skill, `SOUL.md`, coder `SOUL.md` | A rejected command with a registered equivalent is retried once through `dev_test_run`, then work continues. |
+
+### Every call, in order
+
+1. Tool: worker context (`HERMES_KANBAN_TASK`/`RUN_ID` in the dispatcher-owned worker), typed
+   argument validation.
+2. Tool: registry trust (regular file, not a symlink, owned by root, no group/other write,
+   every parent directory root-owned and not group/other writable), runner trust (same) and
+   `sha256(runner) == helper_sha256`; interpreter `/usr/bin/python3` root-owned. Any
+   difference fails closed with the reason; nothing runs.
+3. Tool: the exact fixed invocation
+   (`/usr/bin/python3 -I -S /usr/local/libexec/hermes-devtest-runner run --task … --run-id … --profile … --package … --race --timeout …`)
+   goes through `check_all_command_guards` (hardline floor, dangerous patterns, Tirith). It
+   carries no URL, so Tirith allows it; nothing is filtered or allowlisted.
+4. Tool: the runner starts with the environment `{PATH=/usr/bin:/bin, LANG=C.UTF-8}`, `cwd=/`,
+   stdin closed.
+5. Runner: arguments re-parsed (`allow_abbrev=False`, unknown options refused: `-exec`,
+   `-toolexec`, `-overlay`, `-modfile`, `-ldflags`, … cannot be expressed), registry re-validated
+   (database host must be `127.0.0.1`, database `*_test`, `sslmode=disable`, the URL variable
+   outside `PG*`/`GO*`, no unknown keys), go toolchain root-owned.
+6. Runner: binding. Its parent process must be the worker pid the board records for the
+   running claim of `--task` with `current_run_id == --run-id` (unexpired claim, run row
+   `running`), and the repository lease of the profile checkout (`repo_lease.py` format, read
+   without running git) must name the same task, run, pid, pid start time and host, unexpired.
+   The same invocation from the worker's terminal (parent: bash) is refused.
+7. Runner: credential file metadata (regular, no symlink, owner = the runner uid, mode 0600,
+   one link, a matching `host:port:db:user` entry). The runner reads it only to learn what to
+   scrub; nothing about it is printed.
+8. Runner: clean environment built from nothing (`HOME`/`TMPDIR` in a per-run private dir,
+   `GOENV=off`, `GOFLAGS=-mod=readonly`, `GOTOOLCHAIN=local`, `GOPROXY=off`, `GOSUMDB=off`,
+   `GOWORK=off`, `CGO_ENABLED=1`, dedicated `GOCACHE`, read-only module cache, `PGPASSFILE` and
+   the password-free URL). No `PG*`, cloud, proxy, service or Hermes variable reaches the tests.
+9. Runner: sandbox (below), run, parse `go test -json`, scrub, print one JSON object:
+   `ok`, `exit_code`, `timed_out`, `tests {passed, failed, skipped}`, `skipped_tests` with
+   reasons, `failed_tests` with output, `packages`, `failed_packages`, `build_output`, `vet`,
+   `no_tests_ran`, `argv`, `database` (URL and file path only), `sandbox`.
+
+Exit codes: 0 passed, 1 tests/vet failed or timed out, 2 refused, 3 sandbox unavailable.
+
+### Sandbox (Landlock ABI ≥ 6 + seccomp; no root, no user namespace)
+
+Unprivileged user namespaces are restricted by AppArmor on this host
+(`kernel.apparmor_restrict_unprivileged_userns=1`): `bwrap` fails (`setting up uid map:
+Permission denied`; with `--unshare-net`, `loopback: Failed RTM_NEWADDR`), so mount and
+network namespaces are not available without relaxing a host security setting. Landlock
+(ABI 8 here) needs neither, so the runner uses it:
+
+- Files: read+exec `/usr`, `/lib*`, `/bin`, `/sbin`, the Go root; read `/etc`, `/proc`, `/sys`,
+  the module cache; read each source file of the profile's source roots individually (every
+  `.env`/`.env.*` except `.env.example|sample|template` is left out, `.git` too, symlinks are
+  never granted); read the credential file; read/write only the per-run temp dir and the
+  dedicated build cache; `/dev/null|zero|full|random|urandom`. Everything else (`~/.hermes`,
+  `~/.ssh`, `~/.config`, other repositories, the checkout's own `.git` and `.env`) is denied,
+  and the checkout is read-only (no planted hooks or sources).
+- Processes: Landlock scopes signals and abstract UNIX sockets to the sandbox and denies
+  ptrace-mode access (`/proc/<pid>/environ`, `mem`) to processes outside it, so the worker's
+  environment is not readable.
+- Network: TCP connect only to the database port (port-based: any host on that port is
+  reachable, loopback is not confined; `httptest` servers on ephemeral ports are therefore not
+  reachable in this design), TCP bind only to port 0; seccomp allows `socket()` only for
+  `AF_INET`/`AF_INET6` `SOCK_STREAM` with protocol 0 or `IPPROTO_TCP` (no UNIX sockets such as
+  `docker.sock`, no UDP/DNS, raw, netlink, MPTCP or SCTP) and refuses io_uring and x32
+  syscalls; foreign architectures are killed.
+- `RLIMIT_CORE=0`, `no_new_privs`, own session; killed as a group on timeout.
+
+No sandbox (Landlock missing or below ABI 6, not x86_64, any rule failing) means exit 3 and no
+test run; there is no unsandboxed fallback.
+
+### Guards (additive)
+
+- Every mode, including yolo: a terminal command that references a registered credential file
+  or its directory (`cat`, `base64`, `ls`, `$PGPASSFILE` expansion, `~`/`$HOME` forms), or that
+  runs `docker|podman exec|inspect|cp|export|commit|attach|top|diff` on the registered test
+  container, is blocked. A bare `PGPASSFILE=<path>` assignment is not a read and falls through
+  to the normal gates. `read_file`/`search_files` refuse the credential file and its directory.
+- Unattended deny mode (cron, `-q`, unattended platforms): a database URL or `psql`-family
+  `-h/--host/host=`/`PGHOST=` target other than loopback, and a password written into a URL,
+  are refused. Before this change a hostname-based production URL passed every guard in `-q`.
+- Unchanged: Tirith enabled and fail-closed, `approvals.mode: smart`, single-query/cron/
+  unattended modes `deny`, hardline floor, `approvals.deny`, `command_allowlist`.
+
+### Recovery
+
+Only once an implemented backend is attested (never today): an unattended rejection of a
+`go test`/`go vet` command that matches a *runnable* registered profile (its URL variable,
+credential path, `host:port` or `/dbname`) ends with
+`RECOVERY: an approved equivalent exists … Call dev_test_run(profile="validate-matching", …)`.
+Until the worker calls `dev_test_run` (any outcome counts as tried), `kanban_block` refuses with
+the same pointer. With no runnable profile (the current state, whatever the registry declares)
+no directive is emitted and `kanban_block` is not refused; the worker blocks naming the command,
+the finding and the missing capability. The code card (step 7), the skill and both SOULs say the same: read the
+rejection, make the approved call once as a new request, verify, continue; never retry, wrap,
+encode or script the rejected command; with no approved equivalent, block naming the command,
+the finding and the missing capability.
+
+## Threat limits (same-UID, cooperative)
+
+- The tests are the checkout's own code and must authenticate, so they can read the test
+  database password. Output scrubbing removes the password (plain and URL-encoded), URL
+  userinfo passwords and `password=` values; it stops accidental prints, not deliberate
+  encoding. The password is a local test-database credential.
+- Landlock's network rules are port-based: a malicious test can still connect to any host on
+  the database port or an ephemeral-range port and send what it can read (the source tree,
+  the test password). It cannot read `~/.hermes`, `~/.ssh`, other config, other repositories
+  or other processes' environments, cannot use UNIX or UDP sockets, and cannot write outside
+  its temp dir and build cache.
+- Binding and registry trust are evidence against accidents and confused agents, not against
+  a malicious process of the same uid: such a process could write the board or the lease file
+  or ptrace the worker. The root-owned runner and registry cannot be replaced by the uid;
+  the runtime verifies the digest before every call.
+- The guards match command text. Obfuscated references (globs, variables built in pieces) can
+  evade them; the model is told never to try, and the sandbox, not the guard, is what keeps
+  host secrets away from test code.
+- These limits are why the design is rejected and disabled; the proposed design above would
+  remove them with a restricted worker identity or VM, a broker-side proxy and namespaces.
+  Nothing of it is approved or implemented; that is an operator decision.
+
+## Install (operator, once; needs the sudo password) — currently refused
+
+`plan` and `install` exit 1 with `REJECTED` for the shipped profile (`isolation.mode:
+same-uid-landlock`) and with `NOT IMPLEMENTED` for a profile declaring the proposed
+`credential-broker-netns` mode; `status` exits non-zero while nothing runnable is installed.
+The commands stay documented for a future implemented design.
+
+```bash
+cd /opt/repos/claude-code-autopilot
+bash scripts/install-hermes-devtest.sh plan       # validates the profile, prints the digest it pins
+bash scripts/install-hermes-devtest.sh install    # sudo install root-owned runner + profile file
+bash scripts/install-hermes-devtest.sh status     # trust + pinned digest == installed runner
+make hermes-runtime-patch-status                  # 0001..0004 applied (0004 = git diff 4f845b43ec..61cbead82d)
+```
+
+Kanban workers are new `hermes chat -q` processes, so they load patch 0004 when they start;
+no gateway restart is needed for them. After any runner change: review, then `install` again
+(the old pin makes every call fail closed until then).
+
+## Smoke (from the claimed worker of a card, after `preflight`) — not available until an implemented design is approved
+
+```
+dev_test_run(profile="validate-matching", packages=["./..."], race=true, vet=true)
+```
+
+Expected: `runner_exit` 0 or 1 with real counts; refusal text naming the failed check
+otherwise (`no repository lease` → run `preflight`; `not running under this worker` → not the
+claimed worker). From a terminal, the same runner invocation is refused (parent is not the
+worker).
+
+## Tests
+
+- Kit: `make test-devtest-runner` — synthetic module and canary credential under the real
+  Landlock/seccomp sandbox (race build, counts, skip reasons, scrubbing, `.env`/host secret/
+  parent environ/UNIX socket/unapproved port/signal denied, database port reachable, checkout
+  read-only), refusals for injected flags, production targets, untrusted config, credential
+  metadata, claim/lease binding, missing sandbox; invocation exactly as the runtime does it,
+  and the same invocation through a shell refused.
+- Runtime: `tests/tools/test_dev_test_tool.py` — the real single-query gate with the operator's
+  `security`/`approvals` config and the real Tirith binary: the run-370 command is rejected
+  with the exact findings plus the recovery directive; the fixed runner invocation and ordinary
+  Go/dev commands pass; credential extraction (also under yolo), container env reads,
+  production connections and genuinely unsafe commands stay blocked; the real terminal tool
+  never executes a blocked credential read; digest/trust/worker-context refusals; empty
+  environment; `kanban_block` recovery refusal; a registry declaring the proposed mode string
+  exposes nothing (tool hidden, no directive, refusal names the missing implementation), flags
+  and environment variables are never attestation, and an older trusted registry without
+  `isolation.mode` keeps the credential guards. The recovery state-machine tests opt into a
+  simulated attested backend explicitly and describe future behaviour, not today's.

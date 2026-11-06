@@ -1,0 +1,985 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: NorkzYT <richard@pcscorp.dev>
+Date: Mon, 2 Nov 2026 14:21:05 -0500
+Subject: [PATCH] feat(kanban): hand the worker's own terminal its task
+ identity (supervised terminal)
+
+The dispatcher-owned worker's terminal tool used to be scrubbed like every other
+spawn surface: HERMES_KANBAN_TASK/RUN_ID vanished and the delegate_task fence
+marker was set, so a worker's own scripts could neither tell which card they
+served nor record anything on it (`hermes kanban comment/create/link` all
+refused). A worker read its own pid on the board as a "competing run" and
+blocked.
+
+Keep the fence on every surface, and add one narrow, verified path:
+
+- agent/delegation_context: supervised_worker_terminal_env() re-attaches the
+  worker's own TASK and RUN_ID (never the claim lock) plus
+  HERMES_KANBAN_SUPERVISED_TERMINAL and the worker pid, only when the current
+  process is the dispatcher-owned worker (not a delegate child, not cron);
+  supervised_terminal_identity() verifies marker + ids + worker-pid ancestry.
+- tools/environments/local + process_registry: only the terminal tool's
+  foreground/background spawns use it; execute_code, MCP, LSP, codex, browser
+  and cron spawns stay plain fenced descendants.
+- base_session_env: HERMES_KANBAN_* and the fence never persist in the bash
+  snapshot (they are decided per spawn), so a snapshot taken by the worker
+  cannot hand its identity to a command issued inside a delegate child.
+- hermes_cli/kanban + kanban_db(_connect): the supervised terminal may
+  comment/attach/heartbeat/notify-subscribe its own card, create cards (tagged
+  creator_task_id) and link cards it owns or created, after the board confirms
+  the task is running under that worker pid and run. Lifecycle transitions
+  (complete, block, request-review, unblock, claim, ...) and foreign cards stay
+  denied; the DB-layer fence opens only inside supervised_terminal_mutation().
+
+The grant is verified at the DB write boundary, not only by the CLI precheck:
+supervised_terminal_mutation() records task, run (mandatory), worker pid and
+a short expiry; every write_txn re-reads the task row and its run row inside
+the transaction and denies when the task is not running under that pid and run,
+the run row is missing or ended, or the grant expired. `link` requires both
+endpoints in scope, with one verified exception the workflow needs: a card the
+worker created may become another parent of a card its own card already gates
+(the report card). A foreign card's graph is never changed otherwise. The grant
+never covers board metadata; lifecycle stays denied for every descendant.
+---
+ agent/delegation_context.py                   | 118 ++++++-
+ hermes_cli/kanban.py                          | 139 +++++++-
+ hermes_cli/kanban_db.py                       |  84 ++++-
+ hermes_cli/kanban_db_connect.py               |  12 +-
+ .../tools/test_kanban_supervised_terminal.py  | 330 ++++++++++++++++++
+ tools/environments/base_session_env.py        |   8 +-
+ tools/environments/local.py                   |  29 +-
+ tools/process_registry.py                     |   3 +-
+ 8 files changed, 695 insertions(+), 28 deletions(-)
+ create mode 100644 tests/tools/test_kanban_supervised_terminal.py
+
+diff --git a/agent/delegation_context.py b/agent/delegation_context.py
+index 959c9df85b..b32fb9e926 100644
+--- a/agent/delegation_context.py
++++ b/agent/delegation_context.py
+@@ -4,13 +4,25 @@ A Hermes process may itself be a Kanban dispatcher worker with HERMES_KANBAN_* i
+ os.environ. In-process delegate_task children and cron jobs fired via
+ ``cronjob(action="run")`` are NOT dispatcher-owned, so identity gates must fail
+ closed for them without mutating the process-global environment.
++
++Two process-spawn contexts exist for ``HERMES_KANBAN_*``:
++
++* **descendant fence** (:func:`delegated_child_subprocess_env`): every spawn
++  surface scrubs TASK/RUN/CLAIM and sets ``HERMES_DELEGATED_CHILD_CONTEXT``;
++  a shell, CLI or MCP child is never a board-write grant.
++* **supervised worker terminal** (:func:`supervised_worker_terminal_env`): the
++  dispatcher-owned worker's OWN terminal tool keeps the fence but is handed the
++  worker's task identity back (task id, run id, worker pid; never the claim
++  lock), so scripts it runs know which card they serve and can be verified by
++  ancestry (:func:`supervised_terminal_identity`). Delegate children and cron
++  jobs never receive it.
+ """
+ from __future__ import annotations
+ 
+ import os
+ from contextlib import contextmanager
+ from contextvars import ContextVar, Token
+-from typing import Iterator, Mapping, MutableMapping, overload
++from typing import Iterator, Mapping, MutableMapping, NamedTuple, Optional, overload
+ 
+ _DELEGATED_CHILD_CONTEXT: ContextVar[bool] = ContextVar("hermes_delegated_child_context", default=False)
+ # Any in-process execution that is NOT the dispatcher-owned worker (cron jobs). Kept separate
+@@ -24,6 +36,13 @@ KANBAN_ENV_KEYS: tuple[str, ...] = (
+     "HERMES_KANBAN_GOAL_MODE", "HERMES_KANBAN_GOAL_MAX_TURNS",
+ )
+ 
++# Supervised worker terminal: the dispatcher-owned worker's own terminal tool receives these
++# in addition to the descendant fence. Identity, never authority: the claim lock stays out and
++# lifecycle transitions (complete/block/review) remain in-process tool calls of the worker.
++SUPERVISED_TERMINAL_ENV_MARKER = "HERMES_KANBAN_SUPERVISED_TERMINAL"
++SUPERVISED_WORKER_PID_ENV = "HERMES_KANBAN_SUPERVISED_WORKER_PID"
++SUPERVISED_IDENTITY_KEYS: tuple[str, ...] = ("HERMES_KANBAN_TASK", "HERMES_KANBAN_RUN_ID")
++
+ 
+ @contextmanager
+ def delegated_child_context(session_id: str | None = None) -> Iterator[None]:
+@@ -110,3 +129,100 @@ def delegated_child_subprocess_env(
+             or (env and (env.get("HERMES_KANBAN_TASK") or env.get(DELEGATED_CHILD_ENV_MARKER)))):
+         return None if env is None else dict(env)
+     return scrub_kanban_env(os.environ if env is None else env)
++
++
++def supervised_worker_terminal_env(
++    env: Mapping[str, str] | MutableMapping[str, str] | None = None,
++) -> dict[str, str] | None:
++    """Env for the dispatcher-owned worker's OWN terminal tool.
++
++    Applies the descendant fence first (:func:`delegated_child_subprocess_env`), then, only
++    when THIS process is the dispatcher-owned worker (not a delegate_task child, not a cron
++    run inside the worker), re-attaches the worker's own task id and run id from
++    ``os.environ`` plus the supervised marker and this pid. Values never come from the
++    caller-supplied *env*, so a child cannot smuggle a foreign task id through the terminal.
++    The claim lock is never forwarded. Everything else (None/dict contract, secret policy)
++    matches :func:`delegated_child_subprocess_env`.
++    """
++    scoped = delegated_child_subprocess_env(env)
++    if scoped is None:
++        return None
++    task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
++    if not task or not is_dispatcher_owned_worker_context():
++        return scoped
++    scoped["HERMES_KANBAN_TASK"] = task
++    run_id = (os.environ.get("HERMES_KANBAN_RUN_ID") or "").strip()
++    if run_id:
++        scoped["HERMES_KANBAN_RUN_ID"] = run_id
++    else:
++        scoped.pop("HERMES_KANBAN_RUN_ID", None)
++    scoped[SUPERVISED_TERMINAL_ENV_MARKER] = "1"
++    scoped[SUPERVISED_WORKER_PID_ENV] = str(os.getpid())
++    return scoped
++
++
++class SupervisedTerminalIdentity(NamedTuple):
++    """Verified identity of the worker a supervised terminal process descends from."""
++
++    task_id: str
++    run_id: Optional[int]
++    worker_pid: int
++
++
++def _proc_parent_pid(pid: int) -> Optional[int]:
++    """PPid of *pid* from ``/proc`` (Linux). None when the process is gone or unreadable."""
++    try:
++        with open(f"/proc/{pid}/status", "r", encoding="utf-8", errors="replace") as fh:
++            for line in fh:
++                if line.startswith("PPid:"):
++                    return int(line.split(":", 1)[1].strip() or 0)
++    except (OSError, ValueError):
++        return None
++    return None
++
++
++def is_process_ancestor(ancestor_pid: int, pid: Optional[int] = None, *, max_depth: int = 64) -> bool:
++    """True when *ancestor_pid* is *pid* (default: this process) or one of its ancestors.
++
++    Walks ``/proc/<pid>/status`` PPid links; any unreadable or missing link ends the walk
++    with False (fail closed). Linux only: elsewhere there is no ``/proc`` and the result is
++    False, which keeps the supervised grant denied there.
++    """
++    current = os.getpid() if pid is None else pid
++    for _ in range(max_depth):
++        if current == ancestor_pid:
++            return True
++        if current <= 1:
++            return False
++        parent = _proc_parent_pid(current)
++        if parent is None or parent == current:
++            return False
++        current = parent
++    return False
++
++
++def supervised_terminal_identity() -> Optional[SupervisedTerminalIdentity]:
++    """Identity of the supervising worker when this process runs in its terminal.
++
++    Requires the supervised marker, a task id, a numeric worker pid, and that the worker pid
++    is an ancestor of this process (so a copied environment in an unrelated process, or a
++    stale env after the worker exited, yields None). A non-numeric run id yields None rather
++    than a partial identity. Callers still verify the triple against the board
++    (``worker_pid``/``current_run_id`` of the task) before granting anything.
++    """
++    if (os.environ.get(SUPERVISED_TERMINAL_ENV_MARKER) or "").strip() != "1":
++        return None
++    task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
++    raw_pid = (os.environ.get(SUPERVISED_WORKER_PID_ENV) or "").strip()
++    raw_run = (os.environ.get("HERMES_KANBAN_RUN_ID") or "").strip()
++    if not task or not raw_pid.isdigit():
++        return None
++    run_id: Optional[int] = None
++    if raw_run:
++        if not raw_run.isdigit():
++            return None
++        run_id = int(raw_run)
++    worker_pid = int(raw_pid)
++    if worker_pid <= 1 or worker_pid == os.getpid() or not is_process_ancestor(worker_pid):
++        return None
++    return SupervisedTerminalIdentity(task_id=task, run_id=run_id, worker_pid=worker_pid)
+diff --git a/hermes_cli/kanban.py b/hermes_cli/kanban.py
+index 689dbfca61..82df506e66 100644
+--- a/hermes_cli/kanban.py
++++ b/hermes_cli/kanban.py
+@@ -149,8 +149,14 @@ def kanban_command(args: argparse.Namespace) -> int:
+ 
+     # Fast-fail for UX only; the durable trust boundary is in kanban_db, since children can
+     # import DB mutators directly.
+-    if _is_delegated_child_cli_mutation(args):
+-        return _err("kanban: delegate_task child contexts cannot mutate Kanban tasks via the CLI")
++    denial = _delegated_child_cli_denial(args)
++    if denial is not None:
++        return _err(denial)
++    # A fenced process that passed: the worker's own supervised terminal running one of the
++    # narrow actions on its own cards. Enter the DB-layer grant for this one command.
++    mutation_scope = contextlib.nullcontext()
++    if _is_fenced_descendant() and action in _SUPERVISED_TERMINAL_ACTIONS:
++        mutation_scope = kb.supervised_terminal_mutation()
+ 
+     # `boards …` manages board metadata and the current-board pointer itself, so it must ignore
+     # the `--board` routing override (else `--board beta boards show` reports beta).
+@@ -191,7 +197,8 @@ def kanban_command(args: argparse.Namespace) -> int:
+         if not handler:
+             return _err(f"kanban: unknown action {action!r}", 2)
+         try:
+-            return int(handler(args) or 0)
++            with mutation_scope:
++                return int(handler(args) or 0)
+         except (ValueError, RuntimeError, PermissionError) as exc:
+             return _err(f"kanban: {exc}")
+ 
+@@ -226,13 +233,110 @@ _DELEGATED_CHILD_DENIED_BOARD_ACTIONS: frozenset[str] = frozenset({
+ })
+ 
+ 
+-def _is_delegated_child_cli_mutation(args: argparse.Namespace) -> bool:
++# The dispatcher-owned worker's OWN terminal (``HERMES_KANBAN_SUPERVISED_TERMINAL``, see
++# ``agent.delegation_context.supervised_worker_terminal_env``) may record progress on its own
++# card and build the cards it creates. Lifecycle transitions (complete, block, review, claim,
++# unblock, ...) stay the worker's in-process tool calls; foreign cards stay out of reach.
++_SUPERVISED_TERMINAL_ACTIONS: frozenset[str] = frozenset({
++    "comment", "attach", "heartbeat", "notify-subscribe", "create", "link",
++})
++_DELEGATED_CHILD_CLI_MESSAGE = "kanban: delegate_task child contexts cannot mutate Kanban tasks via the CLI"
++
++
++def _created_by(conn, task_id: str, creator_task_id: str) -> bool:
++    """True when *task_id* was created by *creator_task_id* (its ``created`` event)."""
++    row = conn.execute(
++        "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'created' ORDER BY id LIMIT 1",
++        (task_id,),
++    ).fetchone()
++    if row is None:
++        return False
++    try:
++        payload = json.loads(row[0] or "{}")
++    except (TypeError, ValueError):
++        return False
++    return isinstance(payload, dict) and payload.get("creator_task_id") == creator_task_id
++
++
++def _supervised_terminal_identity():
++    try:
++        from agent.delegation_context import supervised_terminal_identity
++
++        return supervised_terminal_identity()
++    except Exception:
++        return None
++
++
++def _supervised_terminal_denial(args: argparse.Namespace, action: str) -> Optional[str]:
++    """None when the worker's supervised terminal may run *action*; else the refusal text.
++
++    The identity env is verified against the board (task running, same worker pid and run)
++    and every target must be the worker's own card or a card that worker created. Any
++    failure to verify denies (fail closed)."""
++    ident = _supervised_terminal_identity()
++    if ident is None:
++        return _DELEGATED_CHILD_CLI_MESSAGE
++    if action not in _SUPERVISED_TERMINAL_ACTIONS:
++        return (f"kanban: the worker's supervised terminal may not run `{action}`; lifecycle transitions "
++                "(complete, block, request-review, unblock, claim) are the worker's own kanban_* tool calls")
++    try:
++        with kbc.connect_closing() as conn:
++            task = kb.get_task(conn, ident.task_id)
++            if ident.run_id is None:
++                return f"kanban: supervised terminal identity for {ident.task_id} carries no run id; refusing to mutate"
++            if (task is None or task.status != "running" or task.worker_pid != ident.worker_pid
++                    or task.current_run_id != ident.run_id):
++                return (f"kanban: supervised terminal identity for {ident.task_id} does not match the board "
++                        "(task not running under this worker/run); refusing to mutate")
++            run = conn.execute("SELECT status FROM task_runs WHERE id = ? AND task_id = ?",
++                               (ident.run_id, ident.task_id)).fetchone()
++            if run is None or run[0] != "running":
++                return (f"kanban: supervised terminal identity for {ident.task_id} names run {ident.run_id}, which is "
++                        f"{'missing' if run is None else run[0]} on the board; refusing to mutate")
++
++            def in_scope(tid: Optional[str]) -> bool:
++                return bool(tid) and (tid == ident.task_id or _created_by(conn, tid, ident.task_id))
++
++            if action == "link":
++                parent, child = getattr(args, "parent_id", None), getattr(args, "child_id", None)
++                # Both endpoints in scope, or the one shape the workflow needs: a card this worker
++                # created becomes another parent of a card its own card already gates (the request's
++                # report card). A foreign card's graph is never changed from anywhere else.
++                own_gates_child = bool(child) and ident.task_id in kb.parent_ids(conn, child)
++                if not (in_scope(parent) and (in_scope(child) or own_gates_child)):
++                    return (f"kanban: the worker's supervised terminal may only link cards it owns or created, or "
++                            f"add a card it created as a parent of a card its own card {ident.task_id} already "
++                            f"gates; not {parent} -> {child}")
++            elif action != "create":
++                target = getattr(args, "task_id", None)
++                if not in_scope(target):
++                    return (f"kanban: the worker's supervised terminal may only `{action}` its own card "
++                            f"{ident.task_id} or cards it created, not {target}")
++    except Exception as exc:  # unreadable board == unknown ownership: deny
++        return f"kanban: cannot verify supervised terminal identity ({exc}); refusing to mutate"
++    return None
++
++
++def _delegated_child_cli_denial(args: argparse.Namespace) -> Optional[str]:
++    """Refusal text for a board mutation issued from a fenced descendant process, or None.
++
++    Delegate_task children, cron runs and arbitrary shells under a worker carry the descendant
++    fence and are denied every mutation. The worker's own supervised terminal gets the narrow,
++    verified grant of :func:`_supervised_terminal_denial`."""
+     action = getattr(args, "kanban_action", None)
+     if action == "boards":
+         if (getattr(args, "boards_action", None) or "list") not in _DELEGATED_CHILD_DENIED_BOARD_ACTIONS:
+-            return False
+-    elif action not in _DELEGATED_CHILD_DENIED_ACTIONS:
+-        return False
++            return None
++        fenced = _is_fenced_descendant()
++        return _DELEGATED_CHILD_CLI_MESSAGE if fenced else None
++    if action not in _DELEGATED_CHILD_DENIED_ACTIONS:
++        return None
++    if not _is_fenced_descendant():
++        return None
++    return _supervised_terminal_denial(args, action)
++
++
++def _is_fenced_descendant() -> bool:
+     try:
+         from agent.delegation_context import is_delegated_child_process_context
+ 
+@@ -241,6 +345,22 @@ def _is_delegated_child_cli_mutation(args: argparse.Namespace) -> bool:
+         return bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
+ 
+ 
++def _is_delegated_child_cli_mutation(args: argparse.Namespace) -> bool:
++    """Compatibility predicate: True when :func:`_delegated_child_cli_denial` refuses."""
++    return _delegated_child_cli_denial(args) is not None
++
++
++def _creator_task_id() -> Optional[str]:
++    """Task that ``create`` records as creator: the dispatcher-owned worker itself, or the
++    worker a supervised terminal verifiably descends from; never a fenced child's guess."""
++    from agent.delegation_context import is_dispatcher_owned_worker_context
++
++    if os.environ.get("HERMES_KANBAN_TASK") and is_dispatcher_owned_worker_context():
++        return os.environ.get("HERMES_KANBAN_TASK")
++    ident = _supervised_terminal_identity()
++    return ident.task_id if ident is not None else None
++
++
+ def _joined_words(words) -> Optional[str]:
+     """Free-text positional ``nargs="*"`` words -> stripped string, or None when absent."""
+     return " ".join(words).strip() if words else None
+@@ -342,8 +462,6 @@ def _cmd_assignees(args: argparse.Namespace) -> int:
+ 
+ 
+ def _cmd_create(args: argparse.Namespace) -> int:
+-    from agent.delegation_context import is_dispatcher_owned_worker_context
+-
+     try:
+         ws_kind, ws_path = _parse_workspace_flag(args.workspace)
+         branch_name = _parse_branch_flag(getattr(args, "branch", None))
+@@ -374,8 +492,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
+             goal_max_turns=getattr(args, "goal_max_turns", None),
+             completion_contract=getattr(args, "completion_contract", None),
+             initial_status=getattr(args, "initial_status", "running"),
+-            creator_task_id=(os.environ.get("HERMES_KANBAN_TASK")
+-                             if is_dispatcher_owned_worker_context() else None),
++            creator_task_id=_creator_task_id(),
+         )
+         task = kb.get_task(conn, task_id)
+     if getattr(args, "json", False):
+diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
+index ec7f16f05e..f18d4c169e 100644
+--- a/hermes_cli/kanban_db.py
++++ b/hermes_cli/kanban_db.py
+@@ -118,12 +118,86 @@ _IS_WINDOWS = sys.platform == "win32"
+ KANBAN_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024  # one cap for dashboard, tools and CLI
+ 
+ 
+-def _assert_not_delegated_child_mutation() -> None:
++# Set only by :func:`supervised_terminal_mutation` after the CLI verified the worker's
++# supervised terminal identity and the scope of the requested mutation. The grant is
++# re-verified against the board inside every write transaction it covers.
++@dataclass(frozen=True)
++class SupervisedTerminalGrant:
++    task_id: str
++    run_id: int
++    worker_pid: int
++    expires_at: float  # time.monotonic() deadline; one CLI command, never a session
++
++
++_SUPERVISED_TERMINAL_GRANT: ContextVar[Optional[SupervisedTerminalGrant]] = ContextVar(
++    "hermes_kanban_supervised_terminal_grant", default=None)
++# A CLI command finishes in seconds; a grant that outlives this is a leaked context, not a command.
++SUPERVISED_TERMINAL_GRANT_TTL_SECONDS = 120.0
++
++
++@contextlib.contextmanager
++def supervised_terminal_mutation(*, ttl_seconds: float = SUPERVISED_TERMINAL_GRANT_TTL_SECONDS):
++    """Grant the fenced process ONE verified board mutation on behalf of the worker whose
++    supervised terminal it runs in (``agent.delegation_context.supervised_terminal_identity``:
++    marker, task id, run id and an ancestor worker pid). The identity is re-verified here and
++    again inside every ``write_txn`` the grant covers (:func:`_verify_supervised_grant`: task
++    ``running`` under that worker pid and run, the run row alive, grant not expired), so an
++    import of this module from an arbitrary fenced child without that identity still fails
++    closed and a board that moved on (reclaim, block, finished run) denies at the write. The
++    run id is mandatory. Which cards the mutation may touch is the CLI's check. Cooperative
++    runtime scoping like the fence itself, not confinement of same-uid code."""
++    try:
++        from agent.delegation_context import supervised_terminal_identity
++
++        ident = supervised_terminal_identity()
++    except Exception:
++        ident = None
++    if ident is None:
++        raise PermissionError("supervised terminal identity could not be verified; refusing to mutate")
++    if ident.run_id is None:
++        raise PermissionError("supervised terminal identity carries no run id; refusing to mutate")
++    grant = SupervisedTerminalGrant(task_id=ident.task_id, run_id=int(ident.run_id), worker_pid=int(ident.worker_pid),
++                                    expires_at=time.monotonic() + float(ttl_seconds))
++    token = _SUPERVISED_TERMINAL_GRANT.set(grant)
++    try:
++        yield ident
++    finally:
++        _SUPERVISED_TERMINAL_GRANT.reset(token)
++
++
++def _verify_supervised_grant(conn: sqlite3.Connection, grant: SupervisedTerminalGrant) -> None:
++    """The board, read inside the write transaction, must still show the grant's task running
++    under the grant's worker pid and run, with that run row alive. Anything else denies."""
++    if time.monotonic() > grant.expires_at:
++        raise PermissionError("supervised terminal grant expired; refusing to mutate")
++    row = conn.execute(
++        "SELECT status, worker_pid, current_run_id FROM tasks WHERE id = ?", (grant.task_id,)).fetchone()
++    if row is None:
++        raise PermissionError(f"supervised terminal grant: task {grant.task_id} is not on this board; refusing to mutate")
++    status, worker_pid, current_run_id = row[0], row[1], row[2]
++    if status != "running" or worker_pid != grant.worker_pid or current_run_id != grant.run_id:
++        raise PermissionError(
++            f"supervised terminal grant: task {grant.task_id} is {status} under pid {worker_pid} run {current_run_id}, "
++            f"not running under pid {grant.worker_pid} run {grant.run_id}; refusing to mutate")
++    run = conn.execute("SELECT status, worker_pid FROM task_runs WHERE id = ? AND task_id = ?",
++                       (grant.run_id, grant.task_id)).fetchone()
++    if run is None or run[0] != "running" or (run[1] is not None and run[1] != grant.worker_pid):
++        raise PermissionError(
++            f"supervised terminal grant: run {grant.run_id} of {grant.task_id} is "
++            f"{'missing' if run is None else run[0]}; refusing to mutate")
++
++
++def _assert_not_delegated_child_mutation(conn: Optional[sqlite3.Connection] = None) -> None:
+     """Reject Kanban mutations from ``delegate_task`` child contexts.
+ 
+     The tool/CLI fast-fail guards are UX, not a trust boundary (a child can shell
+     out or import this module); the invariant lives here so every ``write_txn``
+     user and board-metadata mutator fails closed before touching durable state.
++    The one exception is a mutation the CLI wrapped in
++    :func:`supervised_terminal_mutation` for the worker's own verified terminal: with
++    *conn* (a task-DB write transaction) the grant is re-verified against the board at
++    that moment; without one (board metadata, the current-board pointer) the grant
++    covers nothing and the mutation is denied.
+     """
+     try:
+         from agent.delegation_context import is_delegated_child_process_context
+@@ -131,8 +205,14 @@ def _assert_not_delegated_child_mutation() -> None:
+         delegated = is_delegated_child_process_context()
+     except Exception:
+         delegated = bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
+-    if delegated:
++    if not delegated:
++        return
++    grant = _SUPERVISED_TERMINAL_GRANT.get()
++    if grant is None:
+         raise PermissionError("delegate_task child contexts cannot mutate Kanban tasks or boards")
++    if conn is None:
++        raise PermissionError("the supervised terminal grant covers task mutations only, not board metadata")
++    _verify_supervised_grant(conn, grant)
+ 
+ 
+ def _fire_kanban_lifecycle_hook(event: str, task_id: str, **fields: Any) -> None:
+diff --git a/hermes_cli/kanban_db_connect.py b/hermes_cli/kanban_db_connect.py
+index 6db4994cb7..8a538c8a93 100644
+--- a/hermes_cli/kanban_db_connect.py
++++ b/hermes_cli/kanban_db_connect.py
+@@ -676,11 +676,16 @@ def connect(db_path: Optional[Path] = None, *, board: Optional[str] = None) -> s
+     if is_delegated_child_process_context():
+         # Reads must not enter schema/backfill write transactions. Never create a
+         # missing board or migrate on a descendant's behalf; the owner initializes it.
+-        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
++        # The worker's verified supervised terminal (``supervised_terminal_mutation``)
++        # gets a plain read-write handle on the already-initialized board, still no init.
++        granted = _kb._SUPERVISED_TERMINAL_GRANT.get()
++        conn = sqlite3.connect(path.resolve().as_uri() + ("?mode=rw" if granted else "?mode=ro"), uri=True)
+         conn.row_factory = sqlite3.Row
+         if not _schema_is_present(conn):
+             conn.close()
+             raise PermissionError("Kanban descendants require an initialized board; ask its owner to initialize it")
++        if granted:
++            conn.execute("PRAGMA foreign_keys=ON")
+         return conn
+     path.parent.mkdir(parents=True, exist_ok=True)
+ 
+@@ -1155,8 +1160,10 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
+     (``complete_task`` & co.) must never run under an open outer transaction,
+     since those side effects would fire while the outer txn can still roll back.
+     """
+-    _kb._assert_not_delegated_child_mutation()
++    # Fence + supervised-terminal grant, checked against the board at this write boundary
++    # (inside the transaction below, so what we verify is what we write against).
+     if getattr(conn, "in_transaction", False):
++        _kb._assert_not_delegated_child_mutation(conn)
+         if not allow_nested:
+             raise RuntimeError(
+                 "write_txn: already inside a transaction. Nested composition "
+@@ -1179,6 +1186,7 @@ def write_txn(conn: sqlite3.Connection, *, allow_nested: bool = False):
+ 
+     _execute_boundary_with_retry(conn, "BEGIN IMMEDIATE")
+     try:
++        _kb._assert_not_delegated_child_mutation(conn)
+         yield conn
+     except Exception:
+         # SQLite may already have auto-rolled-back (EIO, contention, corruption);
+diff --git a/tests/tools/test_kanban_supervised_terminal.py b/tests/tools/test_kanban_supervised_terminal.py
+new file mode 100644
+index 0000000000..a11018fb3a
+--- /dev/null
++++ b/tests/tools/test_kanban_supervised_terminal.py
+@@ -0,0 +1,330 @@
++"""Supervised worker terminal: the dispatcher-owned worker's OWN terminal keeps its task
++identity (task id, run id, worker pid; never the claim lock) while every other spawn surface,
++delegate_task child and cron run stays a fenced descendant. The CLI grants that terminal a
++narrow, board-verified scope: progress on its own card and the cards it creates; lifecycle
++transitions and foreign cards stay denied."""
++import json
++import os
++from pathlib import Path
++import shlex
++import subprocess
++import sys
++
++import pytest
++
++from agent.delegation_context import (
++    DELEGATED_CHILD_ENV_MARKER, SUPERVISED_TERMINAL_ENV_MARKER, SUPERVISED_WORKER_PID_ENV,
++    delegated_child_context, non_dispatcher_owned_context, supervised_terminal_identity,
++    supervised_worker_terminal_env,
++)
++from hermes_cli import kanban_db as kb
++from hermes_cli.kanban_db_connect import connect
++from tools.environments.local import LocalEnvironment, _make_run_env, hermes_subprocess_env
++
++
++ROOT = Path(__file__).resolve().parents[2]
++WORKER_ENV = {
++    "HERMES_KANBAN_TASK": "t_own", "HERMES_KANBAN_RUN_ID": "41", "HERMES_KANBAN_CLAIM_LOCK": "host:1",
++    "HERMES_KANBAN_DB": "/tmp/board.db", "HERMES_KANBAN_BOARD": "default",
++}
++
++
++@pytest.fixture
++def worker_env(monkeypatch):
++    for key, value in WORKER_ENV.items():
++        monkeypatch.setenv(key, value)
++    for key in (DELEGATED_CHILD_ENV_MARKER, SUPERVISED_TERMINAL_ENV_MARKER, SUPERVISED_WORKER_PID_ENV):
++        monkeypatch.delenv(key, raising=False)
++    return monkeypatch
++
++
++def _fenced_without_identity(env):
++    assert env[DELEGATED_CHILD_ENV_MARKER] == "1"
++    assert "HERMES_KANBAN_TASK" not in env and "HERMES_KANBAN_RUN_ID" not in env
++    assert "HERMES_KANBAN_CLAIM_LOCK" not in env
++    assert SUPERVISED_TERMINAL_ENV_MARKER not in env and SUPERVISED_WORKER_PID_ENV not in env
++
++
++class TestSupervisedEnv:
++    def test_worker_terminal_gets_identity_but_never_the_claim_lock(self, worker_env):
++        env = supervised_worker_terminal_env({**os.environ, "KEEP": "1"})
++        assert env["HERMES_KANBAN_TASK"] == "t_own" and env["HERMES_KANBAN_RUN_ID"] == "41"
++        assert env[SUPERVISED_TERMINAL_ENV_MARKER] == "1" and env[SUPERVISED_WORKER_PID_ENV] == str(os.getpid())
++        assert env[DELEGATED_CHILD_ENV_MARKER] == "1", "the descendant fence stays: a shell is not an owner"
++        assert "HERMES_KANBAN_CLAIM_LOCK" not in env
++        assert env["HERMES_KANBAN_DB"] == "/tmp/board.db" and env["KEEP"] == "1"
++
++    def test_identity_comes_from_the_process_not_the_caller_env(self, worker_env):
++        env = supervised_worker_terminal_env({"HERMES_KANBAN_TASK": "t_foreign", "HERMES_KANBAN_RUN_ID": "9"})
++        assert env["HERMES_KANBAN_TASK"] == "t_own" and env["HERMES_KANBAN_RUN_ID"] == "41"
++
++    def test_delegate_child_and_cron_contexts_stay_fenced(self, worker_env):
++        with delegated_child_context():
++            _fenced_without_identity(supervised_worker_terminal_env(dict(os.environ)))
++        with non_dispatcher_owned_context():
++            _fenced_without_identity(supervised_worker_terminal_env(dict(os.environ)))
++
++    def test_descendant_of_the_terminal_cannot_regain_ownership(self, worker_env):
++        """A `hermes` CLI started from the worker terminal inherits the fence; its own spawns
++        carry no identity grant beyond what the worker already handed down."""
++        terminal = supervised_worker_terminal_env(dict(os.environ))
++        worker_env.setenv(DELEGATED_CHILD_ENV_MARKER, "1")  # now we ARE that descendant
++        env = supervised_worker_terminal_env(terminal)
++        assert env[DELEGATED_CHILD_ENV_MARKER] == "1" and "HERMES_KANBAN_CLAIM_LOCK" not in env
++        assert env.get(SUPERVISED_WORKER_PID_ENV) == str(os.getpid()) or SUPERVISED_WORKER_PID_ENV not in env
++        from agent.delegation_context import is_dispatcher_owned_worker_context
++        assert not is_dispatcher_owned_worker_context()
++
++    def test_no_kanban_context_is_a_passthrough(self, monkeypatch):
++        for key in (*WORKER_ENV, DELEGATED_CHILD_ENV_MARKER):
++            monkeypatch.delenv(key, raising=False)
++        assert supervised_worker_terminal_env(None) is None
++        assert supervised_worker_terminal_env({"A": "1"}) == {"A": "1"}
++
++    def test_only_the_terminal_surface_hands_identity_back(self, worker_env):
++        terminal = _make_run_env({})
++        assert terminal["HERMES_KANBAN_TASK"] == "t_own" and terminal[SUPERVISED_TERMINAL_ENV_MARKER] == "1"
++        assert "HERMES_KANBAN_CLAIM_LOCK" not in terminal
++        _fenced_without_identity(hermes_subprocess_env(inherit_credentials=True))
++        from tools.code_execution_env import _build_child_env
++        from tools.mcp_tool_config import _build_safe_env
++        _fenced_without_identity(_build_child_env(rpc_endpoint="f", rpc_token="f", tmpdir="/tmp",
++                                                  child_python=sys.executable))
++        _fenced_without_identity(_build_safe_env({"HERMES_HOME": os.environ.get("HERMES_HOME", "/tmp")}))
++
++    def test_delegate_child_terminal_is_fenced(self, worker_env):
++        with delegated_child_context():
++            _fenced_without_identity(_make_run_env({}))
++
++
++IDENTITY_PROBE = (
++    "import json, sys; sys.path.insert(0, %r)\n"
++    "from agent.delegation_context import supervised_terminal_identity\n"
++    "i = supervised_terminal_identity()\n"
++    "print('IDENT=' + json.dumps(None if i is None else list(i)))\n"
++) % str(ROOT)
++
++
++def _probe(env):
++    proc = subprocess.run([sys.executable, "-c", IDENTITY_PROBE], env=env, capture_output=True, text=True,
++                          stdin=subprocess.DEVNULL, timeout=45)
++    assert proc.returncode == 0, proc.stderr
++    return json.loads(proc.stdout.split("IDENT=", 1)[1])
++
++
++class TestIdentityVerification:
++    def test_child_of_the_worker_verifies_by_ancestry(self, worker_env):
++        env = supervised_worker_terminal_env(dict(os.environ))
++        env["PATH"] = os.environ.get("PATH", "")
++        assert _probe(env) == ["t_own", 41, os.getpid()]
++
++    def test_copied_env_in_a_process_the_worker_did_not_spawn_is_rejected(self, worker_env):
++        """The worker pid must be an ancestor: a sibling process (here `sleep`) that merely
++        received a copy of the env is not supervised by it (stale pid / PID reuse / copy)."""
++        sibling = subprocess.Popen(["sleep", "30"], stdin=subprocess.DEVNULL)
++        try:
++            env = supervised_worker_terminal_env(dict(os.environ))
++            env["PATH"] = os.environ.get("PATH", "")
++            env[SUPERVISED_WORKER_PID_ENV] = str(sibling.pid)
++            assert _probe(env) is None
++        finally:
++            sibling.kill(); sibling.wait()
++
++    def test_malformed_or_missing_fields_fail_closed(self, worker_env):
++        base = supervised_worker_terminal_env(dict(os.environ))
++        for broken in ({SUPERVISED_WORKER_PID_ENV: "abc"}, {"HERMES_KANBAN_RUN_ID": "x1"},
++                       {SUPERVISED_TERMINAL_ENV_MARKER: "0"}, {"HERMES_KANBAN_TASK": ""}):
++            env = {**base, **broken, "PATH": os.environ.get("PATH", "")}
++            assert _probe(env) is None, broken
++        worker_env.setenv(SUPERVISED_WORKER_PID_ENV, str(os.getpid()))
++        worker_env.setenv(SUPERVISED_TERMINAL_ENV_MARKER, "1")
++        assert supervised_terminal_identity() is None, "a process is never its own supervising worker"
++
++
++# --------------------------------------------------------------------- CLI grant ---
++
++def _worker_board(tmp_path, monkeypatch):
++    db = tmp_path / "board.db"
++    conn = connect(db)
++    own, foreign = [kb.create_task(conn, title=title) for title in ("own", "foreign")]
++    for tid in (own, foreign):
++        kb.claim_task(conn, tid)
++    conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), own))
++    conn.commit()
++    task = kb.get_task(conn, own)
++    for key, value in {
++        "HERMES_KANBAN_DB": str(db), "HERMES_KANBAN_BOARD": "default",
++        "HERMES_KANBAN_TASK": own, "HERMES_KANBAN_RUN_ID": str(task.current_run_id),
++        "HERMES_KANBAN_CLAIM_LOCK": task.claim_lock, "HOME": str(tmp_path),
++    }.items():
++        monkeypatch.setenv(key, value)
++    for key in (DELEGATED_CHILD_ENV_MARKER, SUPERVISED_TERMINAL_ENV_MARKER, SUPERVISED_WORKER_PID_ENV):
++        monkeypatch.delenv(key, raising=False)
++    return conn, own, foreign
++
++
++def _cli(terminal, *argv):
++    cmd = f"cd {shlex.quote(str(ROOT))} && {shlex.quote(sys.executable)} -m hermes_cli.main kanban " + " ".join(
++        shlex.quote(a) for a in argv)
++    result = terminal.execute(cmd, timeout=60)
++    return int(result.get("returncode", 1) if result.get("returncode") is not None else 1), result.get("output", "")
++
++
++def test_worker_terminal_records_on_its_own_card_and_builds_its_cards_only(tmp_path, monkeypatch):
++    conn, own, foreign = _worker_board(tmp_path, monkeypatch)
++    terminal = LocalEnvironment(cwd=str(tmp_path))
++    try:
++        rc, out = _cli(terminal, "comment", own, "progress from the worker terminal", "--author", "kanban-workflow")
++        assert rc == 0, out
++        rc, out = _cli(terminal, "comment", foreign, "must refuse")
++        assert rc != 0 and "own card" in out, out
++        rc, out = _cli(terminal, "heartbeat", own)
++        assert rc == 0, out
++        # Lifecycle stays in-process: the terminal cannot finish, block or review the card.
++        for action in (["complete", own, "--result", "no"], ["block", own, "no"],
++                       ["request-review", own, "--summary", "no"], ["unblock", own], ["claim", foreign]):
++            rc, out = _cli(terminal, *action)
++            assert rc != 0 and "supervised terminal may not run" in out, (action, out)
++        rc, out = _cli(terminal, "create", "[mac 1] child", "--created-by", "kanban-workflow", "--json")
++        assert rc == 0, out
++        child = json.loads(out[out.index("{"):out.rindex("}") + 1])["id"]
++        rc, out = _cli(terminal, "create", "[round 1] child", "--created-by", "kanban-workflow", "--json")
++        assert rc == 0, out
++        rnd = json.loads(out[out.index("{"):out.rindex("}") + 1])["id"]
++        assert _cli(terminal, "link", child, rnd)[0] == 0           # both created by the worker
++        assert _cli(terminal, "link", own, child)[0] == 0           # own card as parent
++        # A foreign card's graph is never changed from here, in either direction, unless the
++        # worker's own card already gates it (the request's report card, below).
++        rc, out = _cli(terminal, "link", foreign, rnd)
++        assert rc != 0 and "owns or created" in out, out
++        rc, out = _cli(terminal, "link", foreign, own)
++        assert rc != 0 and "owns or created" in out, out
++        rc, out = _cli(terminal, "comment", child, "lane evidence", "--author", "kanban-workflow")
++        assert rc == 0, out
++        other = kb.create_task(conn, title="someone else's")
++        for parent, kid in ((foreign, other), (own, other), (child, other), (other, rnd)):
++            rc, out = _cli(terminal, "link", parent, kid)
++            assert rc != 0 and "owns or created" in out, (parent, kid, out)
++        assert kb.parent_ids(conn, other) == [] and kb.child_ids(conn, other) == []
++        # The report shape: the worker's own card already gates `report`; a card the worker
++        # created may become another parent of it (open_next_round / review in workflow.py).
++        report = kb.create_task(conn, title="report")
++        kb.link_tasks(conn, own, report)
++        rc, out = _cli(terminal, "link", rnd, report)
++        assert rc == 0, out
++        rc, out = _cli(terminal, "link", foreign, report)                # foreign parent: not ours
++        assert rc != 0 and "owns or created" in out, out
++        assert sorted(kb.parent_ids(conn, report)) == sorted([own, rnd])
++        rc, out = _cli(terminal, "comment", other, "no")
++        assert rc != 0, out
++    finally:
++        terminal.cleanup()
++    assert [c.body for c in kb.list_comments(conn, own)] == ["progress from the worker terminal"]
++    assert kb.get_task(conn, own).status == "running" and kb.get_task(conn, foreign).status == "running"
++    assert not kb.list_comments(conn, foreign)
++    created = conn.execute("SELECT payload FROM task_events WHERE task_id = ? AND kind = 'created'", (child,)).fetchone()
++    assert json.loads(created[0])["creator_task_id"] == own
++    assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
++    conn.close()
++
++
++def test_delegate_child_terminal_and_stale_identity_are_denied(tmp_path, monkeypatch):
++    conn, own, foreign = _worker_board(tmp_path, monkeypatch)
++    terminal = LocalEnvironment(cwd=str(tmp_path))
++    try:
++        with delegated_child_context():
++            rc, out = _cli(terminal, "comment", own, "from a delegate child")
++        assert rc != 0 and "delegate_task child contexts cannot mutate" in out, out
++        # Board says another worker pid owns the run now (stale env after a reclaim).
++        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid() + 100000, own)); conn.commit()
++        rc, out = _cli(terminal, "comment", own, "stale")
++        assert rc != 0 and "does not match the board" in out, out
++        conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (os.getpid(), own)); conn.commit()
++        # The run the env names is gone from the board (finished, reclaimed, pruned).
++        run_id = kb.get_task(conn, own).current_run_id
++        conn.execute("UPDATE task_runs SET status = 'released' WHERE id = ?", (run_id,)); conn.commit()
++        rc, out = _cli(terminal, "comment", own, "finished run")
++        assert rc != 0 and "run" in out and "released" in out, out
++        conn.execute("DELETE FROM task_runs WHERE id = ?", (run_id,)); conn.commit()
++        rc, out = _cli(terminal, "comment", own, "missing run")
++        assert rc != 0 and "missing" in out, out
++        conn.execute("INSERT INTO task_runs (id, task_id, status, worker_pid, started_at) VALUES (?, ?, 'running', ?, 1)",
++                     (run_id, own, os.getpid())); conn.commit()
++        # The env names no run at all: the grant needs one.
++        monkeypatch.delenv("HERMES_KANBAN_RUN_ID")
++        rc, out = _cli(terminal, "comment", own, "no run id")
++        assert rc != 0 and "no run id" in out, out
++        monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
++        assert kb.block_task(conn, own, reason="fixture")
++        rc, out = _cli(terminal, "comment", own, "blocked card")
++        assert rc != 0 and "does not match the board" in out, out
++    finally:
++        terminal.cleanup()
++    assert not kb.list_comments(conn, own)
++    conn.close()
++
++
++def _in_process_grant_env(conn, own, monkeypatch):
++    """Make THIS test process look like a supervised terminal of a worker that is our parent."""
++    worker_pid = os.getppid()
++    conn.execute("UPDATE tasks SET worker_pid = ? WHERE id = ?", (worker_pid, own))
++    conn.execute("UPDATE task_runs SET worker_pid = ? WHERE task_id = ?", (worker_pid, own)); conn.commit()
++    monkeypatch.setenv(DELEGATED_CHILD_ENV_MARKER, "1")
++    monkeypatch.setenv(SUPERVISED_TERMINAL_ENV_MARKER, "1")
++    monkeypatch.setenv(SUPERVISED_WORKER_PID_ENV, str(worker_pid))
++    return worker_pid
++
++
++def test_grant_is_reverified_at_the_write_boundary(tmp_path, monkeypatch):
++    """The CLI's precheck is UX; the board state that counts is the one read inside the write
++    transaction: a task that stopped running, changed worker or run, a dead run row, or an
++    expired grant denies there, and nothing is written."""
++    conn, own, foreign = _worker_board(tmp_path, monkeypatch)
++    _in_process_grant_env(conn, own, monkeypatch)
++    with kb.supervised_terminal_mutation():
++        kb.add_comment(conn, own, "t", "granted")
++    assert [c.body for c in kb.list_comments(conn, own)] == ["granted"]
++
++    def denied(setup, undo, needle):
++        setup(); conn.commit()
++        with pytest.raises(PermissionError, match=needle):
++            with kb.supervised_terminal_mutation():
++                kb.add_comment(conn, own, "t", "must not land")
++        undo(); conn.commit()
++        assert [c.body for c in kb.list_comments(conn, own)] == ["granted"]
++
++    run_id = kb.get_task(conn, own).current_run_id
++    # Stale board status between precheck and write.
++    denied(lambda: conn.execute("UPDATE tasks SET status = 'blocked' WHERE id = ?", (own,)),
++           lambda: conn.execute("UPDATE tasks SET status = 'running' WHERE id = ?", (own,)), "is blocked")
++    # Reclaimed by another worker pid.
++    denied(lambda: conn.execute("UPDATE tasks SET worker_pid = worker_pid + 7 WHERE id = ?", (own,)),
++           lambda: conn.execute("UPDATE tasks SET worker_pid = worker_pid - 7 WHERE id = ?", (own,)), "not running under pid")
++    # A newer run owns the task now.
++    denied(lambda: conn.execute("UPDATE tasks SET current_run_id = ? WHERE id = ?", (run_id + 1, own)),
++           lambda: conn.execute("UPDATE tasks SET current_run_id = ? WHERE id = ?", (run_id, own)), "not running under pid")
++    # The run row ended or vanished.
++    denied(lambda: conn.execute("UPDATE task_runs SET status = 'done' WHERE id = ?", (run_id,)),
++           lambda: conn.execute("UPDATE task_runs SET status = 'running' WHERE id = ?", (run_id,)), "is done")
++    saved = conn.execute("SELECT * FROM task_runs WHERE id = ?", (run_id,)).fetchone()
++    cols = [d[1] for d in conn.execute("PRAGMA table_info(task_runs)")]
++    denied(lambda: conn.execute("DELETE FROM task_runs WHERE id = ?", (run_id,)),
++           lambda: conn.execute(f"INSERT INTO task_runs ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
++                                tuple(saved)), "is missing")
++    # Grant expiry: the context outlived its one command.
++    with pytest.raises(PermissionError, match="expired"):
++        with kb.supervised_terminal_mutation(ttl_seconds=-1):
++            kb.add_comment(conn, own, "t", "late")
++    # No run id in the env: no grant at all.
++    monkeypatch.delenv("HERMES_KANBAN_RUN_ID")
++    with pytest.raises(PermissionError, match="no run id"):
++        with kb.supervised_terminal_mutation():
++            pass
++    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
++    # The grant never covers board metadata or a foreign task the CLI would have refused.
++    with kb.supervised_terminal_mutation():
++        with pytest.raises(PermissionError, match="task mutations only"):
++            kb.write_board_metadata("default", name="x")
++    assert [c.body for c in kb.list_comments(conn, own)] == ["granted"]
++    assert not kb.list_comments(conn, foreign)
++    conn.close()
+diff --git a/tools/environments/base_session_env.py b/tools/environments/base_session_env.py
+index 927b7de966..b8d83ed607 100644
+--- a/tools/environments/base_session_env.py
++++ b/tools/environments/base_session_env.py
+@@ -26,9 +26,13 @@ from typing import Iterable
+ # only carry the user's own shell state (PATH, functions, exports they set), not Hermes' per-turn session
+ # identity. Used by unit tests as the Python-side contract for the exclusion set; the dump path unsets by
+ # name/prefix instead of grepping declare lines (see below / issue #71296).
++# HERMES_KANBAN_* (worker task identity, incl. the supervised-terminal identity) and the
++# delegate_task descendant fence are likewise decided per spawn by the Popen env
++# (agent.delegation_context): a snapshot taken by the worker itself must never hand its
++# identity to a later command issued inside a delegate_task child, nor persist a fence.
+ _SNAPSHOT_EXCLUDED_ENV_REGEX = (
+     "^declare -x (HERMES_SESSION_|HERMES_UI_SESSION_ID|HERMES_CRON_AUTO_DELIVER_|"
+-    "HERMES_CRON_SESSION|HERMES_BROWSER_CONTROL_)")
++    "HERMES_CRON_SESSION|HERMES_BROWSER_CONTROL_|HERMES_KANBAN_|HERMES_DELEGATED_CHILD_CONTEXT)")
+ _SHELL_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ 
+ # mktemp template suffix + the shell variable holding the allocated temp path.
+@@ -67,7 +71,7 @@ def _export_dump_excluding_session_vars(tmp_path: str, excluded_names: Iterable[
+     extra_unset = "".join(f" {shlex.quote(name)}" for name in sorted(safe_names))
+     return (
+         "{ ( unset ${!HERMES_SESSION_*} ${!HERMES_CRON_AUTO_DELIVER_*} "
+-        "${!HERMES_BROWSER_CONTROL_*} "
++        "${!HERMES_BROWSER_CONTROL_*} ${!HERMES_KANBAN_*} HERMES_DELEGATED_CHILD_CONTEXT "
+         # AI_AGENT / HERMES_AGENT are per-command attribution markers re-exported
+         # by every wrapper with ${VAR:-default} semantics; persisting them would
+         # let the FIRST command's value override a later outer-harness value.
+diff --git a/tools/environments/local.py b/tools/environments/local.py
+index b9ffb48aa5..7a4f4a1d45 100644
+--- a/tools/environments/local.py
++++ b/tools/environments/local.py
+@@ -264,19 +264,25 @@ def _filter_secret_env(
+             out[key] = value
+ 
+ 
+-def _finalize_child_env(env: dict) -> dict:
++def _finalize_child_env(env: dict, *, supervised_terminal: bool = False) -> dict:
+     """Guards shared by every spawn surface: profile-home propagation, session-context
+     bridging, Hermes-owned PYTHONPATH + venv-marker strip, MSYS defaults, delegate_task
+-    Kanban scrub. Returns the (possibly new) dict."""
++    Kanban scrub. ``supervised_terminal`` is the worker's OWN terminal tool: the scrub
++    still fences the child, and the dispatcher-owned worker's task identity (never its
++    claim lock) is handed back (``supervised_worker_terminal_env``). Returns the
++    (possibly new) dict."""
+     _apply_profile_home(env)
+     _inject_session_context_env(env)
+     _strip_hermes_owned_pythonpath_and_runtime_markers(env)
+     _apply_windows_msys_bash_env_defaults(env)
++    if supervised_terminal:
++        from agent.delegation_context import supervised_worker_terminal_env
++        return supervised_worker_terminal_env(env)
+     from agent.delegation_context import delegated_child_subprocess_env
+     return delegated_child_subprocess_env(env)
+ 
+ 
+-def _scrubbed_env(parts, plugin_strip: frozenset, fix_path) -> dict:
++def _scrubbed_env(parts, plugin_strip: frozenset, fix_path, *, supervised_terminal: bool = False) -> dict:
+     """Filter each ``(items, unwrap_force)`` in *parts* into one env, rewrite PATH via
+     *fix_path* (always prepending the hermes install dir so bare ``hermes`` resolves
+     for children of a systemd/cron-launched gateway), then apply the shared guards."""
+@@ -289,14 +295,16 @@ def _scrubbed_env(parts, plugin_strip: frozenset, fix_path) -> dict:
+     # already applies this invariant; Cron scripts use this sanitizer directly (#92998).
+     if path_key is not None:
+         out[path_key] = _prepend_hermes_bin_dir(fix_path(out.get(path_key, "")))
+-    return _finalize_child_env(out)
++    return _finalize_child_env(out, supervised_terminal=supervised_terminal)
+ 
+ 
+-def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None) -> dict:
++def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = None, *,
++                             supervised_terminal: bool = False) -> dict:
+     """Filter Hermes-managed secrets from a subprocess environment (background/PTY
+-    spawn path, search workers, computer-use driver, user-script runners)."""
++    spawn path, search workers, computer-use driver, user-script runners).
++    ``supervised_terminal`` only for the terminal tool's own background spawn."""
+     return _scrubbed_env([(base_env or {}, False), (extra_env or {}, True)],
+-                         _plugin_terminal_env_strip_keys(), lambda p: p)
++                         _plugin_terminal_env_strip_keys(), lambda p: p, supervised_terminal=supervised_terminal)
+ 
+ 
+ def hermes_subprocess_env(*, inherit_credentials: bool = False) -> dict[str, str]:
+@@ -563,9 +571,12 @@ def _path_env_key(run_env: dict) -> str | None:
+ 
+ 
+ def _make_run_env(env: dict) -> dict:
+-    """Build a run environment with a sane PATH and provider-var stripping."""
++    """Build a run environment with a sane PATH and provider-var stripping. This is the
++    terminal tool's own foreground spawn: the one surface that hands a dispatcher-owned
++    worker its task identity back (supervised terminal); delegate children stay fenced."""
+     return _scrubbed_env([(dict(os.environ | env), True)], frozenset(),
+-                         lambda p: _prepend_git_bash_dirs(_append_missing_sane_path_entries(p)))
++                         lambda p: _prepend_git_bash_dirs(_append_missing_sane_path_entries(p)),
++                         supervised_terminal=True)
+ 
+ 
+ # --- Hermes venv / repo-root detection (module-level, computed once) ---
+diff --git a/tools/process_registry.py b/tools/process_registry.py
+index 19d5c23e7d..89eb4fa385 100644
+--- a/tools/process_registry.py
++++ b/tools/process_registry.py
+@@ -902,7 +902,8 @@ class ProcessRegistry(ProcessCheckpointMixin):
+     def _spawn_env(env_vars: dict) -> dict:
+         """Sanitized child env; PYTHONUNBUFFERED so tqdm/datasets-style buffering
+         doesn't hide progress from process(action="poll")."""
+-        env = _sanitize_subprocess_env(os.environ, env_vars)
++        # Terminal tool background spawn: same supervised-terminal identity as the foreground path.
++        env = _sanitize_subprocess_env(os.environ, env_vars, supervised_terminal=True)
+         env["PYTHONUNBUFFERED"] = "1"
+         return env
+ 

@@ -32,7 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    hermes-install hermes-config-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow clean
+	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
 # is a section note (one paragraph per line), `##| text` lines just above a
@@ -124,8 +124,39 @@ hermes-install: ## Install Hermes on this host and wire it to Discord, Honcho, b
 hermes-config-apply: ## Apply .env changes: HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force; no gateway restart (then make hermes-restart)
 	@HERMES_SKIP_GATEWAY=1 bash scripts/hermes-install.sh --force
 
+# Narrow rollout of the dev workflow: only the kanban-workflow skill files and the
+# coder profile SOUL.md (when that profile exists), with backups and atomic
+# replaces. No config.yaml/.env/honcho/plugins/memories; config keys go through
+# `hermes config set` separately (docs/hermes-autonomous-development.md).
+hermes-dev-workflow-plan: ## Show what the narrow dev-workflow rollout would copy (kanban-workflow skill + coder SOUL.md); writes nothing [CODER_HOME=<dir>]
+	@python3 scripts/apply-dev-workflow.py --plan $(if $(CODER_HOME),--coder-home "$(CODER_HOME)",)
+
+hermes-dev-workflow-apply: ## Copy the kanban-workflow skill + coder SOUL.md into ~/.hermes (backups, atomic, no config, no restart) [CODER_HOME=<dir>]
+	@python3 scripts/apply-dev-workflow.py --apply $(if $(CODER_HOME),--coder-home "$(CODER_HOME)",)
+
 hermes-restart: ## Restart the Hermes gateway (Discord bot)
 	@hermes gateway restart
+
+hermes-runtime-patch-status: ## Per kit runtime patch (hermes/runtime-patches): applied | applicable | conflict | ambiguous | blocked | dirty | unsafe in ~/.hermes/hermes-agent [SRC=<dir>]
+	@bash scripts/hermes-runtime-patch.sh status $(if $(SRC),--src "$(SRC)",)
+
+hermes-runtime-patch-apply: ## Apply the applicable kit runtime patches to an ISOLATED checkout SRC=<dir> (installed runtime refused; unexplained local changes on targets refused; a partly applied set resumes)
+	@bash scripts/hermes-runtime-patch.sh apply $(if $(SRC),--src "$(SRC)",)
+
+hermes-devtest-status: ## Trusted Go/PostgreSQL dev-test runner: installed vs kit digest, root ownership, pinned SHA-256 (docs/dev-test-runner.md)
+	@bash scripts/install-hermes-devtest.sh status
+
+hermes-devtest-install: ## Validate, then sudo-install the root-owned dev-test runner + profile file that pins its digest (asks for the sudo password; no restart)
+	@bash scripts/install-hermes-devtest.sh install
+
+test-apply-dev-workflow: ## Run the narrow dev-workflow rollout helper tests (temp Hermes homes; never ~/.hermes)
+	@python3 -m unittest discover -s scripts/tests -p 'test_apply_dev_workflow.py'
+
+test-hermes-runtime-patch: ## Run the runtime-patch helper tests (throwaway git checkout and fixture patches; never ~/.hermes)
+	@bash scripts/test_hermes_runtime_patch.sh
+
+test-devtest-runner: ## Run the dev-test runner tests (synthetic Go module + canary credential in the real Landlock/seccomp sandbox; never the operator's database)
+	@python3 -m unittest discover -s scripts/tests -p 'test_devtest_runner.py'
 
 hermes-logs: ## Tail Hermes gateway logs
 	@tail -n 200 -f "$${HERMES_HOME:-$$HOME/.hermes}/logs/gateway.log"
@@ -290,7 +321,7 @@ knowledge-refresh: ## After adding books: stage + sync every book-backed profile
 ##| overlapping new-profile proposals are folded into one broad family per run
 ##| (hermes/knowledge-taxonomy.json, KNOWLEDGE_TAXONOMY=<file>|off); rerun
 ##| the same command to get consolidated proposals.
-knowledge-classify: ## AI proposals + reviewed plan, Markdown review and offline HTML workspace for uncategorized books (dry-run). Then: knowledge-apply PLAN=<plan>. [MODEL=gpt-5.6-terra EFFORT=medium|high SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n] Legacy: APPLY=1, APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1]
+knowledge-classify: ## AI proposals + reviewed plan, Markdown review and offline HTML workspace for uncategorized books (dry-run). Then: knowledge-apply PLAN=<plan>. [MODEL=gpt-6.1-terra EFFORT=medium|high SOURCE=<path> CLASSIFIER=local METADATA_ONLY=1 LIMIT=n] Legacy: APPLY=1, APPROVE='<profile>=<source>' / APPROVALS=<file> [APPROVED_ONLY=1]
 	@args=(); \
 	 [[ -n "$${SOURCE:-}" ]] && args+=("$$SOURCE"); \
 	 [[ "$(if $(filter command line,$(origin APPLY)),$(APPLY))" == "1" ]] && args+=(--apply); \
@@ -470,5 +501,7 @@ test-knowledge-apply: ## Run the reviewed-plan / knowledge-apply / bulk-approval
 test-document-converter: ## Run the document-converter tests (synthetic EPUB/PDF fixtures, offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_document_converter.py'
 
-test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed)
+test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed), the repo_lease tests (leases, writers, manifests) and the completion-policy tests
 	@python3 -m unittest discover -s scripts/tests -p 'test_kanban_workflow.py'
+	@python3 -m unittest discover -s scripts/tests -p 'test_repo_lease.py'
+	@python3 -m unittest discover -s scripts/tests -p 'test_completion.py'

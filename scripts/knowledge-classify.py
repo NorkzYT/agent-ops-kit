@@ -37,7 +37,7 @@ list includes):
      source is classified locally or skipped, and a private excerpt with clean
      metadata goes to the cloud as metadata only. The exemption lives only in
      this script; the model-router plugin and its detectors are unchanged;
-  4. ask the configured classifier (CLIProxyAPI `gpt-5.6-terra` at reasoning
+  4. ask the configured classifier (CLIProxyAPI `gpt-6.1-terra` at reasoning
      effort `medium` by default — --model/--effort, KNOWLEDGE_CLASSIFY_MODEL/
      KNOWLEDGE_CLASSIFY_EFFORT, make MODEL=/EFFORT= — or the local Ollama model,
      to which the cloud effort does not apply) for strict JSON: profile,
@@ -110,7 +110,7 @@ import knowledge_plan as kp  # noqa: E402  (reviewed plan artifact)
 import knowledge_taxonomy as kt  # noqa: E402  (broad-family consolidation of proposals)
 import knowledge_review as kr  # noqa: E402  (Markdown review + offline HTML workspace)
 
-DEFAULT_MODEL = "gpt-5.6-terra"         # benchmarked default (docs/benchmarks/knowledge-classify/); no Opus needed
+DEFAULT_MODEL = "gpt-6.1-terra"         # Terra default; v1 benchmark (docs/benchmarks/knowledge-classify/) chose gpt-5.6-terra; no Opus needed
 # CLIProxyAPI reasoning efforts the classifier may request (top-level reasoning_effort).
 # medium/high are the benchmarked ones; minimal/low are accepted for compatibility only.
 EFFORTS = ("minimal", "low", "medium", "high")
