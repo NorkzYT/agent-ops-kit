@@ -23,25 +23,47 @@ python3 scripts/capability_activation.py manifest > hermes/capabilities/activati
 
 The capability root sits outside `skills/`, so Hermes never scans its SKILL.md
 copies as skills. Excluded on purpose: evaluation fixtures and tests, the
-model-router plugin (it installs through `make specialist-install` and its own
-gates), every raw upstream file (a test proves no bundled file's hash equals a
+model-router plugin (it is a plugin, installed by `make hermes-install` or `make
+specialist-install`, not part of this activation), every raw upstream file (a test proves no bundled file's hash equals a
 locked upstream file), any RO-PNA text, gstack `bin/`, hooks, setup, preamble,
 update, telemetry, browser and ship programs.
 
 `make hermes-install` does not copy these 12 skills. Before writing anything,
-`scripts/hermes-install.sh` fails closed whenever the checkout has
-`hermes/capabilities/`: the manifest must exist, be strict JSON (no duplicate
-keys) and its `skills` list must equal the registry's source-implemented skill
-names, each present under `hermes/skills/`. Otherwise it stops with "capability
-activation gate" and writes nothing; a checkout without `hermes/capabilities/`
-installs as before. Gated skills are skipped with a logged "activation-gated"
-line. In such a checkout it also leaves `$HERMES_HOME/plugins/model-router`
-untouched (it carries the capability seam; it installs only through `make
-specialist-install`, which backs up the previous plugin); other plugins install
-as before. `scripts/test_hermes_install.sh` asserts the skip, that other kit skills
-still install, and (in a private copy of the kit with a stub `hermes`) refusal
-for a missing, malformed, duplicate-key, skills-less, empty, incomplete,
-over-broad or non-list manifest.
+`scripts/hermes-install.sh` (every mode except `--render-only`) fails closed:
+`hermes/capabilities/` must be present, the manifest must exist, be strict JSON
+(no duplicate keys) and its `skills` list must equal the registry's
+source-implemented skill names, each present under `hermes/skills/`. Otherwise
+it stops with "capability activation gate" and writes nothing. A deleted or
+dangling `hermes/capabilities/` is refused the same way, so removing it cannot
+switch the gate off. Gated skills are skipped with a logged "activation-gated"
+line.
+
+Plugins, including the model-router, install as they did before the capability
+work: each `hermes/plugins/<name>/` is copied over `$HERMES_HOME/plugins/<name>/`
+(existing files overwritten, no backup, files absent from the source left in
+place), before the gateway step. On a fresh home the router is therefore on disk
+before the gateway is installed and restarted. The router's capability seam is
+inert by default: the rendered `config.yaml` sets neither
+`specialist_capability_root` nor `specialist_capability_catalog_sha256`, and no
+script writes them.
+
+Running `make hermes-install` against a live home is a router rollout: it
+replaces the installed model-router with this checkout's (seam included) and,
+when `DISCORD_BOT_TOKEN` is set and a systemd user session exists (and it is not
+run inside Hermes), runs `hermes gateway install` and `hermes gateway restart`.
+That needs its own operator approval, like any router rollout. Neither the seam
+nor this installer change has been approved for, or deployed to, a live home.
+
+`scripts/test_hermes_install.sh` (fake `HOME`, stub `hermes`, `systemctl`,
+`loginctl` and `curl`; no network or real service) asserts: the skip and that
+other kit skills still install; on a fresh home the router installs
+byte-identical to source and is present when the stubbed gateway install and
+restart run, with `hermes doctor` after; an existing router is overwritten as
+before (stale extra file kept, no backup); the two opt-in settings are absent by
+default; and, in a private copy of the kit's git-tracked files, refusal with
+nothing written for a missing, malformed, duplicate-key, skills-less, empty,
+incomplete, over-broad or non-list manifest and for a deleted or dangling
+`hermes/capabilities/`.
 
 ### Source-root contract
 
@@ -244,8 +266,9 @@ disposable home.
    adds one (same preimage, collision, journal and rollback rules, the approved
    manifest digest as a required argument) or the operator copies the manifest
    files with those checks by hand. No restart is part of it.
-6. Required for automatic natural-language routing, separate: `make
-   specialist-install` for the model-router change, the two
+6. Required for automatic natural-language routing, separate: the
+   model-router change installed (`make specialist-install`, or `make
+   hermes-install`, which also copies it, without a backup), the two
    `specialist_capability_*` settings bound to the approved catalog SHA-256, and
    a gateway restart, with its own review and approval. Without it, selection is
    the coordinator CLI only.
@@ -261,7 +284,8 @@ no capability skill remains. No other file is touched.
 
 ## Not claimed
 
-No live installation, restart, runtime acceptance, executed workflow on real
+No approval or deployment of the model-router capability seam, no live
+installation, restart, runtime acceptance, executed workflow on real
 company data, automatic routing in a real Hermes session, natural-language
 selection by the live classifier (its key is
 not available in this environment) or company isolation.

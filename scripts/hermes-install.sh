@@ -46,11 +46,12 @@ export HERMES_HOME
 
 # ------------------------------------------- capability activation gate ---
 # Capability skills install only through the reviewed, approved activation with their capability
-# root (docs/capability-activation.md), never here. Fail closed before any write: when this
-# checkout has capability source, the activation manifest must exist, be strict JSON and list
-# exactly the registry's source-implemented skills (each present under hermes/skills/).
+# root (docs/capability-activation.md), never here. Fail closed before any write: the activation
+# manifest must exist, be strict JSON and list exactly the registry's source-implemented skills
+# (each present under hermes/skills/). A missing or dangling hermes/capabilities refuses too, so
+# deleting it cannot turn the gate off and copy those skills.
 gated=""
-if [[ -z "$RENDER_ONLY" && -e hermes/capabilities ]]; then
+if [[ -z "$RENDER_ONLY" ]]; then
   gated=" $(python3 - <<'PY'
 import json, os, re, sys
 def strict(path):
@@ -81,7 +82,7 @@ except Exception as exc:  # any failure refuses: the gate list is required, neve
     sys.exit(1)
 print(" ".join(have))
 PY
-) " || die "capability activation gate: hermes/capabilities/activation/manifest.json is missing or does not list exactly the registry's source-implemented skills; refusing to install (docs/capability-activation.md)"
+) " || die "capability activation gate: hermes/capabilities (registry or activation manifest) is missing, or the manifest does not list exactly the registry's source-implemented skills; refusing to install (docs/capability-activation.md)"
 fi
 
 # ------------------------------------------------------------ 1. Hermes ---
@@ -401,19 +402,14 @@ log "installed skills: ${installed[*]}"
 # ------------------------------------------------------- 6b. plugins ---
 # Bundled Hermes plugins ship in hermes/plugins/<name>/ and install into
 # $HERMES_HOME/plugins/<name>/ where Hermes discovers them. Enablement is in
-# config.yaml (plugins.enabled), rendered above.
-# With capability source in this checkout ($gated set above) the model-router carries the
-# capability seam: it installs only through `make specialist-install` (own approval, backup of the
-# previous plugin for rollback), never through this routine installer.
+# config.yaml (plugins.enabled), rendered above. Existing plugin files are overwritten
+# (no backup). The model-router's capability seam stays inert unless both
+# specialist_capability_* settings are added by hand (docs/capability-activation.md).
 if [[ -d hermes/plugins ]]; then
   mkdir -p "$HERMES_HOME/plugins"
   plugins=()
   for d in hermes/plugins/*/; do
     name="$(basename "$d")"
-    if [[ -n "$gated" && "$name" == model-router ]]; then
-      warn "model-router not installed here (capability seam, activation-gated): use make specialist-install after its review and approval"
-      continue
-    fi
     dest="$HERMES_HOME/plugins/$name"
     mkdir -p "$dest"
     cp -rf "$d". "$dest/"

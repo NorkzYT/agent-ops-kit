@@ -140,6 +140,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/test_hermes_ui.sh
+      - name: Ensure PyYAML (test_healthcheck.sh parses docker-compose.yml)
+        run: python3 -c 'import yaml' 2>/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq python3-yaml)
       - run: bash scripts/test_healthcheck.sh
       - run: bash scripts/test_stack_render.sh
       - run: bash scripts/test_hermes_install.sh

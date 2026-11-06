@@ -390,6 +390,27 @@ class TestComplexity(unittest.TestCase):
         self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.1-sol")
         self.assertIsNone(complexity.resolve_model("high", family="coding", available=["gpt-5.6-sol"]))
 
+    def test_terra_prefers_6_1_over_5_6_when_both_live(self):
+        live = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]
+        for tier in ("medium", "elevated"):
+            with self.subTest(tier=tier):
+                self.assertEqual(complexity.resolve_model(tier, family="gpt", available=live), "gpt-6.1-terra")
+
+    def test_terra_falls_back_to_5_6_same_tier_without_escalation(self):
+        # Only Terra 5.6 at the Terra tier: same-tier fallback, never Sol or Luna.
+        live = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-astra"]
+        for tier in ("medium", "elevated"):
+            with self.subTest(tier=tier):
+                self.assertEqual(complexity.resolve_model(tier, family="gpt", available=live), "gpt-5.6-terra")
+        # Only gpt-5.6-terra live at all: medium/elevated pick it, no escalation path needed.
+        for tier in ("medium", "elevated"):
+            with self.subTest(tier=tier, only="5.6-terra"):
+                self.assertEqual(complexity.resolve_model(tier, family="gpt", available=["gpt-5.6-terra"]),
+                                 "gpt-5.6-terra")
+        # Unknown live set: primary trusted, fallback unused; coding family never uses it.
+        self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-6.1-terra")
+        self.assertIsNone(complexity.resolve_model("medium", family="coding", available=["gpt-5.6-terra"]))
+
     def test_degrade_never_upgrades(self):
         # only terra available; requesting high degrades DOWN to terra
         self.assertEqual(

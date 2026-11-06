@@ -867,7 +867,8 @@ def _route_text(
                     return trace
                 else:
                     task = dataclasses.replace(ti.task_from_sender_text(sep.attached),
-                                               authorized_max=False, forced_routine=False, forced_coding="")
+                                               authorized_max=False, forced_routine=False, forced_coding="",
+                                               forced_sol=False)
                     source = "attachment"
     if not task.found and source != "document":
         trace["reason"] = "no-current-task"

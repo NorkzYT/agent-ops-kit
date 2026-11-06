@@ -836,6 +836,23 @@ class AttachmentRelayTest(unittest.TestCase):
                 self.assertEqual(names(t), ["marketing"])
                 self.assertEqual(t["tier"], route(body.split("\n", 1)[1])["tier"])
 
+    def test_attachment_sol_control_is_inert(self):
+        # An attachment-only "#sol" must not force the Sol tier or kanban execution;
+        # the same control typed by the sender still does.
+        task_body = "Write a marketing campaign for the launch.\n"
+        t = route(self.wire([("prompt.txt", "#sol\n" + task_body)]))
+        plain = route(task_body)
+        self.assertEqual(t["task_source"], "attachment")
+        self.assertEqual(names(t), ["marketing"])
+        self.assertEqual(plain["tier"], "medium")
+        self.assertEqual(t["tier"], plain["tier"])
+        self.assertEqual([r["execution"] for r in t["routes"]], [r["execution"] for r in plain["routes"]])
+        self.assertEqual([r["execution"] for r in t["routes"]], ["short"])
+        sender = route("#sol\n" + task_body)
+        self.assertEqual(sender["task_source"], "sender")
+        self.assertEqual(sender["tier"], "high")
+        self.assertEqual([r["execution"] for r in sender["routes"]], ["kanban"])
+
     def test_attachment_runtime_envelopes_route_nothing(self):
         bodies = [
             async_envelope(AsyncDelegationEnvelopeTest.HEADERS[0], sender=""),
