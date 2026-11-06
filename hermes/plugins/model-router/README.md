@@ -12,7 +12,8 @@ payload is never sent to them by compression or title generation; see
   - orchestrator (CLIProxyAPI): status/lookup→`gpt-5.6-luna` (low effort),
     ordinary work→`gpt-6.1-terra` (medium), ambiguous/planning→`gpt-6.1-terra`,
     genuinely hard (or a leading standalone `#sol` line)→`gpt-6.1-sol`, with
-    `gpt-5.6-sol` only as fallback when a live probe lacks 6.1;
+    `gpt-5.6-terra`/`gpt-5.6-sol` only as same-tier fallbacks when a live
+    probe lacks the 6.1 model;
     `gpt-6-astra` ONLY when the current task
     starts with a standalone `#max`/`#astra` control line (per-task, TTL-bound,
     never bleeding to the next task or session). The automatic ceiling is Sol.
