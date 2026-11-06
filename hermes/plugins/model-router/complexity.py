@@ -6,7 +6,8 @@ Pure and side-effect-free. Classification of the current user task lives in
   * ``gpt`` (orchestrator, CLIProxyAPI): status/lookup -> luna (low effort),
     ordinary execution -> terra (medium), ambiguous/multi-constraint planning ->
     terra, genuinely hard work (or a leading ``#sol`` control) -> sol
-    (``gpt-6.1-sol``, ``gpt-5.6-sol`` only when 6.1 is not advertised).
+    (``gpt-6.1-*`` preferred; ``gpt-5.6-terra``/``gpt-5.6-sol`` only when the
+    6.1 model of that tier is not advertised).
     ``gpt-6-astra`` is reachable ONLY with
     explicit per-task authorization (``allow_max=True``): the automatic budget
     ceiling is Sol regardless of what the provider advertises.
@@ -47,6 +48,8 @@ GPT_TIER_MODELS = {
 # the tier's primary model absent, before the walk leaves the tier. Never
 # consulted when the live set is unknown (the primary is trusted).
 GPT_TIER_FALLBACKS = {
+    "medium": ("gpt-5.6-terra",),
+    "elevated": ("gpt-5.6-terra",),
     "high": ("gpt-5.6-sol",),
 }
 
@@ -183,8 +186,8 @@ def resolve_model(
     walk unless ``allow_max`` is set, so a missing lower model can never silently
     upgrade a request to Astra. Without ``allow_max`` the start tier itself is
     also capped at ``high`` (the automatic Sol ceiling). Within a tier the
-    primary model is tried before its ``GPT_TIER_FALLBACKS`` (gpt-6.1-sol, then
-    gpt-5.6-sol). Returns ``None`` when nothing allowed is available (caller
+    primary model is tried before its ``GPT_TIER_FALLBACKS`` (gpt-6.1-terra, then
+    gpt-5.6-terra; gpt-6.1-sol, then gpt-5.6-sol). Returns ``None`` when nothing allowed is available (caller
     decides: keep, degrade, or refuse).
     """
     coding = family == "coding"
