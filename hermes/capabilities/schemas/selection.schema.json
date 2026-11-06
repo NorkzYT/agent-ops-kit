@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-ops-kit.local/schemas/capabilities/selection.schema.json",
+  "title": "Current-task capability selection v1",
+  "description": "Closed capability IDs selected for one current task, with selector provenance. The planner validates every ID against the registry; unknown IDs and extra fields are rejected. Carries no permissions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "selection_id",
+    "task_id",
+    "selector",
+    "capability_ids"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "selection_id": {
+      "$ref": "#/$defs/id"
+    },
+    "task_id": {
+      "$ref": "#/$defs/id"
+    },
+    "task_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "outcome"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "model-router",
+            "explicit-offline"
+          ],
+          "description": "model-router: closed IDs chosen by the existing router seam for the current task; explicit-offline: deterministic evaluation input typed by an operator/test. Neither is a permission."
+        },
+        "decision_ref": {
+          "$ref": "#/$defs/ref"
+        },
+        "outcome": {
+          "enum": [
+            "ok",
+            "failed",
+            "unconfigured",
+            "skipped"
+          ]
+        }
+      }
+    },
+    "capability_ids": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/capability_id"
+      },
+      "uniqueItems": true
+    },
+    "modes": {
+      "type": "object",
+      "maxProperties": 8,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^(kit|pm|gstack|existing)\\.[a-z0-9]+(-[a-z0-9]+)*$",
+        "maxLength": 64
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+        "maxLength": 64
+      }
+    },
+    "specialist_routes": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "profile",
+          "execution",
+          "advisory_only",
+          "knowledge_status"
+        ],
+        "properties": {
+          "profile": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+          },
+          "execution": {
+            "enum": [
+              "kanban",
+              "short"
+            ]
+          },
+          "advisory_only": {
+            "type": "boolean"
+          },
+          "knowledge_status": {
+            "type": "string",
+            "pattern": "^[a-z-]{1,32}$"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$"
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}:[A-Za-z0-9][A-Za-z0-9_./:-]{0,159}$",
+      "description": "Opaque handle (scheme:id) resolved only by a trusted broker; never a secret, path or URL with credentials."
+    },
+    "capability_id": {
+      "type": "string",
+      "pattern": "^(kit|pm|gstack|existing)\\.[a-z0-9]+(-[a-z0-9]+)*$",
+      "maxLength": 64
+    }
+  }
+}

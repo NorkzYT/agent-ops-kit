@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "coordinator:c3-eng-review-demo"},
+  "binding": {"task_id": "t-support-eng-review", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-support-eng-review", "digest": "bd0a9eee58b4dbe454c5c7735fc80b96bf934fb574a598387ca6b22fc9b596cd"},
+  "reused_artifacts": [],
+  "reviewed_artifacts": [
+    {"artifact_id": "t-support-spec.spec", "kind": "spec", "digest": "8434c9f63c8de9792bc15f53a71fdacc528a41634210203309b680303f74329b"}
+  ],
+  "statements": [
+    {"id": "s-request", "class": "synthetic", "text": "The review covers the draft spec before any helpdesk configuration change.", "source_ids": ["P1"]},
+    {"id": "s-u-volume", "class": "unknown", "text": "Off-hours billing ticket volume per night is unknown, so queue load cannot be sized.", "source_ids": [], "topic": "night-volume", "resolution": "Count billing tickets created outside business hours over the last 4 weeks from the helpdesk export."}
+  ],
+  "computations": [],
+  "next_action": {"action": "Support lead answers the d-fallback decision; then the configuration card goes to the engineering path with the test plan.", "kind": "decide", "owner_role": "support lead", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []},
+  "kind": "plan-eng-review",
+  "capability_id": "gstack.plan-eng-review",
+  "mode": "review",
+  "scope_challenge": {
+    "files_touched": 3,
+    "new_services": 0,
+    "count_basis": {"artifact_id": "t-support-spec.spec", "text": "Three configuration objects in the existing helpdesk; no code."},
+    "already_exists": [
+      {"what": "Europe/Berlin business-hours calendar", "use": "reuse", "evidence": {"artifact_id": "t-support-spec.spec", "text": "Use the existing Europe/Berlin business-hours calendar; do not add a second calendar."}}
+    ],
+    "minimum_change": "One queue, one group and one business-hours rule; nothing else is needed for the first release."
+  },
+  "sections": {
+    "architecture": {"status": "findings", "notes": "Routing depends on a two-person rota; the spec has no path for a day nobody covers, and rules may not re-run when a tag is added later."},
+    "code-quality": {"status": "no-issues", "notes": "Configuration only; the three objects are named and scoped in the spec."},
+    "tests": {"status": "findings", "notes": "Boundary tests exist for 17:00; daylight-saving changes and the unstaffed day are untested."},
+    "performance": {"status": "no-issues", "notes": "One extra rule per ticket; night volume is unknown (s-u-volume), so no load claim is made."}
+  },
+  "findings": [
+    {"id": "f-unstaffed", "title": "No route for a night nobody on the rota covers", "section": "architecture", "severity": "critical", "confidence": 8,
+     "problem": "With two rota agents, a sick day leaves the off-hours queue unwatched; billing tickets would wait there silently, which is the delay the change is meant to remove.",
+     "recommendation": "Decide what happens when no rota agent is on shift: fall back to the queue Billing, alert the support lead, or accept the risk for the pilot.",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-support-spec.spec", "text": "The off-hours rota starts with 2 agents"}],
+     "disposition": "pending", "decision_id": "d-fallback", "failure_mode_ids": ["fm-unstaffed"]},
+    {"id": "f-retag", "title": "Tag added after creation is not specified", "section": "architecture", "severity": "informational", "confidence": 6,
+     "problem": "The criteria say 'when the routing rules run' but not whether they run again when the billing tag is added to an existing ticket at night.",
+     "recommendation": "State in the spec whether re-tagging re-runs routing and add an edge-case test for a ticket tagged billing at 18:00.",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-support-spec.spec", "text": "when the routing rules run"}],
+     "disposition": "pending"},
+    {"id": "f-dst", "title": "Daylight-saving change is not in the test plan", "section": "tests", "severity": "informational", "confidence": 5,
+     "problem": "The unit test checks 16:59, 17:00 and 08:00 on an ordinary day only; a calendar that switches offset could move the boundary by an hour.",
+     "recommendation": "Add the boundary test on the last Sunday of March and October.",
+     "evidence": [{"kind": "statement", "statement_id": "s-request"}],
+     "disposition": "pending", "failure_mode_ids": ["fm-dst"]},
+    {"id": "f-holiday-load", "title": "Holiday volume could overload two agents", "section": "performance", "severity": "informational", "confidence": 3,
+     "problem": "If public holidays count as off-hours, a holiday could route a full day of billing tickets to two agents.",
+     "recommendation": "Revisit after the night-volume count.",
+     "evidence": [{"kind": "statement", "statement_id": "s-u-volume"}],
+     "disposition": "pending"}
+  ],
+  "failure_modes": [
+    {"id": "fm-unstaffed", "path": "off-hours rule → Off-hours billing queue", "failure": "No rota agent is on shift, so tickets wait in an unwatched queue until the next weekday.", "test": null, "error_handling": null, "user_sees": "silent"},
+    {"id": "fm-dst", "path": "business-hours condition", "failure": "The boundary shifts by one hour around a daylight-saving change.", "test": null, "error_handling": "The helpdesk business-hours calendar applies Europe/Berlin daylight saving.", "user_sees": "silent"}
+  ],
+  "test_plan": {
+    "critical_paths": [
+      {"id": "cp-offhours", "flow": "Billing ticket on Friday 18:30 reaches the Off-hours billing queue and a rota agent sees it.", "level": "integration", "covers": ["ac-offhours"]},
+      {"id": "cp-unstaffed", "flow": "Night with no rota agent on shift: billing ticket at 19:00 follows the d-fallback answer.", "level": "integration", "covers": ["fm-unstaffed", "f-unstaffed"]},
+      {"id": "cp-dst", "flow": "Boundary at 17:00 on the last Sunday of March and of October.", "level": "unit", "covers": ["fm-dst", "f-dst"]}
+    ],
+    "edge_cases": ["Ticket created at exactly 17:00:00", "Billing tag added at 18:00 to a ticket created at 16:00", "Public holiday on a weekday (open spec question)"],
+    "regression": [{"behavior": "Daytime billing tickets still go to the queue Billing.", "test": "ac-daytime integration replay"}]
+  },
+  "not_in_scope": [{"item": "Rota scheduling automation", "reason": "The rota calendar stays in the existing scheduling tool."}],
+  "decisions": [
+    {"id": "d-fallback", "question": "What happens to an off-hours billing ticket when no rota agent is on shift?", "options": [
+      {"id": "fallback-billing", "label": "Route it to the queue Billing as today"},
+      {"id": "alert-lead", "label": "Keep it in the off-hours queue and alert the support lead"},
+      {"id": "accept-risk", "label": "Accept the risk for the 28-day pilot"}],
+     "recommendation": "fallback-billing", "why": "It keeps today's behaviour as the floor, so the pilot can only improve on it.", "status": "pending"}
+  ],
+  "handoff": {"targets": ["existing.engineering-path", "gstack.qa"], "notes": "Configuration card after d-fallback is answered; QA uses test-plan.md.", "carries_approval": false}
+}

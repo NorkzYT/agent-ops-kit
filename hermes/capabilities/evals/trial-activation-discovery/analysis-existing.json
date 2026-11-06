@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "kind": "product-discovery",
+  "capability_id": "pm.product-discovery",
+  "mode": "existing",
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "author:hephaestus-coordinator-demo"},
+  "binding": {"task_id": "t-trial-discovery", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-trial-discovery", "digest": "611ace1b07f67715fe29ce0f4c0dee11b8dbd65f98622845f9fd1ac95f78e099"},
+  "reused_artifacts": [
+    {"artifact_id": "t-trial-activation.problem-brief", "kind": "problem-brief", "digest": "80a74a81d5930580697fe127384b239a8a7cbb77dd1ccdafc76d7ae64e8ef411"}
+  ],
+  "discovery_question": "Which first-session change would get more new trials to a first project within 7 days?",
+  "decision_informed": "Which onboarding idea earns a lean PRD and which ideas are dropped before any build.",
+  "desired_outcome": {
+    "metric": "7-day trial activation rate",
+    "baseline_statement_id": "d-activation",
+    "target": {"comparator": ">=", "value": 36, "unit": "percent"},
+    "window_days": 28
+  },
+  "statements": [
+    {"id": "d-activation", "text": "248 of 800 September 2026 trials activated within 7 days, 31 percent.", "class": "synthetic", "source_ids": ["E1"], "computation_ids": ["k-act"]},
+    {"id": "d-nosample", "text": "Trials created without sample data activated at 23 percent.", "class": "synthetic", "source_ids": ["E1"], "computation_ids": ["k-nosample"]},
+    {"id": "d-chats", "text": "14 of 40 reviewed trial support chats asked how to start a first project, 35 percent.", "class": "synthetic", "source_ids": ["E2"], "computation_ids": ["k-chats"]},
+    {"id": "d-guide", "text": "9 of 40 reviewed trial support chats asked where the welcome guide was.", "class": "synthetic", "source_ids": ["E2"]},
+    {"id": "d-h-templates", "text": "Trial users who start from a template create a first project sooner than users who start empty.", "class": "hypothesis", "source_ids": ["E1", "E2"]},
+    {"id": "d-h-guide", "text": "A guide shown at first login does the job the delayed welcome email no longer does.", "class": "hypothesis", "source_ids": ["E1", "E2"]},
+    {"id": "d-a-fixtures", "text": "Existing sample-data fixtures can seed three starter templates.", "class": "assumption", "source_ids": []},
+    {"id": "d-u-rct", "text": "The separate effect of any onboarding change is unknown.", "class": "unknown", "source_ids": [], "topic": "randomized-test", "resolution": "Random assignment in the guide A/B test below."},
+    {"id": "d-u-templates", "text": "How many trial users would choose a template is unknown: no template feature or usage event exists.", "class": "unknown", "source_ids": [], "topic": "template-usage", "resolution": "Log clicks on a fake-door template button before building anything."}
+  ],
+  "computations": [
+    {"id": "k-act", "expression": "a / n * 100", "inputs": {"a": {"source_id": "E1", "value": "activated"}, "n": {"source_id": "E1", "value": "trials"}}, "result": 31.0, "round_to": 1, "unit": "percent"},
+    {"id": "k-nosample", "expression": "a / n * 100", "inputs": {"a": {"source_id": "E1", "value": "no_sample_activated"}, "n": {"source_id": "E1", "value": "no_sample"}}, "result": 23.0, "round_to": 1, "unit": "percent"},
+    {"id": "k-chats", "expression": "a / n * 100", "inputs": {"a": {"source_id": "E2", "value": "first_project"}, "n": {"source_id": "E2", "value": "chats"}}, "result": 35.0, "round_to": 1, "unit": "percent"}
+  ],
+  "opportunities": [
+    {"id": "op-start", "framing": "I open an empty workspace and do not know what to build first.", "statement_ids": ["d-nosample", "d-chats"]},
+    {"id": "op-guide", "framing": "I cannot find the getting-started help when I first log in.", "statement_ids": ["d-guide"]}
+  ],
+  "ideas": [
+    {"id": "i-templates", "title": "Starter template picker", "summary": "Offer three ready-made projects on the empty workspace.", "perspective": "product", "opportunity_id": "op-start", "status": "carried"},
+    {"id": "i-guide", "title": "In-app first-step guide", "summary": "A short guide panel opens at first login and walks through a first project.", "perspective": "design", "opportunity_id": "op-guide", "status": "carried"},
+    {"id": "i-leaderboard", "title": "Activation leaderboard", "summary": "Show trial teams how they rank against other new teams.", "perspective": "product", "opportunity_id": "op-start", "status": "declined", "reason": "Requester declined it: it ranks trial users publicly (E3)."},
+    {"id": "i-import", "title": "Spreadsheet import", "summary": "Create a first project from an uploaded spreadsheet.", "perspective": "engineering", "opportunity_id": "op-start", "status": "proposed"},
+    {"id": "i-event-email", "title": "Event-triggered welcome email", "summary": "Send the welcome email from the sign-up event instead of the nightly batch.", "perspective": "engineering", "opportunity_id": "op-guide", "status": "proposed"}
+  ],
+  "checkpoints": [
+    {"stage": "idea-selection", "question": "Which of these five ideas should be stress-tested?", "status": "answered", "answer_source_id": "E3"},
+    {"stage": "assumption-focus", "question": "Which risky assumptions should be tested first?", "status": "answered", "answer_source_id": "E3"}
+  ],
+  "assumptions": [
+    {"id": "as-uptake", "idea_id": "i-templates", "category": "value", "text": "New trial users will pick a template rather than start empty.", "impact": "high", "risk": "high", "action": "test", "rank": 1, "statement_ids": ["d-h-templates", "d-u-templates"]},
+    {"id": "as-seed", "idea_id": "i-templates", "category": "feasibility", "text": "Three templates can be seeded from existing sample-data fixtures.", "impact": "high", "risk": "low", "action": "accept-risk", "statement_ids": ["d-a-fixtures"]},
+    {"id": "as-guide", "idea_id": "i-guide", "category": "value", "text": "Users who see the guide at first login reach a first project within 7 days more often.", "impact": "high", "risk": "high", "action": "test", "rank": 2, "statement_ids": ["d-h-guide", "d-u-rct"]},
+    {"id": "as-skip", "idea_id": "i-guide", "category": "usability", "text": "Experienced users can dismiss the guide without friction.", "impact": "low", "risk": "low", "action": "defer", "statement_ids": []}
+  ],
+  "experiments": [
+    {
+      "id": "ex-fake-door",
+      "assumption_ids": ["as-uptake"],
+      "method": "fake-door",
+      "setup": "Show a 'Start from a template' button on the empty workspace to half of new trials; a click explains templates are coming and is logged.",
+      "hypothesis": {
+        "population": "New trial accounts that land on an empty workspace",
+        "behavior_or_outcome": "Click 'Start from a template' in their first session",
+        "threshold": {"comparator": ">=", "value": 25, "unit": "percent of exposed trials"},
+        "window_days": 14,
+        "intervention": "Fake-door template button",
+        "rationale": "35 percent of reviewed chats asked how to start a first project.",
+        "measurement": "Template-button click events divided by exposed trials",
+        "counter_metric": "First-project creation rate among exposed trials",
+        "failure_rule": "Drop the template idea if fewer than 10 percent click within 14 days."
+      },
+      "effort": "low",
+      "risk_mitigation": "The button says the feature is not built yet; exposure is half of new trials behind a flag that can be switched off.",
+      "approvals_needed": [],
+      "result": "not-run",
+      "if_pass": "Write a lean PRD for the template picker.",
+      "if_fail": "Drop the template idea and keep the guide branch."
+    },
+    {
+      "id": "ex-guide-ab",
+      "assumption_ids": ["as-guide"],
+      "method": "ab-test",
+      "setup": "Show the guide at first login to a random half of new trials; the welcome email stays unchanged in both arms.",
+      "hypothesis": {
+        "population": "New trial accounts",
+        "behavior_or_outcome": "Create a first project within 7 days",
+        "threshold": {"comparator": ">=", "value": 36, "unit": "percent in the guide arm"},
+        "window_days": 28,
+        "intervention": "In-app first-step guide at first login",
+        "rationale": "Guide questions appear in support chats and delayed-email trials activated less.",
+        "measurement": "First-project events by assignment arm",
+        "counter_metric": "Support chats per trial",
+        "failure_rule": "Stop if the guide arm is not at least 3 points above control after 28 days."
+      },
+      "effort": "medium",
+      "risk_mitigation": "Control keeps today's experience; the guide can be dismissed and the flag rolled back.",
+      "approvals_needed": [],
+      "result": "not-run",
+      "if_pass": "Keep the guide for all new trials.",
+      "if_fail": "Remove the guide and revisit the event-triggered email idea."
+    }
+  ],
+  "questions": [],
+  "next_action": {
+    "action": "Add the template-button click event, then start the fake-door test on half of new trials.",
+    "kind": "test",
+    "owner_role": "product manager",
+    "cost": "cheap",
+    "involves_external_contact": false,
+    "approvals_needed": []
+  }
+}

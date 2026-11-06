@@ -1,0 +1,12 @@
+$ python3 scripts/capability_workflow.py render --analysis hermes/capabilities/evals/support-billing-spec/analysis-feature.json
+--- stdout
+--- stderr
+usage: capability_workflow.py render [-h] --analysis ANALYSIS
+                                     [--evidence EVIDENCE]
+                                     [--artifacts ARTIFACTS]
+                                     [--artifact-root ARTIFACT_ROOT]
+                                     [--today TODAY]
+                                     [--snapshot-dir SNAPSHOT_DIR] --out OUT
+                                     [--run-ref RUN_REF]
+capability_workflow.py render: error: the following arguments are required: --out
+exit=2

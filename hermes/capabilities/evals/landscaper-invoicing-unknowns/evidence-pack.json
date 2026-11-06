@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-landscaper-idea",
+  "binding": {
+    "task_id": "t-landscaper-invoicing",
+    "company_id": "example-a",
+    "project_id": null,
+    "data_classification": "synthetic"
+  },
+  "as_of": "2026-11-03",
+  "items": [
+    {
+      "source_id": "F1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic founder note",
+      "ref": "fixture:landscaper/founder-note",
+      "study_design": "anecdotal",
+      "topics": [
+        "founder-context"
+      ],
+      "excerpt": "Synthetic fixture. Founder note: I run two landscaping crews and spend Sunday evenings writing invoices from paper job sheets."
+    }
+  ],
+  "not_available": [
+    {
+      "topic": "customer-interviews",
+      "reason": "not-supplied",
+      "detail": "No interviews with other landscapers exist."
+    },
+    {
+      "topic": "market-size",
+      "reason": "not-supplied",
+      "detail": "No market data was supplied; public research was not authorized."
+    },
+    {
+      "topic": "baseline-conversion",
+      "reason": "not-measured",
+      "detail": "No landing page or sign-up flow exists."
+    }
+  ],
+  "policy": {
+    "public_research": "denied",
+    "private_terms": []
+  }
+}

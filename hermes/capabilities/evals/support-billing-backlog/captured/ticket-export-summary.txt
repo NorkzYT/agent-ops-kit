@@ -1,0 +1,3 @@
+SYNTHETIC FIXTURE - not real data
+month,total,billing,median_frt_billing_h,median_frt_other_h,billing_reopened
+2026-10,1240,471,31,9,112

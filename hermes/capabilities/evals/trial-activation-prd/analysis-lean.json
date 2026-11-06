@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "kind": "lean-prd",
+  "capability_id": "pm.lean-prd",
+  "mode": "lean",
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "author:hephaestus-coordinator-demo"},
+  "binding": {"task_id": "t-trial-prd", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-trial-prd", "digest": "52da8867b3966e0a755af5860e325e9d133adbdb87947df620ed110e88cac529"},
+  "reused_artifacts": [
+    {"artifact_id": "t-trial-discovery.discovery-brief", "kind": "discovery-brief", "digest": "382d3ddb2ac66366be0835903caff45e4df53acbdcf9f3a576fb58ae1828dacf"}
+  ],
+  "feature_name": "In-app first-step guide for new trials",
+  "summary": "A short guide opens at first login and walks new trial users through a first project. It ships behind a flag to a random half of new trials so its effect on 7-day activation can be measured, because the welcome email no longer arrives in time.",
+  "background_statement_ids": ["st-activation", "st-delay", "st-guide"],
+  "statements": [
+    {"id": "st-activation", "text": "248 of 800 September 2026 trials activated within 7 days, 31 percent.", "class": "synthetic", "source_ids": ["E1"], "computation_ids": ["k-act"]},
+    {"id": "st-delay", "text": "Trials whose welcome email was delayed more than 24 hours activated at 20 percent.", "class": "synthetic", "source_ids": ["E1"], "computation_ids": ["k-delay"]},
+    {"id": "st-guide", "text": "9 of 40 reviewed trial support chats asked where the welcome guide was.", "class": "synthetic", "source_ids": ["E2"]},
+    {"id": "st-h-guide", "text": "A guide at first login does the job the delayed welcome email no longer does.", "class": "hypothesis", "source_ids": ["E1", "E2"]},
+    {"id": "st-a-capacity", "text": "One designer and one engineer can build the first version in about two sprints.", "class": "assumption", "source_ids": []},
+    {"id": "st-u-effect", "text": "The guide's effect on activation is unknown until the A/B test runs.", "class": "unknown", "source_ids": [], "topic": "randomized-test", "resolution": "The flagged rollout in this PRD's first version is the A/B test from the discovery plan."}
+  ],
+  "computations": [
+    {"id": "k-act", "expression": "a / n * 100", "inputs": {"a": {"source_id": "E1", "value": "activated"}, "n": {"source_id": "E1", "value": "trials"}}, "result": 31.0, "round_to": 1, "unit": "percent"},
+    {"id": "k-delay", "expression": "a / n * 100", "inputs": {"a": {"source_id": "E1", "value": "delayed_activated"}, "n": {"source_id": "E1", "value": "delayed"}}, "result": 20.0, "round_to": 1, "unit": "percent"}
+  ],
+  "objective": {
+    "text": "Get more new trial users to a working first project in their first week, without waiting for email.",
+    "key_results": [
+      {"id": "kr-activation", "metric": "7-day activation rate in the guide arm", "baseline_statement_id": "st-activation", "target": {"comparator": ">=", "value": 36, "unit": "percent"}, "window_days": 28}
+    ]
+  },
+  "segments": [
+    {"id": "seg-new-trial", "name": "New trial users in their first week", "job": "Get a first project running without outside help, to judge the product inside the trial.", "constraints": ["The welcome email stays unchanged during the test."]}
+  ],
+  "value_propositions": [
+    {
+      "segment_id": "seg-new-trial",
+      "why": "They need a working first project to decide whether to buy before the trial ends.",
+      "before": "They wait for a welcome email that a nightly batch can delay by more than a day, then hunt for the guide.",
+      "how": "A three-step guide opens at first login and walks them through a first project.",
+      "after": "They create a first project in the first session.",
+      "alternatives": "The delayed welcome email, searching the help centre, or a support chat.",
+      "statement": "For new trial users who want a first project fast, the in-app guide replaces waiting for email with three steps at first login."
+    }
+  ],
+  "features": [
+    {"id": "f-guide", "text": "Three-step guide panel at first login: name the project, add a first task, invite a teammate or skip.", "segment_ids": ["seg-new-trial"]},
+    {"id": "f-flag", "text": "Assignment flag that shows the guide to a random half of new trials and records the arm.", "segment_ids": ["seg-new-trial"]},
+    {"id": "f-reopen", "text": "Dismiss the guide, and reopen it from the help menu.", "segment_ids": ["seg-new-trial"]}
+  ],
+  "open_assumption_ids": ["st-h-guide", "st-a-capacity", "st-u-effect"],
+  "release": {
+    "first_version": [
+      {"id": "r-guide", "text": "Guide panel with three steps at first login.", "idea_id": "i-guide", "feature_ids": ["f-guide"]},
+      {"id": "r-flag", "text": "Random half assignment with the arm recorded.", "feature_ids": ["f-flag"]},
+      {"id": "r-reopen", "text": "Dismiss and reopen from the help menu.", "feature_ids": ["f-reopen"]}
+    ],
+    "later": [
+      {"id": "r-templates", "text": "Starter template picker, only if its fake-door test passes.", "idea_id": "i-templates"}
+    ],
+    "non_goals": [
+      {"id": "ng-email", "text": "Changing the welcome email schedule."},
+      {"id": "ng-ranking", "text": "Any public ranking of trial users."}
+    ],
+    "timeframe": "About two sprints for the first version, then a 28-day test window."
+  },
+  "constraints": ["The welcome email schedule stays as it is until the test ends."],
+  "acceptance_criteria": [
+    {"id": "ac-steps", "scope_id": "r-guide", "given": "a new trial user in the guide arm at first login", "when": "the workspace opens", "then": "the guide panel shows exactly 3 steps", "verification": "automated-test", "trace": {"kind": "chosen-requirement", "rationale": "Three steps match the shortest path to a first project."}},
+    {"id": "ac-split", "scope_id": "r-flag", "given": "1000 test sign-ups", "when": "assignment runs", "then": "between 45 and 55 percent are in the guide arm and every trial has an arm recorded", "verification": "automated-test", "trace": {"kind": "chosen-requirement", "rationale": "Random assignment is the only way to learn the guide's effect (st-u-effect)."}},
+    {"id": "ac-reopen", "scope_id": "r-reopen", "given": "a user who dismissed the guide", "when": "they open the help menu", "then": "the guide reopens at the step they left", "verification": "manual-check", "trace": {"kind": "chosen-requirement", "rationale": "Experienced users must be able to leave the guide without losing it."}},
+    {"id": "ac-activation", "scope_id": "r-guide", "given": "the 28-day test window has ended", "when": "activation is compared by arm", "then": "7-day activation in the guide arm is at least 36 percent", "verification": "metric-check", "trace": {"kind": "evidence", "statement_ids": ["st-activation"]}}
+  ],
+  "risks": [],
+  "handoff": {
+    "targets": ["gstack.plan-design-review", "existing.engineering-path"],
+    "notes": "Design review of the panel first; engineering only after the product manager accepts this draft."
+  },
+  "left_out": ["Contacts (not known)", "Detailed UX flows", "Rollout beyond the test"],
+  "questions": [],
+  "next_action": {
+    "action": "Product manager reviews this draft and accepts or edits it before design review.",
+    "kind": "decide",
+    "owner_role": "product manager",
+    "cost": "cheap",
+    "involves_external_contact": false,
+    "approvals_needed": []
+  }
+}

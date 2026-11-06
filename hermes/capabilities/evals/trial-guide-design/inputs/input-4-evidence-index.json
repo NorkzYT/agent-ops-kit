@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-trial-activation",
+  "binding": {
+    "task_id": "t-trial-activation",
+    "company_id": "example-a",
+    "project_id": "example-web",
+    "data_classification": "synthetic"
+  },
+  "as_of": "2026-10-30",
+  "items": [
+    {
+      "source_id": "D1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic trial cohort export, September 2026",
+      "ref": "fixture:trial-activation/cohort-export",
+      "study_design": "observational",
+      "topics": [
+        "activation",
+        "onboarding-email",
+        "sample-data"
+      ],
+      "excerpt": "Synthetic fixture. Trials started in September 2026: 800; activated within 7 days: 248. Welcome email delayed more than 24 hours: 300 trials, 60 activated. Created without sample data: 400 trials, 92 activated. Both conditions: 180 trials, 27 activated. Observational export; no randomized assignment.",
+      "values": {
+        "trials": 800,
+        "activated": 248,
+        "delayed": 300,
+        "delayed_activated": 60,
+        "no_sample": 400,
+        "no_sample_activated": 92,
+        "both": 180,
+        "both_activated": 27
+      }
+    },
+    {
+      "source_id": "D2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic release notes",
+      "ref": "fixture:trial-activation/release-notes",
+      "study_design": "descriptive",
+      "topics": [
+        "release-history"
+      ],
+      "excerpt": "Synthetic fixture. The welcome email job moved to a nightly batch on 2026-08-28. Sample data became opt-in on 2026-09-01."
+    }
+  ],
+  "not_available": [
+    {
+      "topic": "randomized-test",
+      "reason": "not-measured",
+      "detail": "No experiment has isolated either change."
+    }
+  ],
+  "policy": {
+    "public_research": "denied",
+    "private_terms": []
+  }
+}

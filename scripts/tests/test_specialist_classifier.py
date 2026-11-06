@@ -355,6 +355,33 @@ class PrivacyAndEnvelopeTest(_Cache):
                 self.assertEqual(t["classifier"], "skipped:private")
                 self.assertNotIn("classifier_context", t)
 
+    def test_private_turn_with_a_local_classifier_reads_no_attachment(self):
+        # The local classifier may run on a private turn (capability seam), but no attachment is
+        # read, extracted or included for routing: the classifier sees the typed task only.
+        wire = self.wire([("retainer.txt", "retainer secret Zorblax\n", "text-not-inlined"),
+                          ("notes.txt", "retainer notes Quuxbarian\n", "inline")],
+                         f"#privacy {LONG_NEUTRAL}")
+        reads, seen = [], []
+
+        def rec(*a, **kw):
+            reads.append(1)
+            return [], []
+
+        def fake(text, pool):
+            seen.append(text)
+            return hook_mod.Picks(["kit.problem-definition"], {"model": "m", "attempt": 1, "outcome": "ok"})
+        with mock.patch.object(attachments, "read_documents", side_effect=rec), \
+                mock.patch.object(attachments.subprocess, "run", side_effect=AssertionError("extract")):
+            t = sp.route_text(wire, settings(classifier="local", selection_mode="ai"), readiness=ready,
+                              classifier=fake, capabilities={"kit.problem-definition": "Frame a problem."})
+        self.assertEqual(t["privacy"], "local-only")
+        self.assertEqual(reads, [], "a private turn reads no attachment for routing")
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].documents, 0)
+        self.assertNotIn("Zorblax", seen[0])
+        self.assertNotIn("Quuxbarian", seen[0])
+        self.assertEqual(t["classifier_context"].get("documents"), 0)
+
     def test_private_attachment_only_prompt_never_classified(self):
         wire = self.wire([("prompt.txt", "#privacy\nI keep going back and forth on my retainer.\n", "inline")])
         seen, fake = self.spy(["philosophy"])

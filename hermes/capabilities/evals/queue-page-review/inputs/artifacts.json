@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "artifact_id": "t-queue-review.current-queue-page",
+      "kind": "ui-evidence",
+      "company_id": "example-b",
+      "project_id": "example-ops",
+      "task_id": "t-queue-review",
+      "content_digest": "44dbe53d218a58981478e53d61952c825f8055b8eea391a6639f0ca63ddcc14b",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "current-queue-page.html",
+      "source_refs": [],
+      "review_status": "draft"
+    }
+  ]
+}

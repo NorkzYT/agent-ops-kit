@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "coordinator:c3-office-hours-demo"},
+  "binding": {"task_id": "t-trial-office-hours", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-trial-office-hours", "digest": "6136728e6cecb7cb71efa5dcef0ebe74398e4900b60f0a23b961d540c6574c72"},
+  "reused_artifacts": [
+    {"artifact_id": "t-trial-discovery.discovery-brief", "kind": "discovery-brief", "digest": "382d3ddb2ac66366be0835903caff45e4df53acbdcf9f3a576fb58ae1828dacf"},
+    {"artifact_id": "t-trial-activation.problem-brief", "kind": "problem-brief", "digest": "80a74a81d5930580697fe127384b239a8a7cbb77dd1ccdafc76d7ae64e8ef411"}
+  ],
+  "statements": [
+    {"id": "s-agency", "class": "synthetic", "text": "A 6-seat design agency on a trial asked support twice in October 2026 to keep its sample project as a template.", "source_ids": ["H1"], "topic": "demand-behavior"},
+    {"id": "s-rebuild", "class": "synthetic", "text": "3 of 12 interviewed trial teams rebuilt a previous project by hand in their first session.", "source_ids": ["H1"], "topic": "demand-behavior"},
+    {"id": "s-sales", "class": "assumption", "text": "Sales believes trial teams are interested in a template gallery.", "source_ids": ["H1"]},
+    {"id": "s-wedge", "class": "assumption", "text": "A starter-template button on the empty workspace could ship in under a week from the existing sample-data fixtures.", "source_ids": ["H1"]},
+    {"id": "s-u-observe", "class": "unknown", "text": "How a trial user starts a first project without help has not been observed.", "source_ids": [], "topic": "observation", "resolution": "Watch five new trial users start a first project without help and note what surprises."}
+  ],
+  "computations": [],
+  "questions": [
+    {"topic": "watched-session", "text": "Has anyone on the team watched a new trial user try to start a first project without help? What did they do that surprised you?"}
+  ],
+  "next_action": {"action": "Add the template-button click event and run the fake-door test on half of new trials for 14 days.", "kind": "test", "owner_role": "product manager", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []},
+  "kind": "office-hours",
+  "capability_id": "gstack.office-hours",
+  "mode": "startup",
+  "idea": "Starter templates on the empty trial workspace so new teams reach a first project sooner.",
+  "product_stage": "has-users",
+  "internal_project": false,
+  "forcing_questions": [
+    {"question": "q2-status-quo", "status": "covered", "covered_by": {"artifact_id": "t-trial-discovery.discovery-brief", "text": "14 of 40 reviewed trial support chats asked how to start a first project"}},
+    {"question": "q4-narrowest-wedge", "status": "answered", "statement_ids": ["s-wedge"]},
+    {"question": "q5-observation", "status": "open", "topic": "watched-session"}
+  ],
+  "demand": {"status": "evidenced", "evidence_statement_ids": ["s-agency", "s-rebuild"], "opinion_statement_ids": ["s-sales"]},
+  "premises": [
+    {"id": "p-problem", "text": "New trial teams stall because the empty workspace gives them nothing to start from.", "status": "agreed", "source_id": "H2"},
+    {"id": "p-fixtures", "text": "The existing sample-data fixtures can become templates without design work.", "status": "disagreed", "source_id": "H2"},
+    {"id": "p-distribution", "text": "Templates ship inside the existing web app; no new distribution channel is needed.", "status": "proposed"}
+  ],
+  "alternatives": [
+    {"id": "a-fake-door", "name": "Fake-door template button", "role": "minimal-viable", "summary": "Show a starter-template button on the empty workspace that logs clicks and offers the existing sample project.", "effort": "S", "risk": "low", "pros": ["Measures interest in days", "No template system to maintain"], "cons": ["Clicks are intent, not activation"], "reuses": ["sample-data fixtures", "existing event logging"]},
+    {"id": "a-template-system", "name": "Template library", "role": "ideal-architecture", "summary": "A versioned template library with three designed starter projects and a picker on the empty workspace.", "effort": "L", "risk": "medium", "pros": ["Lasting onboarding asset", "Teams can add their own templates later"], "cons": ["Weeks of design and build before any signal"], "reuses": ["project export format"]},
+    {"id": "a-import", "name": "Spreadsheet import", "role": "lateral", "summary": "Let a new team create its first project from a spreadsheet it already keeps.", "effort": "M", "risk": "medium", "pros": ["Matches teams that rebuild projects by hand"], "cons": ["Import edge cases", "Does not help teams with nothing to import"], "reuses": []}
+  ],
+  "recommendation": {"alternative_id": "a-fake-door", "reason": "It tests whether teams want a starting point before any template design work, which the requester said the fixtures need.", "decision_id": "approach"},
+  "decisions": [
+    {"id": "approach", "question": "Which approach should go into the lean PRD?", "options": [{"id": "a-fake-door", "label": "Fake-door template button"}, {"id": "a-template-system", "label": "Template library"}, {"id": "a-import", "label": "Spreadsheet import"}], "recommendation": "a-fake-door", "why": "Cheapest way to learn whether teams want a starting point.", "status": "pending"}
+  ],
+  "success_criteria": [
+    {"id": "sc-clicks", "metric": "Share of new trials that click the starter-template button", "threshold": {"comparator": ">=", "value": 20, "unit": "percent"}, "window": "first 14 days of the fake-door test"}
+  ],
+  "handoff": {"targets": ["pm.lean-prd"], "notes": "After the approach decision, a lean PRD for the chosen approach; the fake-door needs no engineering beyond one event and one button.", "carries_approval": false}
+}

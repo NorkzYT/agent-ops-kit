@@ -1,0 +1,22 @@
+$ python3 scripts/capability_workflow.py validate --analysis hermes/capabilities/evals/trial-office-hours/analysis-startup.json --artifacts hermes/capabilities/evals/trial-office-hours/inputs/artifacts.json
+--- stdout
+{
+  "ok": false,
+  "errors": [
+    "analysis cites an evidence pack but none was supplied",
+    "statement s-agency: cites unknown source H1",
+    "statement s-agency: synthetic fact cites no fixture source",
+    "statement s-agency: number 6 is not in its cited sources or computations",
+    "statement s-agency: number 2026 is not in its cited sources or computations",
+    "statement s-rebuild: cites unknown source H1",
+    "statement s-rebuild: synthetic fact cites no fixture source",
+    "statement s-rebuild: number 3 is not in its cited sources or computations",
+    "statement s-rebuild: number 12 is not in its cited sources or computations",
+    "statement s-sales: cites unknown source H1",
+    "statement s-wedge: cites unknown source H1",
+    "premise p-problem: answer source H2 is not in the evidence pack",
+    "premise p-fixtures: answer source H2 is not in the evidence pack"
+  ]
+}
+--- stderr
+exit=1

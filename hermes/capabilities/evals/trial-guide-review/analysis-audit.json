@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "kind": "design-review",
+  "capability_id": "gstack.design-review",
+  "mode": "audit",
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "author:hephaestus-coordinator-demo"},
+  "binding": {"task_id": "t-trial-review", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-trial-review", "digest": "bdbe535a8a5d124f38824b4bc38810b7b3ab899b882f8d7b0d0320a68c87d5ed"},
+  "reused_artifacts": [],
+  "reviewed_artifacts": [
+    {"artifact_id": "t-trial-design.design-preview", "kind": "design-package", "digest": "b701321dfbb4a73443df834bcea208b458664c4aabf653356d75250881e7058b"},
+    {"artifact_id": "t-trial-design.design-tokens", "kind": "design-package", "digest": "58ddaa3c2d2ab5c263227b86e46d56e3edfde7be91839e94da1fbe6e9fa5c935"}
+  ],
+  "surface_mode": "operate",
+  "review_question": "Does the draft guide design cover its states, tokens and accessibility basics well enough to put in front of trial users?",
+  "evidence_coverage": {
+    "browser_render": {"status": "not-run", "source_ids": []},
+    "assistive_tech": {"status": "not-run", "source_ids": []},
+    "usability_test": {"status": "not-run", "source_ids": []}
+  },
+  "findings": [
+    {"id": "f-skip", "title": "'Skip the guide' does not say the guide can come back", "category": "content", "impact": "medium",
+     "notice": "The secondary action reads 'Skip the guide' while the help screen offers to reopen it at the same step.",
+     "because": "Someone who skips may think the guide is gone for good, which works against the promise of three steps.",
+     "recommendation": "Label it 'Skip for now' and add a one-line hint that Help reopens the guide at this step.",
+     "verification": "static",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-trial-design.design-preview", "text": "class=\"btn\">Skip the guide</button>"}]},
+    {"id": "f-one-family", "title": "Display and body share one family, so hierarchy rests on size and weight", "category": "typography", "impact": "polish",
+     "notice": "Display and body both use Source Sans 3.",
+     "because": "That fits a quiet operate surface, but headings depend on the 1.25 scale and weight alone.",
+     "recommendation": "Keep it, and check in a rendered screenshot that the step heading still leads at phone width.",
+     "verification": "static",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-trial-design.design-tokens", "text": "\"family\": \"Source Sans 3\""}]}
+  ],
+  "waived_checks": [],
+  "quick_wins": ["f-skip"],
+  "handoff": {"target": "existing.engineering-path", "notes": "Copy and design changes go back to the design consultation; nothing is built from this draft yet."},
+  "statements": [
+    {"id": "r-scope", "text": "The product designer asked for a design audit of the draft guide preview and tokens before any usability session is requested.", "class": "synthetic", "source_ids": ["R1"]},
+    {"id": "r-u-browser", "text": "How the preview renders at phone, tablet and desktop widths is unknown.", "class": "unknown", "source_ids": [], "topic": "browser-render", "resolution": "Capture screenshots at 375, 768 and 1440 pixels in an approved browser session."},
+    {"id": "r-u-at", "text": "What a screen reader announces in the guide states is unknown.", "class": "unknown", "source_ids": [], "topic": "assistive-tech", "resolution": "Run a screen reader pass in an approved session."},
+    {"id": "r-u-usability", "text": "Whether trial users finish step 1 without help is unknown.", "class": "unknown", "source_ids": [], "topic": "usability-test", "resolution": "Moderated usability session after the outreach approval."}
+  ],
+  "computations": [],
+  "questions": [],
+  "next_action": {"action": "Revise the skip label in the design consultation, then request a browser render of the revised preview.", "kind": "decide", "owner_role": "Product designer", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []}
+}

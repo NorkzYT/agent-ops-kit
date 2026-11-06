@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "company_id": "example-a",
+  "manifest_version": "1",
+  "synthetic": true,
+  "display_name": "Synthetic example-a",
+  "authorized_requesters": [
+    "requester:example-a-operator"
+  ],
+  "authorized_destinations": [
+    "discord-thread:example-a-ops"
+  ],
+  "project_ids": [
+    "example-web"
+  ],
+  "knowledge_scope": "company/example-a",
+  "memory_scope": "company/example-a",
+  "execution_policy_ref": "policy:example-a-v1",
+  "service_account_refs": [
+    "vault-ref:example-a-research"
+  ],
+  "default_egress": "deny",
+  "retention_policy_ref": "retention:example-a-v1",
+  "boundaries": {
+    "repositories": {
+      "policy_ref": "policy:example-a-repositories",
+      "default": "deny",
+      "requirement": "Mount only this company's allow-listed repositories into its execution context."
+    },
+    "documents": {
+      "policy_ref": "policy:example-a-documents",
+      "default": "deny",
+      "requirement": "Resolve documents by opaque reference inside the company boundary; no host-wide reads or search."
+    },
+    "memory": {
+      "policy_ref": "policy:example-a-memory",
+      "default": "deny",
+      "requirement": "Company-bound memory namespace enforced server-side; no fallback to shared operator memory."
+    },
+    "connected_apps": {
+      "policy_ref": "policy:example-a-connected-apps",
+      "default": "deny",
+      "requirement": "Company-scoped service accounts; object ownership validated on every call."
+    },
+    "browser_sessions": {
+      "policy_ref": "policy:example-a-browser-sessions",
+      "default": "deny",
+      "requirement": "Dedicated browser process/profile/storage per company; direct human login only."
+    },
+    "credentials": {
+      "policy_ref": "policy:example-a-credentials",
+      "default": "deny",
+      "requirement": "Broker-held secrets; tasks receive scoped actions, never environment bundles or cookies."
+    },
+    "outputs": {
+      "policy_ref": "policy:example-a-outputs",
+      "default": "deny",
+      "requirement": "Artifacts, logs and receipts bound to company/project/task; delivery only to authorized destinations."
+    },
+    "network": {
+      "policy_ref": "policy:example-a-network",
+      "default": "deny",
+      "requirement": "Deny by default; only approved endpoints through the protected egress layer."
+    },
+    "model_inference": {
+      "policy_ref": "policy:example-a-model-inference",
+      "default": "deny",
+      "requirement": "Every inference lane (primary, auxiliary, delegation, memory) checked against allowed routes before any payload leaves."
+    },
+    "cross_company_sharing": {
+      "policy_ref": "policy:example-a-cross-company-sharing",
+      "default": "deny",
+      "requirement": "Denied unless a purpose-, source-, destination- and expiry-bound grant names both companies."
+    }
+  }
+}

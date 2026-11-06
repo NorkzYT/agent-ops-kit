@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "description": "Smallest useful capability sets for the request's example outcomes. Data, not a router: the existing model-router classifier reads these lines as examples (one call, no keyword fallback) and the planner adds only required producers. Never a permission.",
+  "recipes": [
+    {
+      "recipe_id": "new-saas-idea",
+      "outcome": "Decide whether a new product idea is worth pursuing",
+      "capability_ids": ["kit.problem-definition", "pm.product-discovery", "pm.competitor-research"],
+      "never": ["pm.lean-prd", "existing.engineering-path", "gstack.spec"],
+      "note": "Decision brief comes from problem definition and discovery; no PRD before the decision."
+    },
+    {
+      "recipe_id": "defined-feature",
+      "outcome": "Turn an accepted feature into requirements and an engineering plan review",
+      "capability_ids": ["pm.lean-prd", "gstack.plan-eng-review"],
+      "never": ["pm.product-discovery", "gstack.office-hours", "existing.engineering-path"],
+      "note": "Reuses the accepted brief; a PRD never starts code edits."
+    },
+    {
+      "recipe_id": "coding-bug",
+      "outcome": "Fix a known coding bug or typo",
+      "capability_ids": ["existing.engineering-path"],
+      "never": ["kit.problem-definition", "pm.product-discovery", "pm.lean-prd", "gstack.office-hours", "gstack.spec"],
+      "note": "Investigate, fix, test, review and hand off through the existing engineering path only."
+    },
+    {
+      "recipe_id": "ui-improvement",
+      "outcome": "Improve an existing user interface",
+      "capability_ids": ["gstack.design-review", "existing.engineering-path", "gstack.qa"],
+      "never": ["pm.product-discovery", "pm.lean-prd", "gstack.office-hours"],
+      "note": "Read-only design audit, then the authorized fix, then functional QA of the changed flows (gstack.qa is not a visual review)."
+    },
+    {
+      "recipe_id": "competitor-research",
+      "outcome": "Compare competitors from public sources",
+      "capability_ids": ["pm.competitor-research"],
+      "never": ["pm.lean-prd", "existing.engineering-path", "pm.product-discovery"],
+      "note": "Public research and a recommendation; no product or code work."
+    },
+    {
+      "recipe_id": "marketing-plan",
+      "outcome": "Produce an actionable marketing plan",
+      "capability_ids": ["existing.marketing-team"],
+      "never": ["existing.engineering-path", "pm.lean-prd"],
+      "note": "The existing marketing team produces the plan, positioning included; planned pm.positioning is not added while it would only block."
+    },
+    {
+      "recipe_id": "operational-improvement",
+      "outcome": "Diagnose a business process and plan a measurable pilot",
+      "capability_ids": ["kit.operational-analysis"],
+      "never": ["existing.engineering-path", "pm.lean-prd", "pm.product-discovery"],
+      "note": "kit.operational-analysis is planned: the plan reports it blocked rather than substituting."
+    }
+  ]
+}

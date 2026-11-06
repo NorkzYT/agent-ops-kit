@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-trial-office-hours",
+  "binding": {"task_id": "t-trial-office-hours", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "H1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic office-hours notes: what trial teams did",
+      "ref": "fixture:trial-office-hours/session-notes",
+      "topics": ["demand-behavior", "wedge"],
+      "excerpt": "Synthetic fixture. Session notes, 2026-11-04. A 6-seat design agency on a trial asked support twice in October 2026 to keep its sample project as a template. 3 of 12 interviewed trial teams rebuilt a previous project by hand in their first session. Sales says trial teams are interested in a template gallery. The product manager thinks a starter-template button on the empty workspace could ship in under a week from the existing sample-data fixtures."
+    },
+    {
+      "source_id": "H2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic requester answers to the premise list",
+      "ref": "fixture:trial-office-hours/requester-answers",
+      "topics": ["requester-answers"],
+      "excerpt": "Synthetic fixture. Requester answers recorded 2026-11-04.\np-problem: agree\np-fixtures: disagree\nThe fixtures need design work first. The approach question is still open."
+    }
+  ],
+  "not_available": [
+    {"topic": "observation", "reason": "not-measured", "detail": "Nobody has watched a trial user start a first project without help."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

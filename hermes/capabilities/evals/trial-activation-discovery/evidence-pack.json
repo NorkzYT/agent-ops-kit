@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-trial-discovery",
+  "binding": {
+    "task_id": "t-trial-discovery",
+    "company_id": "example-a",
+    "project_id": "example-web",
+    "data_classification": "synthetic"
+  },
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "E1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic trial cohort export, September 2026",
+      "ref": "fixture:trial-activation/cohort-export",
+      "study_design": "observational",
+      "topics": ["activation", "sample-data", "onboarding-email"],
+      "excerpt": "Synthetic fixture. Trials started in September 2026: 800; activated within 7 days: 248. Created without sample data: 400 trials, 92 activated. Welcome email delayed more than 24 hours: 300 trials, 60 activated.",
+      "values": {"trials": 800, "activated": 248, "no_sample": 400, "no_sample_activated": 92, "delayed": 300, "delayed_activated": 60}
+    },
+    {
+      "source_id": "E2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic review of trial support chats, September 2026",
+      "ref": "fixture:trial-activation/chat-review",
+      "study_design": "descriptive",
+      "topics": ["support-chats", "first-project"],
+      "excerpt": "Synthetic fixture. 40 trial support chats reviewed: 14 asked how to start a first project; 9 asked where the welcome guide was; 3 asked about pricing.",
+      "values": {"chats": 40, "first_project": 14, "guide": 9, "pricing": 3}
+    },
+    {
+      "source_id": "E3",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic requester reply to the discovery checkpoints",
+      "ref": "fixture:trial-activation/checkpoint-reply",
+      "study_design": "anecdotal",
+      "topics": ["checkpoint-reply"],
+      "excerpt": "Synthetic fixture. Requester reply: carry the starter template picker and the in-app first-step guide; decline the activation leaderboard because it ranks trial users publicly. Test template uptake and the guide effect first.\nidea-selection: i-templates, i-guide\nassumption-focus: as-uptake, as-guide"
+    }
+  ],
+  "not_available": [
+    {"topic": "randomized-test", "reason": "not-measured", "detail": "No experiment has isolated an onboarding change."},
+    {"topic": "template-usage", "reason": "not-measured", "detail": "No template feature or usage event exists."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

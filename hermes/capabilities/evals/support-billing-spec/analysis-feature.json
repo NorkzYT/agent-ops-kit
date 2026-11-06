@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "coordinator:c3-spec-demo"},
+  "binding": {"task_id": "t-support-spec", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-support-spec", "digest": "14f6b9e88ff85c71f213b600f50761874788b35d8b657091a1e39ef73a7ea174"},
+  "reused_artifacts": [
+    {"artifact_id": "t-support-prd.lean-prd", "kind": "lean-prd", "digest": "50ac43f3b048df16166030bbfeda35e601dcb38a6beaf070f581cc76d137b3f9"}
+  ],
+  "statements": [
+    {"id": "s-all-hours", "class": "synthetic", "text": "Billing-tagged tickets are assigned to the queue Billing at all hours; no routing rule depends on time of day.", "source_ids": ["S1"]},
+    {"id": "s-hours", "class": "synthetic", "text": "Business hours are Monday to Friday 08:00-17:00 in the Europe/Berlin calendar.", "source_ids": ["S1"]},
+    {"id": "s-condition", "class": "synthetic", "text": "Routing rules can use a business-hours condition.", "source_ids": ["S1"]},
+    {"id": "s-rota", "class": "synthetic", "text": "The off-hours rota starts with 2 agents; billing macros follow in a later spec.", "source_ids": ["S2"]},
+    {"id": "s-why", "class": "assumption", "text": "Off-hours billing tickets wait for the next weekday shift because only the Billing queue receives them.", "source_ids": []}
+  ],
+  "computations": [],
+  "questions": [
+    {"topic": "public-holidays", "text": "Should public holidays in the Europe/Berlin calendar count as off-hours for billing routing?"}
+  ],
+  "next_action": {"action": "Support lead reviews this draft spec; then an engineering plan review before any configuration change.", "kind": "decide", "owner_role": "support lead", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []},
+  "kind": "spec",
+  "capability_id": "gstack.spec",
+  "mode": "draft",
+  "title": "Route off-hours billing tickets to a rota queue",
+  "framing": "feature",
+  "why_statement_ids": ["s-why", "s-rota"],
+  "current_state_statement_ids": ["s-all-hours", "s-hours", "s-condition"],
+  "root_cause": null,
+  "scope": {
+    "in": ["A business-hours routing rule for billing-tagged tickets", "An off-hours billing queue", "A billing rota agent group"],
+    "out": [
+      {"item": "Billing reply macros (r-macros)", "reason": "They follow in a later spec after question tagging."},
+      {"item": "Rota calendar (r-rota)", "reason": "The support lead keeps it in the existing scheduling tool."}
+    ]
+  },
+  "proposed_change": "Add an Off-hours billing queue and a billing rota group, then a routing rule that assigns billing-tagged tickets created outside the Europe/Berlin business hours to that queue. Daytime billing assignment stays as it is.",
+  "acceptance_criteria": [
+    {"id": "ac-offhours", "given": "a ticket tagged billing is created on Friday at 18:30 Europe/Berlin", "when": "the routing rules run", "then": "the ticket is assigned to the Off-hours billing queue", "test_level": "integration", "traces_to": ["r-route", "f-route"], "regression": false},
+    {"id": "ac-daytime", "given": "a ticket tagged billing is created on Tuesday at 10:00 Europe/Berlin", "when": "the routing rules run", "then": "the ticket is assigned to the queue Billing, as today", "test_level": "integration", "traces_to": ["r-route"], "regression": true},
+    {"id": "ac-boundary", "given": "a ticket tagged billing is created on a weekday at exactly 17:00 Europe/Berlin", "when": "the routing rules run", "then": "the ticket is assigned to the Off-hours billing queue", "test_level": "unit", "traces_to": ["f-route"], "regression": false},
+    {"id": "ac-untagged", "given": "a ticket without the billing tag is created on Friday at 18:30", "when": "the routing rules run", "then": "its queue assignment is the same as before the change", "test_level": "integration", "traces_to": ["f-route"], "regression": true}
+  ],
+  "testing_plan": [
+    {"level": "integration", "what": "Replay four fixture tickets through the helpdesk rule sandbox and compare assigned queues.", "covers": ["ac-offhours", "ac-daytime", "ac-untagged"]},
+    {"level": "unit", "what": "Evaluate the business-hours condition at 16:59, 17:00 and 08:00.", "covers": ["ac-boundary"]}
+  ],
+  "files": [
+    {"path": "helpdesk/queues/offhours-billing.json", "change": "add", "why": "New queue."},
+    {"path": "helpdesk/groups/billing-rota.json", "change": "add", "why": "Rota agents who work the queue."},
+    {"path": "helpdesk/routing/billing-offhours.json", "change": "add", "why": "Business-hours routing rule."}
+  ],
+  "dependencies": [
+    {"id": "dep-queue", "title": "Create the off-hours queue and rota group", "depends_on": []},
+    {"id": "dep-rule", "title": "Add the routing rule", "depends_on": ["dep-queue"]}
+  ],
+  "rules_for_implementer": [
+    "Do not change daytime billing assignment.",
+    "Use the existing Europe/Berlin business-hours calendar; do not add a second calendar.",
+    "Do not send automatic replies to customers."
+  ],
+  "rollback": "Disable the off-hours routing rule; billing tickets fall back to the queue Billing. The queue and group can stay.",
+  "effort": {"size": "S", "basis": "Three configuration objects in the existing helpdesk; no code."},
+  "filing": {"target": "local-draft", "publish_requested": false},
+  "handoff": {"targets": ["gstack.plan-eng-review", "existing.engineering-path"], "notes": "Plan review first; the helpdesk change is a configuration card on the existing engineering path.", "carries_approval": false}
+}

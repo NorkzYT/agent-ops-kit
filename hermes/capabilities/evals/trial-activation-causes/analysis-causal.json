@@ -1,0 +1,328 @@
+{
+  "schema_version": 1,
+  "kind": "problem-definition",
+  "capability_id": "kit.problem-definition",
+  "mode": "causal",
+  "authored_by": {
+    "kind": "coordinator-synthetic-demo",
+    "ref": "author:hephaestus-coordinator-demo"
+  },
+  "binding": {
+    "task_id": "t-trial-activation",
+    "company_id": "example-a",
+    "project_id": "example-web",
+    "data_classification": "synthetic"
+  },
+  "evidence": {
+    "pack_id": "pack-trial-activation",
+    "digest": "23fb5d0389b18c3dc02da0599b4c624deee915646fd97a4b519e8f41328a9be7"
+  },
+  "reused_artifacts": [],
+  "problem_type": "product",
+  "decision": {
+    "question": "Which onboarding change should be reverted or tested first to recover trial activation?",
+    "owner_role": "product manager"
+  },
+  "affected": {
+    "who": "New trial accounts in their first 7 days",
+    "process": "Onboarding: welcome email and first workspace"
+  },
+  "symptom_id": "t-symptom",
+  "problem_statement": "Trial activation fell after two onboarding changes shipped days apart; the export shows both conditions associated with lower activation but cannot separate their effects.",
+  "statements": [
+    {
+      "id": "t-symptom",
+      "text": "31 percent of September 2026 trials activated within 7 days.",
+      "class": "synthetic",
+      "source_ids": [
+        "D1"
+      ],
+      "computation_ids": [
+        "k-overall"
+      ]
+    },
+    {
+      "id": "t-email",
+      "text": "Trials with a welcome email delayed more than 24 hours activated at 20 percent versus 37.6 percent for the rest.",
+      "class": "synthetic",
+      "source_ids": [
+        "D1"
+      ],
+      "computation_ids": [
+        "k-delayed",
+        "k-not-delayed"
+      ]
+    },
+    {
+      "id": "t-sample",
+      "text": "Trials created without sample data activated at 23 percent versus 39 percent with sample data.",
+      "class": "synthetic",
+      "source_ids": [
+        "D1"
+      ],
+      "computation_ids": [
+        "k-nosample",
+        "k-sample"
+      ]
+    },
+    {
+      "id": "t-both",
+      "text": "Trials with both conditions activated at 15 percent.",
+      "class": "synthetic",
+      "source_ids": [
+        "D1"
+      ],
+      "computation_ids": [
+        "k-both"
+      ]
+    },
+    {
+      "id": "t-release",
+      "text": "The email batch change (2026-08-28) and opt-in sample data (2026-09-01) shipped four days apart.",
+      "class": "synthetic",
+      "source_ids": [
+        "D2"
+      ]
+    },
+    {
+      "id": "t-h-email",
+      "text": "The nightly email batch delays the first-step guide and lowers activation.",
+      "class": "hypothesis",
+      "source_ids": [
+        "D1",
+        "D2"
+      ]
+    },
+    {
+      "id": "t-h-sample",
+      "text": "An empty workspace without sample data stalls first project creation and lowers activation.",
+      "class": "hypothesis",
+      "source_ids": [
+        "D1",
+        "D2"
+      ]
+    },
+    {
+      "id": "t-a-mix",
+      "text": "Trial sign-up mix did not change between August and September.",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "signup-mix"
+    },
+    {
+      "id": "t-u-rct",
+      "text": "The separate causal effect of each change is unknown.",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "randomized-test",
+      "resolution": "Run a two-by-two staggered rollback (immediate email, default sample data) with random assignment for 14 days."
+    }
+  ],
+  "computations": [
+    {
+      "id": "k-overall",
+      "expression": "a / n * 100",
+      "inputs": {
+        "a": {
+          "source_id": "D1",
+          "value": "activated"
+        },
+        "n": {
+          "source_id": "D1",
+          "value": "trials"
+        }
+      },
+      "result": 31.0,
+      "round_to": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "k-delayed",
+      "expression": "a / n * 100",
+      "inputs": {
+        "a": {
+          "source_id": "D1",
+          "value": "delayed_activated"
+        },
+        "n": {
+          "source_id": "D1",
+          "value": "delayed"
+        }
+      },
+      "result": 20.0,
+      "round_to": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "k-not-delayed",
+      "expression": "(a - d) / (n - m) * 100",
+      "inputs": {
+        "a": {
+          "source_id": "D1",
+          "value": "activated"
+        },
+        "d": {
+          "source_id": "D1",
+          "value": "delayed_activated"
+        },
+        "n": {
+          "source_id": "D1",
+          "value": "trials"
+        },
+        "m": {
+          "source_id": "D1",
+          "value": "delayed"
+        }
+      },
+      "result": 37.6,
+      "round_to": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "k-nosample",
+      "expression": "a / n * 100",
+      "inputs": {
+        "a": {
+          "source_id": "D1",
+          "value": "no_sample_activated"
+        },
+        "n": {
+          "source_id": "D1",
+          "value": "no_sample"
+        }
+      },
+      "result": 23.0,
+      "round_to": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "k-sample",
+      "expression": "(a - d) / (n - m) * 100",
+      "inputs": {
+        "a": {
+          "source_id": "D1",
+          "value": "activated"
+        },
+        "d": {
+          "source_id": "D1",
+          "value": "no_sample_activated"
+        },
+        "n": {
+          "source_id": "D1",
+          "value": "trials"
+        },
+        "m": {
+          "source_id": "D1",
+          "value": "no_sample"
+        }
+      },
+      "result": 39.0,
+      "round_to": 1,
+      "unit": "percent"
+    },
+    {
+      "id": "k-both",
+      "expression": "a / n * 100",
+      "inputs": {
+        "a": {
+          "source_id": "D1",
+          "value": "both_activated"
+        },
+        "n": {
+          "source_id": "D1",
+          "value": "both"
+        }
+      },
+      "result": 15.0,
+      "round_to": 1,
+      "unit": "percent"
+    }
+  ],
+  "alternatives": [
+    {
+      "id": "x-email",
+      "kind": "option",
+      "summary": "Revert the welcome email to immediate send first.",
+      "tradeoffs": "Cheap to revert; if sample data is the main driver, activation barely moves."
+    },
+    {
+      "id": "x-sample",
+      "kind": "option",
+      "summary": "Restore default sample data first.",
+      "tradeoffs": "Addresses the larger observed gap; touches first-run experience design."
+    },
+    {
+      "id": "x-factorial",
+      "kind": "option",
+      "summary": "Randomized two-by-two rollback of both changes for 14 days.",
+      "tradeoffs": "Separates the effects and their interaction; needs enough trials per cell and a short delay."
+    }
+  ],
+  "success_measure": {
+    "metric": "7-day trial activation rate",
+    "baseline_statement_id": "t-symptom",
+    "target": {
+      "comparator": ">=",
+      "value": 36,
+      "unit": "percent"
+    },
+    "window_days": 28
+  },
+  "questions": [],
+  "next_action": {
+    "action": "Design the randomized two-by-two rollback, with per-cell sample size computed from the 800-trial September volume, before reverting either change.",
+    "kind": "test",
+    "owner_role": "product manager",
+    "cost": "moderate",
+    "involves_external_contact": false,
+    "approvals_needed": []
+  },
+  "why_tree": {
+    "nodes": [
+      {
+        "id": "w-email",
+        "parent": "root",
+        "statement_id": "t-email",
+        "edge": "observed-association",
+        "counter_statement_ids": []
+      },
+      {
+        "id": "w-email-why",
+        "parent": "w-email",
+        "statement_id": "t-h-email",
+        "edge": "causal-hypothesis",
+        "counter_statement_ids": [],
+        "test": "Randomize immediate versus batched welcome email; if activation does not differ, reject."
+      },
+      {
+        "id": "w-sample",
+        "parent": "root",
+        "statement_id": "t-sample",
+        "edge": "observed-association",
+        "counter_statement_ids": []
+      },
+      {
+        "id": "w-sample-why",
+        "parent": "w-sample",
+        "statement_id": "t-h-sample",
+        "edge": "causal-hypothesis",
+        "counter_statement_ids": [],
+        "test": "Randomize default versus opt-in sample data; if first-project creation does not differ, reject."
+      },
+      {
+        "id": "w-separate",
+        "parent": "root",
+        "statement_id": "t-u-rct",
+        "edge": "unknown-link",
+        "counter_statement_ids": []
+      }
+    ],
+    "stop_reason": "Each branch reaches a testable hypothesis; the export is observational, so further whys would be speculation."
+  },
+  "partition": {
+    "criterion": "Onboarding step where the trial stalls: communication (welcome email) versus first-use content (sample data).",
+    "overlaps": "Trials with both conditions belong to both branches.",
+    "omitted": "Sign-up mix changes and seasonality (recorded as an assumption).",
+    "interaction_assessment": "Both-condition trials activated at 15 percent, below either condition alone, so the effects may compound; because the changes shipped four days apart, only random assignment can estimate each effect and their interaction."
+  }
+}

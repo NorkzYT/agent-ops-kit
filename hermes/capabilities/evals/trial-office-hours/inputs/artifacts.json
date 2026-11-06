@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "artifact_id": "pack-trial-discovery",
+      "kind": "evidence-index",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-discovery",
+      "content_digest": "611ace1b07f67715fe29ce0f4c0dee11b8dbd65f98622845f9fd1ac95f78e099",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "evidence-pack.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-activation.problem-brief",
+      "kind": "problem-brief",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-activation",
+      "content_digest": "80a74a81d5930580697fe127384b239a8a7cbb77dd1ccdafc76d7ae64e8ef411",
+      "produced_by": {
+        "capability_id": "kit.problem-definition",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-activation-causes",
+        "implementation_digest": "50bc8289a203f7b93f389bd9c3e2cbdc102605710b8b31205453cc39c4b6062a"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-1-problem-brief.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-activation",
+          "digest": "23fb5d0389b18c3dc02da0599b4c624deee915646fd97a4b519e8f41328a9be7"
+        }
+      ],
+      "review_status": "accepted",
+      "accepted_by_ref": "review:synthetic-fixture-acceptance"
+    },
+    {
+      "artifact_id": "pack-trial-activation",
+      "kind": "evidence-index",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-activation",
+      "content_digest": "23fb5d0389b18c3dc02da0599b4c624deee915646fd97a4b519e8f41328a9be7",
+      "produced_by": null,
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "input-2-evidence-index.json",
+      "source_refs": [],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-discovery.discovery-brief",
+      "kind": "discovery-brief",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-discovery",
+      "content_digest": "382d3ddb2ac66366be0835903caff45e4df53acbdcf9f3a576fb58ae1828dacf",
+      "produced_by": {
+        "capability_id": "pm.product-discovery",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-activation-discovery",
+        "implementation_digest": "d2203270243438cf8c033cfb320cb308e4fae62db4e3b05d3f19a470d2774acf",
+        "source_digest": "1440e201fe344ca18a25492b9dcaf73b4111133734b014f804b429da6a67d0bc"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "discovery-brief.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-discovery",
+          "digest": "611ace1b07f67715fe29ce0f4c0dee11b8dbd65f98622845f9fd1ac95f78e099"
+        },
+        {
+          "artifact_id": "t-trial-activation.problem-brief",
+          "digest": "80a74a81d5930580697fe127384b239a8a7cbb77dd1ccdafc76d7ae64e8ef411"
+        }
+      ],
+      "review_status": "accepted",
+      "accepted_by_ref": "review:synthetic-fixture-acceptance"
+    },
+    {
+      "artifact_id": "t-trial-discovery.assumption-register",
+      "kind": "assumption-register",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-discovery",
+      "content_digest": "7fdcda1d856bd2ab245e062af6033c8c5ceb98135bdbf6839a74c3efe225a9fe",
+      "produced_by": {
+        "capability_id": "pm.product-discovery",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-activation-discovery",
+        "implementation_digest": "d2203270243438cf8c033cfb320cb308e4fae62db4e3b05d3f19a470d2774acf",
+        "source_digest": "1440e201fe344ca18a25492b9dcaf73b4111133734b014f804b429da6a67d0bc"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "assumption-register.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-discovery",
+          "digest": "611ace1b07f67715fe29ce0f4c0dee11b8dbd65f98622845f9fd1ac95f78e099"
+        },
+        {
+          "artifact_id": "t-trial-activation.problem-brief",
+          "digest": "80a74a81d5930580697fe127384b239a8a7cbb77dd1ccdafc76d7ae64e8ef411"
+        }
+      ],
+      "review_status": "draft"
+    },
+    {
+      "artifact_id": "t-trial-discovery.experiment-plan",
+      "kind": "experiment-plan",
+      "company_id": "example-a",
+      "project_id": "example-web",
+      "task_id": "t-trial-discovery",
+      "content_digest": "a53af2b4632457198b525276c0f763e9c05f60d4b1d8db7fa630d9d9f558d0d6",
+      "produced_by": {
+        "capability_id": "pm.product-discovery",
+        "capability_version": "0.1.0",
+        "run_ref": "run:fixture-trial-activation-discovery",
+        "implementation_digest": "d2203270243438cf8c033cfb320cb308e4fae62db4e3b05d3f19a470d2774acf",
+        "source_digest": "1440e201fe344ca18a25492b9dcaf73b4111133734b014f804b429da6a67d0bc"
+      },
+      "generation": 1,
+      "data_classification": "synthetic",
+      "location": "experiment-plan.md",
+      "source_refs": [
+        {
+          "artifact_id": "pack-trial-discovery",
+          "digest": "611ace1b07f67715fe29ce0f4c0dee11b8dbd65f98622845f9fd1ac95f78e099"
+        },
+        {
+          "artifact_id": "t-trial-activation.problem-brief",
+          "digest": "80a74a81d5930580697fe127384b239a8a7cbb77dd1ccdafc76d7ae64e8ef411"
+        }
+      ],
+      "review_status": "draft"
+    }
+  ]
+}

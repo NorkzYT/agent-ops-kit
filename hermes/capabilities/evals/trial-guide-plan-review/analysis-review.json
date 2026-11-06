@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "coordinator:c3-plan-design-review-demo"},
+  "binding": {"task_id": "t-trial-plan-design-review", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-trial-plan-design-review", "digest": "d7f3c5e15c540fbcc3508533480c2a5dda61779e785402966f12bb094c20416e"},
+  "reused_artifacts": [],
+  "reviewed_artifacts": [
+    {"artifact_id": "t-trial-prd.lean-prd", "kind": "lean-prd", "digest": "c3a8b264d1eb8a7676313440d3d7445f8c18d51579bc7368499e4ee41065a559"},
+    {"artifact_id": "t-trial-design.design-brief", "kind": "design-brief", "digest": "8e2efa33ca64f6b9e9772030315374312bed870b18b4c8a6fa56349ffd7af3da"},
+    {"artifact_id": "t-trial-design.design-package", "kind": "design-package", "digest": "bdc23f5e43f627ae306d031266e9ea8cb9ca4710f7d203d5196c11bce335438b"}
+  ],
+  "statements": [
+    {"id": "s-members", "class": "synthetic", "text": "Workspace members who are not owners can open a trial workspace.", "source_ids": ["R1"]}
+  ],
+  "computations": [],
+  "next_action": {"action": "Product designer answers d-resume and d-member; then the design package is updated before engineering starts.", "kind": "decide", "owner_role": "product designer", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []},
+  "kind": "plan-design-review",
+  "capability_id": "gstack.plan-design-review",
+  "mode": "review",
+  "initial_rating": {"score": 7, "reason": "Screens, states, tokens and breakpoints are specified, but resuming the guide and non-owner members are not.", "ten_looks_like": "Every promised behaviour has a visible state: the resumed guide at step 2 or 3, and what a member who cannot create projects sees."},
+  "design_system": {"status": "present", "artifact_id": "t-trial-design.design-package"},
+  "passes": {
+    "information-architecture": {"rating": 9, "gap": "Primary action per step is clear; the Help entry point for reopening is named but its position in the menu is not."},
+    "interaction-states": {"rating": 5, "gap": "No partial (resumed) state for the guide and no permission-denied state for members who cannot create a project."},
+    "journey": {"rating": 6, "gap": "The reopen step promises the guide opens at the step the user left, but no screen state shows it."},
+    "ai-slop": {"rating": 10},
+    "design-system": {"rating": 10},
+    "responsive-accessibility": {"rating": 8, "gap": "Keyboard order and 44px targets are stated but marked not verified; the mobile sheet's relation to the workspace scroll is not specified."},
+    "unresolved-decisions": {"rating": 6, "gap": "Two decisions are open: resume behaviour and the member experience."}
+  },
+  "state_table": [
+    {"feature": "Setup guide", "access_controlled": true, "loading": "Loading your workspace.", "empty": "No project yet. The guide creates your first one in three steps.", "error": "The project was not created: that name is already used in this workspace.", "success": "Project created. Next: add a first task.", "partial": null, "permission_denied": null},
+    {"feature": "Help: reopen guide", "access_controlled": false, "loading": "Loading help topics.", "empty": "You have not dismissed the guide, so there is nothing to reopen.", "error": "Help topics did not load.", "success": null, "partial": null, "permission_denied": null}
+  ],
+  "journey": [
+    {"step": "Lands on the empty workspace with the guide open", "feels": "oriented", "plan_specifies": {"artifact_id": "t-trial-design.design-package", "text": "No project yet. The guide creates your first one in three steps."}},
+    {"step": "Creates the first project", "feels": "accomplished", "plan_specifies": {"artifact_id": "t-trial-design.design-package", "text": "Project created. Next: add a first task."}},
+    {"step": "Leaves the guide and later reopens it from Help", "feels": "confident it remembered", "plan_specifies": null}
+  ],
+  "slop_hits": [],
+  "mockups": "not-requested",
+  "findings": [
+    {"id": "f-resume", "title": "Resumed guide has no state", "section": "interaction-states", "severity": "high", "confidence": 9,
+     "problem": "The brief promises the guide reopens at the step the user left, but the state table has no partial or resumed state for the guide, so engineering would invent one.",
+     "recommendation": "Specify the resumed guide for steps 2 and 3: heading, progress and the one action, in the existing tokens.",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-trial-design.design-brief", "text": "The guide opens at the step the user left."}],
+     "disposition": "pending", "decision_id": "d-resume"},
+    {"id": "f-member", "title": "No state for members who cannot create a project", "section": "interaction-states", "severity": "medium", "confidence": 6,
+     "problem": "Members who are not owners can open a trial workspace; the guide's first step is creating a project, and the plan does not say what they see.",
+     "recommendation": "Decide whether members see the guide at all, and if they do, specify a permission-denied state with who can help.",
+     "evidence": [{"kind": "statement", "statement_id": "s-members"}, {"kind": "excerpt", "artifact_id": "t-trial-design.design-brief", "text": "Types a project name"}],
+     "disposition": "pending", "decision_id": "d-member"},
+    {"id": "f-mobile-sheet", "title": "Mobile sheet scrolling is unspecified", "section": "responsive-accessibility", "severity": "low", "confidence": 5,
+     "problem": "At 0px the guide becomes a full-width sheet above the workspace; the plan does not say whether the workspace scrolls under it or is pushed down.",
+     "recommendation": "State the mobile sheet's scroll behaviour and its dismiss control.",
+     "evidence": [{"kind": "excerpt", "artifact_id": "t-trial-design.design-package", "text": "The guide becomes a full-width sheet above the workspace"}],
+     "disposition": "pending"}
+  ],
+  "decisions": [
+    {"id": "d-resume", "question": "What does a reopened guide show?", "options": [
+      {"id": "resume-step", "label": "Open at the step the user left, with progress shown"},
+      {"id": "restart", "label": "Always restart at step 1"}],
+     "recommendation": "resume-step", "why": "It is the brief's own goal and keeps the three-step promise.", "status": "pending"},
+    {"id": "d-member", "question": "Do members who cannot create projects see the guide?", "options": [
+      {"id": "hide-guide", "label": "Hide the guide for members"},
+      {"id": "denied-state", "label": "Show a permission-denied state naming the workspace owner"}],
+     "recommendation": "denied-state", "why": "Members still need to know why nothing is there and who can start it.", "status": "pending"}
+  ],
+  "handoff": {"targets": ["gstack.design-consultation", "existing.engineering-path"], "notes": "Update the design package for the answered decisions, then engineering.", "carries_approval": false}
+}

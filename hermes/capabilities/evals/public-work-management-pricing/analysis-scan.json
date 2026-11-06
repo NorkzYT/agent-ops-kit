@@ -1,0 +1,893 @@
+{
+  "schema_version": 1,
+  "kind": "competitor-research",
+  "capability_id": "pm.competitor-research",
+  "mode": "scan",
+  "authored_by": {
+    "kind": "coordinator-analysis",
+    "ref": "task:unified-os-c2-public-pricing-sample"
+  },
+  "binding": {
+    "task_id": "t-public-work-management-pricing",
+    "company_id": null,
+    "project_id": null,
+    "data_classification": "public"
+  },
+  "evidence": {
+    "pack_id": "pack-public-work-management-pricing",
+    "digest": "4b750fe73fd582a7689f10c4120092ca33db7582a906111a8fad8a2123081cdb"
+  },
+  "reused_artifacts": [],
+  "research_question": "How do Notion, Trello and Asana price their free, entry and team plans (amount, unit, billing cadence) and what AI do they advertise there, as stated on their pricing pages on 2026-11-04?",
+  "purpose": "pricing",
+  "lens": [
+    "pricing",
+    "features",
+    "positioning"
+  ],
+  "as_of": "2026-11-04",
+  "max_source_age_days": 90,
+  "subject": {
+    "name": "A hypothetical small-team work-management entrant (no company data supplied)",
+    "statement_ids": [
+      "U-subject"
+    ]
+  },
+  "selection_basis": "Three well-known work-management tools chosen for a public pricing sample; not a ranked or complete competitor set.",
+  "queries": [
+    "https://www.notion.com/pricing",
+    "https://trello.com/pricing",
+    "https://asana.com/pricing"
+  ],
+  "competitors": [
+    {
+      "id": "notion",
+      "name": "Notion",
+      "relation": "direct",
+      "domain": "notion.com",
+      "source_ids": [
+        "public-1"
+      ],
+      "positioning": [
+        {
+          "source_id": "public-1",
+          "text": "One tool to run your company."
+        }
+      ]
+    },
+    {
+      "id": "trello",
+      "name": "Trello",
+      "relation": "direct",
+      "domain": "trello.com",
+      "source_ids": [
+        "public-2"
+      ],
+      "positioning": [
+        {
+          "source_id": "public-2",
+          "text": "Trello your way."
+        }
+      ]
+    },
+    {
+      "id": "asana",
+      "name": "Asana",
+      "relation": "direct",
+      "domain": "asana.com",
+      "source_ids": [
+        "public-3"
+      ],
+      "positioning": [
+        {
+          "source_id": "public-3",
+          "text": "Agentic Work Management"
+        },
+        {
+          "source_id": "public-3",
+          "text": "Power every team with AI"
+        }
+      ]
+    }
+  ],
+  "price_points": [
+    {
+      "id": "p-notion-free",
+      "competitor_id": "notion",
+      "plan": "Free",
+      "status": "stated",
+      "amount": 0,
+      "currency": "USD",
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [
+        {
+          "source_id": "public-1",
+          "text": "Free$0 per seat/month"
+        }
+      ],
+      "caveats": [
+        "Shown with '$' only; read as USD (the extraction does not record the page locale)."
+      ]
+    },
+    {
+      "id": "p-notion-plus",
+      "competitor_id": "notion",
+      "plan": "Plus",
+      "status": "stated",
+      "amount": 10,
+      "currency": "USD",
+      "unit": "per-seat",
+      "cadence": "unstated",
+      "quotes": [
+        {
+          "source_id": "public-1",
+          "text": "Plus\\*$10 per seat/month"
+        }
+      ],
+      "caveats": [
+        "The extracted plan card gives one per-seat monthly price and does not say whether it is the annual or the monthly billing rate; the billing FAQ says both monthly and annual billing periods exist.",
+        "Notion marks Plus with '*': plans may not be available for every workspace.",
+        "Shown with '$' only; read as USD (the extraction does not record the page locale)."
+      ]
+    },
+    {
+      "id": "p-notion-business",
+      "competitor_id": "notion",
+      "plan": "Business",
+      "status": "stated",
+      "amount": 20,
+      "currency": "USD",
+      "unit": "per-seat",
+      "cadence": "unstated",
+      "quotes": [
+        {
+          "source_id": "public-1",
+          "text": "Business$20 per seat/month"
+        }
+      ],
+      "caveats": [
+        "Same ambiguity as Plus: billing basis of the per-seat price is not stated in the extraction.",
+        "Shown with '$' only; read as USD (the extraction does not record the page locale)."
+      ]
+    },
+    {
+      "id": "p-notion-enterprise",
+      "competitor_id": "notion",
+      "plan": "Enterprise",
+      "status": "contact-sales",
+      "amount": null,
+      "currency": null,
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [
+        {
+          "source_id": "public-1",
+          "text": "Enterprise\\*Custom pricing"
+        }
+      ],
+      "caveats": [
+        "No public price."
+      ]
+    },
+    {
+      "id": "p-trello-free",
+      "competitor_id": "trello",
+      "plan": "Free",
+      "status": "stated",
+      "amount": 0,
+      "currency": "USD",
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "$0USD"
+        },
+        {
+          "source_id": "public-2",
+          "text": "Free for up to 10 collaborators per Workspace"
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-trello-standard-annual",
+      "competitor_id": "trello",
+      "plan": "Standard",
+      "status": "stated",
+      "amount": 5,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-annually",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "$5USD"
+        },
+        {
+          "source_id": "public-2",
+          "text": "Per user/month if billed annually ($6 billed monthly)"
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-trello-standard-monthly",
+      "competitor_id": "trello",
+      "plan": "Standard",
+      "status": "stated",
+      "amount": 6,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-monthly",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "Per user/month if billed annually ($6 billed monthly)"
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-trello-premium-annual",
+      "competitor_id": "trello",
+      "plan": "Premium",
+      "status": "stated",
+      "amount": 10,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-annually",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "$10USD"
+        },
+        {
+          "source_id": "public-2",
+          "text": "Per user/month if billed annually ($12.50 billed monthly)"
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-trello-premium-monthly",
+      "competitor_id": "trello",
+      "plan": "Premium",
+      "status": "stated",
+      "amount": 12.5,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-monthly",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "Per user/month if billed annually ($12.50 billed monthly)"
+        }
+      ],
+      "caveats": []
+    },
+    {
+      "id": "p-trello-enterprise",
+      "competitor_id": "trello",
+      "plan": "Enterprise",
+      "status": "stated",
+      "amount": 17.5,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-annually",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "$17.50USD"
+        },
+        {
+          "source_id": "public-2",
+          "text": "Per user/month - billed annually ($210.00 annual price per user)"
+        }
+      ],
+      "caveats": [
+        "The page's per-seat cost estimator did not survive text extraction ('Est. cost forusers'); prices for large seat counts are not captured."
+      ]
+    },
+    {
+      "id": "p-asana-personal",
+      "competitor_id": "asana",
+      "plan": "Personal",
+      "status": "stated",
+      "amount": 0,
+      "currency": "USD",
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [
+        {
+          "source_id": "public-3",
+          "text": "$0"
+        },
+        {
+          "source_id": "public-3",
+          "text": "Free forever"
+        }
+      ],
+      "caveats": [
+        "Shown with '$' only; read as USD (the extraction does not record the page locale)."
+      ]
+    },
+    {
+      "id": "p-asana-starter-annual",
+      "competitor_id": "asana",
+      "plan": "Starter",
+      "status": "stated",
+      "amount": 10.99,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-annually",
+      "quotes": [
+        {
+          "source_id": "public-3",
+          "text": "$10.99"
+        },
+        {
+          "source_id": "public-3",
+          "text": "Per user, per month billed annually"
+        }
+      ],
+      "caveats": [
+        "Shown with '$' only; read as USD (the extraction does not record the page locale)."
+      ]
+    },
+    {
+      "id": "p-asana-starter-monthly",
+      "competitor_id": "asana",
+      "plan": "Starter",
+      "status": "stated",
+      "amount": 13.49,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-monthly",
+      "quotes": [
+        {
+          "source_id": "public-3",
+          "text": "Per user, per month billed annually. $13.49 billed monthly"
+        }
+      ],
+      "caveats": [
+        "Shown with '$' only; read as USD (the extraction does not record the page locale)."
+      ]
+    },
+    {
+      "id": "p-asana-advanced-annual",
+      "competitor_id": "asana",
+      "plan": "Advanced",
+      "status": "stated",
+      "amount": 24.99,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-annually",
+      "quotes": [
+        {
+          "source_id": "public-3",
+          "text": "$24.99"
+        },
+        {
+          "source_id": "public-3",
+          "text": "Per user, per month billed annually"
+        }
+      ],
+      "caveats": [
+        "Shown with '$' only; read as USD (the extraction does not record the page locale)."
+      ]
+    },
+    {
+      "id": "p-asana-advanced-monthly",
+      "competitor_id": "asana",
+      "plan": "Advanced",
+      "status": "stated",
+      "amount": 30.49,
+      "currency": "USD",
+      "unit": "per-user",
+      "cadence": "billed-monthly",
+      "quotes": [
+        {
+          "source_id": "public-3",
+          "text": "Per user, per month billed annually. $30.49 billed monthly"
+        }
+      ],
+      "caveats": [
+        "Shown with '$' only; read as USD (the extraction does not record the page locale)."
+      ]
+    },
+    {
+      "id": "p-asana-enterprise",
+      "competitor_id": "asana",
+      "plan": "Enterprise",
+      "status": "contact-sales",
+      "amount": null,
+      "currency": null,
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [
+        {
+          "source_id": "public-3",
+          "text": "Contact sales for pricing"
+        }
+      ],
+      "caveats": [
+        "No public base price; Enterprise+ is described without any price."
+      ]
+    },
+    {
+      "id": "p-asana-enterprise-plus",
+      "competitor_id": "asana",
+      "plan": "Enterprise+",
+      "status": "unknown",
+      "amount": null,
+      "currency": null,
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [],
+      "caveats": [
+        "The captured page describes Enterprise+ features but states no price and no sales-contact wording for it."
+      ],
+      "resolution": "Ask Asana sales for an Enterprise+ quote; do not infer it from Enterprise."
+    },
+    {
+      "id": "p-asana-ai-studio",
+      "competitor_id": "asana",
+      "plan": "AI Studio Plus / Pro add-on",
+      "status": "unknown",
+      "amount": null,
+      "currency": null,
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [],
+      "caveats": [
+        "The page calls AI Studio Plus and Pro 'paid access' but states no price."
+      ],
+      "resolution": "Retrieve Asana's AI Studio pricing page or ask sales; record the price with its own retrieval date."
+    }
+  ],
+  "features": [
+    {
+      "id": "f-notion-plus-ai",
+      "competitor_id": "notion",
+      "plan": "Plus",
+      "feature": "AI as a trial, not an allowance",
+      "quotes": [
+        {
+          "source_id": "public-1",
+          "text": "Trial AI capabilities like generating docs, or autofilling databases"
+        },
+        {
+          "source_id": "public-1",
+          "text": "Trial of Notion AI"
+        }
+      ]
+    },
+    {
+      "id": "f-notion-business-credits",
+      "competitor_id": "notion",
+      "plan": "Business",
+      "feature": "Per-seat monthly AI credits",
+      "quotes": [
+        {
+          "source_id": "public-1",
+          "text": "1,500 Standard credits / month"
+        },
+        {
+          "source_id": "public-1",
+          "text": "Per seat. Used for work where Notion picks the model"
+        }
+      ]
+    },
+    {
+      "id": "f-trello-standard-ai",
+      "competitor_id": "trello",
+      "plan": "Standard",
+      "feature": "AI features from the entry paid plan",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "Get more stuff done with AI features, unlimited boards, card mirroring, and more automation."
+        }
+      ]
+    },
+    {
+      "id": "f-trello-sso-addon",
+      "competitor_id": "trello",
+      "plan": "all plans (add-on)",
+      "feature": "SAML SSO through a separate Atlassian Guard subscription",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "Atlassian Guard is a separate subscription that your company can enable across all your Atlassian products and starts at $4/month/user."
+        }
+      ]
+    },
+    {
+      "id": "f-trello-enterprise-guard",
+      "competitor_id": "trello",
+      "plan": "Enterprise",
+      "feature": "Atlassian Guard Standard included",
+      "quotes": [
+        {
+          "source_id": "public-2",
+          "text": "This plan includes Atlassian Guard Standard and 24/7 Enterprise Admin support."
+        }
+      ]
+    },
+    {
+      "id": "f-asana-starter-ai",
+      "competitor_id": "asana",
+      "plan": "Starter",
+      "feature": "Metered AI requests in the entry paid plan",
+      "quotes": [
+        {
+          "source_id": "public-3",
+          "text": "Includes 5 requests per user per month, up to 50 requests per account"
+        }
+      ]
+    }
+  ],
+  "statements": [
+    {
+      "id": "O-notion-billing",
+      "class": "observed",
+      "source_ids": [
+        "public-1"
+      ],
+      "topic": "pricing-notion",
+      "text": "Notion's billing FAQ says billing periods can be monthly or annual, while each extracted plan card shows a single per-seat monthly price."
+    },
+    {
+      "id": "O-trello-enterprise",
+      "class": "observed",
+      "source_ids": [
+        "public-2"
+      ],
+      "computation_ids": [
+        "c-trello-enterprise-year"
+      ],
+      "topic": "pricing-trello",
+      "text": "Trello Enterprise at $17.50 per user per month billed annually equals the stated $210.00 annual price per user."
+    },
+    {
+      "id": "O-asana-saving",
+      "class": "observed",
+      "source_ids": [
+        "public-3"
+      ],
+      "computation_ids": [
+        "c-asana-starter-saving",
+        "c-asana-advanced-saving"
+      ],
+      "topic": "pricing-asana",
+      "text": "Asana's toggle says yearly billing saves up to 18%; computed from its own prices the saving is 18.53% on Starter and 18.04% on Advanced; the page does not state the basis of its 18% figure."
+    },
+    {
+      "id": "O-trello-saving",
+      "class": "observed",
+      "source_ids": [
+        "public-2"
+      ],
+      "computation_ids": [
+        "c-trello-standard-saving",
+        "c-trello-premium-saving"
+      ],
+      "topic": "pricing-trello",
+      "text": "Trello's annual billing is 16.67% below its monthly price on Standard and 20% below on Premium."
+    },
+    {
+      "id": "O-five-users",
+      "class": "observed",
+      "source_ids": [
+        "public-2",
+        "public-3"
+      ],
+      "computation_ids": [
+        "c-trello-standard-five",
+        "c-asana-starter-five"
+      ],
+      "topic": "pricing-trello",
+      "text": "For five users billed annually, Trello Standard lists $25 a month and Asana Starter $54.95 a month."
+    },
+    {
+      "id": "U-notion-cadence",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "notion-billing-cadence",
+      "text": "Whether Notion's $10 (Plus) and $20 (Business) per-seat prices are annual-billing or monthly-billing rates is unknown from this capture.",
+      "resolution": "Capture notion.com/pricing with each billing toggle state (or Notion's billing help page) and record both prices with dates."
+    },
+    {
+      "id": "U-market-size",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "market-size",
+      "text": "Market size and the vendors' market shares are unknown: no such source was retrieved.",
+      "resolution": "Retrieve a dated, cited industry or filing source before sizing the market."
+    },
+    {
+      "id": "U-reviews",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "customer-reviews",
+      "text": "How customers rate these plans is unknown: no reviews or independent tests were retrieved.",
+      "resolution": "Collect dated review-site or interview evidence if satisfaction matters to the decision."
+    },
+    {
+      "id": "U-subject",
+      "class": "unknown",
+      "source_ids": [],
+      "topic": "subject-offer",
+      "text": "No entrant offer was supplied, so the comparison is market context, not a head-to-head.",
+      "resolution": "Supply the entrant's planned plans and prices to compare against these rows."
+    },
+    {
+      "id": "A-list-price",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "market-pricing",
+      "text": "Small teams pay the listed self-serve prices; negotiated or promotional discounts are ignored."
+    },
+    {
+      "id": "A-annual-anchor",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "market-buyer",
+      "text": "Small-team buyers compare the headline per-user monthly figure, which these pages show at the annual-billing rate."
+    },
+    {
+      "id": "H-ai-expected",
+      "class": "hypothesis",
+      "source_ids": [],
+      "topic": "market-ai",
+      "text": "Buyers of entry paid plans now expect some AI included, because all three vendors advertise AI at or near their entry paid tier."
+    }
+  ],
+  "computations": [
+    {
+      "id": "c-trello-standard-saving",
+      "expression": "(monthly - annual) / monthly * 100",
+      "round_to": 2,
+      "unit": "percent",
+      "result": 16.67,
+      "inputs": {
+        "monthly": {
+          "source_id": "public-2",
+          "value": "standard_monthly"
+        },
+        "annual": {
+          "source_id": "public-2",
+          "value": "standard_annual"
+        }
+      }
+    },
+    {
+      "id": "c-trello-premium-saving",
+      "expression": "(monthly - annual) / monthly * 100",
+      "round_to": 2,
+      "unit": "percent",
+      "result": 20,
+      "inputs": {
+        "monthly": {
+          "source_id": "public-2",
+          "value": "premium_monthly"
+        },
+        "annual": {
+          "source_id": "public-2",
+          "value": "premium_annual"
+        }
+      }
+    },
+    {
+      "id": "c-asana-starter-saving",
+      "expression": "(monthly - annual) / monthly * 100",
+      "round_to": 2,
+      "unit": "percent",
+      "result": 18.53,
+      "inputs": {
+        "monthly": {
+          "source_id": "public-3",
+          "value": "starter_monthly"
+        },
+        "annual": {
+          "source_id": "public-3",
+          "value": "starter_annual"
+        }
+      }
+    },
+    {
+      "id": "c-asana-advanced-saving",
+      "expression": "(monthly - annual) / monthly * 100",
+      "round_to": 2,
+      "unit": "percent",
+      "result": 18.04,
+      "inputs": {
+        "monthly": {
+          "source_id": "public-3",
+          "value": "advanced_monthly"
+        },
+        "annual": {
+          "source_id": "public-3",
+          "value": "advanced_annual"
+        }
+      }
+    },
+    {
+      "id": "c-trello-enterprise-year",
+      "expression": "annual * 12",
+      "round_to": 2,
+      "unit": "USD per user per year",
+      "result": 210,
+      "inputs": {
+        "annual": {
+          "source_id": "public-2",
+          "value": "enterprise_annual"
+        }
+      }
+    },
+    {
+      "id": "c-trello-standard-five",
+      "expression": "annual * 5",
+      "round_to": 2,
+      "unit": "USD per month (5 users)",
+      "result": 25,
+      "inputs": {
+        "annual": {
+          "source_id": "public-2",
+          "value": "standard_annual"
+        }
+      }
+    },
+    {
+      "id": "c-asana-starter-five",
+      "expression": "annual * 5",
+      "round_to": 2,
+      "unit": "USD per month (5 users)",
+      "result": 54.95,
+      "inputs": {
+        "annual": {
+          "source_id": "public-3",
+          "value": "starter_annual"
+        }
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "F-entry-spread",
+      "kind": "opportunity",
+      "class": "hypothesis",
+      "price_ids": [
+        "p-trello-standard-annual",
+        "p-trello-standard-monthly",
+        "p-asana-starter-annual",
+        "p-notion-plus"
+      ],
+      "feature_ids": [],
+      "statement_ids": [
+        "O-five-users",
+        "A-list-price"
+      ],
+      "computation_ids": [],
+      "text": "Entry paid tiers span $5 (Trello Standard, annual) to $10.99 (Asana Starter, annual) per user a month, with Notion Plus at $10 per seat on an unstated billing basis; an entrant priced near $5 to $6 competes with Trello Standard rather than with Asana or Notion."
+    },
+    {
+      "id": "F-ai-entry",
+      "kind": "table-stakes",
+      "class": "hypothesis",
+      "price_ids": [],
+      "feature_ids": [
+        "f-trello-standard-ai",
+        "f-asana-starter-ai",
+        "f-notion-plus-ai",
+        "f-notion-business-credits"
+      ],
+      "statement_ids": [
+        "H-ai-expected"
+      ],
+      "computation_ids": [],
+      "text": "All three advertise AI in or next to the entry paid tier (Trello Standard AI features, Asana Starter metered requests, a Notion AI trial on Plus and per-seat credits on Business), so some AI is likely table stakes there."
+    },
+    {
+      "id": "F-annual-discount",
+      "kind": "risk",
+      "class": "assumption",
+      "price_ids": [
+        "p-trello-standard-annual",
+        "p-asana-starter-annual"
+      ],
+      "feature_ids": [],
+      "statement_ids": [
+        "O-trello-saving",
+        "O-asana-saving",
+        "A-annual-anchor"
+      ],
+      "computation_ids": [],
+      "text": "Trello and Asana headline annual-billing prices 16.67% to 20% below monthly; an entrant that headlines a monthly-billing price looks dearer at equal value."
+    },
+    {
+      "id": "F-notion-uncertain",
+      "kind": "risk",
+      "class": "assumption",
+      "price_ids": [
+        "p-notion-plus",
+        "p-notion-business"
+      ],
+      "feature_ids": [],
+      "statement_ids": [
+        "O-notion-billing"
+      ],
+      "computation_ids": [],
+      "text": "Any price claim against Notion is uncertain until its billing toggle is captured: the $10 and $20 per-seat prices may be annual or monthly rates."
+    },
+    {
+      "id": "F-sso-bundle",
+      "kind": "differentiator",
+      "class": "hypothesis",
+      "price_ids": [],
+      "feature_ids": [
+        "f-trello-sso-addon",
+        "f-trello-enterprise-guard"
+      ],
+      "statement_ids": [],
+      "computation_ids": [],
+      "text": "Trello sells SAML SSO through Atlassian Guard, a separate subscription from $4/month/user unless on Enterprise; SSO included in a mid tier could differentiate for small IT-managed teams."
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "R-capture-notion",
+      "stance": "investigate",
+      "finding_ids": [
+        "F-notion-uncertain",
+        "F-entry-spread"
+      ],
+      "assumption_ids": [
+        "A-list-price"
+      ],
+      "text": "Before setting a price, capture Notion's monthly and annual prices and anchor the entry tier against Trello Standard's $5 annual and $6 monthly per user."
+    },
+    {
+      "id": "R-ai-entry",
+      "stance": "close-gap",
+      "finding_ids": [
+        "F-ai-entry"
+      ],
+      "assumption_ids": [
+        "H-ai-expected"
+      ],
+      "text": "Plan some AI allowance in the entry paid tier, and state its limits as plainly as Asana's per-user request cap."
+    },
+    {
+      "id": "R-annual-headline",
+      "stance": "close-gap",
+      "finding_ids": [
+        "F-annual-discount"
+      ],
+      "assumption_ids": [
+        "A-annual-anchor"
+      ],
+      "text": "If the entrant offers annual billing, show both prices the way Trello does, with the monthly-billing price in the same line."
+    },
+    {
+      "id": "R-sso",
+      "stance": "investigate",
+      "finding_ids": [
+        "F-sso-bundle"
+      ],
+      "assumption_ids": [],
+      "text": "Ask target small-team buyers whether SSO without an add-on fee would change their choice before building it into a mid tier."
+    }
+  ],
+  "questions": [],
+  "next_action": {
+    "action": "Capture Notion's pricing page in both billing states and Asana's AI Studio pricing, then re-run validation.",
+    "kind": "retrieve",
+    "owner_role": "coordinator",
+    "cost": "cheap",
+    "involves_external_contact": false,
+    "approvals_needed": []
+  }
+}

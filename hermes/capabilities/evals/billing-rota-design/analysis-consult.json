@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "kind": "design-consultation",
+  "capability_id": "gstack.design-consultation",
+  "mode": "consult",
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "author:hephaestus-coordinator-demo"},
+  "binding": {"task_id": "t-billing-design", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-billing-design", "digest": "2a5a14bd4cc48d1cc4a4b7e8fcebd934dd0f695e3e266a1bea2df5b36f532437"},
+  "reused_artifacts": [
+    {"artifact_id": "t-support-prd.lean-prd", "kind": "lean-prd", "digest": "50ac43f3b048df16166030bbfeda35e601dcb38a6beaf070f581cc76d137b3f9"}
+  ],
+  "product_name": "Off-hours billing desk",
+  "surface_mode": "operate",
+  "use_scene": {
+    "who": "Support agents covering the off-hours billing rota",
+    "where": "Evenings and weekends at home, often in dim rooms, on laptops and sometimes a phone",
+    "lighting": "dim",
+    "theme": "dark",
+    "statement_ids": ["b-scene"]
+  },
+  "memorable_thing": {"status": "pending"},
+  "brief": {
+    "problem": "Billing questions that arrive outside weekday day shifts wait for one of two specialists, so customers wait far longer than for other tickets.",
+    "audience": "Support agents without billing training who cover the off-hours rota, and the two billing specialists who review macros.",
+    "audience_statement_ids": ["b-scene", "b-gap"],
+    "goals": ["A rota agent can take the next billing ticket and answer it with a reviewed macro.", "Who covers tonight is visible without asking in chat."],
+    "constraints": ["No new headcount.", "Only reviewed macros may be offered to agents."],
+    "non_goals": ["Automatic replies sent without an agent.", "Changing billing policy or refunds."]
+  },
+  "direction": {
+    "aesthetic": "industrial-utilitarian",
+    "decoration": "minimal",
+    "layout": "grid-disciplined",
+    "color_approach": "restrained",
+    "motion": "minimal-functional",
+    "rationale": "A dense working tool used at night: a dark ground because the rooms are dim, data set in a mono face because ticket times are compared at a glance, and one green accent only on the action that takes a ticket.",
+    "deliberate_risks": [
+      {"text": "Square corners on every surface.", "why": "The tool should read as an instrument; rounded cards would make the queue look like marketing."}
+    ]
+  },
+  "typography": {
+    "roles": [
+      {"role": "display", "family": "Cabinet Grotesk", "fallback": "sans-serif", "weights": [700], "verification": {"status": "pending"}},
+      {"role": "body", "family": "Atkinson Hyperlegible", "fallback": "sans-serif", "weights": [400, 700], "verification": {"status": "pending"}},
+      {"role": "mono", "family": "JetBrains Mono", "fallback": "monospace", "weights": [400, 500], "verification": {"status": "pending"}}
+    ],
+    "base_px": 15,
+    "ratio": 1.2,
+    "body_line_height": 1.45,
+    "measure_ch": 60
+  },
+  "color": {
+    "dark": {"bg": "#121417", "surface": "#1B1F24", "text": "#E3E6EA", "text-muted": "#A9B1BB", "accent": "#7CC4B0", "on-accent": "#0B1A16",
+             "border": "#6B7480", "focus": "#F2C46D", "success": "#6CCB8B", "warning": "#E8B04B", "danger": "#FF8A80", "info": "#8AB4F8"}
+  },
+  "spacing_px": [4, 8, 16, 24, 32, 40, 56],
+  "radius_px": {"small": 0, "medium": 2, "large": 4},
+  "motion": {"short_ms": 100, "long_ms": 200, "enter_easing": "ease-out", "move_easing": "ease-in-out"},
+  "screens": [
+    {
+      "id": "queue",
+      "name": "Off-hours billing queue",
+      "purpose": "Take the next waiting billing ticket and see how long billing tickets wait.",
+      "requires_permission": true,
+      "blocks": [
+        {"kind": "heading", "text": "Off-hours billing queue"},
+        {"kind": "metric", "label": "Median first response, billing tickets, October 2026", "value": "31 hours", "statement_id": "b-gap"},
+        {"kind": "metric", "label": "Median first response, other tickets, October 2026", "value": "9 hours", "statement_id": "b-gap"},
+        {"kind": "table", "caption": "Waiting billing tickets (illustrative rows)", "columns": ["Ticket", "Waiting since", "Question"],
+         "rows": [["T-4812", "Friday 16:20", "Card declined at renewal"], ["T-4815", "Saturday 09:05", "Refund status"]]},
+        {"kind": "action", "label": "Take next ticket", "emphasis": "primary"},
+        {"kind": "action", "label": "Open billing macros", "emphasis": "secondary"}
+      ]
+    },
+    {
+      "id": "macros",
+      "name": "Billing reply macros",
+      "purpose": "Find a reviewed macro for the ticket and insert it into the reply.",
+      "requires_permission": false,
+      "blocks": [
+        {"kind": "heading", "text": "Billing reply macros"},
+        {"kind": "field", "label": "Find a macro", "input": "search", "hint": "Search by question, for example refund status."},
+        {"kind": "text", "text": "Only macros reviewed by the billing-trained agents appear here."},
+        {"kind": "action", "label": "Insert macro into reply", "emphasis": "primary"}
+      ]
+    },
+    {
+      "id": "rota",
+      "name": "Rota calendar",
+      "purpose": "See who covers the off-hours billing queue each day and swap a shift.",
+      "requires_permission": false,
+      "blocks": [
+        {"kind": "heading", "text": "Off-hours rota this week"},
+        {"kind": "table", "caption": "Coverage by day (illustrative rows)", "columns": ["Day", "Covering agent"],
+         "rows": [["Friday evening", "Rota agent A"], ["Saturday", "Rota agent B"], ["Sunday", "Rota agent A"]]},
+        {"kind": "action", "label": "Request a shift swap", "emphasis": "primary"}
+      ]
+    }
+  ],
+  "states": [
+    {"screen_id": "queue", "state": "default"},
+    {"screen_id": "queue", "state": "empty", "message": "No billing tickets are waiting. New ones appear here as they arrive.", "recovery_action": "Open billing macros"},
+    {"screen_id": "queue", "state": "loading", "message": "Loading waiting tickets."},
+    {"screen_id": "queue", "state": "error", "message": "The queue did not load because the ticket service did not answer. Wait a minute, then reload the queue.", "recovery_action": "Reload the queue"},
+    {"screen_id": "queue", "state": "permission-denied", "message": "You are not on tonight's rota, so you cannot take billing tickets. Ask the rota owner to add you.", "recovery_action": "View the rota"},
+    {"screen_id": "queue", "state": "offline", "message": "You are offline. Tickets cannot be taken until the connection returns.", "recovery_action": "Try again"},
+    {"screen_id": "macros", "state": "default"},
+    {"screen_id": "macros", "state": "empty", "message": "No reviewed macro matches this search. Escalate the ticket to a billing specialist.", "recovery_action": "Escalate the ticket"},
+    {"screen_id": "macros", "state": "loading", "message": "Searching reviewed macros."},
+    {"screen_id": "macros", "state": "error", "message": "Macros did not load. Reload the list; if it fails again, escalate the ticket.", "recovery_action": "Reload macros"},
+    {"screen_id": "rota", "state": "default"},
+    {"screen_id": "rota", "state": "empty", "message": "Nobody is on the rota this week yet. The rota owner fills it on Monday.", "recovery_action": "Contact the rota owner"},
+    {"screen_id": "rota", "state": "loading", "message": "Loading this week's rota."},
+    {"screen_id": "rota", "state": "error", "message": "The rota did not load. Reload the page to try again.", "recovery_action": "Reload the rota"},
+    {"screen_id": "rota", "state": "success", "message": "Swap request sent to the rota owner."}
+  ],
+  "journey": [
+    {"id": "j-take", "goal": "Answer the next waiting billing ticket", "screen_id": "queue", "action": "Selects Take next ticket.", "success_signal": "The ticket opens assigned to the agent.", "failure_state": "permission-denied", "statement_ids": ["b-gap"]},
+    {"id": "j-macro", "goal": "Reply with a reviewed answer", "screen_id": "macros", "action": "Searches for the question and inserts the matching macro.", "success_signal": "The macro text appears in the reply for the agent to check and send.", "failure_state": "empty", "statement_ids": ["b-h-macros"]},
+    {"id": "j-rota", "goal": "Check or swap tonight's coverage", "screen_id": "rota", "action": "Opens the rota and requests a swap.", "success_signal": "The rota owner receives the swap request.", "failure_state": "error", "statement_ids": []}
+  ],
+  "responsive": {
+    "breakpoints": [
+      {"name": "mobile", "min_width_px": 0, "columns": 1, "navigation": "bottom-bar", "notes": "Queue, macros and rota become bottom-bar tabs; tables scroll inside their frame."},
+      {"name": "tablet", "min_width_px": 600, "columns": 2, "navigation": "top-bar", "notes": "Queue and macros sit side by side."},
+      {"name": "desktop", "min_width_px": 1024, "columns": 2, "navigation": "sidebar", "notes": "Sidebar navigation; the reply macros stay open beside the queue."},
+      {"name": "wide", "min_width_px": 1440, "columns": 3, "navigation": "sidebar", "notes": "Queue, macros and rota in three columns."}
+    ],
+    "max_content_width_px": 1440
+  },
+  "accessibility": {
+    "target": "WCAG 2.2 AA",
+    "requirements": [
+      {"id": "a11y-contrast", "topic": "contrast", "requirement": "Text and status colours meet 4.5:1 on the dark background and surface; borders and focus meet 3:1.", "verification": "static"},
+      {"id": "a11y-focus", "topic": "focus-visible", "requirement": "A 3px amber focus ring on every control.", "verification": "static"},
+      {"id": "a11y-keyboard", "topic": "keyboard", "requirement": "Take a ticket, search and insert a macro, and request a swap with the keyboard alone.", "verification": "browser"},
+      {"id": "a11y-target", "topic": "target-size", "requirement": "Targets are at least 44 by 44 CSS pixels, including bottom-bar tabs on phones.", "verification": "browser"},
+      {"id": "a11y-motion", "topic": "reduced-motion", "requirement": "Reduced motion removes all transitions.", "verification": "static"},
+      {"id": "a11y-landmarks", "topic": "landmarks", "requirement": "Landmarks and a skip link to the main region.", "verification": "static"},
+      {"id": "a11y-errors", "topic": "form-errors", "requirement": "The macro search explains an empty result and offers escalation.", "verification": "static"},
+      {"id": "a11y-resize", "topic": "text-resize", "requirement": "At 200 percent text size, tables scroll in their frame and nothing overlaps.", "verification": "browser"},
+      {"id": "a11y-status", "topic": "status-messages", "requirement": "Queue loading and offline messages are announced; errors assertively.", "verification": "assistive-tech"},
+      {"id": "a11y-cues", "topic": "non-color-cues", "requirement": "Waiting time is shown as text, never by colour alone.", "verification": "static"}
+    ]
+  },
+  "assets": [
+    {"id": "font-cabinet", "kind": "font", "name": "Cabinet Grotesk", "rights": "pending", "license": "Not recorded", "source_id": "none"},
+    {"id": "font-atkinson", "kind": "font", "name": "Atkinson Hyperlegible", "rights": "pending", "license": "Not recorded", "source_id": "none"},
+    {"id": "font-jetbrains", "kind": "font", "name": "JetBrains Mono", "rights": "pending", "license": "Not recorded", "source_id": "none"}
+  ],
+  "statements": [
+    {"id": "b-scene", "text": "Off-hours rota agents work evenings and weekends from home, often in dim rooms, on laptops and sometimes a phone.", "class": "synthetic", "source_ids": ["F1"]},
+    {"id": "b-gap", "text": "Billing tickets had a median first response of 31 hours versus 9 hours for other tickets in October 2026.", "class": "synthetic", "source_ids": ["F2"]},
+    {"id": "b-staff", "text": "Only 2 agents are trained on billing.", "class": "synthetic", "source_ids": ["F2"]},
+    {"id": "b-h-macros", "text": "Reviewed macros let agents without billing training answer common billing questions themselves.", "class": "hypothesis", "source_ids": ["F2"]},
+    {"id": "b-u-fonts", "text": "Whether the company may use the proposed faces in this tool is unknown.", "class": "unknown", "source_ids": [], "topic": "font-license", "resolution": "Ask the requester for a licence record, or verify each face's official listing once public research is approved."},
+    {"id": "b-u-usability", "text": "Whether rota agents can take and answer a ticket without help is unknown.", "class": "unknown", "source_ids": [], "topic": "usability-test", "resolution": "Run a task-based session with two rota agents on the preview after approval."}
+  ],
+  "computations": [],
+  "questions": [
+    {"topic": "memorable-thing", "text": "What is the one thing a rota agent should remember after the first off-hours shift with this tool?"}
+  ],
+  "next_action": {"action": "Ask the requester the memorable-thing question and for licence records of the three faces before the design is accepted.", "kind": "ask-requester", "owner_role": "Product designer", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []}
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-support-eng-review",
+  "binding": {"task_id": "t-support-eng-review", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "P1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic review request",
+      "ref": "fixture:support-billing-eng-review/request",
+      "topics": ["review-request"],
+      "excerpt": "Synthetic fixture. Review request 2026-11-04: review the draft spec t-support-spec.spec before any helpdesk configuration change. Ticket volume per night is not known."
+    }
+  ],
+  "not_available": [
+    {"topic": "night-volume", "reason": "not-measured", "detail": "Off-hours billing ticket volume per night has not been counted."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

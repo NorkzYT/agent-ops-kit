@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "kind": "design-consultation",
+  "capability_id": "gstack.design-consultation",
+  "mode": "consult",
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "author:hephaestus-coordinator-demo"},
+  "binding": {"task_id": "t-trial-design", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-trial-design", "digest": "7935bcb28c35273a529583500f40546c3cb351ca6a961504079c4ca94c0048ed"},
+  "reused_artifacts": [
+    {"artifact_id": "t-trial-prd.lean-prd", "kind": "lean-prd", "digest": "c3a8b264d1eb8a7676313440d3d7445f8c18d51579bc7368499e4ee41065a559"}
+  ],
+  "product_name": "First-step guide",
+  "surface_mode": "operate",
+  "use_scene": {
+    "who": "New trial users in their first session",
+    "where": "On laptops in office daylight, beside an empty workspace",
+    "lighting": "bright",
+    "theme": "light",
+    "statement_ids": ["st-scene"]
+  },
+  "memorable_thing": {"status": "answered", "text": "You can get a first project running in three steps, without waiting for an email.", "answer_source_id": "D2"},
+  "brief": {
+    "problem": "New trial users wait for a delayed welcome email to find the setup guide, so many never start a first project in the trial.",
+    "audience": "New trial users in their first session, who have not yet created a project.",
+    "audience_statement_ids": ["st-scene", "st-guide"],
+    "goals": ["A first project exists by the end of the first session.", "The guide can be left and reopened from Help without losing the current step."],
+    "constraints": ["The welcome email schedule stays unchanged during the test.", "Only the flagged half of new trials sees the guide."],
+    "non_goals": ["Changing the welcome email.", "Any public ranking of trial users."]
+  },
+  "direction": {
+    "aesthetic": "brutally-minimal",
+    "decoration": "minimal",
+    "layout": "grid-disciplined",
+    "color_approach": "restrained",
+    "motion": "minimal-functional",
+    "rationale": "An operate surface beside an empty workspace: type and spacing carry the hierarchy because the guide must not compete with the product, and one teal accent marks the next step because the thing to remember is three steps.",
+    "deliberate_risks": [
+      {"text": "No illustration in the empty workspace.", "why": "An honest empty state with one action keeps attention on step one instead of decoration."},
+      {"text": "Step numbers set in the mono face.", "why": "The count of steps is the promise, so it is set like data rather than decoration."}
+    ]
+  },
+  "typography": {
+    "roles": [
+      {"role": "display", "family": "Source Sans 3", "fallback": "sans-serif", "weights": [600, 700], "verification": {"status": "verified", "source_id": "D1"}},
+      {"role": "body", "family": "Source Sans 3", "fallback": "sans-serif", "weights": [400, 600], "verification": {"status": "verified", "source_id": "D1"}},
+      {"role": "mono", "family": "JetBrains Mono", "fallback": "monospace", "weights": [400], "verification": {"status": "verified", "source_id": "D1"}}
+    ],
+    "base_px": 16,
+    "ratio": 1.25,
+    "body_line_height": 1.5,
+    "measure_ch": 66
+  },
+  "color": {
+    "light": {"bg": "#F7F7F4", "surface": "#FFFFFF", "text": "#1F2A37", "text-muted": "#4B5563", "accent": "#0F766E", "on-accent": "#FFFFFF",
+              "border": "#7C8594", "focus": "#B45309", "success": "#15803D", "warning": "#A16207", "danger": "#B91C1C", "info": "#1D4ED8"}
+  },
+  "spacing_px": [4, 8, 12, 16, 24, 32, 48],
+  "radius_px": {"small": 2, "medium": 4, "large": 8},
+  "motion": {"short_ms": 120, "long_ms": 240, "enter_easing": "cubic-bezier(0.16, 1, 0.3, 1)", "move_easing": "cubic-bezier(0.65, 0, 0.35, 1)"},
+  "screens": [
+    {
+      "id": "guide",
+      "name": "Setup guide, step 1",
+      "purpose": "Name and create a first project from the guide panel at first login.",
+      "requires_permission": false,
+      "blocks": [
+        {"kind": "heading", "text": "Step 1 of 3: name your first project"},
+        {"kind": "text", "text": "Your workspace is empty. Give the project a name you will recognise; you can rename it later."},
+        {"kind": "field", "label": "Project name", "input": "text", "hint": "Up to 60 characters."},
+        {"kind": "action", "label": "Create project", "emphasis": "primary"},
+        {"kind": "action", "label": "Skip the guide", "emphasis": "secondary"}
+      ]
+    },
+    {
+      "id": "help",
+      "name": "Help menu",
+      "purpose": "Reopen a dismissed guide at the step the user left.",
+      "requires_permission": false,
+      "blocks": [
+        {"kind": "heading", "text": "Help"},
+        {"kind": "text", "text": "Reopen the setup guide at the step you left, or browse help topics."},
+        {"kind": "action", "label": "Reopen the setup guide", "emphasis": "primary"},
+        {"kind": "action", "label": "Browse help topics", "emphasis": "secondary"}
+      ]
+    }
+  ],
+  "states": [
+    {"screen_id": "guide", "state": "default"},
+    {"screen_id": "guide", "state": "empty", "message": "No project yet. The guide creates your first one in three steps.", "recovery_action": "Start step 1"},
+    {"screen_id": "guide", "state": "loading", "message": "Loading your workspace."},
+    {"screen_id": "guide", "state": "error", "message": "The project was not created: that name is already used in this workspace. Choose another name and try again.", "recovery_action": "Edit the name"},
+    {"screen_id": "guide", "state": "success", "message": "Project created. Next: add a first task."},
+    {"screen_id": "help", "state": "default"},
+    {"screen_id": "help", "state": "empty", "message": "You have not dismissed the guide, so there is nothing to reopen.", "recovery_action": "Browse help topics"},
+    {"screen_id": "help", "state": "loading", "message": "Loading help topics."},
+    {"screen_id": "help", "state": "error", "message": "Help topics did not load. Check your connection, then reload the page.", "recovery_action": "Reload help"}
+  ],
+  "journey": [
+    {"id": "j-name", "goal": "Create a first project", "screen_id": "guide", "action": "Types a project name and selects Create project.", "success_signal": "The project appears in the workspace and the guide moves to step 2.", "failure_state": "error", "statement_ids": ["st-guide"]},
+    {"id": "j-skip", "goal": "Leave the guide for later", "screen_id": "guide", "action": "Selects Skip the guide.", "success_signal": "The guide closes and the empty workspace stays usable.", "failure_state": "error", "statement_ids": []},
+    {"id": "j-reopen", "goal": "Pick the guide up again", "screen_id": "help", "action": "Opens Help and selects Reopen the setup guide.", "success_signal": "The guide opens at the step the user left.", "failure_state": "empty", "statement_ids": ["st-h-findable"]}
+  ],
+  "responsive": {
+    "breakpoints": [
+      {"name": "mobile", "min_width_px": 0, "columns": 1, "navigation": "collapsible-menu", "notes": "The guide becomes a full-width sheet above the workspace; actions stack, primary first."},
+      {"name": "tablet", "min_width_px": 768, "columns": 2, "navigation": "top-bar", "notes": "The guide docks beside the workspace."},
+      {"name": "desktop", "min_width_px": 1024, "columns": 2, "navigation": "sidebar", "notes": "The guide keeps a fixed column; the workspace takes the rest."}
+    ],
+    "max_content_width_px": 1120
+  },
+  "accessibility": {
+    "target": "WCAG 2.2 AA",
+    "requirements": [
+      {"id": "a11y-contrast", "topic": "contrast", "requirement": "Text and status colours meet 4.5:1 on background and surface; borders and the focus ring meet 3:1.", "verification": "static"},
+      {"id": "a11y-focus", "topic": "focus-visible", "requirement": "Every control shows a 3px focus ring in the focus colour; no outline is removed without a replacement.", "verification": "static"},
+      {"id": "a11y-keyboard", "topic": "keyboard", "requirement": "The guide can be completed, skipped and reopened with the keyboard alone, in visual order.", "verification": "browser"},
+      {"id": "a11y-target", "topic": "target-size", "requirement": "Buttons and inputs are at least 44 by 44 CSS pixels.", "verification": "browser"},
+      {"id": "a11y-motion", "topic": "reduced-motion", "requirement": "With reduced motion requested, transitions are removed and the final state shows at once.", "verification": "static"},
+      {"id": "a11y-landmarks", "topic": "landmarks", "requirement": "Header, nav, main and footer landmarks; a skip link is the first focusable element.", "verification": "static"},
+      {"id": "a11y-errors", "topic": "form-errors", "requirement": "The project-name error is tied to the field with aria-invalid and aria-describedby and says how to fix it.", "verification": "static"},
+      {"id": "a11y-resize", "topic": "text-resize", "requirement": "At 200 percent text size and 320 CSS pixels wide nothing is clipped and no horizontal scroll appears.", "verification": "browser"},
+      {"id": "a11y-status", "topic": "status-messages", "requirement": "Loading and success messages are announced politely; errors are announced assertively.", "verification": "assistive-tech"}
+    ]
+  },
+  "assets": [
+    {"id": "font-source-sans", "kind": "font", "name": "Source Sans 3", "rights": "licensed", "license": "Company design kit licence (synthetic fixture)", "source_id": "D1"},
+    {"id": "font-jetbrains", "kind": "font", "name": "JetBrains Mono", "rights": "licensed", "license": "Company design kit licence (synthetic fixture)", "source_id": "D1"}
+  ],
+  "statements": [
+    {"id": "st-scene", "text": "New trial users start on laptops in office daylight, and the guide sits beside an empty workspace.", "class": "synthetic", "source_ids": ["D1"]},
+    {"id": "st-fonts", "text": "The company design kit licenses Source Sans 3 and JetBrains Mono for product UI.", "class": "synthetic", "source_ids": ["D1"], "topic": "font-license"},
+    {"id": "st-guide", "text": "9 of 40 reviewed trial support chats asked where the welcome guide was.", "class": "synthetic", "source_ids": ["D3"]},
+    {"id": "st-memorable", "text": "The requester wants people to remember that a first project takes three steps, without waiting for an email.", "class": "synthetic", "source_ids": ["D2"]},
+    {"id": "st-h-findable", "text": "A guide that opens at first login and can be reopened from Help removes the question of where the guide is.", "class": "hypothesis", "source_ids": ["D3"]},
+    {"id": "st-a-laptop", "text": "Most first sessions happen at laptop widths; phone widths are a secondary check.", "class": "assumption", "source_ids": []},
+    {"id": "st-u-usability", "text": "Whether trial users can complete the guide without help is unknown.", "class": "unknown", "source_ids": [], "topic": "usability-test", "resolution": "Run a moderated usability session on the preview with trial users after the outreach approval."}
+  ],
+  "computations": [],
+  "questions": [],
+  "next_action": {"action": "Review the preview with the product trio, then decide whether to request a moderated usability session.", "kind": "decide", "owner_role": "Product designer", "cost": "cheap", "involves_external_contact": false, "approvals_needed": []}
+}

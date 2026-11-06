@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-ops-kit.local/schemas/capabilities/plan.schema.json",
+  "title": "Capability plan v1 (output of scripts/capability-plan.py)",
+  "description": "A read-only description of the smallest capability closure for one task: stages, reused/stale artifacts, missing inputs, tool needs, approvals and readiness. It executes nothing and grants nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plan_kind", "status", "reasons", "errors", "task_id", "selection_id", "registry_version",
+               "selection_provenance", "stages", "reused_artifacts", "stale_artifacts", "needs_input", "advisory_profiles",
+               "company_boundaries", "executable_now", "permission_effect", "writes"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "plan_kind": {"const": "capability-plan"},
+    "status": {"enum": ["planned", "needs_input", "blocked", "refused", "invalid"]},
+    "reasons": {"type": "array", "maxItems": 50, "items": {"type": "string", "maxLength": 400}},
+    "errors": {"type": "array", "maxItems": 200, "items": {"type": "string", "maxLength": 600}},
+    "task_id": {"type": ["string", "null"], "maxLength": 80},
+    "selection_id": {"type": ["string", "null"], "maxLength": 80},
+    "registry_version": {"type": "string", "maxLength": 16},
+    "selection_provenance": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "outcome", "label"],
+      "properties": {
+        "kind": {"enum": ["model-router", "explicit-offline", "none"]},
+        "outcome": {"enum": ["ok", "failed", "unconfigured", "skipped", "none"]},
+        "label": {"type": "string", "maxLength": 300},
+        "decision_ref": {"type": "string", "maxLength": 200}
+      }
+    },
+    "stages": {
+      "type": "array", "maxItems": 8,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["capability_id", "version", "mode", "action", "added_because", "required_by", "after", "inputs",
+                     "outputs", "tool_needs", "side_effects", "approvals_required", "execution", "readiness", "blockers"],
+        "properties": {
+          "capability_id": {"type": "string", "maxLength": 64},
+          "version": {"type": "string", "maxLength": 16},
+          "mode": {"type": "string", "maxLength": 64},
+          "action": {"enum": ["run", "reuse-existing"]},
+          "added_because": {"enum": ["selected", "dependency"]},
+          "required_by": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 64}},
+          "after": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 64}},
+          "inputs": {
+            "type": "array", "maxItems": 12,
+            "items": {
+              "type": "object", "additionalProperties": false, "required": ["name", "kinds", "required", "satisfied_by"],
+              "properties": {
+                "name": {"type": "string", "maxLength": 64},
+                "kinds": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 40}},
+                "required": {"type": "boolean"},
+                "satisfied_by": {
+                  "oneOf": [
+                    {"type": "null"},
+                    {"type": "object", "additionalProperties": false, "required": ["task_envelope"], "properties": {"task_envelope": {"type": "string"}}},
+                    {"type": "object", "additionalProperties": false, "required": ["artifact_id", "digest", "kind", "content_check"],
+                     "properties": {"artifact_id": {"type": "string"}, "digest": {"type": "string"}, "kind": {"type": "string"},
+                                    "content_check": {"$ref": "#/$defs/content_check"}}},
+                    {"type": "object", "additionalProperties": false, "required": ["stage", "kind"],
+                     "properties": {"stage": {"type": "string"}, "kind": {"type": "string"}}}
+                  ]
+                },
+                "note": {"type": "string", "maxLength": 300}
+              }
+            }
+          },
+          "outputs": {"type": "array", "maxItems": 12, "items": {"type": "string", "maxLength": 40}},
+          "reused_output": {
+            "type": "object", "additionalProperties": false, "required": ["artifact_id", "digest", "kind", "content_check"],
+            "properties": {"artifact_id": {"type": "string"}, "digest": {"type": "string"}, "kind": {"type": "string"},
+                           "content_check": {"$ref": "#/$defs/content_check"}}
+          },
+          "tool_needs": {
+            "type": "object", "additionalProperties": false, "required": ["required", "optional", "unavailable_optional", "note"],
+            "properties": {
+              "required": {"type": "array", "maxItems": 14, "items": {"type": "string"}},
+              "optional": {"type": "array", "maxItems": 14, "items": {"type": "string"}},
+              "unavailable_optional": {"type": "array", "maxItems": 14, "items": {"type": "string"}},
+              "note": {"type": "string", "maxLength": 300}
+            }
+          },
+          "side_effects": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
+          "approvals_required": {
+            "type": "array", "maxItems": 10,
+            "items": {"type": "object", "additionalProperties": false, "required": ["action", "when"],
+                      "properties": {"action": {"type": "string"}, "when": {"type": "string"}}}
+          },
+          "execution": {
+            "type": "object", "additionalProperties": false, "required": ["method", "writer"],
+            "properties": {"method": {"type": "string"}, "writer": {"type": "string"}}
+          },
+          "readiness": {"type": "object"},
+          "blockers": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 400}}
+        }
+      }
+    },
+    "reused_artifacts": {"type": "array", "maxItems": 64, "items": {"type": "object", "required": ["artifact_id", "digest", "kind", "content_check"],
+                                                                   "properties": {"content_check": {"$ref": "#/$defs/content_check"}}}},
+    "stale_artifacts": {"type": "array", "maxItems": 500, "items": {"type": "object"}},
+    "needs_input": {"type": "array", "maxItems": 64, "items": {"type": "object"}},
+    "advisory_profiles": {"type": "array", "maxItems": 15, "items": {"type": "object"}},
+    "company_boundaries": {"type": "object"},
+    "executable_now": {"type": "boolean"},
+    "permission_effect": {"const": "none: tool needs and approvals are requirements for the trusted policy layer, never grants"},
+    "writes": {"type": "array", "maxItems": 0}
+  },
+  "$defs": {
+    "content_check": {
+      "enum": ["unverified", "verified"],
+      "description": "unverified: reuse rests on the index-declared digest only (artifact bytes not read). verified: capability-plan.py --artifact-root hashed the bytes and they matched the index."
+    }
+  }
+}

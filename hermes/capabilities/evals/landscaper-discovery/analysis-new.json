@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "kind": "product-discovery",
+  "capability_id": "pm.product-discovery",
+  "mode": "new",
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "author:hephaestus-coordinator-demo"},
+  "binding": {"task_id": "t-landscaper-discovery", "company_id": "example-a", "project_id": null, "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-landscaper-discovery", "digest": "fbbd856e5db00c83fdc3ddf4a7427608d3355dfedfd95dcfcd55f3c97c2affda"},
+  "reused_artifacts": [
+    {"artifact_id": "t-landscaper-invoicing.decision-brief", "kind": "decision-brief", "digest": "3aadb3351d52ccb8b4e7a02dbcffdb1daca0ad65317aa323a34e9b7ff4cb1e04"}
+  ],
+  "discovery_question": "Do other small landscaping operators share the job-sheet invoicing chore, and would they pay to get rid of it?",
+  "decision_informed": "Build, keep testing by hand, or stop the invoicing idea.",
+  "desired_outcome": {
+    "metric": "Operators who pay for a month of concierge invoicing",
+    "baseline_statement_id": "n-u-pay",
+    "target": {"comparator": ">=", "value": 3, "unit": "of 10 operators offered"},
+    "window_days": 30
+  },
+  "statements": [
+    {"id": "n-founder", "text": "The founder runs two landscaping crews and writes invoices from paper job sheets on Sunday evenings.", "class": "synthetic", "source_ids": ["F1"]},
+    {"id": "n-h-pain", "text": "Other owners of small crews lose evening time turning job sheets into invoices.", "class": "hypothesis", "source_ids": ["F1"]},
+    {"id": "n-a-reach", "text": "Operators can be reached through the founder's own supplier and peer network.", "class": "assumption", "source_ids": []},
+    {"id": "n-a-photo", "text": "A phone photo of a handwritten job sheet holds enough detail to draft an invoice.", "class": "assumption", "source_ids": []},
+    {"id": "n-u-interviews", "text": "Whether other operators have this chore is unknown: no interviews exist.", "class": "unknown", "source_ids": [], "topic": "customer-interviews", "resolution": "Problem interviews or the concierge offer below, after outreach approval."},
+    {"id": "n-u-market", "text": "The number of potential customers is unknown.", "class": "unknown", "source_ids": [], "topic": "market-size", "resolution": "Ask for public research approval; no market size is stated until then."},
+    {"id": "n-u-conv", "text": "Sign-up conversion for the offer is unknown.", "class": "unknown", "source_ids": [], "topic": "baseline-conversion", "resolution": "Measure it on the landing page once publication is approved."},
+    {"id": "n-u-pay", "text": "Whether operators would pay for invoicing help is unknown: nobody has been asked.", "class": "unknown", "source_ids": [], "topic": "willingness-to-pay", "resolution": "Offer a paid month of concierge invoicing to 10 operators."}
+  ],
+  "computations": [],
+  "opportunities": [
+    {"id": "op-evenings", "framing": "I lose my Sunday evening turning paper job sheets into invoices.", "statement_ids": ["n-founder"]}
+  ],
+  "ideas": [
+    {"id": "i-photo", "title": "Job-sheet photo to invoice", "summary": "Photograph a job sheet and get a draft invoice to check and send.", "perspective": "product", "opportunity_id": "op-evenings", "status": "carried"},
+    {"id": "i-concierge", "title": "Concierge invoicing", "summary": "The founder types invoices from photos by hand for a monthly fee.", "perspective": "design", "opportunity_id": "op-evenings", "status": "carried"},
+    {"id": "i-scheduling", "title": "Crew scheduling app", "summary": "Plan crew days and turn finished jobs into invoices.", "perspective": "engineering", "opportunity_id": "op-evenings", "status": "declined", "reason": "Founder declined it: scheduling is a different problem (F2)."},
+    {"id": "i-voice", "title": "Voice-note invoice drafts", "summary": "Dictate the job at the site and get an invoice draft.", "perspective": "design", "opportunity_id": "op-evenings", "status": "proposed"},
+    {"id": "i-sync", "title": "Accounting software sync", "summary": "Push approved invoices into the operator's accounting tool.", "perspective": "engineering", "opportunity_id": "op-evenings", "status": "proposed"}
+  ],
+  "checkpoints": [
+    {"stage": "idea-selection", "question": "Which ideas should be stress-tested?", "status": "answered", "answer_source_id": "F2"},
+    {"stage": "assumption-focus", "question": "Which assumptions should be tested first?", "status": "answered", "answer_source_id": "F2"}
+  ],
+  "assumptions": [
+    {"id": "as-pain", "idea_id": "i-photo", "category": "value", "text": "Other small-crew owners have the same invoicing chore and want it gone.", "impact": "high", "risk": "high", "action": "test", "rank": 1, "statement_ids": ["n-h-pain", "n-u-interviews"]},
+    {"id": "as-pay", "idea_id": "i-concierge", "category": "viability", "text": "Operators will pay a monthly fee for invoicing help.", "impact": "high", "risk": "high", "action": "test", "rank": 2, "statement_ids": ["n-u-pay"]},
+    {"id": "as-concierge-value", "idea_id": "i-concierge", "category": "value", "text": "A checked invoice back by Monday morning is worth more than doing it yourself.", "impact": "high", "risk": "high", "action": "test", "rank": 3, "statement_ids": ["n-h-pain"]},
+    {"id": "as-reach", "idea_id": "i-photo", "category": "go-to-market", "text": "Operators can be reached through the founder's supplier and peer network.", "impact": "high", "risk": "high", "action": "test", "rank": 4, "statement_ids": ["n-a-reach", "n-u-conv"]},
+    {"id": "as-photo", "idea_id": "i-photo", "category": "feasibility", "text": "Handwritten job sheets can be read from a phone photo.", "impact": "low", "risk": "low", "action": "defer", "statement_ids": ["n-a-photo"]},
+    {"id": "as-data", "idea_id": "i-concierge", "category": "ethics", "text": "Customers' names and addresses on job sheets can be handled without consent problems.", "impact": "low", "risk": "low", "action": "defer", "statement_ids": []}
+  ],
+  "experiments": [
+    {
+      "id": "ex-concierge",
+      "assumption_ids": ["as-pain", "as-pay", "as-concierge-value"],
+      "method": "concierge-mvp",
+      "setup": "Offer 10 operators from the founder's network one paid month of invoices typed from their job-sheet photos.",
+      "hypothesis": {
+        "population": "Owners of small landscaping crews in the founder's network",
+        "behavior_or_outcome": "Pay for a month of concierge invoicing",
+        "threshold": {"comparator": ">=", "value": 3, "unit": "of 10 operators offered"},
+        "window_days": 30,
+        "intervention": "Paid concierge invoicing offer",
+        "rationale": "Payment is a stronger signal than stated interest.",
+        "measurement": "Paid sign-ups recorded by the founder",
+        "counter_metric": "Founder hours spent per invoice",
+        "failure_rule": "Stop the idea if fewer than 2 of 10 pay within 30 days."
+      },
+      "effort": "medium",
+      "approvals_needed": ["outreach"],
+      "result": "not-run",
+      "if_pass": "Keep the concierge running and test photo-to-invoice drafting.",
+      "if_fail": "Stop the invoicing idea or reframe the problem."
+    },
+    {
+      "id": "ex-landing",
+      "assumption_ids": ["as-reach"],
+      "method": "landing-page",
+      "setup": "One page describing photo-to-invoice with a waitlist, shared only in the founder's supplier and peer channels.",
+      "hypothesis": {
+        "population": "Operators who open the page from the founder's channels",
+        "behavior_or_outcome": "Join the waitlist with a business email",
+        "threshold": {"comparator": ">=", "value": 10, "unit": "percent of page visitors"},
+        "window_days": 21,
+        "intervention": "Waitlist landing page",
+        "rationale": "Tests whether these channels reach operators at all.",
+        "measurement": "Waitlist sign-ups divided by unique visitors",
+        "counter_metric": "Share of sign-ups that are not crew owners",
+        "failure_rule": "Find another channel if fewer than 5 percent join within 21 days."
+      },
+      "effort": "low",
+      "approvals_needed": ["outreach", "publication"],
+      "result": "not-run",
+      "if_pass": "Use the channel to recruit the concierge cohort.",
+      "if_fail": "Look for another channel before more testing."
+    }
+  ],
+  "questions": [
+    {"topic": "outreach-scope", "text": "May I contact up to 10 operators from your supplier and peer network for the concierge offer?"}
+  ],
+  "next_action": {
+    "action": "Draft the concierge offer and landing page; contact and publish nothing until outreach and publication are approved.",
+    "kind": "test",
+    "owner_role": "founder",
+    "cost": "cheap",
+    "involves_external_contact": true,
+    "approvals_needed": ["outreach", "publication"]
+  }
+}

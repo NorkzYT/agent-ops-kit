@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "kind": "competitor-research",
+  "capability_id": "pm.competitor-research",
+  "mode": "scan",
+  "authored_by": {
+    "kind": "coordinator-synthetic-demo",
+    "ref": "fixture:clinic-reminder-competitors"
+  },
+  "binding": {
+    "task_id": "t-clinic-reminders",
+    "company_id": "example-b",
+    "project_id": "example-ops",
+    "data_classification": "synthetic"
+  },
+  "evidence": {
+    "pack_id": "pack-clinic-reminders",
+    "digest": "d7f3a33edf9cd61a8dba3ac381e0da8ce349af400e5bd96758e56b4ad9f8f6c6"
+  },
+  "reused_artifacts": [],
+  "research_question": "How do two reminder tools position themselves to small clinics, and what do they charge per location?",
+  "purpose": "positioning",
+  "lens": [
+    "positioning",
+    "pricing"
+  ],
+  "as_of": "2026-09-15",
+  "max_source_age_days": 30,
+  "subject": {
+    "name": "Synthetic clinic reminder add-on",
+    "statement_ids": [
+      "A-subject"
+    ]
+  },
+  "selection_basis": "The two tools the synthetic requester named as the ones their pilot clinics already use.",
+  "queries": [
+    "clinic appointment reminder software pricing",
+    "pingwell.example",
+    "remindly.example pricing"
+  ],
+  "competitors": [
+    {
+      "id": "pingwell",
+      "name": "Pingwell",
+      "relation": "direct",
+      "domain": "pingwell.example",
+      "source_ids": [
+        "P1"
+      ],
+      "positioning": [
+        {
+          "source_id": "P1",
+          "text": "Fewer empty chairs, without hiring a receptionist."
+        }
+      ]
+    },
+    {
+      "id": "remindly",
+      "name": "Remindly",
+      "relation": "direct",
+      "domain": "remindly.example",
+      "source_ids": [
+        "M1"
+      ],
+      "positioning": [
+        {
+          "source_id": "M1",
+          "text": "The reminder tool your front desk already knows."
+        }
+      ]
+    }
+  ],
+  "price_points": [
+    {
+      "id": "p-pingwell-clinic",
+      "competitor_id": "pingwell",
+      "plan": "Clinic",
+      "status": "stated",
+      "amount": 39,
+      "currency": "EUR",
+      "unit": "per-account",
+      "cadence": "billed-annually",
+      "quotes": [
+        {
+          "source_id": "P1",
+          "text": "Clinic: €39 EUR per location per month, billed annually."
+        }
+      ],
+      "caveats": [
+        "Priced per location; the page does not define location."
+      ]
+    },
+    {
+      "id": "p-pingwell-overage",
+      "competitor_id": "pingwell",
+      "plan": "Clinic",
+      "status": "stated",
+      "amount": 0.05,
+      "currency": "EUR",
+      "unit": "usage-based",
+      "cadence": "unstated",
+      "quotes": [
+        {
+          "source_id": "P1",
+          "text": "Each reminder after the first 500 a month costs €0.05 EUR per message."
+        }
+      ],
+      "caveats": [
+        "The page does not say how overage is billed."
+      ]
+    },
+    {
+      "id": "p-remindly-practice",
+      "competitor_id": "remindly",
+      "plan": "Practice",
+      "status": "stated",
+      "amount": 25,
+      "currency": "GBP",
+      "unit": "per-user",
+      "cadence": "unstated",
+      "quotes": [
+        {
+          "source_id": "M1",
+          "text": "£25 GBP per user per month"
+        }
+      ],
+      "caveats": [
+        "Monthly per-user price without a billing cadence."
+      ]
+    },
+    {
+      "id": "p-remindly-group",
+      "competitor_id": "remindly",
+      "plan": "Group",
+      "status": "contact-sales",
+      "amount": null,
+      "currency": null,
+      "unit": "not-applicable",
+      "cadence": "not-applicable",
+      "quotes": [
+        {
+          "source_id": "M1",
+          "text": "Talk to sales for groups of 5 or more practices."
+        }
+      ],
+      "caveats": []
+    }
+  ],
+  "features": [
+    {
+      "id": "f-pingwell-voice",
+      "competitor_id": "pingwell",
+      "plan": "Clinic",
+      "feature": "Two-way SMS and voice reminders",
+      "quotes": [
+        {
+          "source_id": "P1",
+          "text": "Pingwell sends two-way appointment reminders by SMS and voice."
+        }
+      ]
+    },
+    {
+      "id": "f-remindly-sync",
+      "competitor_id": "remindly",
+      "plan": "Practice",
+      "feature": "Calendar sync with practice-management systems",
+      "quotes": [
+        {
+          "source_id": "M1",
+          "text": "Includes calendar sync with three practice-management systems."
+        }
+      ]
+    }
+  ],
+  "statements": [
+    {
+      "id": "S-units",
+      "class": "synthetic",
+      "source_ids": [
+        "P1",
+        "M1"
+      ],
+      "text": "Pingwell prices per location (€39) and Remindly per user (£25), so the two list prices are not directly comparable."
+    },
+    {
+      "id": "A-subject",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "subject-offer",
+      "text": "The add-on is sold to clinics that already run one of these two tools."
+    },
+    {
+      "id": "A-desk",
+      "class": "assumption",
+      "source_ids": [],
+      "topic": "market-buyer",
+      "text": "Front-desk staff, not clinicians, choose the reminder tool in small clinics."
+    }
+  ],
+  "computations": [],
+  "findings": [
+    {
+      "id": "F-units",
+      "kind": "differentiator",
+      "class": "hypothesis",
+      "statement_ids": [
+        "S-units"
+      ],
+      "price_ids": [
+        "p-pingwell-clinic",
+        "p-remindly-practice"
+      ],
+      "feature_ids": [],
+      "computation_ids": [],
+      "text": "The two tools sell on different units (location vs user), so a clinic with several front-desk users may find Pingwell cheaper per location."
+    },
+    {
+      "id": "F-sync",
+      "kind": "risk",
+      "class": "assumption",
+      "statement_ids": [
+        "A-desk"
+      ],
+      "price_ids": [],
+      "feature_ids": [
+        "f-remindly-sync"
+      ],
+      "computation_ids": [],
+      "text": "Remindly advertises calendar sync with practice-management systems; an add-on without that sync asks the front desk to double-enter appointments."
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "R-position",
+      "stance": "double-down",
+      "finding_ids": [
+        "F-units",
+        "F-sync"
+      ],
+      "assumption_ids": [
+        "A-subject",
+        "A-desk"
+      ],
+      "text": "Position the add-on as working inside the clinic's current reminder tool rather than competing on reminder price."
+    }
+  ],
+  "questions": [],
+  "next_action": {
+    "action": "Ask the requester which pilot clinics may be contacted to confirm who chooses the reminder tool.",
+    "kind": "ask-requester",
+    "owner_role": "coordinator",
+    "cost": "cheap",
+    "involves_external_contact": false,
+    "approvals_needed": []
+  }
+}

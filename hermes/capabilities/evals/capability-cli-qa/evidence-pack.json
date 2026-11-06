@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-cli-qa",
+  "binding": {
+    "task_id": "t-cli-qa",
+    "company_id": null,
+    "project_id": null,
+    "data_classification": "public"
+  },
+  "as_of": "2026-11-05",
+  "items": [
+    {
+      "source_id": "c-success",
+      "kind": "artifact",
+      "classification": "real",
+      "title": "validate: passing spec analysis",
+      "ref": "capture:capability-cli-qa/c-success",
+      "topics": [
+        "command-capture"
+      ],
+      "excerpt": "Command capture: exact command, stdout, stderr and exit status, recorded 2026-11-05 by the coordinator from this source checkout.",
+      "captured_file": "captured/c-success.txt",
+      "digest": "f4602b95a617acf4185764932a2c65728bc52b5e9935bc490e9ea8278c16ec26"
+    },
+    {
+      "source_id": "c-no-evidence",
+      "kind": "artifact",
+      "classification": "real",
+      "title": "validate: analysis without its evidence pack",
+      "ref": "capture:capability-cli-qa/c-no-evidence",
+      "topics": [
+        "command-capture"
+      ],
+      "excerpt": "Command capture: exact command, stdout, stderr and exit status, recorded 2026-11-05 by the coordinator from this source checkout.",
+      "captured_file": "captured/c-no-evidence.txt",
+      "digest": "cd1c4ad92e29d880fded41240450f840eab17f797d0e0935c4b4069888446dc0"
+    },
+    {
+      "source_id": "c-dup-keys",
+      "kind": "artifact",
+      "classification": "real",
+      "title": "validate: duplicate JSON keys",
+      "ref": "capture:capability-cli-qa/c-dup-keys",
+      "topics": [
+        "command-capture"
+      ],
+      "excerpt": "Command capture: exact command, stdout, stderr and exit status, recorded 2026-11-05 by the coordinator from this source checkout.",
+      "captured_file": "captured/c-dup-keys.txt",
+      "digest": "e90d7c8ed3147dcf57ba361b01b87f12347de6ae8b592b44f27e49fea7db51f6"
+    },
+    {
+      "source_id": "c-render-no-out",
+      "kind": "artifact",
+      "classification": "real",
+      "title": "render: missing --out",
+      "ref": "capture:capability-cli-qa/c-render-no-out",
+      "topics": [
+        "command-capture"
+      ],
+      "excerpt": "Command capture: exact command, stdout, stderr and exit status, recorded 2026-11-05 by the coordinator from this source checkout.",
+      "captured_file": "captured/c-render-no-out.txt",
+      "digest": "9eede9d5f69ed75624482584c3460b23e4219fac13c1a27778ac9a346c0abe0d"
+    }
+  ],
+  "not_available": [],
+  "policy": {
+    "public_research": "denied",
+    "private_terms": []
+  }
+}

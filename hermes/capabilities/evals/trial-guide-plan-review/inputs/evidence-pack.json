@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-trial-design",
+  "binding": {"task_id": "t-trial-design", "company_id": "example-a", "project_id": "example-web", "data_classification": "synthetic"},
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "D1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic product-trio design notes for the first-step guide",
+      "ref": "fixture:trial-guide-design/trio-notes",
+      "topics": ["use-scene", "font-license", "brand-assets"],
+      "excerpt": "Synthetic fixture. New trial users start on laptops in office daylight; the guide sits beside an empty workspace. The company design kit licenses Source Sans 3 and JetBrains Mono for product UI. No logo, illustration or image assets are supplied for the guide."
+    },
+    {
+      "source_id": "D2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic requester answer to the memorable-thing question",
+      "ref": "fixture:trial-guide-design/memorable-answer",
+      "topics": ["memorable-thing"],
+      "excerpt": "Synthetic fixture. Requester answer: you can get a first project running in three steps, without waiting for an email."
+    },
+    {
+      "source_id": "D3",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Background fact carried from the accepted lean PRD",
+      "ref": "artifact:t-trial-prd.lean-prd",
+      "topics": ["support-chats"],
+      "excerpt": "Synthetic fixture (from the accepted lean PRD background): 9 of 40 reviewed trial support chats asked where the welcome guide was.",
+      "values": {"chats": 40, "guide": 9}
+    }
+  ],
+  "not_available": [
+    {"topic": "usability-test", "reason": "not-measured", "detail": "No usability session has run on any guide design."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "kind": "lean-prd",
+  "capability_id": "pm.lean-prd",
+  "mode": "full",
+  "authored_by": {"kind": "coordinator-synthetic-demo", "ref": "author:hephaestus-coordinator-demo"},
+  "binding": {"task_id": "t-support-prd", "company_id": "example-b", "project_id": "example-ops", "data_classification": "synthetic"},
+  "evidence": {"pack_id": "pack-support-prd", "digest": "d43fd3d9b878ec6dcd20ef47aae5c1622d8d1ae3f40e4577ec549f1811148d9c"},
+  "reused_artifacts": [
+    {"artifact_id": "t-support-billing.problem-brief", "kind": "problem-brief", "digest": "eaa6399487f22ca447c55cfa6869ab2516f288c75d1d43e54406754b598fb818"}
+  ],
+  "feature_name": "Off-hours billing queue and billing reply macros",
+  "summary": "Billing questions wait far longer for a first reply than other tickets, mostly outside the two billing agents' shifts. This routes off-hours billing tickets to a rota queue and gives rota agents reviewed reply macros, without new headcount.",
+  "background_statement_ids": ["b-gap", "b-staff", "b-friday", "b-constraint"],
+  "statements": [
+    {"id": "b-gap", "text": "Billing tickets had a median first response of 31 hours versus 9 hours for other tickets in October 2026.", "class": "synthetic", "source_ids": ["E1"]},
+    {"id": "b-share", "text": "Billing was 38 percent of the 1240 October tickets.", "class": "synthetic", "source_ids": ["E1"], "computation_ids": ["k-share"]},
+    {"id": "b-staff", "text": "Only 2 agents are trained on billing and both work weekday day shifts.", "class": "synthetic", "source_ids": ["E2"]},
+    {"id": "b-friday", "text": "Billing questions arriving on Friday after 15:00 wait until Monday.", "class": "synthetic", "source_ids": ["E2"]},
+    {"id": "b-constraint", "text": "No new support headcount before 2027-01-01; the Q4 2026 tooling budget is 3000 USD.", "class": "synthetic", "source_ids": ["E3"]},
+    {"id": "b-h-coverage", "text": "Thin billing coverage outside weekday day shifts drives much of the billing delay.", "class": "hypothesis", "source_ids": ["E1", "E2"]},
+    {"id": "b-a-rota", "text": "Two non-billing agents can join an off-hours rota after a short training.", "class": "assumption", "source_ids": []},
+    {"id": "b-u-csat", "text": "Whether slow billing replies lower customer satisfaction is unknown.", "class": "unknown", "source_ids": [], "topic": "customer-satisfaction", "resolution": "Add a one-question satisfaction prompt on closed billing tickets during the pilot."},
+    {"id": "b-u-macros", "text": "How many billing questions a reply macro could answer is unknown.", "class": "unknown", "source_ids": [], "topic": "macro-coverage", "resolution": "Tag a two-week sample of billing tickets by question type before writing macros."}
+  ],
+  "computations": [
+    {"id": "k-share", "expression": "b / t * 100", "inputs": {"b": {"source_id": "E1", "value": "billing_tickets"}, "t": {"source_id": "E1", "value": "tickets_total"}}, "result": 38.0, "round_to": 0, "unit": "percent"}
+  ],
+  "objective": {
+    "text": "Bring billing first response close to other tickets this quarter without hiring.",
+    "key_results": [
+      {"id": "kr-billing", "metric": "Median first response for billing tickets", "baseline_statement_id": "b-gap", "target": {"comparator": "<=", "value": 12, "unit": "hours"}, "window_days": 28},
+      {"id": "kr-other", "metric": "Median first response for other tickets", "baseline_statement_id": "b-gap", "target": {"comparator": "<=", "value": 12, "unit": "hours"}, "window_days": 28}
+    ]
+  },
+  "segments": [
+    {"id": "seg-customer", "name": "Customers with a billing question", "job": "Get a billing question answered before it blocks a payment or renewal.", "constraints": []},
+    {"id": "seg-agent", "name": "Support agents without billing training", "job": "Answer a billing ticket correctly without waiting for a billing specialist.", "constraints": ["Rota shifts must fit current contracts."]}
+  ],
+  "value_propositions": [
+    {
+      "segment_id": "seg-customer",
+      "why": "A billing question often blocks paying or renewing.",
+      "before": "Questions sent on Friday afternoon wait until Monday for one of 2 specialists.",
+      "how": "Off-hours billing tickets go to a rota queue that is staffed every day.",
+      "after": "They get a first reply within the same half day.",
+      "alternatives": "Waiting, emailing again, or contacting sales.",
+      "statement": "For customers with a billing question, the rota queue answers off-hours tickets the same day instead of after the weekend."
+    },
+    {
+      "segment_id": "seg-agent",
+      "why": "They see billing tickets they cannot answer and leave them in the queue.",
+      "before": "They pass every billing ticket to the 2 trained agents.",
+      "how": "Reviewed reply macros cover common billing questions.",
+      "after": "They answer common billing questions themselves and escalate only the rest.",
+      "alternatives": "Asking a specialist in chat or leaving the ticket.",
+      "statement": "For agents without billing training, reviewed macros turn common billing tickets into ones they can close."
+    }
+  ],
+  "features": [
+    {"id": "f-route", "text": "Route billing-tagged tickets created outside weekday day shifts to an off-hours billing queue.", "segment_ids": ["seg-customer"]},
+    {"id": "f-rota", "text": "Rota calendar that names the agent covering the off-hours billing queue each day.", "segment_ids": ["seg-customer", "seg-agent"]},
+    {"id": "f-macros", "text": "Billing reply macros written and reviewed by the 2 billing-trained agents.", "segment_ids": ["seg-agent"]}
+  ],
+  "open_assumption_ids": ["b-h-coverage", "b-a-rota", "b-u-csat", "b-u-macros"],
+  "release": {
+    "first_version": [
+      {"id": "r-route", "text": "Off-hours routing rule and queue.", "feature_ids": ["f-route"]},
+      {"id": "r-rota", "text": "Rota calendar with daily coverage.", "feature_ids": ["f-rota"]},
+      {"id": "r-macros", "text": "First set of reviewed billing macros.", "feature_ids": ["f-macros"]}
+    ],
+    "later": [
+      {"id": "r-crosstrain", "text": "Cross-training more agents, if the pilot misses its target."}
+    ],
+    "non_goals": [
+      {"id": "ng-hire", "text": "Hiring."},
+      {"id": "ng-policy", "text": "Changing billing policy or refunds."},
+      {"id": "ng-auto", "text": "Automatic replies sent to customers without an agent."}
+    ],
+    "timeframe": "One sprint to configure, then a 28-day pilot."
+  },
+  "constraints": ["No new headcount before the date in b-constraint.", "Tooling spend stays within the Q4 budget in b-constraint."],
+  "acceptance_criteria": [
+    {"id": "ac-route", "scope_id": "r-route", "given": "a billing-tagged ticket created on Friday at 16:00", "when": "routing runs", "then": "the ticket lands in the off-hours billing queue within 1 minute", "verification": "automated-test", "trace": {"kind": "evidence", "statement_ids": ["b-friday"]}},
+    {"id": "ac-daytime", "scope_id": "r-route", "given": "a billing-tagged ticket created on Tuesday at 10:00", "when": "routing runs", "then": "the ticket stays in the normal billing queue", "verification": "automated-test", "trace": {"kind": "chosen-requirement", "rationale": "Daytime billing tickets keep going to the trained agents."}},
+    {"id": "ac-rota", "scope_id": "r-rota", "given": "the rota for the next 28 days", "when": "a supervisor opens the calendar", "then": "every day has exactly 1 named agent for the off-hours billing queue", "verification": "manual-check", "trace": {"kind": "evidence", "statement_ids": ["b-staff"]}},
+    {"id": "ac-macros", "scope_id": "r-macros", "given": "the macro library", "when": "a billing-trained agent reviews it", "then": "each macro has a recorded reviewer and review date", "verification": "manual-check", "trace": {"kind": "chosen-requirement", "rationale": "Macros reach customers through agents, so a specialist signs off each one."}},
+    {"id": "ac-target", "scope_id": "r-route", "given": "the 28-day pilot has ended", "when": "the ticket export is compared", "then": "billing median first response is 12 hours or less and other tickets stay at 12 hours or less", "verification": "metric-check", "trace": {"kind": "evidence", "statement_ids": ["b-gap"]}}
+  ],
+  "risks": [
+    {"id": "rk-fatigue", "text": "Rota agents tire of off-hours shifts.", "mitigation": "Rotate daily and cap each agent at two off-hours days a week."},
+    {"id": "rk-season", "text": "Seasonal billing volume changes hide the effect.", "mitigation": "Compare against the same weeks of October and report volume next to the median."},
+    {"id": "rk-wrong-answer", "text": "A macro gives a wrong billing answer.", "mitigation": "Only reviewed macros are available; unclear cases are escalated."}
+  ],
+  "handoff": {
+    "targets": ["existing.engineering-path"],
+    "notes": "Helpdesk configuration only; the support lead accepts this draft before any change is made."
+  },
+  "left_out": ["Contacts (not known)", "Satisfaction survey design"],
+  "questions": [
+    {"topic": "rota-pay", "text": "Do off-hours rota shifts need extra pay or time off in lieu?"}
+  ],
+  "next_action": {
+    "action": "Support lead answers the rota-pay question and reviews this draft before configuration starts.",
+    "kind": "ask-requester",
+    "owner_role": "support lead",
+    "cost": "cheap",
+    "involves_external_contact": false,
+    "approvals_needed": []
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-landscaper-discovery",
+  "binding": {
+    "task_id": "t-landscaper-discovery",
+    "company_id": "example-a",
+    "project_id": null,
+    "data_classification": "synthetic"
+  },
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "F1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic founder note",
+      "ref": "fixture:landscaper/founder-note",
+      "study_design": "anecdotal",
+      "topics": ["founder-context"],
+      "excerpt": "Synthetic fixture. Founder note: I run two landscaping crews and spend Sunday evenings writing invoices from paper job sheets."
+    },
+    {
+      "source_id": "F2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic founder reply to the discovery checkpoints",
+      "ref": "fixture:landscaper/checkpoint-reply",
+      "study_design": "anecdotal",
+      "topics": ["checkpoint-reply"],
+      "excerpt": "Synthetic fixture. Founder reply: carry job-sheet photo to invoice and concierge invoicing; decline the crew scheduling app because scheduling is a different problem. Test whether other operators share the chore and would pay before anything is built.\nidea-selection: i-photo, i-concierge\nassumption-focus: as-pain, as-pay, as-concierge-value, as-reach"
+    }
+  ],
+  "not_available": [
+    {"topic": "customer-interviews", "reason": "not-supplied", "detail": "No interviews with other landscapers exist."},
+    {"topic": "market-size", "reason": "not-supplied", "detail": "No market data was supplied; public research was not authorized."},
+    {"topic": "baseline-conversion", "reason": "not-measured", "detail": "No landing page or sign-up flow exists."},
+    {"topic": "willingness-to-pay", "reason": "not-measured", "detail": "Nobody has been asked to pay."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "pack_id": "pack-trial-prd",
+  "binding": {
+    "task_id": "t-trial-prd",
+    "company_id": "example-a",
+    "project_id": "example-web",
+    "data_classification": "synthetic"
+  },
+  "as_of": "2026-11-04",
+  "items": [
+    {
+      "source_id": "E1",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic trial cohort export, September 2026",
+      "ref": "fixture:trial-activation/cohort-export",
+      "study_design": "observational",
+      "topics": ["activation", "onboarding-email"],
+      "excerpt": "Synthetic fixture. Trials started in September 2026: 800; activated within 7 days: 248. Welcome email delayed more than 24 hours: 300 trials, 60 activated.",
+      "values": {"trials": 800, "activated": 248, "delayed": 300, "delayed_activated": 60}
+    },
+    {
+      "source_id": "E2",
+      "kind": "synthetic-fixture",
+      "classification": "synthetic",
+      "title": "Synthetic review of trial support chats, September 2026",
+      "ref": "fixture:trial-activation/chat-review",
+      "study_design": "descriptive",
+      "topics": ["support-chats"],
+      "excerpt": "Synthetic fixture. 40 trial support chats reviewed: 14 asked how to start a first project; 9 asked where the welcome guide was.",
+      "values": {"chats": 40, "first_project": 14, "guide": 9}
+    }
+  ],
+  "not_available": [
+    {"topic": "randomized-test", "reason": "not-measured", "detail": "The guide A/B test has not run."}
+  ],
+  "policy": {"public_research": "denied", "private_terms": []}
+}
