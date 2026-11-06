@@ -15,7 +15,7 @@ PORT=18317
 fail=0
 
 # Extract the cliproxyapi healthcheck argv from docker-compose.yml with PyYAML
-# (already used by the CI `stack` job; preinstalled on ubuntu-latest). No live
+# (the CI shell-tests job ensures python3-yaml explicitly). No live
 # `docker compose config`: that would need a real .env. Supported forms only —
 # anything else fails closed:
 #   test: ["CMD", "bash"|"sh", "-c", "<script>"]
@@ -56,6 +56,12 @@ sys.stdout.write("".join(a + "\0" for a in argv))
 PY
 }
 
+# PyYAML is a hard dependency: fail with a clear reason before any fixture, so
+# an ImportError can never be mistaken for a fixture "rejection".
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  echo "FAIL: PyYAML (python3 'yaml' module) is not available; install python3-yaml"; exit 1
+fi
+
 # Fail-closed self-checks: unsupported or ambiguous forms must not extract.
 FIXDIR="$(mktemp -d)"; trap 'rm -rf "$FIXDIR"' EXIT
 fixture() { printf 'services:\n  cliproxyapi:\n    healthcheck:\n      test: %s\n' "$1" >"$FIXDIR/c.yml"; }
@@ -68,6 +74,18 @@ for bad in '["CMD", "wget", "-qO-", "http://127.0.0.1:8317/"]' \
   if extract_healthcheck "$FIXDIR/c.yml" >/dev/null 2>&1; then
     echo "  FAIL extractor accepted unsupported test: $bad"; fail=1
   else echo "  ok   rejects $bad"; fi
+done
+# Unescaped `$` with an otherwise valid 8317 probe: only the interpolation guard
+# can reject these, and the reason must say so (`$$$X` = literal `$` + `$X`).
+# shellcheck disable=SC2016  # literal $SUFFIX is the point of these fixtures
+for bad in '["CMD-SHELL", "curl -f http://127.0.0.1:8317/$SUFFIX"]' \
+           '["CMD", "bash", "-c", "curl -f http://127.0.0.1:8317/$$$SUFFIX"]'; do
+  fixture "$bad"
+  if err="$(extract_healthcheck "$FIXDIR/c.yml" 2>&1 >/dev/null)"; then
+    echo "  FAIL extractor accepted unescaped \$: $bad"; fail=1
+  elif [[ "$err" == *"unescaped \$ (Compose would interpolate it)"* ]]; then
+    echo "  ok   rejects unescaped \$ $bad"
+  else echo "  FAIL wrong rejection reason for $bad: $err"; fail=1; fi
 done
 fixture '"wget -q -O- http://127.0.0.1:8317/healthz"'
 if [[ "$(extract_healthcheck "$FIXDIR/c.yml" | tr '\0' '|')" == "sh|-c|wget -q -O- http://127.0.0.1:8317/healthz|" ]]
@@ -102,13 +120,13 @@ trap 'stop_mock; rm -rf "$FIXDIR"' EXIT
 start_mock "$PORT" 200
 wait_up "$PORT" || { echo "FAIL: mock (200) did not start"; exit 1; }
 if "${argv[@]}" >/dev/null 2>&1; then echo "  ok   200 -> healthy"; else echo "  FAIL 200 reported unhealthy"; fail=1; fi
-stop_mock; wait_down "$PORT" || true
+stop_mock; wait_down "$PORT" || { echo "FAIL: port $PORT still listening after mock stop"; exit 1; }
 
 # (b) endpoint up, returns 500 -> healthcheck must fail (status line is not 200)
 start_mock "$PORT" 500
 wait_up "$PORT" || { echo "FAIL: mock (500) did not start"; exit 1; }
 if "${argv[@]}" >/dev/null 2>&1; then echo "  FAIL 500 -> reported healthy"; fail=1; else echo "  ok   500 -> unhealthy"; fi
-stop_mock; wait_down "$PORT" || true
+stop_mock; wait_down "$PORT" || { echo "FAIL: port $PORT still listening after mock stop"; exit 1; }
 
 # (c) port dead -> healthcheck must fail (this is what the old `|| exit 0` broke)
 if "${argv[@]}" >/dev/null 2>&1; then echo "  FAIL down -> reported healthy (false green)"; fail=1; else echo "  ok   down -> unhealthy"; fi
