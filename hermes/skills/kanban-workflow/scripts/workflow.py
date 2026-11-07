@@ -73,10 +73,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import difflib
 import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -88,6 +90,7 @@ sys.dont_write_bytecode = True  # keep __pycache__ out of the installed skill di
 sys.path.insert(0, str(SCRIPT.parent))
 import browserstack as bs  # noqa: E402
 import completion as cp  # noqa: E402
+import dev_test_mode as tm  # noqa: E402
 import repo_lease as rl  # noqa: E402
 
 LANES = {"mac": "mac-worker", "windows": "windows-worker"}
@@ -358,7 +361,7 @@ class Ctx:
     FIELDS = (("key", "Key"), ("title", "Title"), ("repo", "Repo"), ("base", "Base"), ("branch", "Branch"),
               ("lanes", "Lanes"), ("coder", "Coder"), ("reviewer", "Reviewer"), ("orchestrator", "Orchestrator"),
               ("max_rounds", "Max-rounds"), ("max_runtime", "Max-runtime"), ("code_max_runtime", "Code-max-runtime"),
-              ("mobile", "Mobile"), ("checkout", "Checkout"))
+              ("mobile", "Mobile"), ("checkout", "Checkout"), ("dev_test_mode", tm.HEADER_LABEL))
 
     def __init__(self, **kw):
         for name, _ in self.FIELDS:
@@ -388,6 +391,10 @@ class Ctx:
             raise WorkflowError("card header is missing workflow settings (not a card from this workflow)")
         if ctx.checkout and not CHECKOUT_RE.match(ctx.checkout):
             raise WorkflowError(f"card header has an invalid checkout '{ctx.checkout}'")
+        try:
+            ctx.dev_test_mode = tm.card_mode(h)
+        except tm.ModeError as exc:
+            raise WorkflowError(str(exc)) from exc
         return ctx
 
 
@@ -865,6 +872,44 @@ SCANNER_RECOVERY = """\
    block-check: kanban_block(reason="capability: <the exact command>; <the scanner finding>; missing <the capability>")."""
 
 
+SCANNER_RECOVERY_COMPOSE = SCANNER_RECOVERY.replace(
+    """   exists. Read the rejection; when it names one (RECOVERY: dev_test_run for registered
+   Go/PostgreSQL tests), make that call once as a new request, verify its result and
+   continue.""",
+    """   exists. On this card (Dev-test-mode: compose) a RECOVERY naming dev_test_run is not one:
+   never call dev_test_run; use the Compose test path of step 3, or block as it says.""")
+
+
+if SCANNER_RECOVERY_COMPOSE == SCANNER_RECOVERY:  # the default text moved: fail at import, not on a card
+    raise RuntimeError("SCANNER_RECOVERY no longer holds the dev_test_run RECOVERY sentence")
+
+
+def card_mode_of(show: dict) -> tuple:
+    """(mode, source) of a card: its Dev-test-mode header, else the default. Only the header
+    counts (written by intake or by the operator's body edit); a comment never changes a mode.
+    ModeError for an invalid header value."""
+    mode = tm.card_mode(header_of(show))
+    return (mode, "header") if mode else ("", "default")
+
+
+def dev_test_mode(show: dict, env=None) -> dict:
+    """This card's dev-test mode checked against this process's settings (card wins over an
+    unset setting; an explicit different setting, or one on a card without a mode, is refused:
+    exit 3, block). Fails closed."""
+    try:
+        mode, source = card_mode_of(show)
+        out = tm.check_worker(mode, env)
+    except tm.ModeError as exc:
+        raise CapabilityError(f"capability: dev-test mode: {exc}") from exc
+    out["card_source"] = source
+    return out
+
+
+def scanner_recovery(mode: str = "") -> str:
+    """Step 7 of the code card; the default text is unchanged."""
+    return SCANNER_RECOVERY_COMPOSE if mode == tm.COMPOSE else SCANNER_RECOVERY
+
+
 def label(lane: str) -> str:
     return LANE_LABELS.get(lane, lane)
 
@@ -921,6 +966,121 @@ def checkout_steps(ctx: Ctx) -> str:
    Every later round of this request works in this same checkout and repeats these steps."""
 
 
+# The default database-test paragraph of the code card: byte-identical to the text before
+# Dev-test-mode existed, so existing default cards do not drift.
+DB_TEST_STEP = """\
+   Go tests against a registered local PostgreSQL test database run only through the
+   dev_test_run tool (profile, packages, race, vet); never a terminal command carrying a
+   database URL or a credential file, and never read that file. When dev_test_run is not
+   among your tools, no approved equivalent exists on this host:
+   kanban_block(reason="capability: <the exact command>; <the scanner finding>; missing <the capability>")
+   (an operator-approved dev-test profile); do not assume one will appear.
+"""
+
+
+# The operator-authorized Compose test rules (compose mode only; the default text above is unchanged).
+COMPOSE_RULES = """\
+   inspect the compose files and confirm the services they define use no production
+   database, production credential or destructive host resource (docker.sock, host root or
+   device mounts, privileged mode). Use the compose project, files, service names, profiles
+   and test commands the repository defines, never guessed ones ("compose" below is docker
+   compose with that project and those files). Read service state only with compose ps;
+   compose config --services, --profiles or --hash <service>, never plain compose config
+   (it prints interpolated env values); and docker inspect --format limited to the
+   com.docker.compose.project, com.docker.compose.service, com.docker.compose.config-hash
+   and com.docker.compose.project.config_files labels, .State.Status,
+   .HostConfig.Privileged and each mount's type, source and destination (docker volume
+   inspect --format: its project and volume labels), never a whole docker inspect,
+   {{json .}}, .Config.Env or any environment field.
+   A needed service that is not running may be brought up, one service at a time, only:
+   - when its container exists and is stopped, its project and service labels are this
+     repository's and those reads show it safe: docker start <that exact container name>;
+   - when no container exists for it, or the existing container's config-hash label equals
+     the output of compose config --hash <service>, and every named volume it mounts is
+     absent or already labelled with this project: compose up -d --no-deps --no-recreate <service>.
+   A running service whose config-hash differs is used as it is and never brought up again;
+   report the difference. Run the tests with compose exec -T and --profile <profile> run
+   --rm --no-deps against an isolated test database and a non-superuser role you create for
+   this card inside the existing database service, never the main development database
+   (the tests truncate tables) and never production; its password is one you generate,
+   kept in a 0600 file outside the repository, never a value from the project's env files,
+   and never printed. Leave that database and every service you started in place, and
+   report every service you started and the test database. When no rule above applies (an
+   unsafe or foreign container, a drifted or volume-mismatched service that would need up),
+   start and recreate nothing: block (human-approval:) naming the service and the failed
+   check. Never: compose down, stop, restart, kill or rm; compose up without --no-deps
+   --no-recreate <service>; --force-recreate, --renew-anon-volumes (-V), --remove-orphans,
+   --build or --pull on an up; make dev-deps or a target that recreates services; volume
+   rm, prune, dropdb, DROP; migrations reset or down; never reading or printing .env files,
+   plain compose config, exec env of a service or an unformatted docker inspect; a
+   password, token or connection secret in a command, log or report. These are your rules:
+   the host scanner checks only a few of them; this is not OS isolation.
+   A command the scanner rejects is not an approved alternative: do not reword, wrap or
+   encode it; block as below."""
+
+
+# The mode paragraphs are built once at import; the script path is filled in per render, so a
+# card always embeds the same path in every command (body-plan compares them).
+SCRIPT_MARK = "\x00workflow.py\x00"
+
+
+def db_evidence_line(backend: str, command: str) -> str:
+    return (f"   python3 {SCRIPT_MARK} completion evidence {TASK_TOKEN} --repo-dir <checkout> --kind test\n"
+            f"     --check {tm.DB_CHECK} --backend {backend} --result pass|fail --command \"{command}\"\n"
+            f"     --exit <code> --passed N [--failed N] --log <its output file>\n")
+
+
+DB_TEST_STEP_COMPOSE = (
+    """   Go tests against a local PostgreSQL test database (Dev-test-mode: compose, the operator's
+   setting for this request): never call dev_test_run, even when it is among your tools or a
+   scanner rejection names it as RECOVERY. The project's existing Docker Compose development
+   services are this card's test path: the setting authorizes them for testing only after you
+""" + COMPOSE_RULES + """ On this card the tests may also run
+   from the host against that isolated Compose test database (go test -p 1 ./..., with -race
+   and go vet), or through the repository's own make target or test script that does so;
+   the connection reaches them through the environment from that 0600 file, never written
+   into the command. Migrate and seed only that isolated database, through the repository's
+   migration service: compose --profile <profile> run --rm --no-deps <service>, with every
+   connection setting it reads overridden for the test database with -e (never its env-file
+   values) and the password only as a read-only mounted PGPASSFILE (-v <that 0600
+   file>:<path>:ro -e PGPASSFILE=<path>); when the service cannot read that file, block, never
+   put the password in the command. make dev-deps and the project's db setup, migrate and seed
+   targets migrate and seed the main development database: never use them for this. Tests
+   that skip because no test database reached them did not run: count executed tests (go
+   test -v or -json); a run whose database tests all skipped is not a pass.
+   When no rule above lets the tests run, start and recreate nothing and block:
+   kanban_block(reason="capability: <the exact command>; <the failed check>; missing <what the Compose path lacks>")
+   dev_test_run is not a fallback on this card. When the change touches database code,
+   queries or migrations, select --check db-tests in step 1's criteria; a docs-only or
+   unit-only change does not need it. Record every database test run, pass or fail
+   (a run that executed no test is not evidence):
+""" + db_evidence_line(tm.COMPOSE, "<the exact command that ran>") + """   With db-tests selected, completion handoff refuses without a passing --backend compose
+   db-tests record on the current source.
+""")
+
+DB_TEST_STEP_DEV_TEST_RUN = (
+    """   Go tests against a local PostgreSQL test database (Dev-test-mode: dev_test_run, the
+   operator's setting for this request): run them only with the dev_test_run tool (profile,
+   packages, race, vet). The project's Docker Compose services, a terminal go test with a
+   database URL or credential file and any other path are not approved on this card, even
+   with an authorization comment. When dev_test_run is not among your tools or refuses (its
+   isolation is not provisioned on this host), block; do not assume it will appear:
+   kanban_block(reason="capability: dev_test_run required by Dev-test-mode; <its error or absence>")
+   When the change touches database code, queries or migrations, select --check db-tests
+   in step 1's criteria; a docs-only or unit-only change does not need it. Record every
+   run, pass or fail (a run that executed no test is not evidence):
+""" + db_evidence_line(tm.DEV_TEST_RUN, "dev_test_run(<its arguments>)") + """   With db-tests selected, completion handoff refuses without a passing --backend
+   dev_test_run db-tests record on the current source.
+""")
+
+
+def db_test_step(mode: str = "") -> str:
+    """Step 3's database-test paragraph of the code card (one place, so an existing card's body
+    can be checked against it when the operator re-renders that card). The default is unchanged."""
+    text = {tm.COMPOSE: DB_TEST_STEP_COMPOSE, tm.DEV_TEST_RUN: DB_TEST_STEP_DEV_TEST_RUN}.get(mode, DB_TEST_STEP)
+    return text.replace(SCRIPT_MARK, str(SCRIPT))
+
+
 def code_body(ctx: Ctx, n: int, request: str, feedback: str) -> str:
     fix = ""
     if feedback:
@@ -932,6 +1092,7 @@ def code_body(ctx: Ctx, n: int, request: str, feedback: str) -> str:
             if ctx.mobile else "")
     hint = ("; the Xcode scheme, the UI test target, bundle id and the screens to check on iPhone and iPad"
             if ctx.mobile else "")
+    caps_mode = f" --dev-test-mode {ctx.dev_test_mode}" if ctx.dev_test_mode else ""
     return f"""\
 {header_block([("Workflow", "code"), *ctx.header(), ("Round", n), TRANSPORT_HEADER])}
 
@@ -951,7 +1112,7 @@ Steps:
    the request, the card and the repository before asking anything, then record them and a plan:
    python3 {SCRIPT} completion criteria {TASK_TOKEN} --item "<criterion>" ... --check <check> ...
    python3 {SCRIPT} completion plan {TASK_TOKEN} --step "<step>" ...
-   `completion capabilities --repo-dir {work}` lists the stacks and the approved capabilities
+   `completion capabilities --repo-dir {work}{caps_mode}` lists the stacks and the approved capabilities
    this repository needs (it reads manifest names only and runs nothing).
 2. Write the code with a Claude coding subagent: delegate_task(goal=<the request or the
    failures below, the checkout path, the acceptance criteria>). It runs Claude Opus. For hard
@@ -969,13 +1130,7 @@ Steps:
    (exit 0 proceed; 2 identical repeat refused: change the diagnosis or approach; 4 stop: use
    its block_reason). Fix, retest, record again. After your full-diff review:
    completion evidence {TASK_TOKEN} --repo-dir {work} --kind review --check diff --result pass|fail.
-   Go tests against a registered local PostgreSQL test database run only through the
-   dev_test_run tool (profile, packages, race, vet); never a terminal command carrying a
-   database URL or a credential file, and never read that file. When dev_test_run is not
-   among your tools, no approved equivalent exists on this host:
-   kanban_block(reason="capability: <the exact command>; <the scanner finding>; missing <the capability>")
-   (an operator-approved dev-test profile); do not assume one will appear.
-4. Commit on {ctx.branch} (Conventional Commits, no Co-Authored-By trailer), then
+{db_test_step(ctx.dev_test_mode)}4. Commit on {ctx.branch} (Conventional Commits, no Co-Authored-By trailer), then
    git push origin {ctx.branch}. Never force push. Never merge unless the merge gates below allow it.
 5. With your own terminal tool (never inside delegate_task) run:
    python3 {SCRIPT} record-sha {TASK_TOKEN} --repo-dir {work} --notes "<what changed; what each platform should check{hint}>"
@@ -1003,7 +1158,7 @@ Steps:
    (an approval stop closes only this way; it never stands in for an approval itself).
    A running owner (preflight or a completion command naming another live run) is never
    taken over, on a timeout or after a delegate exits: wait, or block with checkout: <detail>.
-{SCANNER_RECOVERY}
+{scanner_recovery(ctx.dev_test_mode)}
 
 {NATIVE_PROTOCOL}
 
@@ -1192,6 +1347,12 @@ def card_diff(spec: dict, show: dict, creators: set) -> list:
     if native_v1(show):
         if task.get("body") != spec["body"]:
             diff.append("body differs from the planned native-v1 body (truncated or edited)")
+            want_mode, have_mode = want_h.get(tm.HEADER_KEY, ""), have_h.get(tm.HEADER_KEY, "")
+            if want_mode != have_mode:
+                diff.append(f"header {tm.HEADER_LABEL}: board {have_mode or 'default'!r}, planned "
+                            f"{want_mode or 'default'!r} (an existing request changes mode only by the "
+                            f"operator's `hermes kanban edit --body` of `dev-test-mode body-plan <code card> "
+                            f"--mode {want_mode or '<mode>'}`)")
         if task.get("created_by") not in creators:
             diff.append(f"created_by: board {task.get('created_by')!r}, expected one of {sorted(creators)}")
     elif task.get("created_by") not in (LEGACY_AUTHOR, None):
@@ -1285,15 +1446,20 @@ def create_round(run: Runner, ctx: Ctx, n: int, request: str, parent: Optional[s
                  bind: str = "") -> dict:
     """Code card -> one validation card per lane -> round card, idempotent per round: each
     level is discovered on the board first; missing cards of one level are queued together."""
+    try:
+        tm.check_worker(ctx.dev_test_mode)
+    except tm.ModeError as exc:
+        raise CapabilityError(f"capability: dev-test mode: {exc}") from exc
     creators = creators_of(ctx)
-    code = create_card(run, f"[code {n}] {ctx.title}", ctx.coder, code_body(ctx, n, request, feedback),
-                       f"{ctx.key}:code:{n}", parents=[parent] if parent else [], max_runtime=ctx.code_max_runtime,
-                       creators=creators, bind=bind)
+    spec = card_spec(f"[code {n}] {ctx.title}", ctx.coder, code_body(ctx, n, request, feedback),
+                     f"{ctx.key}:code:{n}", [parent] if parent else [], ctx.code_max_runtime)
+    code = {"id": ensure_cards(run, [spec], creators, bind)[0]}
     specs = [card_spec(f"[{label(lane)} {n}] {ctx.title}", lane, validate_body(ctx, n, lane, code["id"], request),
                        f"{ctx.key}:{lane}:{n}", [code["id"]], ctx.max_runtime) for lane in ctx.lanes]
     lanes = dict(zip(ctx.lanes, ensure_cards(run, specs, creators)))
-    rnd = create_card(run, f"[round {n}] {ctx.title}", ctx.orchestrator, round_body(ctx, n, code["id"], request),
-                      f"{ctx.key}:round:{n}", parents=list(lanes.values()), creators=creators)
+    rspec = card_spec(f"[round {n}] {ctx.title}", ctx.orchestrator, round_body(ctx, n, code["id"], request),
+                      f"{ctx.key}:round:{n}", list(lanes.values()))
+    rnd = {"id": ensure_cards(run, [rspec], creators)[0]}
     return {"round": n, "code": code["id"], "lanes": lanes, "round_card": rnd["id"]}
 
 
@@ -1320,10 +1486,14 @@ def intake(args, run: Runner = default_runner, git: Optional[GitRunner] = None) 
     request = read_request(args)
     title = defang(short_title(args.title))
     branch = check_branch(args.branch or default_branch(title), args.base)
+    try:
+        mode = tm.resolve_intake(getattr(args, "dev_test_mode", None))
+    except tm.ModeError as exc:
+        raise CapabilityError(f"capability: dev-test mode: {exc}") from exc
     ctx = Ctx(key=base_key, title=title, repo=repo, base=args.base, branch=branch, lanes=peers,
               coder=args.coder, reviewer=args.reviewer, orchestrator=args.orchestrator,
               max_rounds=args.max_rounds, max_runtime=args.max_runtime, code_max_runtime=args.code_max_runtime,
-              mobile=args.mobile, checkout=checkout)
+              mobile=args.mobile, checkout=checkout, dev_test_mode=mode["mode"])
 
     plan = {
         "key": base_key, "repo": repo, "base": args.base, "branch": branch, "max_rounds": ctx.max_rounds,
@@ -1336,6 +1506,7 @@ def intake(args, run: Runner = default_runner, git: Optional[GitRunner] = None) 
                     "idempotency_key": f"{base_key}:request"},
         "reviewer": ctx.reviewer,
         "discord": origin,
+        "dev_test_mode": {"mode": mode["mode"] or "default", "source": mode["source"]},
     }
     if checkout:
         plan["checkout"] = checkout
@@ -1464,6 +1635,7 @@ def checkout_command(cmd: str, task_id: str, repo_dir: str, manifest: str = "", 
     if str(Path(repo_dir).expanduser().resolve()) != checkout:
         raise WorkflowError(f"this card works in the designated checkout {checkout}, not '{repo_dir}'")
     if cmd == "preflight":
+        dev_test_mode(show)  # a misconfigured worker stops before it edits anything; release never is
         result = checkout_preflight(run, task_id, show, h, checkout, scan_runner=scan_runner, git=git)
         return result["exit"], result
     owner = worker_owner(run, task_id, show, checkout, git)
@@ -2270,6 +2442,22 @@ def mobile_stages(rows: list, sha: str, stage: str = "") -> list:
     return out + [{"stage": "windows", "status": "deferred"}]
 
 
+def inherit_mode(run: Runner, ctx: Ctx, h: dict) -> None:
+    """A round or review card's Dev-test-mode must equal its code card's: a header that was
+    dropped or changed on either card is refused (exit 3), never read as the default."""
+    if not h.get("code"):
+        return
+    try:
+        code_mode = card_mode_of(card(run, h["code"]))[0]
+    except tm.ModeError as exc:
+        raise CapabilityError(f"capability: dev-test mode: {exc}") from exc
+    if code_mode != ctx.dev_test_mode:
+        raise CapabilityError(f"capability: dev-test mode: this {h.get('workflow')} card records "
+                              f"{ctx.dev_test_mode or 'default'}, its code card {h['code']} records "
+                              f"{code_mode or 'default'}: the operator makes the bodies agree "
+                              f"(`dev-test-mode body-plan {h['code']} --mode <mode>`)")
+
+
 def open_next_round(run: Runner, show: dict, ctx: Ctx, n: int, feedback: str) -> dict:
     """Round n+1 after `show` (a round or review card), linked into the report card
     before `show` completes, thus the report never runs between rounds."""
@@ -2307,6 +2495,7 @@ def advance(task_id: str, run: Runner = default_runner) -> tuple:
     show = card(run, task_id)
     h = kind_of(show, "round")
     ctx, n, stage = Ctx.from_header(h), int(h.get("round") or 1), h.get("stage", "")
+    inherit_mode(run, ctx, h)
     sync_records(run, show)
     sha = code_sha(run, h["code"])["sha"]
     rows = round_evidence(run, show, sha)
@@ -2370,6 +2559,7 @@ def verdict(task_id: str, decision: str, reason: str, run: Runner = default_runn
     show = card(run, task_id)
     h = kind_of(show, "review")
     ctx, n, sha = Ctx.from_header(h), int(h.get("round") or 1), h.get("commit", "")
+    inherit_mode(run, ctx, h)
     try:
         profile = rl.current_run(show).get("profile") or ""  # the runtime-recorded reviewer, never an env value
     except rl.IdentityError as exc:
@@ -2660,6 +2850,21 @@ def completion_source(h: dict, repo_dir: str, git: GitRunner) -> dict:
         raise WorkflowError(str(exc)) from exc
 
 
+DEV_TEST_ENFORCED = ("mode resolution and the card header fail closed (exit 3); a comment never sets a mode",
+                     "a worker setting (config.yaml or environment) naming another explicit mode is refused (exit 3)",
+                     "a --backend contradicting the mode is refused (exit 2)",
+                     "db-tests records are validated identically when written and at every read",
+                     "with db-tests selected in the criteria, handoff needs a passing db-tests record of the "
+                     "mode's backend on the current source",
+                     "this script never runs dev_test_run, docker or tests itself")
+DEV_TEST_INSTRUCTION_ONLY = ("which tools the agent calls (dev_test_run, docker compose) is card text, not "
+                             "intercepted here; tool exposure is the Hermes runtime's",
+                             "whether db-tests is selected is the coordinator's call, guided by the card text",
+                             "a record is the agent's report bound to source state; its log digest shows a file of "
+                             "that content existed, not that the command ran or produced it",
+                             "no OS isolation")
+
+
 def completion_view(run: Runner, task_id: str, repo_dir: str = "", git: GitRunner = default_git,
                     remote_sha: Optional[str] = None, shows: Optional[dict] = None) -> dict:
     """Stages, next unmet criteria, owner and held cards of the request (reads only)."""
@@ -2679,6 +2884,12 @@ def completion_view(run: Runner, task_id: str, repo_dir: str = "", git: GitRunne
         done = [r for r in cp.of(recs, "handoff") if r.get("commit") == pushed.get("sha")]
         if done:
             current, basis = done[-1]["source"], "handoff"
+    mode_info = dev_test_mode(code_show)
+    mode = card_mode_of(code_show)[0]
+    accept = {tm.DB_CHECK: lambda e: tm.accepts(mode, e)} if mode else None
+    selected = tm.DB_CHECK in ((cp.last(recs, "criteria") or {}).get("checks") or ())
+    mode_info = {**mode_info, "db_tests_required": bool(mode) and selected,
+                 "enforced_by_this_script": DEV_TEST_ENFORCED, "instruction_only": DEV_TEST_INSTRUCTION_ONLY}
     final = None
     report = next((tid for tid, s in shows.items() if header_of(s).get("workflow") == "report"), None)
     if report:
@@ -2687,7 +2898,7 @@ def completion_view(run: Runner, task_id: str, repo_dir: str = "", git: GitRunne
         final = {"validate": (bool(lanes) and all(r["ok"] for r in lanes),
                               [r["reason"] for r in lanes if not r["ok"]] or ["no lane evidence for the final round"]),
                  "complete": (ok, [r["reason"] for r in rows if not r["ok"]])}
-    rows = cp.evaluate(recs, code_id, current, pushed, remote_sha, final)
+    rows = cp.evaluate(recs, code_id, current, pushed, remote_sha, final, accept=accept)
     held = [{"id": tid, "title": s["task"].get("title"), "status": "blocked",
              "rule": "held for the operator; never unblocked or promoted automatically"}
             for tid, s in shows.items() if (s.get("task") or {}).get("status") == "blocked"]
@@ -2704,13 +2915,15 @@ def completion_view(run: Runner, task_id: str, repo_dir: str = "", git: GitRunne
             "branch": h.get("branch"), "source": current, "source_basis": basis,
             "handoff_ready": cp.handoff_ready(rows), "complete": all(r["met"] is True for r in rows),
             "stages": rows, "next": nxt, "owner": lease_owner(h, git), "code_card_running": running,
-            "held": held, "records": len(recs)}
+            "held": held, "records": len(recs), "dev_test_mode": mode_info}
 
 
 def completion_write(cmd: str, args, run: Runner = default_runner, git: GitRunner = default_git) -> tuple:
     """criteria | plan | delegate | evidence | recover | block-check | resolve on the coordinator's own code card."""
     show = card(run, args.task_id)
     h = kind_of(show, "code")
+    dev_test_mode(show)
+    mode = card_mode_of(show)[0]
     require_completion_writer(run, args.task_id, h, git)
     recs = completion_records(request_cards(run, args.task_id))
     try:
@@ -2723,8 +2936,16 @@ def completion_write(cmd: str, args, run: Runner = default_runner, git: GitRunne
         elif cmd == "evidence":
             source = completion_source(h, args.repo_dir, git)
             counts = {"passed": args.passed, "failed": args.failed, "skipped": args.skipped}
-            rec = cp.evidence_record(args.kind, args.check, args.result, args.command, args.exit, counts, source,
-                                     cp.log_digest(args.log), args.summary)
+            backend = getattr(args, "backend", "") or ""
+            try:
+                tm.check_backend(mode, args.check, backend)
+                rec = cp.evidence_record(args.kind, args.check, args.result, args.command, args.exit, counts, source,
+                                         cp.log_digest(args.log), args.summary)
+                if backend:
+                    rec["backend"] = backend
+                tm.check_db_record(mode, rec)  # the same rule every later read applies
+            except tm.ModeError as exc:
+                raise WorkflowError(str(exc)) from exc
         elif cmd == "recover":
             rec = cp.plan_recovery(recs, args.stage, getattr(args, "class"), args.signature, args.diagnosis,
                                    args.action)
@@ -2734,6 +2955,11 @@ def completion_write(cmd: str, args, run: Runner = default_runner, git: GitRunne
             rec = cp.resolve_record(recs, args.stop, args.reason)
         else:
             rec = cp.check_block(recs, args.reason)
+            if mode == tm.COMPOSE and rec["event"] == "block" and tm.DEV_TEST_RUN_RE.search(args.reason):
+                rec = {"event": "block-refused", "reason": rec["reason"],
+                       "detail": "Dev-test-mode: compose: dev_test_run is not this card's test path, so its absence "
+                                 "is not a stop; run the tests on the Compose path of step 3, or block on that "
+                                 "path's own failed check"}
     except cp.CompletionError as exc:
         raise WorkflowError(str(exc)) from exc
     rec = completion_put(run, args.task_id, h, rec)
@@ -2824,7 +3050,178 @@ def completion_command(args, run: Runner = default_runner, git: GitRunner = defa
     if act == "metrics":
         return 0, completion_metrics()
     root = str(Path(args.repo_dir).expanduser().resolve())
-    return 0, cp.detect_capabilities(root, registered_scanner=root in rl.scanner_registry())
+    mode = getattr(args, "dev_test_mode", None) or ""
+    return 0, cp.detect_capabilities(root, registered_scanner=root in rl.scanner_registry(),
+                                     dev_test_mode="" if mode == "default" else mode)
+
+
+# ------------------------------------------------------ dev-test body plan ---
+# An existing native-v1 request created without a Dev-test-mode moves to an explicit mode only by
+# the operator's own supported `hermes kanban edit <id> --body` of the exact bodies planned here.
+# This command is read-only on the board (kanban show only); agents have no body-edit tool and
+# never apply it. Nothing on the card (a comment, a record) is an authorization or sets a mode.
+
+BODY_EDITABLE = {"todo", "ready", "blocked"}
+ARG_MAX_BYTES = 131072 - 1  # Linux MAX_ARG_STRLEN: one argv string incl. its NUL
+EMBEDDED_SCRIPT = re.compile(r"python3 (\S*workflow\.py)(?=\s|$)")
+
+
+def embedded_scripts(body: str) -> set:
+    """The workflow.py paths a card body's `python3 <path> ...` commands run."""
+    return set(EMBEDDED_SCRIPT.findall(body or ""))
+
+
+def _planned_card(ctx: Ctx, n: int, code_id: str, request: str, show: dict) -> tuple:
+    """(title, assignee, body) the current generator renders in ctx's mode for this card of the
+    round; WorkflowError for a card kind this plan does not cover."""
+    h = header_of(show)
+    kind = h.get("workflow")
+    if kind == "code":
+        return f"[code {n}] {ctx.title}", ctx.coder, code_body(ctx, n, request, "")
+    if kind == "validate" and not h.get("stage") and h.get("lane") in ctx.lanes:
+        lane = h["lane"]
+        return (f"[{label(lane)} {n}] {ctx.title}", lane, validate_body(ctx, n, lane, code_id, request))
+    if kind == "round" and not h.get("stage"):
+        return f"[round {n}] {ctx.title}", ctx.orchestrator, round_body(ctx, n, code_id, request)
+    if kind == "report":
+        return f"Report: {ctx.title}", ctx.orchestrator, report_body(ctx, request)
+    raise WorkflowError(f"{(show.get('task') or {}).get('id')}: a {kind} card"
+                        f"{' (stage ' + h['stage'] + ')' if h.get('stage') else ''} is not covered by the body "
+                        "plan (round 1 code, validation, round and report cards only)")
+
+
+def body_plan(run: Runner, task_id: str, mode: str, out_dir: str = "") -> dict:
+    """The exact body edits that put an existing default-mode request into *mode*: per card the
+    current and new body sha256, the preserved request and header identity, and the operator's
+    `hermes kanban edit` command. Reads the board only; WorkflowError/CapabilityError when refused."""
+    if mode not in tm.MODES:
+        raise WorkflowError(f"--mode must be one of {', '.join(tm.MODES)}")
+    show = card(run, task_id)
+    h = kind_of(show, "code")
+    if not native_v1(show):
+        raise WorkflowError(f"{task_id} is not a native-v1 card; only native-v1 requests are planned")
+    try:
+        local = tm.local_setting()
+        ctx = Ctx.from_header(h)
+    except tm.ModeError as exc:
+        raise CapabilityError(f"capability: dev-test mode: {exc}") from exc
+    if local["mode"] and local["mode"] != mode:
+        raise CapabilityError(f"capability: dev-test mode: this process's {local['source']} setting selects "
+                              f"{local['mode']}, not {mode}")
+    if ctx.dev_test_mode and ctx.dev_test_mode != mode:
+        raise WorkflowError(f"{task_id} records {tm.HEADER_LABEL}: {ctx.dev_test_mode}; changing an explicit mode "
+                            "is not planned")
+    n = int(h.get("round") or 1)
+    if n != 1:
+        raise WorkflowError(f"{task_id} is round {n}; only a round-1 request is planned (its code body has no "
+                            "review feedback to carry)")
+    request = request_of(show)
+    if not request or REQUEST_MARKER not in (show.get("task") or {}).get("body", ""):
+        raise WorkflowError(f"{task_id} has no verbatim request section")
+    shows = request_cards(run, task_id)
+    codes = code_cards(shows)
+    if codes[max(codes)][0] != task_id:
+        raise WorkflowError(f"{task_id} is not the request's current code card ({codes[max(codes)][0]})")
+    later = sorted(tid for tid, s in shows.items() if int(header_of(s).get("round") or n) != n)
+    if later:
+        raise WorkflowError(f"the request already has cards of a later round ({', '.join(later)})")
+    # The new bodies embed this process's own path. Run from any other copy (a scratch clone, a
+    # checkout) the plan would silently repoint live cards' commands, so it refuses; there is no
+    # override: run it from the exact script the cards already name.
+    foreign = {tid: sorted(p - {str(SCRIPT)}) for tid, s in shows.items()
+               if (p := embedded_scripts((s.get("task") or {}).get("body"))) - {str(SCRIPT)}}
+    if foreign:
+        named = sorted({p for ps in foreign.values() for p in ps})
+        raise WorkflowError(f"the request's cards run another workflow script path than this one ({SCRIPT}): "
+                            + "; ".join(f"{tid}: {', '.join(ps)}" for tid, ps in sorted(foreign.items()))
+                            + f"; not planned: rerun as python3 {named[0] if len(named) == 1 else '<that path>'} "
+                            "dev-test-mode body-plan ... so every card keeps its exact script path")
+    target = Ctx(**{name: getattr(ctx, name) for name, _ in Ctx.FIELDS})
+    target.dev_test_mode = mode
+    creators = creators_of(ctx)
+    order = [task_id] + sorted(tid for tid in shows if tid != task_id)
+    edits, unchanged = [], []
+    for tid in order:
+        cshow, task = shows[tid], shows[tid].get("task") or {}
+        old = task.get("body") or ""
+        title, assignee, new = _planned_card(target, n, task_id, request, cshow)
+        if old == new:
+            unchanged.append(tid)
+            continue
+        problems = []
+        if (task.get("title"), task.get("assignee")) != (title, assignee):
+            problems.append(f"title/assignee {task.get('title')!r}/{task.get('assignee')!r}, planned "
+                            f"{title!r}/{assignee!r}")
+        if not native_v1(cshow) or task.get("created_by") not in creators:
+            problems.append(f"not a native-v1 card created by {sorted(creators)}")
+        if task.get("status") not in BODY_EDITABLE or run_fence(cshow)["live"]:
+            problems.append(f"status {task.get('status')} / live runs {run_fence(cshow)['live']} (edit only a "
+                            f"{'/'.join(sorted(BODY_EDITABLE))} card with no live run)")
+        old_h, new_h = card_header(old), card_header(new)
+        added = {k: v for k, v in new_h.items() if k not in old_h}
+        if identity_of(old_h) != identity_of(new_h) or {k: v for k, v in new_h.items() if k in old_h} != old_h \
+                or set(added) - {tm.HEADER_KEY}:
+            problems.append("the header would change beyond adding the Dev-test-mode line")
+        if request_of(cshow) != request:
+            problems.append("its verbatim request differs from the code card's")
+        if embedded_scripts(new) - embedded_scripts(old):
+            problems.append(f"the new body would add the workflow script path {SCRIPT} (old: "
+                            f"{', '.join(sorted(embedded_scripts(old))) or 'none'})")
+        if request_of({"task": {"body": new}}) != request_of(cshow):
+            problems.append("the new body would not carry the same verbatim request")
+        raw = new.encode("utf-8")
+        if "\x00" in new or len(raw) > ARG_MAX_BYTES:
+            problems.append(f"the new body ({len(raw)} bytes) cannot pass as one --body argument")
+        if problems:
+            raise WorkflowError(f"{tid}: not planned: " + "; ".join(problems))
+        removed = [ln for ln in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0)
+                   if ln[:1] == "-" and not ln.startswith("---")]
+        edits.append({"card": tid, "kind": header_of(cshow).get("workflow"), "status": task.get("status"),
+                      "old_sha256": tm.sha256(old), "old_bytes": len(old.encode("utf-8")),
+                      "new_sha256": tm.sha256(new), "new_bytes": len(raw),
+                      "request_sha256": tm.sha256(request),
+                      "header_added": {tm.HEADER_LABEL: mode} if added else {},
+                      "removed_lines": [ln[1:] for ln in removed], "new_body": new})
+    if out_dir:
+        d = Path(out_dir).expanduser()
+        if not d.is_dir():
+            raise WorkflowError(f"--out-dir {out_dir}: not an existing directory")
+        for e in edits:
+            f = d / f"{e['card']}.body"
+            data = e["new_body"].encode("utf-8")
+            try:
+                fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                if f.read_bytes() != data:
+                    raise WorkflowError(f"{f} exists with other content; choose an empty --out-dir")
+            else:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(data)
+            e["body_file"] = str(f.resolve())
+    for e in edits:
+        src = shlex.quote(e.get("body_file") or f"<out-dir>/{e['card']}.body")
+        e["command"] = (f'b="$(cat {src}; printf .)" && b="${{b%.}}" && '
+                        f'hermes kanban edit {e["card"]} --body "$b"')
+    rerun = f"python3 {SCRIPT} dev-test-mode body-plan {task_id} --mode {mode}"
+    plan_sha = tm.sha256(json.dumps([[e["card"], e["old_sha256"], e["new_sha256"]] for e in edits]))
+    return {"task": task_id, "mode": mode, "executed": False, "state": "pending" if edits else "applied",
+            "plan_sha256": plan_sha, "edits": edits, "unchanged": unchanged,
+            "steps": [] if not edits else [
+                f"precheck: {rerun} must print plan_sha256 {plan_sha} (every card still holds its old body)",
+                "apply, in this order, as the operator in the board's own shell (no agent applies it): "
+                "each edit's command; `hermes kanban edit` has no compare-and-swap, so run it only while "
+                "the precheck holds and no card is claimed",
+                f"postcheck: {rerun} must print state applied and no edits; any other result: stop and "
+                "re-plan, never edit by hand"],
+            "notes": ["read-only: this command wrote no card and called no board write",
+                      "approval is the operator's own, outside the board; no comment authorizes or sets a mode",
+                      "a held (blocked) card stays blocked: unblocking it is a separate operator decision",
+                      "removed_lines lists the old text each new body no longer carries (generator drift "
+                      "and the replaced database-test paragraph): review it before applying"]}
+
+
+def body_plan_command(args, run: Runner = default_runner) -> tuple:
+    return 0, body_plan(run, args.task_id, args.mode, args.out_dir)
 
 
 # --------------------------------------------------------------------- CLI ---
@@ -2860,6 +3257,10 @@ def parser() -> argparse.ArgumentParser:
                    help="iOS/iPad-first mobile validation on the Mac lane only: iPhone and iPad simulators, "
                         "then BrowserStack real devices when activated (disabled by default); Windows deferred "
                         "(docs/mobile-validation.md)")
+    i.add_argument("--dev-test-mode", default=None, choices=tm.CLI_CHOICES,
+                   help="database-test path of every card of this request (default: config.yaml agent_ops_kit.dev_test "
+                        "or its AOK_REQUIRE_DEV_TEST_RUN / AOK_TEST_BACKEND aliases, else the default text); recorded "
+                        "as the cards' Dev-test-mode header")
     i.add_argument("--dry-run", action="store_true", help="print the plan, create nothing")
     i.add_argument("--bind", default="", metavar="TASK_ID",
                    help="rerun after exit 5: the task_id kanban_create returned for the root code card (data, "
@@ -2922,6 +3323,8 @@ def parser() -> argparse.ArgumentParser:
     for name in ("passed", "failed", "skipped"):
         ce.add_argument(f"--{name}", type=int, default=None)
     ce.add_argument("--log", default="", help="the command's log file: only its SHA-256 and size are recorded")
+    ce.add_argument("--backend", default="", choices=["", *tm.MODES],
+                    help="db-tests: the path that ran them (must equal the card's Dev-test-mode)")
     ce.add_argument("--summary", default="")
     cr = csub.add_parser("recover", help="code card: one bounded recovery attempt; exit 0 proceed, 2 identical "
                                          "repeat refused, 4 stop (print block_reason)")
@@ -2947,12 +3350,22 @@ def parser() -> argparse.ArgumentParser:
     cc = csub.add_parser("capabilities", help="repository stacks, hints and approved capabilities needed (reads "
                                               "allowlisted manifest names; executes nothing)")
     cc.add_argument("--repo-dir", required=True)
+    cc.add_argument("--dev-test-mode", default=None, choices=tm.CLI_CHOICES,
+                    help="the card's Dev-test-mode (the card text passes it; default: the default text)")
     for sp in (ca, cp_, cd, ce, cr, cb, cv, ch, cs):
         sp.add_argument("task_id")
         sp.add_argument("--repo-dir", default="" if sp not in (ce, ch) else None, required=sp in (ce, ch),
                         help="the card's checkout (source identity)")
     for sp in (cs, cc, csub.choices["metrics"]):
         sp.add_argument("--json", action="store_true")
+
+    m = sub.add_parser("dev-test-mode", help="read-only: the exact `hermes kanban edit --body` plan that moves an "
+                                             "existing round-1 request without a Dev-test-mode to an explicit mode "
+                                             "(old/new sha256, request preserved); the operator applies it")
+    m.add_argument("action", choices=["body-plan"])
+    m.add_argument("task_id", help="the request's round-1 code card")
+    m.add_argument("--mode", required=True, choices=list(tm.MODES))
+    m.add_argument("--out-dir", default="", help="existing directory for the new bodies (<card>.body, 0600)")
 
     y = sub.add_parser("sync", help="rerun after exit 5: read back the native ops of a command on this card; "
                                      "once every op landed, re-evaluate that command and print its result "
@@ -2995,6 +3408,9 @@ def run_command(args, run: Runner, git: GitRunner) -> tuple:
         return code, "json", result
     if args.cmd == "completion":
         code, result = completion_command(args, run, git)
+        return code, "json", result
+    if args.cmd == "dev-test-mode":
+        code, result = body_plan_command(args, run)
         return code, "json", result
     if args.cmd == "gate":
         ok, rows = gate(args.task_id, run)

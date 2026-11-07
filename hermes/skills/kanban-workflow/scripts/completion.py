@@ -340,9 +340,10 @@ def _stage(name: str, met: Optional[bool], unmet: list, **extra) -> dict:
     return {"stage": name, "met": met, "unmet": [] if met else unmet, **extra}
 
 
-def _fresh_evidence(recs: list, kind: str, check: str, current: Optional[dict]) -> tuple:
-    """(met, unmet line, evidence) for one check against the current content."""
-    evs = of(recs, "evidence", kind=kind, check=check)
+def _fresh_evidence(recs: list, kind: str, check: str, current: Optional[dict], accept=None) -> tuple:
+    """(met, unmet line, evidence) for one check against the current content. *accept*: an
+    extra predicate a record must pass to count (the dev-test mode's backend rule)."""
+    evs = [e for e in of(recs, "evidence", kind=kind, check=check) if accept is None or accept(e)]
     what = f"{kind} '{check}'" if kind == "test" else "full-diff review"
     if current is None:
         return None, f"{what}: source state unknown (pass --repo-dir)", evs[-1] if evs else None
@@ -360,12 +361,14 @@ def _fresh_evidence(recs: list, kind: str, check: str, current: Optional[dict]) 
 
 
 def evaluate(recs: list, code_card: str, current: Optional[dict], pushed: Optional[dict],
-             remote_sha: Optional[str] = None, final: Optional[dict] = None) -> list:
+             remote_sha: Optional[str] = None, final: Optional[dict] = None,
+             accept: Optional[dict] = None) -> list:
     """One row per stage. *recs*: every completion record of the request, oldest first.
     *current*: source identity of the checkout (None: unknown). *pushed*: the code card's
     latest code-sha record. *remote_sha*: a live `git ls-remote` answer (None: not checked
     now; record-sha verified it when it wrote *pushed*). *final*: {"validate": (ok, reasons),
-    "complete": (ok, reasons)} from the report gate, None when not evaluated."""
+    "complete": (ok, reasons)} from the report gate, None when not evaluated. *accept*: {check:
+    predicate} a record of that check must pass to count (the dev-test mode's db-tests rule)."""
     rows = []
     crit = last(recs, "criteria")
     rows.append(_stage("understand", bool(crit), ["record the acceptance criteria recovered from the request, "
@@ -398,7 +401,7 @@ def evaluate(recs: list, code_card: str, current: Optional[dict], pushed: Option
     checks = (crit or {}).get("checks") or list(DEFAULT_CHECKS)
     test_unmet, oks, evid = [], [], {}
     for check in checks:
-        ok, line, ev = _fresh_evidence(recs, "test", check, current)
+        ok, line, ev = _fresh_evidence(recs, "test", check, current, (accept or {}).get(check))
         oks.append(ok)
         evid[check] = (ev or {}).get("rid")
         if ok is not True:
@@ -601,7 +604,20 @@ SUFFIX_HINTS = ((".xcodeproj", "apple:xcode"), (".xcworkspace", "apple:xcode"), 
                 (".sln", "dotnet"))
 
 
-def detect_capabilities(root: str, registered_scanner: bool = False) -> dict:
+DB_NEED_BY_MODE = {
+    "compose": ("database tests (Dev-test-mode: compose), when the change touches database code: the project's "
+                "existing Docker Compose development services under the card's Compose rules (compose exec/run, "
+                "or host go test -p 1 / race / vet, or the repository's make target or script) against an "
+                "isolated test database, never the main development database; never dev_test_run; select "
+                "--check db-tests and record it with --backend compose; never a credential from the project's "
+                "env files on a command line"),
+    "dev_test_run": ("database tests (Dev-test-mode: dev_test_run), when the change touches database code: only the "
+                     "dev_test_run tool; no Compose or terminal path; without it a capability block; select "
+                     "--check db-tests and record it with --backend dev_test_run"),
+}
+
+
+def detect_capabilities(root: str, registered_scanner: bool = False, dev_test_mode: str = "") -> dict:
     """Stacks, hint commands and the approved capabilities a task in *root* would need.
     Reads names in the top two directory levels and package.json scripts only."""
     base = Path(root)
@@ -644,7 +660,9 @@ def detect_capabilities(root: str, registered_scanner: bool = False) -> dict:
             scripts = []
     stacks = list(dict.fromkeys(stacks))
     needs = []
-    if any(s.startswith("database") for s in stacks):
+    if any(s.startswith("database") for s in stacks) and dev_test_mode in DB_NEED_BY_MODE:
+        needs.append(DB_NEED_BY_MODE[dev_test_mode])
+    elif any(s.startswith("database") for s in stacks):
         needs.append("database tests: a registered dev_test_run profile (approved isolation); never a database "
                      "URL or credential file on a command line")
     if any(s.startswith("docker") for s in stacks):
@@ -658,4 +676,5 @@ def detect_capabilities(root: str, registered_scanner: bool = False) -> dict:
     return {"root": str(base), "manifests": found, "stacks": stacks, "package_scripts": scripts,
             "hints": list(dict.fromkeys(hints)), "hints_executed": False,
             "approved_capabilities_needed": needs,
-            "writer_scanner_registered": registered_scanner}
+            "writer_scanner_registered": registered_scanner,
+            **({"dev_test_mode": dev_test_mode} if dev_test_mode else {})}

@@ -1,5 +1,5 @@
 {
-  "bundle_digest": "6f34382fed13da7f9cf7505c9c6034a85388a9b5217b5461322f87e8867d88f6",
+  "bundle_digest": "7a56040b7de23331c1e070f2a7a313a72f1526e85e384a2cb8164fa6e96fad10",
   "capability_ids": [
     "gstack.design-consultation",
     "gstack.design-review",
@@ -38,7 +38,7 @@
       "destination": "agent-ops-kit/capability-root/hermes/capabilities/registry.json",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "61baaa9c195d17334c5e0b9d35abfe78f8073070fede160317b46a5b603c35b1",
+      "sha256": "da630267779203859115150b5c4d888edba8df726115e957354eb8dc7db76b06",
       "size": 82863,
       "source": "hermes/capabilities/registry.json"
     },
@@ -550,8 +550,8 @@
       "destination": "agent-ops-kit/capability-root/hermes/skills/kanban-workflow/SKILL.md",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "0788cf83c634a30c05eadd289d437d64a2546c78f9f0b9c12e3fb6c10a49f6bb",
-      "size": 18399,
+      "sha256": "e6e3cf19f10094d6e6ce74bfe79aadd4b60bcc61d2e37913823ad8915768c9c0",
+      "size": 19272,
       "source": "hermes/skills/kanban-workflow/SKILL.md"
     },
     {
