@@ -32,9 +32,14 @@ passive tools is accepted by name; everything else fails closed:
   self-chain / own-descendant  this run's own process chain (up to its verified anchor,
                                the card's board-bound managed worker) and its descendants -> fine
   gone                         exited between scan and inspection (ENOENT/ESRCH)  -> fine
-  editor / language-server /   known passive tools: editors, LSP servers,
-  dev-server                   dev servers                                         -> reported
-  git-readonly                 git status/log/diff/show/...                       -> reported
+  editor / language-server /   known passive tools: editors, LSP servers, dev servers
+  dev-server / shell           in serve/watch mode, idle shells; without an observer
+                               grant only (classify_cmdline_ungranted), and only when
+                               /proc/<pid>/exe backs the name (ungranted_image_mismatch);
+                               under a grant see classify_cmdline              -> reported
+  git-readonly                 git status/log/diff/show/... (ungranted) without write
+                               forms (--output, grep -O, -c core.pager, ...); the exact
+                               GIT_SAFE_READS forms under a grant                 -> reported
   VS Code Remote server        bundled JSON/Markdown/CSS/HTML language servers, only
                                when /proc proves it: the server's own node binary,
                                parented by that server's extension host; otherwise
@@ -104,6 +109,33 @@ READONLY_GIT = {"status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tr
                 "describe", "rev-list", "grep", "shortlog", "for-each-ref", "name-rev", "merge-base", "show-ref",
                 "diff-tree", "diff-index", "diff-files", "count-objects", "var", "version", "help", "check-ignore",
                 "check-attr", "symbolic-ref", "fsck", "reflog"}
+# Ungranted read-only git that still writes or starts a program the invoker chose (git accepts any
+# unique prefix of a long option, so abbreviations count): --output (diff/log/show... write a file),
+# grep -O/--open-files-in-pager, fsck --lost-found, reflog expire/delete/drop, symbolic-ref
+# update/delete, ls-remote --upload-pack, and command-line configuration (-c, --config-env, the
+# GIT_CONFIG_PARAMETERS/GIT_CONFIG_COUNT environment) other than these display keys (core.pager,
+# diff.external, core.fsmonitor=<hook>, alias.*, *.textconv, credential.helper... all run programs).
+UNGRANTED_GIT_CONFIG_KEYS = {"core.quotepath", "core.precomposeunicode", "core.longpaths", "core.abbrev", "color.ui",
+                             "column.ui", "diff.mnemonicprefix", "diff.noprefix", "diff.renames", "diff.relative",
+                             "i18n.logoutputencoding", "log.decorate", "log.date", "safe.directory",
+                             "core.ignorecase", "status.showuntrackedfiles", "status.relativepaths"}
+UNGRANTED_GIT_CONFIG_PREFIXES = ("color.", "advice.")
+REFLOG_WRITES = {"expire", "delete", "drop"}
+GREP_SHORT_VALUE = set("ABCefm")  # grep short options whose value is the rest of the cluster
+# Dev servers/watchers stay observations without a grant only in a serve/watch mode: a one-shot
+# build writes its output. Subcommand tools: any of these positionals is a build/write command.
+DEV_SERVER_WRITE_COMMANDS = {"vite": {"build", "optimize"},
+                             "next": {"build", "export", "lint", "experimental-compile", "experimental-generate"},
+                             "nuxt": {"build", "generate", "prepare", "cleanup", "upgrade", "add", "module", "init",
+                                      "analyze"},
+                             "astro": {"build", "sync", "add", "preferences", "telemetry"},
+                             "parcel": {"build"}}
+# Flag tools: a build unless one of these (case-insensitive; `--opt=` forms too) is present.
+DEV_SERVER_WATCH_FLAGS = {"tsc": {"-w", "--watch", "--noemit"}, "rollup": {"-w", "--watch"},
+                          "swc": {"-w", "--watch"}, "esbuild": {"--watch", "--serve"},
+                          "webpack": {"-w", "--watch"}}
+DEV_SERVER_SERVE_POSITIONALS = {"webpack": {"serve", "server", "s", "watch", "w"}}
+TURBO_WATCH_TASKS = {"dev", "start", "serve"}
 # Foreign git reads accepted as passive under a granted observer policy: only these subcommands, each with an explicit list of exact
 # option tokens (and `--opt=` prefixes). Anything else (another subcommand, an unlisted or abbreviated
 # option such as `--open-fil`, `--del`, `--lost`, a short-option cluster) is unknown. Excluded on
@@ -339,13 +371,17 @@ def _filters_in_use(base: list, cwd: str, env: dict, drivers: set) -> Optional[s
     """Why a granted own `git status` cannot run: a configured clean/process driver is the filter
     attribute of a tracked path. Disabling it would report normalized files as changed; running it
     runs repository-configured code; so the read fails closed as unsupported. None: no tracked path
-    uses one. check-attr and ls-files run no filter."""
+    uses one; a symlink or gitlink never runs a filter, so only regular files count. check-attr and
+    ls-files run no filter."""
     if not drivers:
         return None
-    files = subprocess.run([*base, "ls-files", "-z"], cwd=cwd, capture_output=True, timeout=120, env=env)
-    attrs = subprocess.run([*base, "check-attr", "-z", "--stdin", "filter"], cwd=cwd, input=files.stdout,
-                           capture_output=True, timeout=120, env=env)
-    if files.returncode != 0 or attrs.returncode != 0:
+    staged = subprocess.run([*base, "ls-files", "-s", "-z"], cwd=cwd, capture_output=True, timeout=120, env=env)
+    # git converts only regular files: a symlink is hashed as its target, a gitlink is a commit id.
+    regular = [entry.split(b"\t", 1)[1] for entry in staged.stdout.split(b"\0")
+               if b"\t" in entry and entry.startswith((b"100644 ", b"100755 "))]
+    attrs = subprocess.run([*base, "check-attr", "-z", "--stdin", "filter"], cwd=cwd,
+                           input=b"".join(path + b"\0" for path in regular), capture_output=True, timeout=120, env=env)
+    if staged.returncode != 0 or attrs.returncode != 0:
         return "cannot read filter attributes of tracked paths"
     parts = attrs.stdout.split(b"\0")
     for i in range(0, len(parts) - 2, 3):
@@ -1273,10 +1309,116 @@ def classify_cmdline(cmd: list) -> tuple:
     return "unknown", True, f"{name or '?'}: not a known passive tool; treated as a possible writer"
 
 
+def _long_abbrev(token: str, *names: str) -> bool:
+    """Whether *token* (`--x` or `--x=v`) is a long option git would read as one of *names*
+    (any prefix: git accepts unique abbreviations; an ambiguous one is refused by git anyway)."""
+    if not token.startswith("--") or token == "--":
+        return False
+    opt = token[2:].split("=", 1)[0]
+    return bool(opt) and any(n.startswith(opt) for n in names)
+
+
+def git_config_refusal(key: str, value: Optional[str]) -> Optional[str]:
+    """None when command-line configuration *key*=*value* only changes display; otherwise why not."""
+    k, v = key.lower(), (value or "").lower()
+    if k in UNGRANTED_GIT_CONFIG_KEYS or k.startswith(UNGRANTED_GIT_CONFIG_PREFIXES):
+        return None
+    if k == "core.fsmonitor" and value is not None and v in ("false", "no", "off", "0", ""):
+        return None
+    if re.fullmatch(r"filter\..+\.(?:clean|smudge|process)", k) and value == "":
+        return None
+    return f"git command-line configuration {key[:60]} can run a program or change what git writes"
+
+
+def _ungranted_git_refusal(cmd: list) -> Optional[str]:
+    """Why a READONLY_GIT command line can write or run an invoker-chosen program; None when plain."""
+    globals_, sub, rest = _git_split(cmd)
+    i = 0
+    while i < len(globals_):
+        g = globals_[i]
+        if g == "-c" and i + 1 < len(globals_):
+            key, eq, value = globals_[i + 1].partition("=")
+            why = git_config_refusal(key, value if eq else None)
+            if why:
+                return why
+            i += 2
+            continue
+        if g.startswith("--config-env") or g.startswith("--exec-path="):
+            return f"git {g.split('=', 1)[0]} runs a command-line chosen program"
+        i += 1 if g not in _GIT_VALUE_OPTIONS else 2
+    opts = _options_until_dashdash(rest)
+    positionals = [a for a in opts if not a.startswith("-")]
+    if any(_long_abbrev(a, "output") for a in opts):
+        return f"git {sub} --output writes a file"
+    if sub == "grep":
+        for a in opts:
+            if _long_abbrev(a, "open-files-in-pager"):
+                return "git grep --open-files-in-pager runs a program"
+            if a.startswith("-") and not a.startswith("--"):
+                for ch in a[1:]:
+                    if ch == "O":
+                        return "git grep -O runs a program"
+                    if ch in GREP_SHORT_VALUE:
+                        break
+    if sub == "fsck" and any(_long_abbrev(a, "lost-found") for a in opts):
+        return "git fsck --lost-found writes into the git directory"
+    if sub == "reflog" and positionals[:1] and positionals[0] in REFLOG_WRITES:
+        return f"git reflog {positionals[0]} rewrites reflogs"
+    if sub == "symbolic-ref" and (len(positionals) != 1 or any(a in ("-d", "-m") or _long_abbrev(a, "delete")
+                                                               for a in opts)):
+        return "git symbolic-ref with other than one name (or -d/-m) updates a ref"
+    if sub == "ls-remote" and any(_long_abbrev(a, "upload-pack") for a in opts):
+        return "git ls-remote --upload-pack runs a program"
+    return None
+
+
+def _script_index(cmd: list) -> Optional[int]:
+    """Index of the script an interpreter command line runs (as program_name reads it)."""
+    for i, part in enumerate(cmd[1:], 1):
+        if part.startswith("-"):
+            if part in ("-c", "-e", "-m", "--eval", "-p", "--print"):
+                return None
+            continue
+        return i
+    return None
+
+
+def _tool_args(cmd: list) -> list:
+    """The tool's own arguments: after the script for an interpreter command line."""
+    name = Path(cmd[0]).name.lstrip("-")
+    if name in SCRIPT_INTERPRETERS or re.match(r"^python3\.\d+$", name):
+        i = _script_index(cmd)
+        return cmd[i + 1:] if i is not None else []
+    return cmd[1:]
+
+
+def _dev_server_refusal(name: str, args: list) -> Optional[str]:
+    """Why a dev server / watcher invocation is a one-shot build (writes output); None when serve/watch."""
+    opts = _options_until_dashdash(args)
+    positionals = [a for a in opts if not a.startswith("-")]
+    writes = DEV_SERVER_WRITE_COMMANDS.get(name, set()) & set(positionals)
+    if writes:
+        return f"{name} {sorted(writes)[0]} is a build that writes output"
+    if name in DEV_SERVER_WATCH_FLAGS:
+        flags = DEV_SERVER_WATCH_FLAGS[name]
+        watching = any(a.lower().split("=", 1)[0] in flags for a in opts)
+        serving = bool(DEV_SERVER_SERVE_POSITIONALS.get(name, set()) & set(positionals[:1]))
+        if not (watching or serving):
+            return f"{name} without watch/serve mode is a build that writes output"
+    if name == "turbo":
+        tasks = [a for a in positionals if a not in ("run", "watch")]
+        if not tasks or not set(tasks) <= TURBO_WATCH_TASKS:
+            return "turbo runs package tasks other than dev/start/serve"
+    return None
+
+
 def classify_cmdline_ungranted(cmd: list) -> tuple:
     """The pre-PR28 (d468701) classification, used for a checkout no valid observer policy grants:
     agents and git mutations block, the listed read-only git, editors, language servers, dev
-    servers/watchers and idle shells are observations, anything else is unknown and blocks."""
+    servers/watchers and idle shells are observations, anything else is unknown and blocks. A
+    read-only git form that writes or runs an invoker-chosen program (_ungranted_git_refusal) and
+    a dev server in build mode (_dev_server_refusal) block; classify_process also checks that
+    /proc/<pid>/exe backs the name (ungranted_image_mismatch, git_environ_refusal)."""
     if not cmd:
         return "unknown", True, "empty command line"
     sub = _git_subcommand(cmd)
@@ -1284,6 +1426,9 @@ def classify_cmdline_ungranted(cmd: list) -> tuple:
         if sub in MUTATING_GIT:
             return "git-mutation", True, f"git {sub} in progress"
         if sub in READONLY_GIT:
+            why = _ungranted_git_refusal(cmd)
+            if why:
+                return "unknown", True, f"{why}; treated as a possible writer"
             return "git-readonly", False, f"read-only git {sub}"
         return "unknown", True, f"git {sub or '?'}: not a known read-only subcommand"
     if _is_agent(cmd):
@@ -1294,6 +1439,9 @@ def classify_cmdline_ungranted(cmd: list) -> tuple:
     if name in PASSIVE_LANGUAGE_SERVERS:
         return "language-server", False, f"language server ({name})"
     if name in PASSIVE_DEV_SERVERS:
+        why = _dev_server_refusal(name, _tool_args(cmd))
+        if why:
+            return "unknown", True, f"{why}; treated as a possible writer"
         return "dev-server", False, f"dev server / watcher ({name})"
     if name in INTERACTIVE_SHELLS:
         args = cmd[1:]
@@ -1636,7 +1784,8 @@ def trusted_terminal_refusal(pid: int, root: str, pty_host: int, grant: dict) ->
 
 # Image names that legitimately run under another passive name (Debian alternatives: vi -> vim.tiny).
 PASSIVE_IMAGE_ALIASES = {"vi": {"vi", "vim", "nvim", "nvi"}, "view": {"view", "vim", "nvim"}, "hx": {"hx", "helix"},
-                         "helix": {"hx", "helix"}, "zed": {"zed", "zed-editor"}, "code": {"code", "code-oss"}}
+                         "helix": {"hx", "helix"}, "zed": {"zed", "zed-editor"}, "code": {"code", "code-oss"},
+                         "sh": {"sh", "dash", "bash", "busybox"}}
 # Packaging suffixes of an image name: vim.basic, vim.tiny, emacs-gtk, emacs-29.1, clangd-17, python3.12.
 IMAGE_VARIANT_RE = re.compile(r"(?:\.(?:basic|tiny|gtk3?|nox|athena|lucid|motif)|-(?:gtk3?|nox|lucid|pgtk|x11|wayland)"
                               r"|-?\d+(?:\.\d+)*)$")
@@ -1690,6 +1839,73 @@ def passive_image_mismatch(pid: int, cmd: list) -> Optional[str]:
     return _root_owned_image(exe)
 
 
+UNGRANTED_IDENTITY_KINDS = {"editor", "language-server", "dev-server", "shell", "git-readonly"}
+NODE_FAMILY = {"node", "deno", "bun"}
+
+
+def ungranted_image_mismatch(pid: int, cmd: list, kind: str) -> Optional[str]:
+    """Without a grant, the passive name must still be the process's real program: /proc/<pid>/exe
+    has the claimed image name (packaging suffixes and listed aliases allowed; ownership is not
+    required, user installs stay accepted), an interpreter command line runs on that interpreter,
+    and a node-hosted tool's script is an installed package (resolves inside node_modules).
+    `exec -a vite <writer>`, a symlink named like the tool and `node /tmp/vite.js` fail here."""
+    exe = proc_exe(pid)
+    if not exe:
+        return "executable image not readable"
+    claimed = Path(cmd[0]).name.lstrip("-")
+    image = _image_name(exe)
+    family = _interpreter_family(claimed)
+    if family:
+        if _interpreter_family(image) != family:
+            return f"command line says {claimed} but the process runs {exe}"
+        i = _script_index(cmd)
+        if family in NODE_FAMILY and kind in ("dev-server", "language-server") and i is not None:
+            script = cmd[i]
+            if not script.startswith("/"):
+                try:
+                    script = os.path.join(os.readlink(f"/proc/{pid}/cwd"), script)
+                except OSError as exc:
+                    if exc.errno in (errno.EACCES, errno.EPERM):
+                        raise ProcVisibilityError(exc.errno, f"/proc/{pid}/cwd: {exc.strerror}")
+                    return f"cannot resolve the script {cmd[i][:80]}"
+            real = os.path.realpath(script)
+            if "node_modules" not in Path(real).parts[:-1]:
+                return f"script {real[:120]} is not an installed package (outside node_modules)"
+        return None
+    if image not in PASSIVE_IMAGE_ALIASES.get(claimed, {claimed}) | {_image_name(claimed)}:
+        return f"command line says {claimed} but the process runs {exe}"
+    return None
+
+
+def git_environ_refusal(pid: int) -> Optional[str]:
+    """Why the environment of a git read carries command-line configuration
+    (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT/KEY_n/VALUE_n) that is not display-only."""
+    raw = _proc_read(pid, "environ")
+    if raw is None:
+        return None
+    env = dict(e.split("=", 1) for e in raw.decode("utf-8", "surrogateescape").split("\0") if "=" in e)
+    params = env.get("GIT_CONFIG_PARAMETERS")
+    if params:
+        try:
+            pairs = shlex.split(params)
+        except ValueError:
+            return "unparseable GIT_CONFIG_PARAMETERS"
+        for pair in pairs:
+            key, eq, value = pair.partition("=")
+            why = git_config_refusal(key, value if eq else None)
+            if why:
+                return f"{why} (GIT_CONFIG_PARAMETERS)"
+    count = env.get("GIT_CONFIG_COUNT")
+    if count:
+        if not count.isdigit():
+            return "unparseable GIT_CONFIG_COUNT"
+        for n in range(int(count)):
+            why = git_config_refusal(env.get(f"GIT_CONFIG_KEY_{n}", ""), env.get(f"GIT_CONFIG_VALUE_{n}"))
+            if why:
+                return f"{why} (GIT_CONFIG_COUNT)"
+    return None
+
+
 def proc_stdout_is_terminal(pid: int) -> Optional[bool]:
     """Whether fd 1 of *pid* is a terminal (None: not readable or gone)."""
     try:
@@ -1722,6 +1938,14 @@ def classify_process(pid: int, self_pid: int, anchors: Iterable[int], self_chain
         if (grant or {}).get("status") != "granted":
             # No valid policy for this host, uid and repository: the pre-PR28 classification.
             kind, blocking, detail = classify_cmdline_ungranted(cmd)
+            if not blocking and kind in UNGRANTED_IDENTITY_KINDS:
+                why = ungranted_image_mismatch(pid, cmd, kind) or (git_environ_refusal(pid)
+                                                                     if kind == "git-readonly" else None)
+                if why:
+                    if proc_exited(pid):
+                        return {"pid": pid, "kind": "gone", "blocking": False, "detail": "exited before inspection"}
+                    return {"pid": pid, "kind": "unknown", "blocking": True,
+                            "detail": f"claims {kind} ({detail}) but {why}; treated as a possible writer"}
             return {"pid": pid, "kind": kind, "blocking": blocking, "detail": detail}
         vscode = classify_vscode(pid, cmd, grant)
         kind, blocking, detail = vscode or classify_cmdline(cmd)

@@ -1453,6 +1453,42 @@ class TrustedTerminalPolicyTest(VSCodeServerTest):
 
 # ------------------------------------------------- successor of the baseline ---
 
+    def test_write_capable_reads_in_the_real_terminal_block_with_and_without_a_grant(self):
+        """Real VS Code chain (launcher -> server-main -> pty host -> bash). Children with write
+        effects named like reads/watchers block in both regimes; the terminal itself is trusted only
+        under the grant and stays blocking without one."""
+        Path(self.co, "node_modules", "vite", "bin").mkdir(parents=True)
+        Path(self.co, "node_modules", "vite", "bin", "vite.js").write_text(SLEEPER)
+        Path(self.co, "writer.py").write_text(SPOOF_WRITER)
+        self.write_policy()
+        host, shell = self.launch()
+        self.prompt(host, shell)
+        py = os.path.realpath(sys.executable)
+        lines = ["git -c core.pager='sh -c \"sleep 30\"' log --output=out.txt -p &\n",
+                 f"(exec -a vite {py} - < writer.py) &\n",
+                 f"{py} node_modules/vite/bin/vite.js build &\n"]
+        for line in lines:
+            host.stdin.write(line); host.stdin.flush()
+        deadline = time.time() + 15
+        kids = []
+        while time.time() < deadline:
+            kids = [k for k in (rl.proc_children(shell) or []) if rl.proc_cmdline(k)]
+            if len(kids) >= 3 and Path(self.co, "spoof.txt").exists():
+                break
+            time.sleep(0.1)
+        self.assertGreaterEqual(len(kids), 3, kids)
+        granted = self.scan(shell, *kids)
+        self.assertEqual(granted["observer_policy"]["status"], "granted")
+        by_pid = {row["pid"]: row for row in granted["processes"]}
+        self.assertEqual(by_pid[shell]["kind"], "trusted-terminal")
+        for k in kids:
+            self.assertTrue(by_pid[k]["blocking"], ("granted", by_pid[k]))
+        rl.observer_policy_path().unlink()
+        ungranted = self.scan(shell, *kids)
+        self.assertEqual(ungranted["observer_policy"]["status"], "none")
+        for row in ungranted["processes"]:
+            self.assertTrue(row["blocking"], ("ungranted", row))
+
 class SuccessorInventoryTest(ManifestTest):
     """The pre-existing operator baseline (task, role, head, branch, status_sha256, index_sha256,
     files[{path, status, sha256, mode, type}]) is never adopted as such; a strict successor is
@@ -2451,16 +2487,27 @@ class ObserverGrantScopeTest(TempRepo):
             path.unlink()
 
     def test_without_a_grant_reads_and_watchers_classify_as_before_pr28(self):
-        readers = [("git", "status"), ("git", "diff"), ("git", "log"), ("git", "ls-files"),
-                   ("vite",), ("nodemon",), ("gopls",)]
-        pids = {argv: self.fake(*argv) for argv in readers}
+        """Real processes (their /proc/<pid>/exe is checked without a grant): git reads, a node
+        watcher from node_modules, a native language server image."""
+        mods = Path(self.co, "node_modules", "vite", "bin"); mods.mkdir(parents=True)
+        Path(mods, "vite.js").write_text("setInterval(() => {}, 1000);\n")
+        bindir = self.tmp / "bin"; bindir.mkdir()
+        shutil.copy(shutil.which("sleep"), bindir / "gopls")
+        procs = [subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  cwd=self.co)
+                 for argv in (["git", "cat-file", "--batch"], ["git", "log", "--stdin"], ["git", "rev-list", "--stdin"])]
+        self.procs += procs
+        procs.append(self.spawn([str(bindir / "gopls"), "60"], cwd=self.co))
+        if shutil.which("node"):
+            procs.append(self.spawn([shutil.which("node"), str(mods / "vite.js"), "dev"], cwd=self.co))
+        time.sleep(0.5)
         for name, setup in self.regimes():
             self.reset_policy()
             setup()
-            scan = self.scan(*pids.values())
+            scan = self.scan(*(p.pid for p in procs))
             self.assertNotEqual(scan["observer_policy"]["status"], "granted", name)
-            for argv, row in zip(pids, scan["processes"]):
-                self.assertFalse(row["blocking"], (name, argv, row))
+            for row in scan["processes"]:
+                self.assertFalse(row["blocking"], (name, row))
             self.assertTrue(scan["ok"], name)
 
     def test_agents_and_git_mutations_block_in_both_regimes(self):
@@ -2527,6 +2574,231 @@ class ObserverGrantScopeTest(TempRepo):
         Path(self.co, "a.txt").write_text("x\n")
         r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
         self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+
+
+
+    def test_with_a_grant_a_filter_attribute_on_a_symlink_is_not_in_use(self):
+        """git never runs clean filters on symlinks (it hashes the link target), so a filter
+        attribute that matches only a tracked symlink does not make the granted status unsupported."""
+        self.g("config", "filter.crlf.clean", "tr X x")
+        os.symlink("a.txt", Path(self.co, "link"))
+        Path(self.co, ".gitattributes").write_text("link filter=crlf\n")
+        self.g("add", "link", ".gitattributes")
+        self.g("commit", "-m", "chore: symlink attrs")
+        self.policy()
+        r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+
+DEV_TOOL_SCRIPT = (
+    "const fs = require('fs');\n"
+    "const args = process.argv.slice(2);\n"
+    "if (args.some(a => ['build', 'optimize'].includes(a)) || process.env.FIXTURE_WRITE) {\n"
+    "  fs.mkdirSync('dist', {recursive: true}); fs.writeFileSync('dist/out.js', 'built');\n"
+    "}\n"
+    "setInterval(() => {}, 1000);\n")
+
+
+class UngrantedWriterEscapeTest(TempRepo):
+    """Without an observer grant (pre-PR28 classification) the read and watcher names are a claim:
+    real processes with write effects behind them block; genuine reads and watchers do not."""
+
+    def setUp(self):
+        super().setUp()
+        self.node = shutil.which("node")
+
+    def classify(self, pid):
+        grant = rl.observer_grant(self.identity())
+        self.assertNotEqual(grant.get("status"), "granted")
+        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set(), grant=grant)
+
+    def wait_path(self, rel, timeout=10.0):
+        deadline = time.time() + timeout
+        while not Path(self.co, rel).exists() and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(Path(self.co, rel).exists(), f"fixture did not write {rel}: it must be a real writer")
+
+    def wait_alive(self, p, timeout=1.0):
+        time.sleep(timeout)
+        self.assertIsNone(p.poll(), "the fixture must still be running when classified")
+
+    def slow_filter(self):
+        """A repository (not command line) clean filter that keeps a real git read alive."""
+        self.g("config", "filter.slow.clean", "sleep 30; cat")
+        Path(self.co, ".gitattributes").write_text("*.txt filter=slow\n")
+        self.g("add", ".gitattributes")
+        self.g("commit", "-m", "chore: slow filter")
+        os.utime(Path(self.co, "a.txt"), (time.time() + 5, time.time() + 5))
+
+    def dev_tool(self, name):
+        bindir = Path(self.co, "node_modules", name, "bin")
+        bindir.mkdir(parents=True, exist_ok=True)
+        (bindir / f"{name}.js").write_text(DEV_TOOL_SCRIPT)
+        return str(bindir / f"{name}.js")
+
+    def blocks(self, p, label):
+        row = self.classify(p.pid)
+        with self.subTest(label):
+            self.assertTrue(row["blocking"], (label, row))
+        return row
+
+    def test_git_reads_with_write_effects_block(self):
+        self.slow_filter()
+        cases = []
+        # --output (and its abbreviation) writes a file; the slow filter / --stdin keep git alive.
+        cases.append(("diff --output", self.spawn(["git", "diff", "--output=out-diff.patch"], cwd=self.co),
+                      "out-diff.patch"))
+        # A repository textconv driver keeps `log -p` alive after it opened its --output file.
+        self.g("config", "diff.slow.textconv", "sleep 30; cat")
+        Path(self.co, ".git", "info", "attributes").write_text("*.txt diff=slow\n")
+        cases.append(("log --output", self.spawn(["git", "log", "-p", "--output=out-log.txt"], cwd=self.co),
+                      "out-log.txt"))  # git 2.43 rejects the --outp abbreviation; the command-line test keeps it
+        # A command-line pager (git starts it on a terminal and waits for it).
+        master, slave = os.openpty()
+        self.addCleanup(os.close, master)
+        p = subprocess.Popen(["git", "-c", "core.pager=sh -c 'echo x >> pager.txt; cd /; exec sleep 30'", "log"],
+                             stdin=subprocess.DEVNULL, stdout=slave, stderr=slave, cwd=self.co)
+        os.close(slave)
+        self.procs.append(p)
+        cases.append(("-c core.pager log", p, "pager.txt"))
+        # grep -O runs its argument as a program on the matching files.
+        p = self.spawn(["git", "grep", "-Osh -c 'echo x >> grep-o.txt; cd /; exec sleep 30'", "-e", "1"], cwd=self.co)
+        cases.append(("grep -O", p, "grep-o.txt"))
+        for label, p, rel in cases:
+            self.wait_path(rel)
+            self.wait_alive(p, 0.3)
+            self.assertEqual(rl.proc_exe(p.pid), os.path.realpath(shutil.which("git")), label)
+            self.blocks(p, label)
+
+    def test_genuine_git_reads_stay_passive(self):
+        self.slow_filter()
+        cat = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, cwd=self.co)
+        log = subprocess.Popen(["git", "log", "--stdin", "-p"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, cwd=self.co)
+        self.procs += [cat, log]
+        procs = {"status": self.spawn(["git", "status"], cwd=self.co),
+                 "diff": self.spawn(["git", "diff", "--stat"], cwd=self.co),
+                 "vscode-style status": self.spawn(["git", "-c", "core.quotepath=false", "-c", "color.ui=false",
+                                                    "status", "-z", "-uall"], cwd=self.co),
+                 "cat-file": cat, "log --stdin": log}
+        time.sleep(0.8)
+        for label, p in procs.items():
+            self.assertIsNone(p.poll(), label)
+            row = self.classify(p.pid)
+            self.assertEqual((row["kind"], row["blocking"]), ("git-readonly", False), (label, row))
+        self.assertEqual(sorted(os.listdir(self.co)), [".git", ".gitattributes", "a.txt"], "reads wrote nothing")
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_dev_server_build_and_spoofed_watchers_block(self):
+        vite = self.dev_tool("vite")
+        p = self.spawn([self.node, vite, "build"], cwd=self.co)
+        self.wait_path("dist/out.js")
+        self.wait_alive(p, 0.2)
+        row = self.blocks(p, "vite build")
+        shutil.rmtree(Path(self.co, "dist"))
+        # tsc without --watch is a one-shot compile that writes its output.
+        tsc = self.dev_tool("tsc")
+        p = self.spawn([self.node, tsc, "-p", "."], cwd=self.co, env={**os.environ, "FIXTURE_WRITE": "1"})
+        self.wait_path("dist/out.js")
+        self.blocks(p, "tsc")
+        # `exec -a vite <writer>`: argv says vite, the image is python and it writes.
+        script = self.tmp / "writer.py"; script.write_text(SPOOF_WRITER)
+        for argv in (["vite"], ["nodemon"], ["gopls"], ["git", "status"], ["vim"], ["bash"]):
+            Path(self.co, "spoof.txt").unlink(missing_ok=True)
+            # python3 reads the writer from stdin: the command line is exactly argv (plus `-`).
+            rest = ["-", *argv[1:]] if argv[1:] else []
+            with open(script) as src:
+                p = subprocess.Popen(["/bin/bash", "-c", 'exec -a "$0" "$@"', argv[0], os.path.realpath(sys.executable),
+                                      *rest], stdin=src, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     cwd=self.co)
+            self.procs.append(p)
+            self.wait_path("spoof.txt")
+            self.assertEqual(rl.proc_cmdline(p.pid)[0], argv[0])
+            self.blocks(p, f"exec -a {argv[0]}")
+            p.kill(); p.wait()
+        # A node script named like the tool but outside node_modules is whatever the file says.
+        Path(self.co, "spoof.txt").unlink(missing_ok=True)
+        rogue = self.tmp / "vite.js"; rogue.write_text(DEV_TOOL_SCRIPT)
+        p = self.spawn([self.node, str(rogue)], cwd=self.co, env={**os.environ, "FIXTURE_WRITE": "1"})
+        self.wait_path("dist/out.js")
+        self.blocks(p, "node /tmp/vite.js")
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_genuine_watchers_stay_passive(self):
+        procs = {"vite": [self.node, self.dev_tool("vite")], "vite dev": [self.node, self.dev_tool("vite"), "dev"],
+                 "vite --port": [self.node, self.dev_tool("vite"), "--port", "5173"],
+                 "tsc --watch": [self.node, self.dev_tool("tsc"), "--watch", "-p", "."],
+                 "nodemon": [self.node, self.dev_tool("nodemon"), "server.js"],
+                 "webpack serve": [self.node, self.dev_tool("webpack"), "serve"]}
+        bindir = self.tmp / "bin"; bindir.mkdir()
+        shutil.copy(shutil.which("sleep"), bindir / "gopls")      # a native tool image named like itself
+        running = {k: self.spawn(v, cwd=self.co) for k, v in procs.items()}
+        running["gopls"] = self.spawn([str(bindir / "gopls"), "60"], cwd=self.co)
+        vi = shutil.which("vi")
+        if vi:
+            running["vi"] = subprocess.Popen(["vi", "-n", "-R"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.DEVNULL, cwd=self.co)
+            self.procs.append(running["vi"])
+        time.sleep(0.8)
+        for label, p in running.items():
+            self.assertIsNone(p.poll(), label)
+            row = self.classify(p.pid)
+            self.assertFalse(row["blocking"], (label, row))
+        self.assertFalse(Path(self.co, "dist").exists())
+
+    def test_agents_and_git_mutations_still_block(self):
+        bindir = self.tmp / "bin"; bindir.mkdir()
+        (bindir / "claude").symlink_to(shutil.which("sleep"))
+        agent = self.spawn([str(bindir / "claude"), "30"], cwd=self.co)
+        commit = self.spawn(["git", "commit", "--allow-empty"], cwd=self.co,
+                            env={**os.environ, "GIT_EDITOR": "sleep 30; :"})
+        rebase = self.spawn(["git", "-c", "sequence.editor=sleep 30; :", "rebase", "-i", "--root"], cwd=self.co)
+        time.sleep(0.8)
+        kinds = {self.classify(p.pid)["kind"] for p in (agent,)}
+        self.assertEqual(kinds, {"agent-writer"})
+        for p in (commit, rebase):
+            row = self.classify(p.pid)
+            self.assertEqual((row["kind"], row["blocking"]), ("git-mutation", True), row)
+
+    def test_cmdline_write_forms_block_without_a_grant(self):
+        blocked = [("git", "diff", "--output=/x"), ("git", "log", "--outp=/x"), ("git", "show", "--o", "x"),
+                   ("git", "-c", "core.pager=sh -c x", "log"), ("git", "-c", "diff.external=x", "diff"),
+                   ("git", "--config-env=core.pager=X", "log"), ("git", "--exec-path=/tmp/x", "status"),
+                   ("git", "grep", "-O", "x"), ("git", "grep", "-nOvim", "x"), ("git", "grep", "--open-files", "x"),
+                   ("git", "grep", "--open", "x"), ("git", "fsck", "--lost-found"), ("git", "fsck", "--lost"),
+                   ("git", "reflog", "expire", "--all"), ("git", "reflog", "delete", "HEAD@{1}"),
+                   ("git", "symbolic-ref", "HEAD", "refs/heads/x"), ("git", "symbolic-ref", "-d", "HEAD"),
+                   ("git", "ls-remote", "--upload-pack=touch x", "origin"),
+                   ("node", "/r/node_modules/vite/bin/vite.js", "build"), ("vite", "build"), ("next", "build"),
+                   ("tsc",), ("tsc", "-p", "."), ("rollup", "-c"), ("webpack",), ("esbuild", "a.js", "--outfile=b"),
+                   ("parcel", "build", "x"), ("turbo", "run", "build")]
+        passive = [("git", "diff"), ("git", "log", "--oneline"), ("git", "-c", "core.quotepath=false", "status"),
+                   ("git", "grep", "-n", "x"), ("git", "grep", "--or", "-e", "x"), ("git", "fsck"),
+                   ("git", "reflog"), ("git", "reflog", "show"), ("git", "symbolic-ref", "HEAD"),
+                   ("git", "diff", "--output-indicator-new=+"),
+                   ("vite",), ("vite", "dev"), ("vite", "--port", "3000"), ("next", "dev"), ("tsc", "--watch"),
+                   ("tsc", "-w"), ("tsc", "--noEmit"), ("rollup", "-c", "-w"), ("webpack", "serve"),
+                   ("webpack", "--watch"), ("esbuild", "a.js", "--watch"), ("esbuild", "--serve=8000"),
+                   ("parcel", "index.html"), ("turbo", "dev"), ("nodemon", "x.js"), ("webpack-dev-server",)]
+        for argv in blocked:
+            with self.subTest(argv):
+                self.assertTrue(rl.classify_cmdline_ungranted(list(argv))[1], argv)
+        for argv in passive:
+            with self.subTest(argv):
+                self.assertFalse(rl.classify_cmdline_ungranted(list(argv))[1], argv)
+
+    def test_without_a_grant_a_vscode_style_terminal_shell_still_blocks(self):
+        bash = os.path.realpath(shutil.which("bash"))
+        init = self.tmp / "shellIntegration-bash.sh"; init.write_text("PS1='$ '\n")
+        master, slave = os.openpty()
+        self.addCleanup(os.close, master)
+        p = subprocess.Popen([bash, "--init-file", str(init)], stdin=slave, stdout=slave, stderr=slave, cwd=self.co,
+                             start_new_session=True)
+        os.close(slave)
+        self.procs.append(p)
+        time.sleep(0.5)
+        row = self.classify(p.pid)
+        self.assertEqual((row["kind"], row["blocking"]), ("unknown", True), row)
 
 
 if __name__ == "__main__":

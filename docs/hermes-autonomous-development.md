@@ -146,14 +146,35 @@ invocation (allowed by the scanner without any config change), the in-process
   `sudo -n /abs/helper` or `/abs/helper` that is root-owned and not group/world
   writable, exit-code contract 0/1/2, unprivileged `/proc` fallback that marks
   other users' processes as unknown; classification per match: `self-chain`,
-  `own-descendant`, `gone` (ENOENT/ESRCH), the explicit passive observations
+  `own-descendant`, `gone` (ENOENT/ESRCH), then one of two regimes chosen by the
+  observer policy (`observer_grant`: a valid, owner-protected policy for this host,
+  uid and repository).
+  **Ungranted (default, the pre-PR28 d468701 rules):** `git-readonly` (`READONLY_GIT`
+  subcommands), `editor`, `language-server`, `dev-server` and an idle `shell` are passive,
+  but each claim is checked against `/proc/<pid>/exe` (same image name, packaging
+  suffixes/aliases allowed, user installs accepted; an interpreter command line must run on
+  that interpreter; a node-hosted tool's script must resolve inside `node_modules`), so
+  `exec -a vite <writer>`, a symlink named like the tool and `node /tmp/vite.js` are
+  `unknown`. Read forms that write or start an invoker-chosen program are `unknown`:
+  `--output` (any abbreviation) on any read, `grep -O`/`--open-files-in-pager`,
+  `fsck --lost-found`, `reflog expire|delete|drop`, symbolic-ref update/delete,
+  `ls-remote --upload-pack`, `--exec-path=`, `--config-env`, and `-c` (or
+  `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_COUNT` in the process environment) other than the
+  display keys in `UNGRANTED_GIT_CONFIG_KEYS` (so `-c core.pager=...`, `-c diff.external=...`
+  block; `-c core.quotepath=false -c color.ui=false status` does not). Dev servers pass
+  only in serve/watch mode: `vite|next|nuxt|astro|parcel build` (and the other
+  `DEV_SERVER_WRITE_COMMANDS`), `tsc`/`rollup`/`swc`/`esbuild`/`webpack` without a
+  watch/serve flag (`tsc --noEmit` passes) and `turbo` tasks other than dev/start/serve
+  are one-shot builds and block. Shells with arguments (the VS Code integrated terminal's
+  `bash --init-file ...` included) stay `unknown`.
+  **Granted (PR28 strict):** the explicit passive observations are only
   `editor` (root-owned image in root-owned directories), `language-server` (only a /proc-verified
-  VS Code bundled server) and `git-readonly` (only the explicit `GIT_SAFE_READS` forms, stdout not a
-  terminal); language servers by name, dev servers/build tools and interpreter scripts are `unknown`;
-  every interactive shell, the VS Code integrated terminal included, is `unknown`:
-  traps, `PROMPT_COMMAND` or `read -t` then a write look like a prompt to any
+  VS Code bundled server), `git-readonly` (only the explicit `GIT_SAFE_READS` forms, stdout not a
+  terminal) and the /proc-verified `trusted-terminal`; language servers by name, dev
+  servers/build tools and interpreter scripts are `unknown`; any other interactive shell is
+  `unknown`: traps, `PROMPT_COMMAND` or `read -t` then a write look like a prompt to any
   `/proc` sample, so a shell whose CWD is the checkout blocks until it is closed or
-  leaves the checkout;
+  leaves the checkout. In both regimes agents, git mutations and everything unlisted block;
   a registered helper must be bound to the checkout by its own root-owned `REPOSITORY = "/abs"`
   declaration, else its PASS is incomplete), and the
   blocking kinds `git-mutation`, `agent-writer` (by executable name only when
@@ -357,24 +378,38 @@ metadata and can be deleted; nothing in any repository was changed by this work.
 - `adopt` keys on worktree content hashes (the operator's manifest form); the
   adopted entries then carry the full identity, so later mode/stage changes are
   detected. A rename appears as its new path with `origin` recorded.
-- Passive classification: editors by name only with a root-owned image in root-owned
-  directories (a user copy of an interpreter named `gopls`/`vim.basic` blocks); language
-  servers only as /proc-verified VS Code bundled servers (gopls, pyright, ruff server,
-  tsserver... block); dev servers, build tools and interpreter scripts block; foreign git
-  only in `GIT_SAFE_READS` forms (exact option tokens, so `--open-fil`/`--del`/`--lost`
+- Passive classification under a grant: editors by name only with a root-owned image in
+  root-owned directories (a user copy of an interpreter named `gopls`/`vim.basic` blocks);
+  language servers only as /proc-verified VS Code bundled servers (gopls, pyright, ruff
+  server, tsserver... block); dev servers, build tools and interpreter scripts block; foreign
+  git only in `GIT_SAFE_READS` forms (exact option tokens, so `--open-fil`/`--del`/`--lost`
   abbreviations block; status/diff/log/show/grep block because they can run repository
   filters, fsmonitor, textconv, external diff or a pager) with stdout not a terminal.
   Residual: a safe read in a partial clone can lazily fetch missing objects (transport,
-  writes into the git dir). Shells never pass (idle-shell requirement still unresolved).
+  writes into the git dir). Shells other than the verified trusted terminal never pass.
+- Passive classification without a grant (default): the pre-PR28 names with the image,
+  write-form and build-mode checks above. Accepted residuals of that baseline: the image
+  check is by name, not ownership (a user copy of an interpreter renamed `gopls` passes, as
+  before PR28); a python-hosted language server's script location is not checked; reads
+  still run repository-configured filters, textconv, external diff and pagers (repository
+  config, not the command line; a pager child in the checkout is itself scanned);
+  `GIT_PAGER`/`GIT_EXTERNAL_DIFF` in a read's environment are not inspected; `nodemon`,
+  `air` and `turbo dev` run project commands by design; idle shells pass. Other users'
+  processes block (their `/proc/<pid>/exe` is unreadable).
 - Scanner root binding: the approved helper prints no root, so a PASS is accepted only when
   the helper's root-owned source declares `REPOSITORY = "<this checkout>"`. The live helper
   is bound to `/opt/repos/validate`; any other checkout needs a root-installed helper
   bound to it (not provided here).
-- Own git reads: `status` runs with every configured `filter.<driver>.clean/process`
-  overridden empty (a `required` filter makes it fail; a driver name containing `=` fails
-  closed). Not covered: filter drivers configured only inside a submodule's own repository
-  (git recurses into submodules with their config). Same-uid cooperative evidence
-  throughout: lease, scan and checkpoint prove what was observed, not who wrote.
+- Own git reads: without a grant `status` runs as git does (repository filters normalize
+  as before PR28). Under a grant `status` runs with every configured
+  `filter.<driver>.clean/process` overridden empty (a `required` filter makes it fail; a
+  driver name containing `=` fails closed) and fails as `unsupported` when a configured
+  driver is the `filter` attribute of a tracked regular file (symlinks and gitlinks never
+  run a filter and do not count): disabling it would report normalized files as changed,
+  running it runs repository code. Not covered: filter drivers configured only inside a
+  submodule's own repository (git recurses into submodules with their config). Same-uid
+  cooperative evidence throughout: lease, scan and checkpoint prove what was observed, not
+  who wrote.
 - `checkpoint` after a commit needs a fresh passing `preflight` (the baseline is
   bound to HEAD; manifests are bound to root, git dir, remote and branch only, so
   a partial commit keeps the remaining paths resumable); the card text says so.
