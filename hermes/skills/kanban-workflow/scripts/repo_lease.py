@@ -33,13 +33,13 @@ passive tools is accepted by name; everything else fails closed:
                                the card's board-bound managed worker) and its descendants -> fine
   gone                         exited between scan and inspection (ENOENT/ESRCH)  -> fine
   editor / language-server /   known passive tools: editors, LSP servers, dev servers
-  dev-server / shell           in serve/watch mode, idle shells; without an observer
-                               grant only (classify_cmdline_ungranted), and only when
-                               /proc/<pid>/exe backs the name (ungranted_image_mismatch);
-                               under a grant see classify_cmdline              -> reported
-  git-readonly                 git status/log/diff/show/... (ungranted) without write
-                               forms (--output, grep -O, -c core.pager, ...); the exact
-                               GIT_SAFE_READS forms under a grant                 -> reported
+  dev-server / shell           in serve/watch mode, idle shells (classify_cmdline_ungranted,
+                               with or without the host-wide observer policy), only when
+                               /proc/<pid>/exe backs the name (ungranted_image_mismatch) -> reported
+  git-readonly                 git status/log/diff/show/... without write forms
+                               (--output, grep -O, -c core.pager, ...)            -> reported
+  trusted-terminal             only under the host-wide observer policy: a /proc-verified VS
+                               Code integrated terminal of this uid (any repository) -> reported
   VS Code Remote server        bundled JSON/Markdown/CSS/HTML language servers, only
                                when /proc proves it: the server's own node binary,
                                parented by that server's extension host; otherwise
@@ -317,12 +317,16 @@ FILTER_DRIVER_RE = re.compile(r"^filter\.(.+)\.(clean|process)$", re.S)
 # stat-dirty file through its filter). Our other calls (rev-parse, ls-files -s, cat-file blob,
 # rev-list, worktree list, branch, remote) never run a filter.
 FILTERED_OWN_GIT = {"status"}
+# Own `git status` applies repository filters as git does (pre-PR28 normalization, LFS etc.) on every
+# checkout, with or without the host-wide observer policy. The neutralizing path is kept off: a
+# machine-wide policy must not make every filter-using repository fail its preflight.
+OWN_GIT_NEUTRALIZE_FILTERS = False
 
 
 def own_git(argv: list, cwd: str, env: dict, **kw) -> subprocess.CompletedProcess:
-    """Run this module's (or workflow.py's) own git call. core.fsmonitor=false always. Only for a
-    checkout a valid observer policy grants (_granted_checkout; otherwise git applies its filters
-    as before PR28), without repository-configured filters:
+    """Run this module's (or workflow.py's) own git call. core.fsmonitor=false always. Repository
+    filters apply as before PR28 (OWN_GIT_NEUTRALIZE_FILTERS is off); when switched on, without
+    repository-configured filters:
     core.fsmonitor=false always; for FILTERED_OWN_GIT, every `filter.<driver>.clean`/`.process`
     configured anywhere (as `git config --get-regexp` sees it, includes and command scope) is
     overridden empty on the command line, so git applies no filter. A `required` filter then fails
@@ -332,7 +336,7 @@ def own_git(argv: list, cwd: str, env: dict, **kw) -> subprocess.CompletedProces
     Not covered: submodule repositories' own filter drivers (git recurses into them with their own
     config); see docs."""
     base = ["git", "-c", "core.fsmonitor=false"]
-    if _git_split(["git", *argv])[1] in FILTERED_OWN_GIT and _granted_checkout(cwd, env):
+    if _git_split(["git", *argv])[1] in FILTERED_OWN_GIT and OWN_GIT_NEUTRALIZE_FILTERS:
         drivers = set()
         listed = subprocess.run([*base, "config", "-z", "--get-regexp", r"^filter\..*\.(clean|process)$"], cwd=cwd,
                                 capture_output=True, timeout=120, env=env)
@@ -350,21 +354,6 @@ def own_git(argv: list, cwd: str, env: dict, **kw) -> subprocess.CompletedProces
         if used:
             return subprocess.CompletedProcess(argv, 128, "", used)
     return subprocess.run([*base, *argv], cwd=cwd, capture_output=True, timeout=120, env=env, **kw)
-
-
-def _granted_checkout(cwd: str, env: dict) -> bool:
-    """True only when a valid observer policy grants the checkout at *cwd* on this host and uid
-    (observer_grant). rev-parse and remote get-url run no filter or fsmonitor."""
-    def out(*argv):
-        r = subprocess.run(["git", "-c", "core.fsmonitor=false", *argv], cwd=cwd, capture_output=True, text=True,
-                           timeout=120, env=env)
-        return r.stdout.strip() if r.returncode == 0 else ""
-    root, gitdir = out("rev-parse", "--show-toplevel"), out("rev-parse", "--absolute-git-dir")
-    if not root or not gitdir:
-        return False
-    identity = {"root": str(Path(root).resolve()), "gitdir": str(Path(gitdir).resolve()),
-                "remote": out("remote", "get-url", "origin")}
-    return observer_grant(identity).get("status") == "granted"
 
 
 def _filters_in_use(base: list, cwd: str, env: dict, drivers: set) -> Optional[str]:
@@ -1534,8 +1523,8 @@ def classify_vscode(pid: int, cmd: list, grant: Optional[dict] = None) -> Option
             why = trusted_terminal_refusal(pid, root, parent, grant)
             if why is None:
                 return "trusted-terminal", False, (
-                    f"{claim} under pty host {parent}: operator-accepted interactive terminal on this host and "
-                    f"repository (observer policy {grant['policy_sha256'][:12]}); its commands are classified on "
+                    f"{claim} under pty host {parent}: operator-accepted interactive terminal on this host, "
+                    f"any repository (observer policy {grant['policy_sha256'][:12]}); its commands are classified on "
                     "their own, content drift is still checked")
             return "unknown", True, f"{claim} under pty host {parent}: observer policy not applied ({why}); {SHELL_REMEDY}"
         return "unknown", True, f"{claim} under pty host {parent}: {SHELL_REMEDY}"
@@ -1544,21 +1533,19 @@ def classify_vscode(pid: int, cmd: list, grant: Optional[dict] = None) -> Option
 
 # ------------------------------------------------ trusted observer policy ---
 #
-# The operator may accept the risk of their OWN VS Code integrated terminal (bash) sitting in one
-# designated checkout on one host: a native, private policy file next to the run state (never a
-# scanner bypass; the privileged scan still runs and every other match is classified as before).
-# It names this host (machine-id + hostname), the uid, the VS Code server directory and the exact
-# repositories (root, gitdir, remote). Absent, malformed, foreign-host or foreign-repository
-# policies change nothing: the terminal blocks as before. Even under a valid policy the terminal
-# passes only when /proc proves the whole VS Code chain (trusted_terminal_refusal); its child
-# processes (git commit, an agent, a script) are separate matches and still block, and dirty-state
-# provenance, lease and owner checks are unchanged. This module never writes the policy.
-OBSERVER_POLICY_VERSION = 1
-OBSERVER_POLICY_KIND = "trusted-vscode-terminal"
-OBSERVER_POLICY_FIELDS = ("version", "kind", "host", "uid", "vscode_server_dir", "repositories", "accepted_risk")
+# Host-wide cooperative VS Code observer policy (opt-in once per host and uid, any repository, no
+# per-repository list): `repo_lease.py observer-policy enable --accept-risk ...` writes a private
+# 0600 file next to the run state, `disable` removes it; workers never write it. Under it, processes
+# making a VS Code claim (bundled language server, integrated terminal) are classified by /proc
+# ancestry (classify_vscode, trusted_terminal_refusal); everything else keeps the pre-PR28
+# classification, so agents, git mutations and unlisted programs block. Absent: pre-PR28 default.
+# Malformed, retired version 1 (per-repository), foreign host/uid: refused, no terminal is trusted.
+# Cooperative same-uid evidence, never OS containment; the privileged scan still runs.
+OBSERVER_POLICY_VERSION = 2
+OBSERVER_POLICY_KIND = "cooperative-vscode-host"
+OBSERVER_POLICY_FIELDS = ("version", "kind", "host", "uid", "vscode_server_dir", "accepted_risk")
 OBSERVER_POLICY_OPTIONAL = ("note", "created_at")
 OBSERVER_HOST_FIELDS = ("machine_id", "hostname")
-OBSERVER_REPO_FIELDS = ("root", "gitdir", "remote")
 MACHINE_ID_PATH = "/etc/machine-id"
 PTS_MAJORS = range(136, 144)  # UNIX98 pty slaves
 
@@ -1608,11 +1595,14 @@ def load_observer_policy(path: Optional[Path] = None) -> tuple:
         return None, f"{path} is not JSON"
     if not isinstance(data, dict):
         return None, f"{path} is not a JSON object"
+    if "repositories" in data or data.get("version") == 1:
+        return None, ("observer policy version 1 (per-repository) is retired; the cooperative VS Code policy is "
+                      "host-wide (version 2, no repositories): run `repo_lease.py observer-policy enable`")
     missing = [k for k in OBSERVER_POLICY_FIELDS if k not in data]
     extra = sorted(set(data) - set(OBSERVER_POLICY_FIELDS) - set(OBSERVER_POLICY_OPTIONAL))
     if missing or extra:
         return None, f"observer policy fields: missing {missing or 'none'}, unknown {extra or 'none'}"
-    host, repos, sdir = data["host"], data["repositories"], data["vscode_server_dir"]
+    host, sdir = data["host"], data["vscode_server_dir"]
     if data["version"] != OBSERVER_POLICY_VERSION or data["kind"] != OBSERVER_POLICY_KIND:
         return None, f"observer policy must be version {OBSERVER_POLICY_VERSION}, kind {OBSERVER_POLICY_KIND}"
     if not isinstance(host, dict) or sorted(host) != sorted(OBSERVER_HOST_FIELDS) \
@@ -1622,19 +1612,16 @@ def load_observer_policy(path: Optional[Path] = None) -> tuple:
         return None, "observer policy uid must be an integer"
     if not isinstance(sdir, str) or not sdir.startswith("/") or os.path.normpath(sdir) != sdir or sdir == "/":
         return None, "observer policy vscode_server_dir must be a normalized absolute directory"
-    if not isinstance(repos, list) or not repos or not all(
-            isinstance(r, dict) and sorted(r) == sorted(OBSERVER_REPO_FIELDS)
-            and all(isinstance(r[k], str) and r[k] for k in OBSERVER_REPO_FIELDS) for r in repos):
-        return None, "observer policy repositories must be a non-empty list of exactly {root, gitdir, remote}"
     if not isinstance(data["accepted_risk"], str) or len(data["accepted_risk"].strip()) < 20 \
             or data["accepted_risk"].lstrip().startswith("<"):
         return None, "observer policy accepted_risk must state the accepted risk"
     return data | {"_sha256": hashlib.sha256(raw).hexdigest()}, None
 
 
-def observer_grant(identity: dict, path: Optional[Path] = None) -> dict:
-    """What the observer policy allows for this checkout on this host: status "none" (no policy),
-    "refused" (a policy that does not apply here, with why) or "granted"."""
+def observer_grant(identity: Optional[dict] = None, path: Optional[Path] = None) -> dict:
+    """What the host-wide observer policy allows on this host and uid: status "none" (no policy),
+    "refused" (malformed, retired v1, foreign host or uid, with why) or "granted". *identity* is
+    accepted for call-site compatibility; the policy has no per-repository list."""
     policy, problem = load_observer_policy(path)
     if problem:
         return {"status": "refused", "detail": problem}
@@ -1646,13 +1633,33 @@ def observer_grant(identity: dict, path: Optional[Path] = None) -> dict:
         return out | {"status": "refused", "detail": f"policy is for host {policy['host']}, this is {here}"}
     if policy["uid"] != os.getuid():
         return out | {"status": "refused", "detail": f"policy is for uid {policy['uid']}, this is {os.getuid()}"}
-    for repo in policy["repositories"]:
-        if repo["root"] == identity["root"] and repo["gitdir"] == identity["gitdir"] \
-                and same_remote(repo["remote"], identity.get("remote") or ""):
-            return out | {"status": "granted", "uid": policy["uid"], "vscode_server_dir": policy["vscode_server_dir"],
-                          "repository": repo, "detail": "trusted VS Code terminal for this host and repository"}
-    return out | {"status": "refused", "detail": f"checkout {identity['root']} ({identity['gitdir']}, "
-                                                 f"{identity.get('remote')}) is not a policy repository"}
+    return out | {"status": "granted", "uid": policy["uid"], "vscode_server_dir": policy["vscode_server_dir"],
+                  "detail": "host-wide cooperative VS Code observer for this uid (any repository)"}
+
+
+def observer_policy_command(action: str, vscode_server_dir: str, accept_risk: str = "") -> dict:
+    """The operator's explicit, once-per-host switch (never called by a worker or workflow):
+    `enable` writes the version-2 host-wide policy (private 0600 file in the run state, atomic),
+    `disable` removes it, `show` reports it. Enabling needs an accepted-risk statement."""
+    path = observer_policy_path()
+    if action == "disable":
+        try:
+            path.unlink()
+            removed = True
+        except FileNotFoundError:
+            removed = False
+        return {"path": str(path), "removed": removed, "current": observer_grant()}
+    if action == "enable":
+        policy = {"version": OBSERVER_POLICY_VERSION, "kind": OBSERVER_POLICY_KIND, "host": host_identity(),
+                  "uid": os.getuid(), "vscode_server_dir": os.path.normpath(os.path.abspath(vscode_server_dir)),
+                  "accepted_risk": accept_risk}
+        if not isinstance(accept_risk, str) or len(accept_risk.strip()) < 20:
+            return {"path": str(path), "written": False, "current": observer_grant(),
+                    "detail": "--accept-risk must state the accepted risk (20+ characters)"}
+        _atomic_replace(_private_dir(path.parent), path.name, policy)
+        return {"path": str(path), "written": True, "current": observer_grant()}
+    return {"path": str(path), "mode": "0600", "current": observer_grant(),
+            "enable": "repo_lease.py observer-policy enable --accept-risk '<statement>' [--vscode-server-dir DIR]"}
 
 
 def proc_uids(pid: int) -> Optional[tuple]:
@@ -2006,32 +2013,25 @@ def classify_process(pid: int, self_pid: int, anchors: Iterable[int], self_chain
         if anchors & set(lineage) or self_pid in lineage:
             return {"pid": pid, "kind": "own-descendant", "blocking": False,
                     "detail": f"descends from this coordinator ({Path(cmd[0]).name if cmd else '?'})"}
-        if (grant or {}).get("status") != "granted":
-            # No valid policy for this host, uid and repository: the pre-PR28 classification.
-            kind, blocking, detail = classify_cmdline_ungranted(cmd)
-            if not blocking and kind in UNGRANTED_IDENTITY_KINDS:
-                why = ungranted_image_mismatch(pid, cmd, kind) or (git_environ_refusal(pid)
-                                                                     if kind == "git-readonly" else None)
-                if why:
-                    if proc_exited(pid):
-                        return {"pid": pid, "kind": "gone", "blocking": False, "detail": "exited before inspection"}
-                    return {"pid": pid, "kind": "unknown", "blocking": True,
-                            "detail": f"claims {kind} ({detail}) but {why}; treated as a possible writer"}
-            return {"pid": pid, "kind": kind, "blocking": blocking, "detail": detail}
-        vscode = classify_vscode(pid, cmd, grant)
-        kind, blocking, detail = vscode or classify_cmdline(cmd)
-        if not vscode and not blocking and kind in PASSIVE_IDENTITY_KINDS:
-            mismatch = passive_image_mismatch(pid, cmd)
-            if mismatch:
+        if (grant or {}).get("status") == "granted":
+            # Host-wide cooperative VS Code policy: a /proc-verified VS Code chain (bundled language
+            # server, integrated terminal) is classified by classify_vscode; a VS Code claim that /proc
+            # does not back stays unknown. Everything else uses the pre-PR28 classification below.
+            vscode = classify_vscode(pid, cmd, grant)
+            if vscode:
+                if vscode[1] and proc_exited(pid):
+                    return {"pid": pid, "kind": "gone", "blocking": False, "detail": "exited before inspection"}
+                return {"pid": pid, "kind": vscode[0], "blocking": vscode[1], "detail": vscode[2]}
+        # No grant, or not a VS Code chain process: the pre-PR28 classification.
+        kind, blocking, detail = classify_cmdline_ungranted(cmd)
+        if not blocking and kind in UNGRANTED_IDENTITY_KINDS:
+            why = ungranted_image_mismatch(pid, cmd, kind) or (git_environ_refusal(pid)
+                                                                 if kind == "git-readonly" else None)
+            if why:
                 if proc_exited(pid):
                     return {"pid": pid, "kind": "gone", "blocking": False, "detail": "exited before inspection"}
                 return {"pid": pid, "kind": "unknown", "blocking": True,
-                        "detail": f"claims {kind} ({detail}) but {mismatch}; treated as a possible writer"}
-            if kind == "git-readonly" and proc_stdout_is_terminal(pid) is not False:
-                # git starts pager.<cmd> (repository config, any program) only when stdout is a tty.
-                return {"pid": pid, "kind": "unknown", "blocking": True,
-                        "detail": f"{detail} with stdout on a terminal (or unreadable): it can start a "
-                                  "repository-configured pager; treated as a possible writer"}
+                        "detail": f"claims {kind} ({detail}) but {why}; treated as a possible writer"}
         return {"pid": pid, "kind": kind, "blocking": blocking, "detail": detail}
     except ProcVisibilityError as exc:
         return {"pid": pid, "kind": "unknown", "blocking": True, "detail": f"not inspectable: {exc}"}
@@ -2876,10 +2876,12 @@ def parser() -> argparse.ArgumentParser:
     sc.add_argument("--original", required=True)
     sc.add_argument("--original-sha256", required=True)
     sc.add_argument("--out", required=True)
-    op = sub.add_parser("observer-policy", help="print a trusted VS Code terminal policy template for this host "
-                                                "and checkout (stdout only; the operator reviews and saves it)")
-    common(op, task=False)
+    op = sub.add_parser("observer-policy", help="show, enable or disable the host-wide cooperative VS Code observer "
+                                                "policy for this uid (one policy, any repository; never per repository)")
+    op.add_argument("action", nargs="?", choices=("show", "enable", "disable"), default="show")
     op.add_argument("--vscode-server-dir", default=str(Path.home() / ".vscode-server"))
+    op.add_argument("--accept-risk", default="", help="enable: the operator's statement of the accepted risk")
+    op.add_argument("--json", action="store_true")
     rs = sub.add_parser("register-scanner", help="register the privileged CWD scanner for a checkout")
     rs.add_argument("checkout")
     rs.add_argument("argv", nargs=argparse.REMAINDER, help="-- sudo -n /absolute/helper")
@@ -2956,14 +2958,8 @@ def main(argv=None, git: GitRunner = default_git, scan_runner: Optional[ScanRunn
                                      args.original_sha256, args.out))
             return 0
         if args.cmd == "observer-policy":
-            identity = repo_identity(args.checkout, git)
-            emit({"path": str(observer_policy_path()), "mode": "0600", "current": observer_grant(identity),
-                  "template": {"version": OBSERVER_POLICY_VERSION, "kind": OBSERVER_POLICY_KIND, "host": host_identity(),
-                               "uid": os.getuid(), "vscode_server_dir": os.path.normpath(args.vscode_server_dir),
-                               "repositories": [{k: identity.get(k) or "" for k in OBSERVER_REPO_FIELDS}],
-                               "accepted_risk": "<operator: state that you accept your own VS Code integrated "
-                                                "terminal running in this checkout on this host>"}})
-            return 0
+            emit(observer_policy_command(args.action, args.vscode_server_dir, args.accept_risk))
+            return 0 if args.action != "enable" or observer_grant().get("status") == "granted" else 2
         if args.cmd == "register-scanner":
             scanner = [a for a in args.argv if a != "--"]
             emit(register_scanner(args.checkout, scanner, git))

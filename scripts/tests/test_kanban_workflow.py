@@ -2726,7 +2726,7 @@ class OwnGitFsmonitorTest(unittest.TestCase):
         self.assertEqual(wf.default_git(["status", "--porcelain"], str(co)).returncode, 0)
         self.assertFalse(sentinel.exists(), "workflow git read ran the fsmonitor hook")
 
-    def test_workflow_git_status_never_runs_a_repository_clean_filter(self):
+    def test_workflow_git_status_keeps_repository_filters_with_and_without_the_policy(self):
         tmp = Path(tempfile.mkdtemp(prefix="kanban-workflow-filter-")).resolve()
         self.addCleanup(shutil.rmtree, tmp, True)
         co, sentinel = tmp / "co", tmp / "filter-ran"
@@ -2749,18 +2749,9 @@ class OwnGitFsmonitorTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertTrue(sentinel.exists(), "no grant: workflow git status keeps pre-PR28 filter behaviour")
             sentinel.unlink()
-            # Granted checkout: the filter is never run; a tracked path using it is unsupported.
-            subprocess.run(["git", "remote", "add", "origin", "file:///nonexistent/origin.git"], cwd=co, check=True)
-            ident = wf.rl.repo_identity(str(co), wf.rl.default_git)
-            path = wf.rl.observer_policy_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({
-                "version": 1, "kind": "trusted-vscode-terminal", "host": wf.rl.host_identity(), "uid": os.getuid(),
-                "vscode_server_dir": str(tmp / ".vscode-server"),
-                "repositories": [{k: ident[k] for k in ("root", "gitdir", "remote")}],
-                "accepted_risk": "I accept my own VS Code integrated terminal running in this checkout."}))
-            path.chmod(0o600)
+            # Host-wide observer policy: ordinary repository filtering is preserved.
+            wf.rl.observer_policy_command("enable", str(tmp / ".vscode-server"),
+                                          "I accept my own VS Code sessions on this host in any repository.")
             r = wf.default_git(["status", "--porcelain", "--untracked-files=all"], str(co))
-            self.assertNotEqual(r.returncode, 0)
-            self.assertIn("unsupported", r.stderr)
-        self.assertFalse(sentinel.exists(), "workflow git status ran a clean filter in a granted checkout")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(sentinel.exists(), "host-wide policy: workflow git status keeps filter behaviour")

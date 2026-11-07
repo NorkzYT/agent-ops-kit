@@ -147,8 +147,8 @@ invocation (allowed by the scanner without any config change), the in-process
   writable, exit-code contract 0/1/2, unprivileged `/proc` fallback that marks
   other users' processes as unknown; classification per match: `self-chain`,
   `own-descendant`, `gone` (ENOENT/ESRCH), then one of two regimes chosen by the
-  observer policy (`observer_grant`: a valid, owner-protected policy for this host,
-  uid and repository).
+  host-wide observer policy (`observer_grant`: one valid, owner-protected policy for this
+  host and uid; no repository list).
   **Ungranted (default, the pre-PR28 d468701 rules):** `git-readonly` (`READONLY_GIT`
   subcommands), `editor`, `language-server`, `dev-server` and an idle `shell` are passive,
   but each claim is checked against `/proc/<pid>/exe` (same image name, packaging
@@ -167,14 +167,19 @@ invocation (allowed by the scanner without any config change), the in-process
   watch/serve flag (`tsc --noEmit` passes) and `turbo` tasks other than dev/start/serve
   are one-shot builds and block. Shells with arguments (the VS Code integrated terminal's
   `bash --init-file ...` included) stay `unknown`.
-  **Granted (PR28 strict):** the explicit passive observations are only
-  `editor` (root-owned image in root-owned directories), `language-server` (only a /proc-verified
-  VS Code bundled server), `git-readonly` (only the explicit `GIT_SAFE_READS` forms, stdout not a
-  terminal) and the /proc-verified `trusted-terminal`; language servers by name, dev
-  servers/build tools and interpreter scripts are `unknown`; any other interactive shell is
-  `unknown`: traps, `PROMPT_COMMAND` or `read -t` then a write look like a prompt to any
-  `/proc` sample, so a shell whose CWD is the checkout blocks until it is closed or
-  leaves the checkout. In both regimes agents, git mutations and everything unlisted block;
+  **Host-wide cooperative VS Code policy (opt-in, `repo_lease.py observer-policy
+  enable --accept-risk '...' [--vscode-server-dir DIR]`, `disable` removes it):** applies to
+  every repository and every VS Code window of this uid at once. A process making a VS Code
+  claim is classified by /proc ancestry, not name: the bundled language server only under its
+  own extension host, the integrated terminal (`trusted-terminal`) only as the session leader
+  of a pty its pty host holds, under that server's server-main.js and bin/code-server launcher
+  inside the policy's server directory, policy uid throughout, no agent or managed worker
+  ancestor; a claim /proc does not back stays `unknown`. Everything else (git reads, `tsc
+  --watch`, `vite`, `nodemon`, extension language servers and watchers, commands typed in the
+  terminal) is the ungranted rule set above, so agents, git mutations, write forms and
+  unlisted programs still block. A missing policy is the ungranted default; a malformed,
+  retired version-1 (per-repository), foreign host/uid or non-0600 policy is `refused`: no
+  terminal is trusted (fails closed) and the rest is the ungranted default. No idle sampling.
   a registered helper must be bound to the checkout by its own root-owned `REPOSITORY = "/abs"`
   declaration, else its PASS is incomplete), and the
   blocking kinds `git-mutation`, `agent-writer` (by executable name only when
@@ -378,16 +383,14 @@ metadata and can be deleted; nothing in any repository was changed by this work.
 - `adopt` keys on worktree content hashes (the operator's manifest form); the
   adopted entries then carry the full identity, so later mode/stage changes are
   detected. A rename appears as its new path with `origin` recorded.
-- Passive classification under a grant: editors by name only with a root-owned image in
-  root-owned directories (a user copy of an interpreter named `gopls`/`vim.basic` blocks);
-  language servers only as /proc-verified VS Code bundled servers (gopls, pyright, ruff
-  server, tsserver... block); dev servers, build tools and interpreter scripts block; foreign
-  git only in `GIT_SAFE_READS` forms (exact option tokens, so `--open-fil`/`--del`/`--lost`
-  abbreviations block; status/diff/log/show/grep block because they can run repository
-  filters, fsmonitor, textconv, external diff or a pager) with stdout not a terminal.
-  Residual: a safe read in a partial clone can lazily fetch missing objects (transport,
-  writes into the git dir). Shells other than the verified trusted terminal never pass.
-- Passive classification without a grant (default): the pre-PR28 names with the image,
+- Host-wide policy limits: cooperative same-uid evidence, not OS containment. A same-uid
+  process that launches a real VS Code server detached from any agent is indistinguishable;
+  a process writing into a checkout without its CWD there is not scanned; commands in a
+  trusted terminal are only as safe as the ungranted rules that classify them (no endless
+  denylist). The root scanner is the one installed helper bound to `/opt/repos/validate`;
+  other checkouts use the unprivileged `/proc` fallback (other users' processes unknown), so
+  the policy is not all-repository privileged visibility.
+- Passive classification outside verified VS Code chains (with or without the policy): the pre-PR28 names with the image,
   write-form and build-mode checks above. Accepted residuals of that baseline: the image
   check is by name, not ownership (a user copy of an interpreter renamed `gopls` passes, as
   before PR28); a python-hosted language server's script location is not checked; reads
@@ -400,13 +403,10 @@ metadata and can be deleted; nothing in any repository was changed by this work.
   the helper's root-owned source declares `REPOSITORY = "<this checkout>"`. The live helper
   is bound to `/opt/repos/validate`; any other checkout needs a root-installed helper
   bound to it (not provided here).
-- Own git reads: without a grant `status` runs as git does (repository filters normalize
-  as before PR28). Under a grant `status` runs with every configured
-  `filter.<driver>.clean/process` overridden empty (a `required` filter makes it fail; a
-  driver name containing `=` fails closed) and fails as `unsupported` when a configured
-  driver is the `filter` attribute of a tracked regular file (symlinks and gitlinks never
-  run a filter and do not count): disabling it would report normalized files as changed,
-  running it runs repository code. Not covered: filter drivers configured only inside a
+- Own git reads: `status` runs as git does on every checkout, with or without the policy
+  (repository filters normalize as before PR28; `OWN_GIT_NEUTRALIZE_FILTERS` is off, its
+  neutralizing path, which overrides drivers empty and fails as `unsupported` when a tracked
+  file uses one, is kept but unused). Not covered when enabled: filter drivers configured only inside a
   submodule's own repository (git recurses into submodules with their config). Same-uid
   cooperative evidence throughout: lease, scan and checkpoint prove what was observed, not
   who wrote.

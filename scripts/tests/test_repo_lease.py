@@ -40,11 +40,9 @@ wf = importlib.util.module_from_spec(_wf_spec)
 _wf_spec.loader.exec_module(wf)
 
 REPO_URL = "https://github.com/acme/app.git"
-# The strict (PR28) classification applies only under a granted observer policy. Tests of that
-# regime classify with a grant whose VS Code server dir no fixture uses: strict rules apply, no
-# terminal is trusted. Without a grant the pre-PR28 classification applies (ObserverGrantScopeTest).
-STRICT_GRANT = {"status": "granted", "uid": os.getuid(), "vscode_server_dir": "/nonexistent/strict-regime-server",
-                "repository": {"root": "/nonexistent", "gitdir": "/nonexistent/.git", "remote": ""}}
+# A granted host-wide policy whose VS Code server dir no fixture uses: VS Code chain claims are
+# verified (and fail here: no terminal is trusted); everything else is the pre-PR28 classification.
+STRICT_GRANT = {"status": "granted", "uid": os.getuid(), "vscode_server_dir": "/nonexistent/strict-regime-server"}
 
 
 def done(code=0, out="", err=""):
@@ -1148,22 +1146,19 @@ class VSCodeServerTest(TempRepo):
         time.sleep(0.5)
         self.assert_never_idle(shell, 10)
 
-    def test_name_only_shell_needs_the_same_idle_proof(self):
-        """`bash`/`bash -i` by name alone is no bypass: at its prompt, running a builtin loop, or
-        without a terminal, it is unknown."""
+    def test_name_only_shell_is_the_pre_pr28_idle_shell(self):
+        """A plain `bash -i` (not a VS Code chain) is the pre-PR28 idle shell under the host-wide
+        policy too: passive by name, no idle sampling (accepted residual; its children are scanned)."""
         host, shell = self.host("ptyHost", FIXTURE_ARGV=json.dumps([self.bash, "-i"]))
         self.prompt(host, shell)
         row = self.classify(shell)
-        self.assertEqual((row["kind"], row["blocking"]), ("unknown", True), row)
-        host.stdin.write("while :; do echo x >> plain.txt; done\n"); host.stdin.flush()
-        time.sleep(0.5)
-        self.assert_never_idle(shell, 10)
+        self.assertEqual((row["kind"], row["blocking"]), ("shell", False), row)
         notty = subprocess.Popen([self.bash], cwd=self.co, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL)
         self.procs.append(notty)
         time.sleep(0.3)
         row = self.classify(notty.pid)
-        self.assertEqual((row["kind"], row["blocking"]), ("unknown", True), row)
+        self.assertEqual((row["kind"], row["blocking"]), ("shell", False), row)
 
     def prompt(self, host, shell):
         """Wait until bash sits at its prompt (has read its init file and is waiting on the tty)."""
@@ -1205,12 +1200,11 @@ class VSCodeServerTest(TempRepo):
     def test_a_shell_at_its_prompt_is_unknown_with_an_actionable_reason(self):
         """No /proc evidence proves a shell will not run code (traps, PROMPT_COMMAND, read -t): every
         interactive shell whose CWD is the checkout blocks, the VS Code one included."""
-        for argv in (None, [self.bash, "-i"]):
-            host, shell = self.host("ptyHost", **({"FIXTURE_ARGV": json.dumps(argv)} if argv else {}))
-            time.sleep(1.0)
-            row = self.classify(shell)
-            self.assertEqual((row["kind"], row["blocking"]), ("unknown", True), row)
-            self.assertIn("cd out of", row["detail"])
+        host, shell = self.host("ptyHost")
+        time.sleep(1.0)
+        row = self.classify(shell)
+        self.assertEqual((row["kind"], row["blocking"]), ("unknown", True), row)
+        self.assertIn("cd out of", row["detail"])
         self.assertNotIn("shell", rl.NONBLOCKING_KINDS)
 
     def test_agents_and_git_inside_the_terminal_still_block(self):
@@ -1292,10 +1286,9 @@ class TrustedTerminalPolicyTest(VSCodeServerTest):
 
     def write_policy(self, **over):
         ident = self.identity()
-        policy = {"version": 1, "kind": "trusted-vscode-terminal", "host": rl.host_identity(), "uid": os.getuid(),
+        policy = {"version": 2, "kind": "cooperative-vscode-host", "host": rl.host_identity(), "uid": os.getuid(),
                   "vscode_server_dir": str(self.tmp / "home" / ".vscode-server"),
-                  "repositories": [{"root": ident["root"], "gitdir": ident["gitdir"], "remote": ident["remote"]}],
-                  "accepted_risk": "I accept my own VS Code integrated terminal running in this checkout."}
+                  "accepted_risk": "I accept my own VS Code sessions on this host in any repository."}
         policy.update(over)
         path = rl.observer_policy_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1328,6 +1321,24 @@ class TrustedTerminalPolicyTest(VSCodeServerTest):
         # Without a grant (other call sites, other checkouts) nothing changes.
         self.assertEqual(self.classify(shell)["blocking"], True)
 
+    def test_one_host_policy_trusts_simultaneous_vscode_terminals_in_two_repositories(self):
+        """No repository list: one policy, two genuine VS Code chains at once, each terminal in a
+        different repository, both trusted; a git mutation started in either still blocks."""
+        other = self.tmp / "second-repo"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        self.write_policy()
+        sessions = [self.launch(), self.launch(FIXTURE_CWD=str(other))]
+        for host, shell in sessions:
+            self.prompt(host, shell)
+        for (host, shell), repo in zip(sessions, (self.co, str(other))):
+            grant = rl.observer_grant(rl.repo_identity(repo, rl.default_git))
+            r = rl.classify_scan({"status": "complete", "scanner": "x", "matches": [{"pid": shell, "cwd": repo}]},
+                                 self_pid=10 ** 6, grant=grant)
+            self.assertEqual((r["ok"], r["processes"][0]["kind"]), (True, "trusted-terminal"), (repo, r))
+        rl.observer_policy_path().unlink()
+        for host, shell in sessions:
+            self.assertFalse(self.scan(shell)["ok"], "disabled: the terminal blocks again")
+
     def test_policy_scope_and_file_refusals_keep_the_terminal_blocking(self):
         host, shell = self.launch()
         self.prompt(host, shell)
@@ -1338,10 +1349,7 @@ class TrustedTerminalPolicyTest(VSCodeServerTest):
             "other machine": {"host": {**here, "machine_id": "0" * 32}},
             "other hostname": {"host": {**here, "hostname": here["hostname"] + "-x"}},
             "other uid": {"uid": os.getuid() + 1},
-            "other repository": {"repositories": [other_repo]},
-            "other gitdir": {"repositories": [{**other_repo, "root": ident["root"], "gitdir": "/nope/.git"}]},
-            "other remote": {"repositories": [{"root": ident["root"], "gitdir": ident["gitdir"],
-                                               "remote": "https://github.com/evil/app.git"}]},
+            "retired per-repository v1": {"version": 1, "kind": "trusted-vscode-terminal", "repositories": [other_repo]},
             "other server dir": {"vscode_server_dir": str(self.tmp / "elsewhere")},
             "template risk": {"accepted_risk": "<operator: state that you accept your own terminal>"},
             "unknown field": {"scanner_bypass": True},
@@ -2213,9 +2221,8 @@ class PassiveExecutableIdentityTest(TempRepo):
         time.sleep(0.5)
         for name, p in procs.items():
             rows[name] = self.classify(p.pid)
-        # A user copy named nvim is a name chosen by the user, not root: unknown (copied-interpreter spoof).
-        self.assertEqual((rows["nvim"]["kind"], rows["nvim"]["blocking"]), ("unknown", True), rows["nvim"])
-        self.assertIn("root-owned", rows["nvim"]["detail"])
+        # Pre-PR28 image check is by name (accepted residual): an image itself named nvim passes.
+        self.assertEqual((rows["nvim"]["kind"], rows["nvim"]["blocking"]), ("editor", False), rows["nvim"])
         self.assertEqual((rows["git"]["kind"], rows["git"]["blocking"]), ("git-readonly", False), rows["git"])
         if "vi" in rows:
             self.assertEqual((rows["vi"]["kind"], rows["vi"]["blocking"]), ("editor", False), rows["vi"])
@@ -2291,6 +2298,7 @@ class IndependentAuditR3Test(TempRepo):
             time.sleep(0.05)
         self.assertTrue(Path(self.co, name).exists(), "the fixture is a real writer")
 
+    @unittest.skip("strict PR28 image ownership retired with the host-wide policy (documented residual)")
     def test_copied_interpreter_named_like_a_tool_blocks(self):
         """A user copy of python named gopls / vim.basic: image name matches, it still writes."""
         bindir = self.tmp / "bin"; bindir.mkdir()
@@ -2352,6 +2360,7 @@ class IndependentAuditR3Test(TempRepo):
             kind, b, detail = rl.classify_cmdline(list(cmd))
             self.assertEqual((kind, b), ("git-readonly", False), (cmd, detail))
 
+    @unittest.skip("pre-PR28 reads are not checked for a terminal stdout (documented residual)")
     def test_git_read_on_a_terminal_can_spawn_a_configured_pager(self):
         """pager.<cmd> config applies to any builtin when stdout is a tty: such a read blocks."""
         import pty
@@ -2400,38 +2409,20 @@ class IndependentAuditR3Test(TempRepo):
         with mock.patch.object(rl, "helper_repository", lambda h: self.co):
             self.assertEqual(rl.run_scan(self.co, scan_runner(0, PASS_LINES), reg)["status"], "complete")
 
-    def test_own_git_status_never_runs_a_repository_clean_filter(self):
+    def test_own_git_status_applies_repository_filters_with_and_without_the_policy(self):
+        """Ordinary git filtering (LFS-style clean filters, required filters) is preserved on every
+        checkout: the host-wide policy must not make filter-using repositories fail preflight."""
         sentinel = self.tmp / "filter-ran"
         self.g("config", "filter.x.clean", f"sh -c 'touch {sentinel}; cat'")
-        Path(self.co, ".gitattributes").write_text("* filter=x\n")
-        Path(self.co, "a.txt").write_text("2\n")
-        subprocess.run(["git", "status", "--porcelain"], cwd=self.co, capture_output=True)
-        self.assertTrue(sentinel.exists(), "the fixture filter really runs under plain git")
-        sentinel.unlink()
-        ObserverGrantScopeTest.policy(self)  # suppression is the granted regime only (PR28 scope)
-        r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
-        self.assertFalse(sentinel.exists(), "repo_lease git status ran a clean filter")
-        self.assertNotEqual(r.returncode, 0, "a filter a tracked path uses is unsupported, not disabled")
-        self.assertIn("unsupported", r.stderr)
-        with self.assertRaises(rl.LeaseError):
-            rl.snapshot_dirty(rl.default_git, self.identity())
-        self.assertFalse(sentinel.exists())
-        # A driver name a `-c` override cannot express fails the read instead of running it.
-        self.g("config", "filter.we=ird.process", f"sh -c 'touch {sentinel}'")
-        r = rl.default_git(["status", "--porcelain"], self.co)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertFalse(sentinel.exists())
-
-    def test_own_git_status_fails_closed_on_a_required_filter(self):
-        self.g("config", "filter.x.clean", "cat")
         self.g("config", "filter.x.required", "true")
         Path(self.co, ".gitattributes").write_text("* filter=x\n")
-        Path(self.co, "a.txt").write_text("3\n")
-        self.assertEqual(rl.default_git(["status", "--porcelain"], self.co).returncode, 0,
-                         "no grant: git applies the filter as before PR28")
-        ObserverGrantScopeTest.policy(self)
-        r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
-        self.assertNotEqual(r.returncode, 0, "a required filter cannot be neutered: the read must fail")
+        Path(self.co, "a.txt").write_text("2\n")
+        for name, setup in (("absent", lambda: None), ("host-wide", lambda: ObserverGrantScopeTest.policy(self))):
+            setup()
+            sentinel.unlink(missing_ok=True)
+            r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
+            self.assertEqual(r.returncode, 0, (name, r.stderr))
+            self.assertTrue(sentinel.exists(), name)
 
 
 class ObserverGrantScopeTest(TempRepo):
@@ -2441,10 +2432,9 @@ class ObserverGrantScopeTest(TempRepo):
 
     def policy(self, **over):
         ident = self.identity()
-        data = {"version": 1, "kind": "trusted-vscode-terminal", "host": rl.host_identity(), "uid": os.getuid(),
+        data = {"version": 2, "kind": "cooperative-vscode-host", "host": rl.host_identity(), "uid": os.getuid(),
                 "vscode_server_dir": str(self.tmp / "home" / ".vscode-server"),
-                "repositories": [{"root": ident["root"], "gitdir": ident["gitdir"], "remote": ident["remote"]}],
-                "accepted_risk": "I accept my own VS Code integrated terminal running in this checkout."}
+                "accepted_risk": "I accept my own VS Code sessions on this host in any repository."}
         data.update(over)
         path = rl.observer_policy_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2478,8 +2468,8 @@ class ObserverGrantScopeTest(TempRepo):
                  or (rl.observer_policy_path().write_text("{"), rl.observer_policy_path().chmod(0o600))),
                 ("foreign-host", lambda: self.policy(host={"machine_id": "0" * 32, "hostname": "elsewhere"})),
                 ("foreign-uid", lambda: self.policy(uid=os.getuid() + 1)),
-                ("foreign-repo", lambda: self.policy(repositories=[{"root": "/nonexistent/other", "gitdir":
-                                                                    "/nonexistent/other/.git", "remote": "file:///x"}]))]
+                ("retired-v1-per-repo", lambda: self.policy(version=1, kind="trusted-vscode-terminal",
+                                                            repositories=[{"root": "/x", "gitdir": "/x/.git", "remote": ""}]))]
 
     def reset_policy(self):
         path = rl.observer_policy_path()
@@ -2519,12 +2509,52 @@ class ObserverGrantScopeTest(TempRepo):
             self.assertEqual([r["blocking"] for r in scan["processes"]], [True] * 4, (name, scan["processes"]))
             self.assertFalse(scan["ok"], name)
 
-    def test_granted_policy_keeps_the_strict_classification(self):
+    def test_host_wide_policy_keeps_pre_pr28_reads_and_watchers_in_any_repository(self):
+        """One host-wide policy, no repository list: real git reads and node watchers (vite dev,
+        tsc --watch, nodemon) in two unrelated synthetic repositories are passive; a git mutation
+        and a competing agent in either still block; spoofed names (exec -a) still block."""
         self.policy()
-        pids = [self.fake("git", "status"), self.fake("vite")]
-        scan = self.scan(*pids)
-        self.assertEqual(scan["observer_policy"]["status"], "granted")
-        self.assertTrue(all(r["blocking"] for r in scan["processes"]), scan["processes"])
+        other = self.tmp / "second-repo"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        procs, blockers = [], []
+        for repo in (self.co, str(other)):
+            for pkg, script, argv in (("vite", "vite.js", ["dev"]), ("typescript", "tsc", ["--watch"]),
+                                      ("nodemon", "nodemon.js", ["server.js"])):
+                d = Path(repo, "node_modules", pkg, "bin"); d.mkdir(parents=True, exist_ok=True)
+                (d / script).write_text("setInterval(() => {}, 1000);\n")
+                if shutil.which("node"):
+                    procs.append((repo, self.spawn([shutil.which("node"), str(d / script), *argv], cwd=repo).pid))
+            for argv in (["git", "cat-file", "--batch"], ["git", "log", "--stdin"]):
+                p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, cwd=repo)
+                self.procs.append(p)
+                procs.append((repo, p.pid))
+            blockers.append((repo, self.spawn(["/bin/bash", "-c", 'exec -a "git" sleep 60', "x"], cwd=repo).pid))
+        blockers += [(self.co, self.fake("git", "commit")), (str(other), self.fake("claude"))]
+        time.sleep(0.5)
+        for repo in (self.co, str(other)):
+            grant = rl.observer_grant(rl.repo_identity(repo, rl.default_git))
+            self.assertEqual(grant["status"], "granted", repo)
+            mine = [pid for r, pid in procs if r == repo]
+            ok = rl.classify_scan({"status": "complete", "scanner": "x",
+                                   "matches": [{"pid": p, "cwd": repo} for p in mine]}, self_pid=10 ** 6, grant=grant)
+            self.assertTrue(ok["ok"], (repo, ok["processes"]))
+            bad = [pid for r, pid in blockers if r == repo]
+            blocked = rl.classify_scan({"status": "complete", "scanner": "x",
+                                        "matches": [{"pid": p, "cwd": repo} for p in bad]}, self_pid=10 ** 6, grant=grant)
+            self.assertTrue(all(r["blocking"] for r in blocked["processes"]), (repo, blocked["processes"]))
+
+    def test_enable_and_disable_commands_write_the_host_wide_policy(self):
+        self.reset_policy()
+        out = rl.observer_policy_command("enable", str(self.tmp / "vsc"), "short")
+        self.assertFalse(out["written"])
+        self.assertEqual(out["current"]["status"], "none")
+        out = rl.observer_policy_command("enable", str(self.tmp / "vsc"), "I accept my own VS Code sessions here.")
+        self.assertEqual((out["written"], out["current"]["status"]), (True, "granted"))
+        self.assertEqual(rl.observer_policy_path().stat().st_mode & 0o777, 0o600)
+        self.assertNotIn("repositories", json.loads(rl.observer_policy_path().read_text()))
+        self.assertEqual(rl.observer_policy_command("disable", "")["current"]["status"], "none")
+        self.assertFalse(rl.observer_policy_path().exists())
 
     def test_failed_or_unknown_scan_blocks_in_both_regimes(self):
         for name, setup in [("absent", lambda: None), ("granted", self.policy)]:
@@ -2558,24 +2588,12 @@ class ObserverGrantScopeTest(TempRepo):
         r = wf.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
         self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
 
-    def test_with_a_grant_an_applied_filter_is_explicitly_unsupported_not_dirty(self):
+    def test_with_the_policy_own_git_status_keeps_legitimate_filter_normalization(self):
         self._normalizing_filter()
         self.policy()
         r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
-        self.assertNotEqual(r.returncode, 0, "a filter in scope must not be silently disabled")
-        self.assertNotIn("a.txt", r.stdout or "")
-        self.assertIn("unsupported", r.stderr)
-        with self.assertRaises(rl.LeaseError):
-            rl.dirty_paths(rl.default_git, self.co)
-        # A configured driver no tracked path uses does not block the granted read.
-        Path(self.co, ".gitattributes").write_text("*.nomatch filter=crlf\n")
-        self.g("add", ".gitattributes")
-        self.g("commit", "-m", "chore: attrs off")
-        Path(self.co, "a.txt").write_text("x\n")
-        r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
         self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
-
-
+        self.assertEqual(rl.dirty_paths(rl.default_git, self.co), [])
 
     def test_with_a_grant_a_filter_attribute_on_a_symlink_is_not_in_use(self):
         """git never runs clean filters on symlinks (it hashes the link target), so a filter
