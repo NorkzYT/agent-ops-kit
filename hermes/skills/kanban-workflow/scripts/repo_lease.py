@@ -1642,21 +1642,44 @@ def observer_policy_command(action: str, vscode_server_dir: str, accept_risk: st
     `enable` writes the version-2 host-wide policy (private 0600 file in the run state, atomic),
     `disable` removes it, `show` reports it. Enabling needs an accepted-risk statement."""
     path = observer_policy_path()
+    existing = os.path.lexists(path)
+    current = observer_grant()
+    # Only this uid's own valid policy for this host is ever replaced or removed; anything else at
+    # the path (malformed, retired v1, foreign host/uid, a symlink, unknown fields) is left as is.
+    owned = current.get("status") == "granted"
+    keep = (f"{path} holds a policy this command did not establish as this uid's own for this host "
+            f"({current.get('detail')}); left unchanged, inspect and remove it by hand if intended")
     if action == "disable":
-        try:
-            path.unlink()
-            removed = True
-        except FileNotFoundError:
-            removed = False
-        return {"path": str(path), "removed": removed, "current": observer_grant()}
+        if not existing:
+            return {"path": str(path), "removed": False, "current": current, "detail": "no observer policy"}
+        if not owned:
+            return {"path": str(path), "removed": False, "refused": True, "current": current, "detail": keep}
+        policy, _ = load_observer_policy(path)
+        if not policy or policy["_sha256"] != current.get("policy_sha256"):
+            return {"path": str(path), "removed": False, "refused": True, "current": observer_grant(),
+                    "detail": "observer policy changed while disabling; left unchanged"}
+        path.unlink()
+        return {"path": str(path), "removed": True, "current": observer_grant()}
     if action == "enable":
         policy = {"version": OBSERVER_POLICY_VERSION, "kind": OBSERVER_POLICY_KIND, "host": host_identity(),
                   "uid": os.getuid(), "vscode_server_dir": os.path.normpath(os.path.abspath(vscode_server_dir)),
                   "accepted_risk": accept_risk}
         if not isinstance(accept_risk, str) or len(accept_risk.strip()) < 20:
-            return {"path": str(path), "written": False, "current": observer_grant(),
+            return {"path": str(path), "written": False, "current": current,
                     "detail": "--accept-risk must state the accepted risk (20+ characters)"}
-        _atomic_replace(_private_dir(path.parent), path.name, policy)
+        if existing:
+            if not owned:
+                return {"path": str(path), "written": False, "refused": True, "current": current, "detail": keep}
+            have, _ = load_observer_policy(path)
+            if have and all(have.get(k) == policy[k] for k in OBSERVER_POLICY_FIELDS):
+                return {"path": str(path), "written": False, "current": current,
+                        "detail": "the same observer policy is already enabled"}
+            return {"path": str(path), "written": False, "refused": True, "current": current,
+                    "detail": "a different observer policy is enabled for this uid; run `observer-policy disable` "
+                              "first to replace it"}
+        if not _exclusive_create(_private_dir(path.parent), path, policy):
+            return {"path": str(path), "written": False, "refused": True, "current": observer_grant(),
+                    "detail": f"{path} appeared while enabling; left unchanged"}
         return {"path": str(path), "written": True, "current": observer_grant()}
     return {"path": str(path), "mode": "0600", "current": observer_grant(),
             "enable": "repo_lease.py observer-policy enable --accept-risk '<statement>' [--vscode-server-dir DIR]"}
@@ -1899,6 +1922,33 @@ def _checkout_root(path: str) -> Optional[str]:
         cur = parent
 
 
+def _global_node_package(pid: int, real: str) -> bool:
+    """True when *real* is a package installed globally for the node binary the process runs: under
+    <prefix>/lib/node_modules/ where /proc/<pid>/exe is <prefix>/bin/node (nvm, a user npm prefix or
+    a system prefix), every component from <prefix> down to the script a real directory or file
+    owned by this uid (or root) and not writable by others. Cooperative same-uid evidence like the
+    rest of this classification: it establishes the script as the installed tool, not containment."""
+    exe = proc_exe(pid)
+    if not exe or exe.endswith(" (deleted)") or not exe.startswith("/") or os.path.normpath(exe) != exe:
+        return False
+    bindir = os.path.dirname(exe)
+    if os.path.basename(bindir) != "bin":
+        return False
+    prefix = os.path.dirname(bindir)
+    modules = os.path.join(prefix, "lib", "node_modules")
+    if not real.startswith(modules + "/") or len(Path(real).relative_to(modules).parts) < 2:
+        return False
+    uid = os.getuid()
+    for path in [prefix, *(str(p) for p in reversed(Path(real).parents) if str(p).startswith(prefix + "/")), real]:
+        try:
+            st = os.lstat(path)
+        except OSError:
+            return False
+        if stat.S_ISLNK(st.st_mode) or not _owner_protected(st, uid, allow_root=True):
+            return False
+    return True
+
+
 def interpreter_script_refusal(pid: int, script: str, family: str) -> Optional[str]:
     """Why the script an interpreter runs under a passive tool name is not established as that
     tool. A path proves nothing about integrity (any same-uid process can write
@@ -1912,6 +1962,8 @@ def interpreter_script_refusal(pid: int, script: str, family: str) -> Optional[s
     real = os.path.realpath(os.path.join(cwd, script))
     if _root_owned_image(real) is None:
         return None
+    if family in NODE_FAMILY and _global_node_package(pid, real):
+        return None
     root = _checkout_root(cwd)
     if root and real.startswith(root.rstrip("/") + "/"):
         rel = Path(real).relative_to(root).parts[:-1]
@@ -1919,8 +1971,8 @@ def interpreter_script_refusal(pid: int, script: str, family: str) -> Optional[s
             return None
         if family == "python" and any(Path(root, *rel[:n], "pyvenv.cfg").is_file() for n in range(1, len(rel) + 1)):
             return None
-    where = "an installed package in this checkout (node_modules)" if family in NODE_FAMILY else \
-        "a system install or a virtualenv in this checkout"
+    where = ("an installed package in this checkout (node_modules) or in the global node_modules of the node "
+             "it runs") if family in NODE_FAMILY else "a system install or a virtualenv in this checkout"
     return f"script {real[:120]} is not {where}; its identity is not established"
 
 
@@ -2958,7 +3010,10 @@ def main(argv=None, git: GitRunner = default_git, scan_runner: Optional[ScanRunn
                                      args.original_sha256, args.out))
             return 0
         if args.cmd == "observer-policy":
-            emit(observer_policy_command(args.action, args.vscode_server_dir, args.accept_risk))
+            out = observer_policy_command(args.action, args.vscode_server_dir, args.accept_risk)
+            emit(out)
+            if out.get("refused"):
+                return 2
             return 0 if args.action != "enable" or observer_grant().get("status") == "granted" else 2
         if args.cmd == "register-scanner":
             scanner = [a for a in args.argv if a != "--"]

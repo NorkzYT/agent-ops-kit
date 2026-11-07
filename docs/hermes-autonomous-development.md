@@ -153,7 +153,10 @@ invocation (allowed by the scanner without any config change), the in-process
   subcommands), `editor`, `language-server`, `dev-server` and an idle `shell` are passive,
   but each claim is checked against `/proc/<pid>/exe` (same image name, packaging
   suffixes/aliases allowed, user installs accepted; an interpreter command line must run on
-  that interpreter; a node-hosted tool's script must resolve inside `node_modules`), so
+  that interpreter; a node-hosted tool's script must resolve inside the checkout's
+  `node_modules`, a root-owned system install, or the global `<prefix>/lib/node_modules` of
+  the node binary the process runs (`<prefix>/bin/node`, e.g. nvm), owned by this uid or
+  root and not writable by others, so a global `tsc --watch` passes), so
   `exec -a vite <writer>`, a symlink named like the tool and `node /tmp/vite.js` are
   `unknown`. Read forms that write or start an invoker-chosen program are `unknown`:
   `--output` (any abbreviation) on any read, `grep -O`/`--open-files-in-pager`,
@@ -168,7 +171,10 @@ invocation (allowed by the scanner without any config change), the in-process
   are one-shot builds and block. Shells with arguments (the VS Code integrated terminal's
   `bash --init-file ...` included) stay `unknown`.
   **Host-wide cooperative VS Code policy (opt-in, `repo_lease.py observer-policy
-  enable --accept-risk '...' [--vscode-server-dir DIR]`, `disable` removes it):** applies to
+  enable --accept-risk '...' [--vscode-server-dir DIR]`, `disable` removes it):** `enable`
+  never overwrites an existing file (the same policy again is a no-op; a different one needs
+  `disable` first) and both commands refuse (exit 2, file untouched) a malformed, retired,
+  foreign or symlinked policy; only this uid's own valid policy is removed. Applies to
   every repository and every VS Code window of this uid at once. A process making a VS Code
   claim is classified by /proc ancestry, not name: the bundled language server only under its
   own extension host, the integrated terminal (`trusted-terminal`) only as the session leader

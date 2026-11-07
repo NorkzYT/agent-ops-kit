@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -2555,6 +2556,142 @@ class ObserverGrantScopeTest(TempRepo):
         self.assertNotIn("repositories", json.loads(rl.observer_policy_path().read_text()))
         self.assertEqual(rl.observer_policy_command("disable", "")["current"]["status"], "none")
         self.assertFalse(rl.observer_policy_path().exists())
+
+    def _global_node_prefix(self):
+        """A user-owned nvm-style prefix: <prefix>/bin/node (a hard link of the real node) and a
+        globally installed <prefix>/lib/node_modules/typescript/bin/tsc linked from <prefix>/bin/tsc."""
+        node = shutil.which("node") or next(iter(sorted(Path(pwd.getpwuid(os.getuid()).pw_dir).glob(".nvm/versions/node/*/bin/node"))), None)
+        if not node:
+            self.skipTest("no node binary")
+        prefix = self.tmp / "nvm" / "versions" / "node" / "v0"
+        (prefix / "bin").mkdir(parents=True)
+        try:
+            os.link(os.path.realpath(node), prefix / "bin" / "node")
+        except OSError:
+            shutil.copy2(os.path.realpath(node), prefix / "bin" / "node")
+        pkg = prefix / "lib" / "node_modules" / "typescript" / "bin"
+        pkg.mkdir(parents=True)
+        (pkg / "tsc").write_text("setInterval(() => {}, 1000);\n")
+        os.symlink("../lib/node_modules/typescript/bin/tsc", prefix / "bin" / "tsc")
+        return prefix
+
+    def _classify(self, pid, grant):
+        return rl.classify_scan({"status": "complete", "scanner": "x", "matches": [{"pid": pid, "cwd": self.co}]},
+                                self_pid=10 ** 6, grant=grant)
+
+    def test_user_global_node_tsc_watch_passes_in_both_regimes(self):
+        """`tsc --watch` from a user-owned global install (nvm: <prefix>/lib/node_modules of the node
+        the process runs) is a normal watcher; agents, git mutations and unlisted programs still block."""
+        prefix = self._global_node_prefix()
+        tsc = subprocess.Popen(["node", str(prefix / "bin" / "tsc"), "--watch", "--preserveWatchOutput"],
+                               executable=str(prefix / "bin" / "node"), cwd=self.co, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(tsc)
+        build = subprocess.Popen(["node", str(prefix / "bin" / "tsc")], executable=str(prefix / "bin" / "node"),
+                                 cwd=self.co, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+        self.procs.append(build)
+        blockers = [self.fake("git", "commit"), self.fake("claude"),
+                    self.spawn(["/bin/bash", "-c", 'exec -a "$0" sleep 60', "unlisted-tool"], cwd=self.co).pid]
+        time.sleep(0.5)
+        for name, setup in [("absent", lambda: None), ("granted", self.policy)]:
+            self.reset_policy()
+            setup()
+            grant = rl.observer_grant(self.identity())
+            self.assertEqual(grant["status"], name if name == "granted" else "none")
+            ok = self._classify(tsc.pid, grant)
+            self.assertTrue(ok["ok"], (name, ok["processes"]))
+            self.assertEqual(ok["processes"][0]["kind"], "dev-server")
+            self.assertFalse(self._classify(build.pid, grant)["ok"], name)
+            for pid in blockers:
+                self.assertFalse(self._classify(pid, grant)["ok"], (name, pid))
+            self.assertFalse(rl.classify_scan({"status": "unknown", "scanner": "x", "matches": []},
+                                              self_pid=10 ** 6, grant=grant)["ok"])
+
+    def test_global_tsc_outside_the_running_nodes_prefix_or_writable_blocks(self):
+        prefix = self._global_node_prefix()
+        stray = self.tmp / "stray" / "node_modules" / "typescript" / "bin"; stray.mkdir(parents=True)
+        (stray / "tsc").write_text("setInterval(() => {}, 1000);\n")
+        p = subprocess.Popen(["node", str(stray / "tsc"), "--watch"], executable=str(prefix / "bin" / "node"),
+                             cwd=self.co, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(p)
+        q = subprocess.Popen(["node", str(prefix / "bin" / "tsc"), "--watch"], executable=str(prefix / "bin" / "node"),
+                             cwd=self.co, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(q)
+        time.sleep(0.5)
+        self.reset_policy()
+        self.assertFalse(self._classify(p.pid, rl.observer_grant())["ok"])
+        self.assertTrue(self._classify(q.pid, rl.observer_grant())["ok"])
+        os.chmod(prefix / "lib" / "node_modules", 0o777)
+        try:
+            self.assertFalse(self._classify(q.pid, rl.observer_grant())["ok"])
+        finally:
+            os.chmod(prefix / "lib" / "node_modules", 0o755)
+
+    def test_live_nvm_global_tsc_watch_passes(self):
+        tsc = next(iter(sorted(Path(pwd.getpwuid(os.getuid()).pw_dir).glob(".nvm/versions/node/*/bin/tsc"))), None)
+        if not tsc:
+            self.skipTest("no nvm global tsc")
+        Path(self.co, "tsconfig.json").write_text('{"compilerOptions": {"noEmit": true}}\n')
+        Path(self.co, "a.ts").write_text("export const a = 1;\n")
+        p = subprocess.Popen(["node", str(tsc), "--watch", "--preserveWatchOutput"],
+                             executable=str(tsc.parent / "node"), cwd=self.co, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(p)
+        time.sleep(1.0)
+        self.reset_policy()
+        out = self._classify(p.pid, rl.observer_grant())
+        self.assertTrue(out["ok"], out["processes"])
+
+    def test_enable_never_overwrites_and_disable_never_deletes_a_foreign_or_malformed_policy(self):
+        risk = "I accept my own VS Code sessions here."
+        cases = {"malformed": "{not json", "retired-v1": {"version": 1, "repositories": []},
+                 "foreign-uid": {"uid": os.getuid() + 1}, "foreign-host": {"host": {"machine_id": "x", "hostname": "y"}},
+                 "unknown-field": {"extra": 1}}
+        for name, over in cases.items():
+            self.reset_policy()
+            if isinstance(over, str):
+                rl.observer_policy_path().parent.mkdir(parents=True, exist_ok=True)
+                rl.observer_policy_path().write_text(over)
+                os.chmod(rl.observer_policy_path(), 0o600)
+            else:
+                self.policy(**over)
+            before = rl.observer_policy_path().read_bytes()
+            out = rl.observer_policy_command("enable", str(self.tmp / "vsc"), risk)
+            self.assertFalse(out["written"], name)
+            self.assertEqual(rl.observer_policy_path().read_bytes(), before, name)
+            out = rl.observer_policy_command("disable", "")
+            self.assertFalse(out["removed"], name)
+            self.assertEqual(rl.observer_policy_path().read_bytes(), before, name)
+            self.assertEqual(rl.main(["observer-policy", "disable"]), 2, name)
+            self.assertEqual(rl.main(["observer-policy", "enable", "--accept-risk", risk]), 2, name)
+            self.assertEqual(rl.observer_policy_path().read_bytes(), before, name)
+        # A symlink in place of the policy is neither followed, replaced nor removed.
+        self.reset_policy()
+        target = self.tmp / "elsewhere.json"; target.write_text("{}")
+        os.symlink(target, rl.observer_policy_path())
+        self.assertFalse(rl.observer_policy_command("enable", str(self.tmp / "vsc"), risk)["written"])
+        self.assertFalse(rl.observer_policy_command("disable", "")["removed"])
+        self.assertTrue(rl.observer_policy_path().is_symlink())
+        self.assertEqual(target.read_text(), "{}")
+        rl.observer_policy_path().unlink()
+
+    def test_enable_is_idempotent_for_the_same_owned_policy_and_refuses_changing_it(self):
+        self.reset_policy()
+        risk = "I accept my own VS Code sessions here."
+        self.assertTrue(rl.observer_policy_command("enable", str(self.tmp / "vsc"), risk)["written"])
+        before = rl.observer_policy_path().read_bytes()
+        again = rl.observer_policy_command("enable", str(self.tmp / "vsc"), risk)
+        self.assertEqual((again["written"], again["current"]["status"]), (False, "granted"))
+        self.assertEqual(rl.main(["observer-policy", "enable", "--vscode-server-dir", str(self.tmp / "vsc"),
+                                  "--accept-risk", risk]), 0)
+        other = rl.observer_policy_command("enable", str(self.tmp / "other"), risk)
+        self.assertFalse(other["written"])
+        self.assertEqual(rl.observer_policy_path().read_bytes(), before)
+        out = rl.observer_policy_command("disable", "")
+        self.assertEqual((out["removed"], out["current"]["status"]), (True, "none"))
+        self.assertFalse(rl.observer_policy_command("disable", "")["removed"])
+        self.assertEqual(rl.main(["observer-policy", "disable"]), 0)
 
     def test_failed_or_unknown_scan_blocks_in_both_regimes(self):
         for name, setup in [("absent", lambda: None), ("granted", self.policy)]:
