@@ -1,5 +1,5 @@
 {
-  "bundle_digest": "7a56040b7de23331c1e070f2a7a313a72f1526e85e384a2cb8164fa6e96fad10",
+  "bundle_digest": "29fb5ba7c3ffb3d25b8bbeda56dea0bf347c6946741ad862c39691059fb7bd3f",
   "capability_ids": [
     "gstack.design-consultation",
     "gstack.design-review",
@@ -47,7 +47,7 @@
       "destination": "agent-ops-kit/capability-root/hermes/capabilities/routing-catalog.json",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "60380f1de68140252fd67ba75e861ce25ccaeaebdcc40930b5d592ad313fb7c7",
+      "sha256": "117a133018b9cd3ed4d20cbc83f7cfe1db7e265c93a4993d03e4a73d5db8abe1",
       "size": 6502,
       "source": "hermes/capabilities/routing-catalog.json"
     },
