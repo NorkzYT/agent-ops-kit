@@ -98,7 +98,13 @@ PROTECTED_BRANCHES = {"main", "master", "develop", "release", "production"}
 MUTATING_GIT = {"commit", "merge", "rebase", "cherry-pick", "revert", "am", "apply", "pull", "checkout",
                 "switch", "reset", "stash", "restore", "clean", "mv", "rm", "add", "worktree", "push", "filter-branch",
                 "bisect"}
-# Foreign git reads accepted as passive: only these subcommands, each with an explicit list of exact
+# Pre-PR28 (d468701) read-only git subcommands: the classification used when no observer policy
+# grants this checkout (see classify_cmdline_ungranted).
+READONLY_GIT = {"status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree", "ls-remote", "cat-file", "blame",
+                "describe", "rev-list", "grep", "shortlog", "for-each-ref", "name-rev", "merge-base", "show-ref",
+                "diff-tree", "diff-index", "diff-files", "count-objects", "var", "version", "help", "check-ignore",
+                "check-attr", "symbolic-ref", "fsck", "reflog"}
+# Foreign git reads accepted as passive under a granted observer policy: only these subcommands, each with an explicit list of exact
 # option tokens (and `--opt=` prefixes). Anything else (another subcommand, an unlisted or abbreviated
 # option such as `--open-fil`, `--del`, `--lost`, a short-option cluster) is unknown. Excluded on
 # purpose: status, diff*, log, show, grep, blame, describe, ls-files, reflog, fsck (worktree reads
@@ -282,16 +288,20 @@ FILTERED_OWN_GIT = {"status"}
 
 
 def own_git(argv: list, cwd: str, env: dict, **kw) -> subprocess.CompletedProcess:
-    """Run this module's (or workflow.py's) own git call without repository-configured programs:
+    """Run this module's (or workflow.py's) own git call. core.fsmonitor=false always. Only for a
+    checkout a valid observer policy grants (_granted_checkout; otherwise git applies its filters
+    as before PR28), without repository-configured filters:
     core.fsmonitor=false always; for FILTERED_OWN_GIT, every `filter.<driver>.clean`/`.process`
     configured anywhere (as `git config --get-regexp` sees it, includes and command scope) is
     overridden empty on the command line, so git applies no filter. A `required` filter then fails
-    the call (git refuses), which callers already treat as an error. A driver name the override
+    the call (git refuses), and a driver a tracked path uses fails it as unsupported
+    (_filters_in_use) instead of reporting un-normalized files as changed. A driver name the override
     cannot express, or an unreadable config, fails the call instead of running git unneutered.
     Not covered: submodule repositories' own filter drivers (git recurses into them with their own
     config); see docs."""
     base = ["git", "-c", "core.fsmonitor=false"]
-    if _git_split(["git", *argv])[1] in FILTERED_OWN_GIT:
+    if _git_split(["git", *argv])[1] in FILTERED_OWN_GIT and _granted_checkout(cwd, env):
+        drivers = set()
         listed = subprocess.run([*base, "config", "-z", "--get-regexp", r"^filter\..*\.(clean|process)$"], cwd=cwd,
                                 capture_output=True, timeout=120, env=env)
         if listed.returncode not in (0, 1):
@@ -303,7 +313,48 @@ def own_git(argv: list, cwd: str, env: dict, **kw) -> subprocess.CompletedProces
             if not m or "=" in key or "\n" in key:
                 return subprocess.CompletedProcess(argv, 128, "", f"filter driver {key[:80]!r} cannot be disabled")
             base += ["-c", f"filter.{m.group(1)}.clean=", "-c", f"filter.{m.group(1)}.process="]
+            drivers.add(m.group(1))
+        used = _filters_in_use(base, cwd, env, drivers)
+        if used:
+            return subprocess.CompletedProcess(argv, 128, "", used)
     return subprocess.run([*base, *argv], cwd=cwd, capture_output=True, timeout=120, env=env, **kw)
+
+
+def _granted_checkout(cwd: str, env: dict) -> bool:
+    """True only when a valid observer policy grants the checkout at *cwd* on this host and uid
+    (observer_grant). rev-parse and remote get-url run no filter or fsmonitor."""
+    def out(*argv):
+        r = subprocess.run(["git", "-c", "core.fsmonitor=false", *argv], cwd=cwd, capture_output=True, text=True,
+                           timeout=120, env=env)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    root, gitdir = out("rev-parse", "--show-toplevel"), out("rev-parse", "--absolute-git-dir")
+    if not root or not gitdir:
+        return False
+    identity = {"root": str(Path(root).resolve()), "gitdir": str(Path(gitdir).resolve()),
+                "remote": out("remote", "get-url", "origin")}
+    return observer_grant(identity).get("status") == "granted"
+
+
+def _filters_in_use(base: list, cwd: str, env: dict, drivers: set) -> Optional[str]:
+    """Why a granted own `git status` cannot run: a configured clean/process driver is the filter
+    attribute of a tracked path. Disabling it would report normalized files as changed; running it
+    runs repository-configured code; so the read fails closed as unsupported. None: no tracked path
+    uses one. check-attr and ls-files run no filter."""
+    if not drivers:
+        return None
+    files = subprocess.run([*base, "ls-files", "-z"], cwd=cwd, capture_output=True, timeout=120, env=env)
+    attrs = subprocess.run([*base, "check-attr", "-z", "--stdin", "filter"], cwd=cwd, input=files.stdout,
+                           capture_output=True, timeout=120, env=env)
+    if files.returncode != 0 or attrs.returncode != 0:
+        return "cannot read filter attributes of tracked paths"
+    parts = attrs.stdout.split(b"\0")
+    for i in range(0, len(parts) - 2, 3):
+        value = parts[i + 2].decode("utf-8", "surrogateescape")
+        if value in drivers:
+            path = parts[i].decode("utf-8", "replace")
+            return (f"unsupported: filter driver {value!r} applies to tracked path {path[:120]!r}; a trusted-observer "
+                    "status neither runs repository filters nor reports their un-normalized content as changes")
+    return None
 
 
 def default_git(argv: list, cwd: str) -> subprocess.CompletedProcess:
@@ -1222,6 +1273,36 @@ def classify_cmdline(cmd: list) -> tuple:
     return "unknown", True, f"{name or '?'}: not a known passive tool; treated as a possible writer"
 
 
+def classify_cmdline_ungranted(cmd: list) -> tuple:
+    """The pre-PR28 (d468701) classification, used for a checkout no valid observer policy grants:
+    agents and git mutations block, the listed read-only git, editors, language servers, dev
+    servers/watchers and idle shells are observations, anything else is unknown and blocks."""
+    if not cmd:
+        return "unknown", True, "empty command line"
+    sub = _git_subcommand(cmd)
+    if Path(cmd[0]).name == "git":
+        if sub in MUTATING_GIT:
+            return "git-mutation", True, f"git {sub} in progress"
+        if sub in READONLY_GIT:
+            return "git-readonly", False, f"read-only git {sub}"
+        return "unknown", True, f"git {sub or '?'}: not a known read-only subcommand"
+    if _is_agent(cmd):
+        return "agent-writer", True, f"autonomous agent outside this chain: {Path(cmd[0]).name}"
+    name = program_name(cmd)
+    if name in PASSIVE_EDITORS:
+        return "editor", False, f"editor ({name}); a writer only on operator action, not by CWD alone"
+    if name in PASSIVE_LANGUAGE_SERVERS:
+        return "language-server", False, f"language server ({name})"
+    if name in PASSIVE_DEV_SERVERS:
+        return "dev-server", False, f"dev server / watcher ({name})"
+    if name in INTERACTIVE_SHELLS:
+        args = cmd[1:]
+        if all(a in IDLE_SHELL_OPTIONS for a in args):
+            return "shell", False, f"idle interactive shell ({name})"
+        return "unknown", True, f"shell with arguments ({name} {' '.join(args)[:80]}): not provably idle"
+    return "unknown", True, f"{name or '?'}: not a known passive tool; treated as a possible writer"
+
+
 # An interactive shell is never passive. Its prompt is not observable from outside: a shell at
 # its prompt can still run code on its own (trap handlers on a signal, PROMPT_COMMAND, TMOUT) and
 # `read -t N; echo >> file` sleeps in the same tty wait, with no child and no CPU or
@@ -1638,6 +1719,10 @@ def classify_process(pid: int, self_pid: int, anchors: Iterable[int], self_chain
         if anchors & set(lineage) or self_pid in lineage:
             return {"pid": pid, "kind": "own-descendant", "blocking": False,
                     "detail": f"descends from this coordinator ({Path(cmd[0]).name if cmd else '?'})"}
+        if (grant or {}).get("status") != "granted":
+            # No valid policy for this host, uid and repository: the pre-PR28 classification.
+            kind, blocking, detail = classify_cmdline_ungranted(cmd)
+            return {"pid": pid, "kind": kind, "blocking": blocking, "detail": detail}
         vscode = classify_vscode(pid, cmd, grant)
         kind, blocking, detail = vscode or classify_cmdline(cmd)
         if not vscode and not blocking and kind in PASSIVE_IDENTITY_KINDS:

@@ -34,8 +34,17 @@ spec = importlib.util.spec_from_file_location("repo_lease", SCRIPT)
 rl = importlib.util.module_from_spec(spec)
 sys.modules["repo_lease"] = rl
 spec.loader.exec_module(rl)
+sys.path.insert(0, str(SCRIPTS))
+_wf_spec = importlib.util.spec_from_file_location("kanban_workflow_under_test", SCRIPTS / "workflow.py")
+wf = importlib.util.module_from_spec(_wf_spec)
+_wf_spec.loader.exec_module(wf)
 
 REPO_URL = "https://github.com/acme/app.git"
+# The strict (PR28) classification applies only under a granted observer policy. Tests of that
+# regime classify with a grant whose VS Code server dir no fixture uses: strict rules apply, no
+# terminal is trusted. Without a grant the pre-PR28 classification applies (ObserverGrantScopeTest).
+STRICT_GRANT = {"status": "granted", "uid": os.getuid(), "vscode_server_dir": "/nonexistent/strict-regime-server",
+                "repository": {"root": "/nonexistent", "gitdir": "/nonexistent/.git", "remote": ""}}
 
 
 def done(code=0, out="", err=""):
@@ -1044,7 +1053,7 @@ class VSCodeServerTest(TempRepo):
             pass
 
     def classify(self, pid):
-        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set())
+        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set(), grant=STRICT_GRANT)
 
     def wait_for(self, pid, kind, blocking, timeout=10.0):
         deadline = time.time() + timeout
@@ -1824,7 +1833,7 @@ class ProcessIdentityHardeningTest(TempRepo):
     command line reads empty is unknown (it can still write), never "gone"."""
 
     def classify(self, pid):
-        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set())
+        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set(), grant=STRICT_GRANT)
 
     def test_empty_argv0_cannot_spoof_a_passive_name(self):
         bindir = self.tmp / "bin"; bindir.mkdir()
@@ -2103,7 +2112,7 @@ class PassiveExecutableIdentityTest(TempRepo):
     """A passive name in argv is a claim; /proc/<pid>/exe must back it."""
 
     def classify(self, pid):
-        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set())
+        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set(), grant=STRICT_GRANT)
 
     def wait_writing(self, name="spoof.txt"):
         deadline = time.time() + 5
@@ -2238,7 +2247,7 @@ class IndependentAuditR3Test(TempRepo):
     repository clean filter."""
 
     def classify(self, pid):
-        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set())
+        return rl.classify_process(pid, self_pid=10 ** 6, anchors=[], self_chain=set(), grant=STRICT_GRANT)
 
     def wait_writing(self, name="spoof.txt"):
         deadline = time.time() + 5
@@ -2363,10 +2372,13 @@ class IndependentAuditR3Test(TempRepo):
         subprocess.run(["git", "status", "--porcelain"], cwd=self.co, capture_output=True)
         self.assertTrue(sentinel.exists(), "the fixture filter really runs under plain git")
         sentinel.unlink()
+        ObserverGrantScopeTest.policy(self)  # suppression is the granted regime only (PR28 scope)
         r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
         self.assertFalse(sentinel.exists(), "repo_lease git status ran a clean filter")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        rl.snapshot_dirty(rl.default_git, self.identity())
+        self.assertNotEqual(r.returncode, 0, "a filter a tracked path uses is unsupported, not disabled")
+        self.assertIn("unsupported", r.stderr)
+        with self.assertRaises(rl.LeaseError):
+            rl.snapshot_dirty(rl.default_git, self.identity())
         self.assertFalse(sentinel.exists())
         # A driver name a `-c` override cannot express fails the read instead of running it.
         self.g("config", "filter.we=ird.process", f"sh -c 'touch {sentinel}'")
@@ -2379,8 +2391,142 @@ class IndependentAuditR3Test(TempRepo):
         self.g("config", "filter.x.required", "true")
         Path(self.co, ".gitattributes").write_text("* filter=x\n")
         Path(self.co, "a.txt").write_text("3\n")
+        self.assertEqual(rl.default_git(["status", "--porcelain"], self.co).returncode, 0,
+                         "no grant: git applies the filter as before PR28")
+        ObserverGrantScopeTest.policy(self)
         r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
         self.assertNotEqual(r.returncode, 0, "a required filter cannot be neutered: the read must fail")
+
+
+class ObserverGrantScopeTest(TempRepo):
+    """PR28 stricter classification and own-git filter suppression apply only under a granted
+    observer policy for this exact host, uid and repository; without one (absent, malformed,
+    foreign host/uid/repo) process classification and git status are the pre-PR28 (d468701) ones."""
+
+    def policy(self, **over):
+        ident = self.identity()
+        data = {"version": 1, "kind": "trusted-vscode-terminal", "host": rl.host_identity(), "uid": os.getuid(),
+                "vscode_server_dir": str(self.tmp / "home" / ".vscode-server"),
+                "repositories": [{"root": ident["root"], "gitdir": ident["gitdir"], "remote": ident["remote"]}],
+                "accepted_risk": "I accept my own VS Code integrated terminal running in this checkout."}
+        data.update(over)
+        path = rl.observer_policy_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data if isinstance(data, str) else json.dumps(data))
+        path.chmod(0o600)
+        return path
+
+    def fake(self, *argv):
+        """A live process whose /proc cmdline is exactly *argv* (argv[0] via exec -a)."""
+        d = self.tmp / f"bin-{len(self.procs)}"
+        d.mkdir()
+        script = d / (argv[1] if len(argv) > 1 else "x")
+        script.write_text("while :; do sleep 1; done\n")
+        args = list(argv[1:]) or ["x"]
+        p = self.spawn(["/bin/bash", "-c", 'exec -a "$0" /bin/sh "$@"', argv[0], *args], cwd=str(d))
+        deadline = time.time() + 5
+        while time.time() < deadline and (rl.proc_cmdline(p.pid) or [""])[0] != argv[0]:
+            time.sleep(0.02)
+        return p.pid
+
+    def scan(self, *pids):
+        return rl.classify_scan({"status": "complete", "scanner": "x",
+                                 "matches": [{"pid": p, "cwd": self.co} for p in pids]},
+                                self_pid=10 ** 6, grant=rl.observer_grant(self.identity()))
+
+    def regimes(self):
+        """(name, setup) for every non-granted regime."""
+        return [("absent", lambda: None),
+                ("malformed", lambda: self.policy(version=99)),
+                ("not-json", lambda: rl.observer_policy_path().parent.mkdir(parents=True, exist_ok=True)
+                 or (rl.observer_policy_path().write_text("{"), rl.observer_policy_path().chmod(0o600))),
+                ("foreign-host", lambda: self.policy(host={"machine_id": "0" * 32, "hostname": "elsewhere"})),
+                ("foreign-uid", lambda: self.policy(uid=os.getuid() + 1)),
+                ("foreign-repo", lambda: self.policy(repositories=[{"root": "/nonexistent/other", "gitdir":
+                                                                    "/nonexistent/other/.git", "remote": "file:///x"}]))]
+
+    def reset_policy(self):
+        path = rl.observer_policy_path()
+        if path.exists():
+            path.unlink()
+
+    def test_without_a_grant_reads_and_watchers_classify_as_before_pr28(self):
+        readers = [("git", "status"), ("git", "diff"), ("git", "log"), ("git", "ls-files"),
+                   ("vite",), ("nodemon",), ("gopls",)]
+        pids = {argv: self.fake(*argv) for argv in readers}
+        for name, setup in self.regimes():
+            self.reset_policy()
+            setup()
+            scan = self.scan(*pids.values())
+            self.assertNotEqual(scan["observer_policy"]["status"], "granted", name)
+            for argv, row in zip(pids, scan["processes"]):
+                self.assertFalse(row["blocking"], (name, argv, row))
+            self.assertTrue(scan["ok"], name)
+
+    def test_agents_and_git_mutations_block_in_both_regimes(self):
+        pids = [self.fake("git", "commit"), self.fake("git", "rebase"), self.fake("claude"), self.fake("hermes")]
+        for name, setup in [*self.regimes(), ("granted", self.policy)]:
+            self.reset_policy()
+            setup()
+            scan = self.scan(*pids)
+            self.assertEqual([r["blocking"] for r in scan["processes"]], [True] * 4, (name, scan["processes"]))
+            self.assertFalse(scan["ok"], name)
+
+    def test_granted_policy_keeps_the_strict_classification(self):
+        self.policy()
+        pids = [self.fake("git", "status"), self.fake("vite")]
+        scan = self.scan(*pids)
+        self.assertEqual(scan["observer_policy"]["status"], "granted")
+        self.assertTrue(all(r["blocking"] for r in scan["processes"]), scan["processes"])
+
+    def test_failed_or_unknown_scan_blocks_in_both_regimes(self):
+        for name, setup in [("absent", lambda: None), ("granted", self.policy)]:
+            self.reset_policy()
+            setup()
+            grant = rl.observer_grant(self.identity())
+            for scan in ({"status": "incomplete", "scanner": "sudo", "tail": "sudo: a password is required", "matches": []},
+                         {"status": "unknown", "scanner": "x", "matches": []}, {"matches": []}):
+                self.assertFalse(rl.classify_scan(scan, self_pid=10 ** 6, grant=grant)["ok"], (name, scan))
+
+    def _normalizing_filter(self):
+        """A clean filter that normalizes X to x: a worktree "X" equal to HEAD after normalization,
+        stat-dirty (touched) so git must hash it through the filter."""
+        self.g("config", "filter.crlf.clean", "tr X x")
+        Path(self.co, "a.txt").write_text("x\n")
+        self.g("add", "a.txt")
+        Path(self.co, ".gitattributes").write_text("*.txt filter=crlf\n")
+        self.g("add", ".gitattributes")
+        self.g("commit", "-m", "chore: attrs")
+        Path(self.co, "a.txt").write_text("X\n")
+        os.utime(Path(self.co, "a.txt"), (time.time() + 5, time.time() + 5))
+
+    def test_without_a_grant_own_git_status_keeps_legitimate_filter_normalization(self):
+        self._normalizing_filter()
+        plain = subprocess.run(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                               cwd=self.co, capture_output=True, text=True)
+        self.assertEqual(plain.stdout, "", "fixture: plain git sees the normalized file as clean")
+        r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+        self.assertEqual(rl.dirty_paths(rl.default_git, self.co), [])
+        r = wf.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+
+    def test_with_a_grant_an_applied_filter_is_explicitly_unsupported_not_dirty(self):
+        self._normalizing_filter()
+        self.policy()
+        r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
+        self.assertNotEqual(r.returncode, 0, "a filter in scope must not be silently disabled")
+        self.assertNotIn("a.txt", r.stdout or "")
+        self.assertIn("unsupported", r.stderr)
+        with self.assertRaises(rl.LeaseError):
+            rl.dirty_paths(rl.default_git, self.co)
+        # A configured driver no tracked path uses does not block the granted read.
+        Path(self.co, ".gitattributes").write_text("*.nomatch filter=crlf\n")
+        self.g("add", ".gitattributes")
+        self.g("commit", "-m", "chore: attrs off")
+        Path(self.co, "a.txt").write_text("x\n")
+        r = rl.default_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], self.co)
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
 
 
 if __name__ == "__main__":

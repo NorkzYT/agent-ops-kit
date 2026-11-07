@@ -2741,6 +2741,26 @@ class OwnGitFsmonitorTest(unittest.TestCase):
         subprocess.run(["git", "status", "--porcelain"], cwd=co, capture_output=True)
         self.assertTrue(sentinel.exists(), "the fixture filter really runs under plain git")
         sentinel.unlink()
-        r = wf.default_git(["status", "--porcelain", "--untracked-files=all"], str(co))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertFalse(sentinel.exists(), "workflow git status ran a clean filter")
+        # No observer grant: git applies the repository's filters as before PR28.
+        state = tmp / "state"
+        state.mkdir()
+        with mock.patch.dict(os.environ, {"HERMES_WORKFLOW_STATE": str(state)}):
+            r = wf.default_git(["status", "--porcelain", "--untracked-files=all"], str(co))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(sentinel.exists(), "no grant: workflow git status keeps pre-PR28 filter behaviour")
+            sentinel.unlink()
+            # Granted checkout: the filter is never run; a tracked path using it is unsupported.
+            subprocess.run(["git", "remote", "add", "origin", "file:///nonexistent/origin.git"], cwd=co, check=True)
+            ident = wf.rl.repo_identity(str(co), wf.rl.default_git)
+            path = wf.rl.observer_policy_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "version": 1, "kind": "trusted-vscode-terminal", "host": wf.rl.host_identity(), "uid": os.getuid(),
+                "vscode_server_dir": str(tmp / ".vscode-server"),
+                "repositories": [{k: ident[k] for k in ("root", "gitdir", "remote")}],
+                "accepted_risk": "I accept my own VS Code integrated terminal running in this checkout."}))
+            path.chmod(0o600)
+            r = wf.default_git(["status", "--porcelain", "--untracked-files=all"], str(co))
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("unsupported", r.stderr)
+        self.assertFalse(sentinel.exists(), "workflow git status ran a clean filter in a granted checkout")
