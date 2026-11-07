@@ -109,7 +109,7 @@
   "kind": "agent-ops-kit/capability-routing-catalog",
   "schema_version": 1,
   "sources": {
-    "hermes/capabilities/registry.json": "61baaa9c195d17334c5e0b9d35abfe78f8073070fede160317b46a5b603c35b1",
+    "hermes/capabilities/registry.json": "da630267779203859115150b5c4d888edba8df726115e957354eb8dc7db76b06",
     "hermes/capabilities/routing-recipes.json": "0bd461f344a57ca1c3cf3387d86f6eb81084e1e12f905fcf3a5c232b95951042"
   }
 }

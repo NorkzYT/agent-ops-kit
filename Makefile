@@ -522,7 +522,8 @@ test-capabilities: ## Run the capability registry/planner tests (strict JSON, sc
 	@python3 -m unittest discover -s scripts/tests -p 'test_capability_*.py'
 	@python3 -m unittest discover -s scripts/tests -p 'test_specialist_capability_seam.py'
 
-test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed), the repo_lease tests (leases, writers, manifests) and the completion-policy tests
+test-kanban-workflow: ## Run the Discord->Kanban workflow tests (fake runner, temp git repos; real hermes CLI on a temp board when installed), the repo_lease tests (leases, writers, manifests), the completion-policy tests and the dev-test mode tests
 	@python3 -m unittest discover -s scripts/tests -p 'test_kanban_workflow.py'
 	@python3 -m unittest discover -s scripts/tests -p 'test_repo_lease.py'
 	@python3 -m unittest discover -s scripts/tests -p 'test_completion.py'
+	@python3 -m unittest discover -s scripts/tests -p 'test_dev_test_mode.py'
