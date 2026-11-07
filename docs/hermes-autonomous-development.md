@@ -147,10 +147,15 @@ invocation (allowed by the scanner without any config change), the in-process
   writable, exit-code contract 0/1/2, unprivileged `/proc` fallback that marks
   other users' processes as unknown; classification per match: `self-chain`,
   `own-descendant`, `gone` (ENOENT/ESRCH), the explicit passive observations
-  `editor`, `language-server`, `dev-server`, `shell` (idle shell: no arguments or
-  only `-i`/`-l`/`--login`/`--interactive`; `-c`, `-s`/`--stdin`, combined
-  `-lc`/`-sc`, a script or any other option is `unknown`) and `git-readonly` (documented name sets in `repo_lease.py`;
-  `node`/`python` running a known script resolve to that script's name), and the
+  `editor` (root-owned image in root-owned directories), `language-server` (only a /proc-verified
+  VS Code bundled server) and `git-readonly` (only the explicit `GIT_SAFE_READS` forms, stdout not a
+  terminal); language servers by name, dev servers/build tools and interpreter scripts are `unknown`;
+  every interactive shell, the VS Code integrated terminal included, is `unknown`:
+  traps, `PROMPT_COMMAND` or `read -t` then a write look like a prompt to any
+  `/proc` sample, so a shell whose CWD is the checkout blocks until it is closed or
+  leaves the checkout;
+  a registered helper must be bound to the checkout by its own root-owned `REPOSITORY = "/abs"`
+  declaration, else its PASS is incomplete), and the
   blocking kinds `git-mutation`, `agent-writer` (by executable name only when
   outside our chain) and `unknown` (any other executable or script, including
   arbitrary python/node tasks and tty-attached tools, EACCES/EPERM, incomplete
@@ -352,10 +357,23 @@ metadata and can be deleted; nothing in any repository was changed by this work.
 - `adopt` keys on worktree content hashes (the operator's manifest form); the
   adopted entries then carry the full identity, so later mode/stage changes are
   detected. A rename appears as its new path with `origin` recorded.
-- Passive classification is by name (`PASSIVE_EDITORS`, `PASSIVE_LANGUAGE_SERVERS`,
-  `PASSIVE_DEV_SERVERS`, idle shells, `READONLY_GIT`). A writer that names itself
-  `nvim` passes as an editor; a legitimate tool that is not listed blocks the card
-  with `unknown` until the operator adds it. Same-uid cooperative evidence
+- Passive classification: editors by name only with a root-owned image in root-owned
+  directories (a user copy of an interpreter named `gopls`/`vim.basic` blocks); language
+  servers only as /proc-verified VS Code bundled servers (gopls, pyright, ruff server,
+  tsserver... block); dev servers, build tools and interpreter scripts block; foreign git
+  only in `GIT_SAFE_READS` forms (exact option tokens, so `--open-fil`/`--del`/`--lost`
+  abbreviations block; status/diff/log/show/grep block because they can run repository
+  filters, fsmonitor, textconv, external diff or a pager) with stdout not a terminal.
+  Residual: a safe read in a partial clone can lazily fetch missing objects (transport,
+  writes into the git dir). Shells never pass (idle-shell requirement still unresolved).
+- Scanner root binding: the approved helper prints no root, so a PASS is accepted only when
+  the helper's root-owned source declares `REPOSITORY = "<this checkout>"`. The live helper
+  is bound to `/opt/repos/validate`; any other checkout needs a root-installed helper
+  bound to it (not provided here).
+- Own git reads: `status` runs with every configured `filter.<driver>.clean/process`
+  overridden empty (a `required` filter makes it fail; a driver name containing `=` fails
+  closed). Not covered: filter drivers configured only inside a submodule's own repository
+  (git recurses into submodules with their config). Same-uid cooperative evidence
   throughout: lease, scan and checkpoint prove what was observed, not who wrote.
 - `checkpoint` after a commit needs a fresh passing `preflight` (the baseline is
   bound to HEAD; manifests are bound to root, git dir, remote and branch only, so

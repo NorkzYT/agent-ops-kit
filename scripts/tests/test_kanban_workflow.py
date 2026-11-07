@@ -674,6 +674,10 @@ class CheckoutRepo(StateDirMixin):
         git("commit", "-m", "chore: init", cwd=self.co)
         git("push", "origin", "main", cwd=self.co)
         self.fake = FakeHermes()
+        real = wf.rl.helper_repository  # `/bin/true` is bound to this checkout (see helper_repository)
+        binding = mock.patch.object(wf.rl, "helper_repository", lambda h: self.co if h == "/bin/true" else real(h))
+        binding.start()
+        self.addCleanup(binding.stop)
         wf.rl.register_scanner(self.co, ["sudo", "-n", "/bin/true"])
         # Lease adaptor: the code card's bound managed worker is this test's parent process (a
         # live ancestor, recorded by FakeHermes.claim as the run's worker_bound event). Only its
@@ -2706,3 +2710,37 @@ class DesignatedCheckoutLeaseTest(CheckoutRepo, unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()) as err:
                     self.assertEqual(nw.main(["preflight", "t_1", "--repo-dir", self.co], self.fake), 3)
                 self.assertIn("capability: task-scoped worker identity", err.getvalue())
+
+
+class OwnGitFsmonitorTest(unittest.TestCase):
+    def test_workflow_git_reads_never_run_a_repository_fsmonitor_hook(self):
+        tmp = Path(tempfile.mkdtemp(prefix="kanban-workflow-fsmon-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        co, sentinel, hook = tmp / "co", tmp / "fsmonitor-ran", tmp / "hook"
+        hook.write_text(f"#!/bin/sh\ntouch '{sentinel}'\nexit 1\n"); hook.chmod(0o755)
+        subprocess.run(["git", "init", "-q", str(co)], check=True)
+        subprocess.run(["git", "config", "core.fsmonitor", str(hook)], cwd=co, check=True)
+        subprocess.run(["git", "status", "--porcelain"], cwd=co, capture_output=True)
+        self.assertTrue(sentinel.exists(), "the fixture hook really runs under plain git")
+        sentinel.unlink()
+        self.assertEqual(wf.default_git(["status", "--porcelain"], str(co)).returncode, 0)
+        self.assertFalse(sentinel.exists(), "workflow git read ran the fsmonitor hook")
+
+    def test_workflow_git_status_never_runs_a_repository_clean_filter(self):
+        tmp = Path(tempfile.mkdtemp(prefix="kanban-workflow-filter-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        co, sentinel = tmp / "co", tmp / "filter-ran"
+        subprocess.run(["git", "init", "-q", str(co)], check=True)
+        subprocess.run(["git", "config", "filter.x.clean", f"sh -c 'touch {sentinel}; cat'"], cwd=co, check=True)
+        Path(co, ".gitattributes").write_text("* filter=x\n")
+        Path(co, "a.txt").write_text("1\n")
+        subprocess.run(["git", "add", "-f", "a.txt"], cwd=co, check=True,
+                       env={**os.environ, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "filter.x.clean",
+                            "GIT_CONFIG_VALUE_0": "cat"})
+        Path(co, "a.txt").write_text("2\n")
+        subprocess.run(["git", "status", "--porcelain"], cwd=co, capture_output=True)
+        self.assertTrue(sentinel.exists(), "the fixture filter really runs under plain git")
+        sentinel.unlink()
+        r = wf.default_git(["status", "--porcelain", "--untracked-files=all"], str(co))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(sentinel.exists(), "workflow git status ran a clean filter")
