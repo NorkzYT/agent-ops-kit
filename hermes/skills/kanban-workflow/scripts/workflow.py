@@ -199,7 +199,8 @@ def default_runner(argv: list) -> subprocess.CompletedProcess:
 
 def default_git(argv: list, cwd: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    return subprocess.run(["git", *argv], cwd=cwd, capture_output=True, text=True, timeout=120, env=env)
+    # Never run a repository-configured fsmonitor hook or clean filter on our own git calls.
+    return rl.own_git(argv, cwd, env, text=True)
 
 
 def invoke(run: Runner, argv: list) -> subprocess.CompletedProcess:
@@ -1647,7 +1648,8 @@ def checkout_command(cmd: str, task_id: str, repo_dir: str, manifest: str = "", 
             return 0, rl.checkpoint(task_id, identity, git, owner=owner,
                                     scan_runner=scan_runner or rl.default_scan_runner)
         if cmd == "adopt":
-            return 0, rl.adopt_manifest(task_id, identity, git, manifest)
+            return 0, rl.adopt_manifest(task_id, identity, git, manifest, owner=owner,
+                                        scan_runner=scan_runner or rl.default_scan_runner)
         result = rl.release_lease(identity, owner)
         return (0 if result["status"] in ("released", "none") else 2), result
     except rl.LeaseError as exc:
