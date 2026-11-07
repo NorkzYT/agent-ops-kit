@@ -2801,5 +2801,123 @@ class UngrantedWriterEscapeTest(TempRepo):
         self.assertEqual((row["kind"], row["blocking"]), ("unknown", True), row)
 
 
+LINGER = "sh -c 'echo x >> {out}; cd /; exec sleep 30'"
+
+
+class UngrantedEnvironmentAndScriptTest(TempRepo):
+    """Without a grant, git's environment (pager, external diff, alternate config files, exec
+    path) and an interpreter's script location are part of the claim: real processes whose
+    environment or script runs an invoker-chosen program block; genuine reads and watchers do not."""
+
+    def setUp(self):
+        super().setUp()
+        self.node = shutil.which("node")
+
+    classify = UngrantedWriterEscapeTest.classify
+    wait_path = UngrantedWriterEscapeTest.wait_path
+    wait_alive = UngrantedWriterEscapeTest.wait_alive
+    dev_tool = UngrantedWriterEscapeTest.dev_tool
+    blocks = UngrantedWriterEscapeTest.blocks
+
+    def on_pty(self, argv, env, cwd=None):
+        master, slave = os.openpty()
+        self.addCleanup(os.close, master)
+        p = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, cwd=cwd or self.co, env=env)
+        os.close(slave)
+        self.procs.append(p)
+        return p
+
+    def clean_env(self, **extra):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("GIT_") and k not in ("PAGER", "LESS", "LESSOPEN")}
+        env.update(extra)
+        return env
+
+    def test_git_environment_programs_block(self):
+        Path(self.co, "a.txt").write_text("2\n")  # a worktree change, so diff has work
+        cases = []
+        cases.append(("GIT_PAGER", self.on_pty(["git", "log"], self.clean_env(GIT_PAGER=LINGER.format(out="gp.txt"))),
+                      "gp.txt"))
+        cases.append(("PAGER", self.on_pty(["git", "log"], self.clean_env(PAGER=LINGER.format(out="pg.txt"))),
+                      "pg.txt"))
+        ext = self.tmp / "ext.sh"; ext.write_text("#!/bin/sh\necho x >> ext.txt; cd /; exec sleep 30\n")
+        ext.chmod(0o755)
+        cases.append(("GIT_EXTERNAL_DIFF", self.spawn(["git", "diff"], cwd=self.co,
+                                                      env=self.clean_env(GIT_EXTERNAL_DIFF=str(ext))), "ext.txt"))
+        for var in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"):
+            cfg = self.tmp / f"{var}.cfg"
+            cfg.write_text(f"[diff]\n\texternal = \"sh -c 'echo x >> {var}.txt; cd /; exec sleep 30'\"\n")
+            cases.append((var, self.spawn(["git", "diff"], cwd=self.co, env=self.clean_env(**{var: str(cfg)})),
+                          f"{var}.txt"))
+        execdir = self.tmp / "exec"; execdir.mkdir()
+        up = execdir / "git-upload-pack"; up.write_text("#!/bin/sh\necho x >> up.txt; cd /; exec sleep 30\n")
+        up.chmod(0o755)
+        cases.append(("GIT_EXEC_PATH", self.spawn(["git", "ls-remote", "origin"], cwd=self.co,
+                                                  env=self.clean_env(GIT_EXEC_PATH=str(execdir))), "up.txt"))
+        for label, p, rel in cases:
+            self.wait_path(rel)
+            self.wait_alive(p, 0.3)
+            self.assertEqual(rl.proc_exe(p.pid), os.path.realpath(shutil.which("git")), label)
+            row = self.blocks(p, label)
+            self.assertIn("treated as a possible writer", row["detail"], label)
+
+    @unittest.skipUnless(shutil.which("less"), "less not installed")
+    def test_git_with_ordinary_pager_environment_stays_passive(self):
+        env = self.clean_env(PAGER="less", GIT_PAGER="less -R", LESS="-FRX", GIT_CONFIG_NOSYSTEM="1",
+                             GIT_TERMINAL_PROMPT="0", TERM="dumb", GIT_EDITOR="true",
+                             GIT_ASKPASS="/x/.vscode-server/askpass.sh")
+        procs = {"log on pty": self.on_pty(["git", "log", "-p"], env)}
+        cat = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, cwd=self.co, env=env)
+        self.procs.append(cat)
+        procs["cat-file"] = cat
+        time.sleep(0.8)
+        for label, p in procs.items():
+            self.assertIsNone(p.poll(), label)
+            row = self.classify(p.pid)
+            self.assertEqual((row["kind"], row["blocking"]), ("git-readonly", False), (label, row))
+
+    def test_interpreter_scripts_outside_the_checkout_block(self):
+        evil = self.tmp / "evil"
+        cases = []
+        if self.node:
+            mods = evil / "node_modules" / "vite"; mods.mkdir(parents=True)
+            (mods / "vite.js").write_text("require('fs').writeFileSync('node.txt', 'x'); setInterval(() => {}, 1000);\n")
+            cases.append(("node foreign node_modules/vite", [self.node, str(mods / "vite.js"), "dev"], "node.txt"))
+        evil.mkdir(exist_ok=True)
+        (evil / "pylsp").write_text("open('py.txt', 'w').write('x')\nimport time\ntime.sleep(30)\n")
+        cases.append(("python /tmp/pylsp", [os.path.realpath(sys.executable), str(evil / "pylsp")], "py.txt"))
+        for label, argv, rel in cases:
+            p = self.spawn(argv, cwd=self.co)
+            self.wait_path(rel)
+            self.wait_alive(p, 0.2)
+            self.blocks(p, label)
+
+    def test_interpreter_scripts_inside_the_checkout_stay_passive(self):
+        procs = {}
+        if self.node:
+            procs["node checkout node_modules vite"] = [self.node, self.dev_tool("vite"), "dev"]
+        venv = Path(self.co, ".venv"); (venv / "bin").mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        (venv / "bin" / "pylsp").write_text(SLEEPER)
+        procs["python checkout venv pylsp"] = [os.path.realpath(sys.executable), str(venv / "bin" / "pylsp")]
+        running = {k: self.spawn(v, cwd=self.co) for k, v in procs.items()}
+        time.sleep(0.8)
+        for label, p in running.items():
+            self.assertIsNone(p.poll(), label)
+            row = self.classify(p.pid)
+            self.assertFalse(row["blocking"], (label, row))
+
+    def test_explicitly_false_watch_flags_are_builds(self):
+        """tsc --watch false / --noEmit false compile and write (verified against tsc 5)."""
+        for argv in (("tsc", "--watch", "false"), ("tsc", "--noEmit", "false"), ("tsc", "--watch=false"),
+                     ("tsc", "-w", "FALSE")):
+            with self.subTest(argv):
+                self.assertTrue(rl.classify_cmdline_ungranted(list(argv))[1], argv)
+        for argv in (("tsc", "--watch"), ("tsc", "--watch", "-p", "."), ("tsc", "--noEmit", "true")):
+            with self.subTest(argv):
+                self.assertFalse(rl.classify_cmdline_ungranted(list(argv))[1], argv)
+
+
 if __name__ == "__main__":
     unittest.main()

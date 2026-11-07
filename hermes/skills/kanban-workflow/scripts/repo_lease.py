@@ -1401,7 +1401,11 @@ def _dev_server_refusal(name: str, args: list) -> Optional[str]:
         return f"{name} {sorted(writes)[0]} is a build that writes output"
     if name in DEV_SERVER_WATCH_FLAGS:
         flags = DEV_SERVER_WATCH_FLAGS[name]
-        watching = any(a.lower().split("=", 1)[0] in flags for a in opts)
+        # tsc takes an explicit boolean value (`tsc --watch false`, `--noEmit false` compile and
+        # write, verified with tsc 5); `--watch=false` is rejected by tsc but refused here too.
+        watching = any(a.lower().split("=", 1)[0] in flags and a.lower().split("=", 1)[1:] != ["false"]
+                       and (i + 1 >= len(opts) or opts[i + 1].lower() != "false")
+                       for i, a in enumerate(opts))
         serving = bool(DEV_SERVER_SERVE_POSITIONALS.get(name, set()) & set(positionals[:1]))
         if not (watching or serving):
             return f"{name} without watch/serve mode is a build that writes output"
@@ -1859,31 +1863,98 @@ def ungranted_image_mismatch(pid: int, cmd: list, kind: str) -> Optional[str]:
         if _interpreter_family(image) != family:
             return f"command line says {claimed} but the process runs {exe}"
         i = _script_index(cmd)
-        if family in NODE_FAMILY and kind in ("dev-server", "language-server") and i is not None:
-            script = cmd[i]
-            if not script.startswith("/"):
-                try:
-                    script = os.path.join(os.readlink(f"/proc/{pid}/cwd"), script)
-                except OSError as exc:
-                    if exc.errno in (errno.EACCES, errno.EPERM):
-                        raise ProcVisibilityError(exc.errno, f"/proc/{pid}/cwd: {exc.strerror}")
-                    return f"cannot resolve the script {cmd[i][:80]}"
-            real = os.path.realpath(script)
-            if "node_modules" not in Path(real).parts[:-1]:
-                return f"script {real[:120]} is not an installed package (outside node_modules)"
+        if kind in ("dev-server", "language-server") and i is not None:
+            return interpreter_script_refusal(pid, cmd[i], family)
         return None
     if image not in PASSIVE_IMAGE_ALIASES.get(claimed, {claimed}) | {_image_name(claimed)}:
         return f"command line says {claimed} but the process runs {exe}"
     return None
 
 
+def _proc_cwd(pid: int) -> Optional[str]:
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError as exc:
+        if exc.errno in (errno.EACCES, errno.EPERM):
+            raise ProcVisibilityError(exc.errno, f"/proc/{pid}/cwd: {exc.strerror}")
+        return None
+
+
+def _checkout_root(path: str) -> Optional[str]:
+    """The nearest directory at or above *path* that holds a .git entry (None: none)."""
+    cur = os.path.realpath(path)
+    while True:
+        if os.path.lexists(os.path.join(cur, ".git")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def interpreter_script_refusal(pid: int, script: str, family: str) -> Optional[str]:
+    """Why the script an interpreter runs under a passive tool name is not established as that
+    tool. A path proves nothing about integrity (any same-uid process can write
+    /tmp/x/node_modules/vite/vite.js or ~/.local/bin/pylsp), so a script is accepted only when it
+    is root-owned in root-owned directories (a system install), or lies in the checkout the
+    process works in: node under its node_modules, python under a virtualenv (pyvenv.cfg) in it.
+    Planting a fake tool there is itself a write into the lease-protected checkout."""
+    cwd = _proc_cwd(pid)
+    if cwd is None:
+        return f"cannot resolve the script {script[:80]}"
+    real = os.path.realpath(os.path.join(cwd, script))
+    if _root_owned_image(real) is None:
+        return None
+    root = _checkout_root(cwd)
+    if root and real.startswith(root.rstrip("/") + "/"):
+        rel = Path(real).relative_to(root).parts[:-1]
+        if family in NODE_FAMILY and "node_modules" in rel:
+            return None
+        if family == "python" and any(Path(root, *rel[:n], "pyvenv.cfg").is_file() for n in range(1, len(rel) + 1)):
+            return None
+    where = "an installed package in this checkout (node_modules)" if family in NODE_FAMILY else \
+        "a system install or a virtualenv in this checkout"
+    return f"script {real[:120]} is not {where}; its identity is not established"
+
+
+# Environment that makes a git read start a program the invoker chose (GIT_EXTERNAL_DIFF; the
+# exec path git prepends to PATH, e.g. git-upload-pack for ls-remote) or read configuration
+# outside the repository and the user's own files (where core.pager, diff.external, textconv...
+# live). GIT_PAGER/PAGER are accepted only as a bare less/more/cat with options. Not listed:
+# GIT_EDITOR/GIT_SEQUENCE_EDITOR (only mutations start them, and those block anyway) and
+# GIT_ASKPASS (VS Code sets it in every terminal; reads here do not prompt).
+GIT_PROGRAM_ENV = ("GIT_EXTERNAL_DIFF", "GIT_EXEC_PATH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM")
+GIT_PLAIN_PAGERS = {"less", "more", "cat"}
+
+
+def _pager_refusal(var: str, value: str) -> Optional[str]:
+    try:
+        words = shlex.split(value)
+    except ValueError:
+        return f"unparseable {var}"
+    if not words or (words[0] in GIT_PLAIN_PAGERS and all(w.startswith("-") for w in words[1:])
+                     and not any(c in value for c in "`$;|&<>()\n")):
+        return None
+    return f"{var}={value[:60]!r} runs a program the invoker chose"
+
+
 def git_environ_refusal(pid: int) -> Optional[str]:
-    """Why the environment of a git read carries command-line configuration
-    (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT/KEY_n/VALUE_n) that is not display-only."""
+    """Why the environment of a git read starts an invoker-chosen program: GIT_PROGRAM_ENV, a
+    GIT_PAGER/PAGER other than plain less/more/cat, or command-line configuration
+    (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT/KEY_n/VALUE_n) that is not display-only. An
+    unreadable environment raises ProcVisibilityError (the read blocks)."""
     raw = _proc_read(pid, "environ")
     if raw is None:
         return None
     env = dict(e.split("=", 1) for e in raw.decode("utf-8", "surrogateescape").split("\0") if "=" in e)
+    for var in GIT_PROGRAM_ENV:
+        if env.get(var):
+            return f"{var} in its environment runs a program or reads configuration the invoker chose"
+    for var in ("GIT_PAGER", "PAGER"):
+        if var in env:
+            why = _pager_refusal(var, env[var])
+            if why:
+                return why
     params = env.get("GIT_CONFIG_PARAMETERS")
     if params:
         try:
