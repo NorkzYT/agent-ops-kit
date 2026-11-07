@@ -2726,7 +2726,7 @@ class OwnGitFsmonitorTest(unittest.TestCase):
         self.assertEqual(wf.default_git(["status", "--porcelain"], str(co)).returncode, 0)
         self.assertFalse(sentinel.exists(), "workflow git read ran the fsmonitor hook")
 
-    def test_workflow_git_status_never_runs_a_repository_clean_filter(self):
+    def test_workflow_git_status_keeps_repository_filters_with_and_without_the_policy(self):
         tmp = Path(tempfile.mkdtemp(prefix="kanban-workflow-filter-")).resolve()
         self.addCleanup(shutil.rmtree, tmp, True)
         co, sentinel = tmp / "co", tmp / "filter-ran"
@@ -2741,6 +2741,17 @@ class OwnGitFsmonitorTest(unittest.TestCase):
         subprocess.run(["git", "status", "--porcelain"], cwd=co, capture_output=True)
         self.assertTrue(sentinel.exists(), "the fixture filter really runs under plain git")
         sentinel.unlink()
-        r = wf.default_git(["status", "--porcelain", "--untracked-files=all"], str(co))
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertFalse(sentinel.exists(), "workflow git status ran a clean filter")
+        # No observer grant: git applies the repository's filters as before PR28.
+        state = tmp / "state"
+        state.mkdir()
+        with mock.patch.dict(os.environ, {"HERMES_WORKFLOW_STATE": str(state)}):
+            r = wf.default_git(["status", "--porcelain", "--untracked-files=all"], str(co))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(sentinel.exists(), "no grant: workflow git status keeps pre-PR28 filter behaviour")
+            sentinel.unlink()
+            # Host-wide observer policy: ordinary repository filtering is preserved.
+            wf.rl.observer_policy_command("enable", str(tmp / ".vscode-server"),
+                                          "I accept my own VS Code sessions on this host in any repository.")
+            r = wf.default_git(["status", "--porcelain", "--untracked-files=all"], str(co))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue(sentinel.exists(), "host-wide policy: workflow git status keeps filter behaviour")
