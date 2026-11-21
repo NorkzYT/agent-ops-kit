@@ -132,12 +132,76 @@ unknown env var|n["environment"]["NEO_EXTRA"] = "1"
 PUID root|n["environment"]["PUID"] = "0"
 restart always|n["restart"] = "always"
 EOF
-  for rp in 5900 6080 6081 9010 9011; do
-    python3 -I "$CHECK" --data "$data" --image "$IMAGE" --compose-dir "$ROOT/docker/browseros-neo" \
-      --project bneo-test --vnc-port "$rp" --mcp-port 19010 < "$cfg" 2>/dev/null \
-      && no "refuses: viewer port $rp (listens inside Neo)" || ok "refuses: viewer port $rp (listens inside Neo)"
+  # The specific reason must be the reserved port (a config rendered for
+  # another viewer port is refused anyway, for its Origin).
+  for rp in 5900 6080 6081 9010 9011 9110 9210; do
+    if ! python3 -I "$CHECK" --data "$data" --image "$IMAGE" --compose-dir "$ROOT/docker/browseros-neo" \
+         --project bneo-test --vnc-port "$rp" --mcp-port 19010 < "$cfg" 2>"$tmp/rp.err" \
+       && grep -q "viewer port $rp is a port Neo listens on internally" "$tmp/rp.err"; then
+      ok "refuses: viewer port $rp (listens inside Neo), for that reason"
+    else no "refuses: viewer port $rp (listens inside Neo)"; fi
   done
+
+  # 6080 shim must be executable: a non-executable file is skipped by PATH
+  # lookup and the image's unchecked websockify runs instead (review P2).
+  cd2="$tmp/cdir"; mkdir -p "$cd2"
+  for f in compose.yaml neo.toml mcp-gate.py websockify-6080 chromium-policy.json; do cp -p "$ROOT/docker/browseros-neo/$f" "$cd2/$f"; done
+  render2() { env -u COMPOSE_FILE BROWSEROS_NEO_DATA="$data" BROWSEROS_NEO_UID=1000 BROWSEROS_NEO_GID=1000 \
+    docker compose --env-file /dev/null -p bneo-test --project-directory "$cd2" -f "$cd2/compose.yaml" config --format json; }
+  check2() { render2 > "$tmp/cfg2.json" 2>/dev/null && python3 -I "$CHECK" --data "$data" --image "$IMAGE" --compose-dir "$cd2" \
+    --project bneo-test --vnc-port 16080 --mcp-port 19010 < "$tmp/cfg2.json" 2>"$tmp/check2.err"; }
+  chmod 755 "$cd2/websockify-6080"
+  check2 && ok "shim copy at 0755: accepted (positive control)" || { no "shim copy at 0755"; cat "$tmp/check2.err"; }
+  for m in 644 754 700; do
+    chmod "$m" "$cd2/websockify-6080"
+    ! check2 && grep -q "6080 shim .* has mode $m; it must be executable" "$tmp/check2.err" \
+      && ok "refuses: 6080 shim mode $m (PATH fallthrough)" || { no "refuses: 6080 shim mode $m"; cat "$tmp/check2.err"; }
+  done
+  chmod 755 "$cd2/websockify-6080"
 fi
+
+# --- live 6080 probe (the wrapper's PORT_PROBE) vs controlled loopback listeners
+python3 -I - "$WRAP" <<'PYEOF' > "$tmp/probe.out" 2>&1 && ok "6080 probe: $(tail -1 "$tmp/probe.out")" || { no "6080 probe"; cat "$tmp/probe.out"; }
+import re, socket, subprocess, sys, threading
+src = open(sys.argv[1]).read()
+probe = re.search(r"\nPORT_PROBE='(.*?)'\n", src, re.S).group(1)
+def free():
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+def serve(host, port, answer):
+    srv = socket.create_server((host, port)); srv.settimeout(10)
+    def loop():
+        while True:
+            try:
+                c, _ = srv.accept()
+            except OSError:
+                return
+            c.settimeout(2)
+            try:
+                c.recv(4096); c.sendall(answer)
+            except OSError:
+                pass
+            c.close()
+    threading.Thread(target=loop, daemon=True).start(); return srv
+def run(nov, vnc):
+    r = subprocess.run([sys.executable, "-I", "-c", probe, str(vnc), str(nov)], capture_output=True, text=True, timeout=60)
+    return r.returncode, r.stdout.strip()
+F403 = b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"
+F101 = b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n"
+cases, bad = [], []
+p, v = free(), free(); s = serve("127.0.0.1", p, F403); cases.append(("loopback 403", run(p, v), 0)); s.close()
+p, v = free(), free(); s = serve("0.0.0.0", p, F403); cases.append(("all interfaces", run(p, v), 1)); s.close()
+p, v = free(), free(); s = serve("127.0.0.1", p, F101); cases.append(("upgrade accepted", run(p, v), 1)); s.close()
+p, v = free(), free(); s = serve("127.0.0.1", p, F403); t = serve("127.0.0.1", v, F403)
+cases.append(("listener on viewer port", run(p, v), 1)); s.close(); t.close()
+p, v = free(), free(); cases.append(("nothing on 6080", run(p, v), 1))
+for label, (rc, out), want in cases:
+    good = (rc == 0 and out == "PROBE-OK") if want == 0 else (rc != 0 and out.startswith("PROBE-BAD"))
+    print(("ok  " if good else "BAD ") + label + ": rc=%d %s" % (rc, out[:160]))
+    if not good:
+        bad.append(label)
+print("%d/%d probe cases" % (len(cases) - len(bad), len(cases)))
+sys.exit(1 if bad else 0)
+PYEOF
 
 # --- no automatic destructive Compose operations in the wrapper -------------
 if grep -nE -- '--force-recreate|--renew-anon-volumes|compose (rm|kill)\b' "$WRAP"; then no "wrapper has no --force-recreate/rm/kill"
@@ -264,7 +328,16 @@ echo "$*" >> "$FK/calls"; echo "$*" >> "$FK/calls.all"
 P="${BROWSEROS_NEO_PROJECT:-browseros-neo}"
 running() { [[ -e "$FK/run/$1" ]]; }
 exists() { [[ -e "$FK/exist/$1" ]]; }
+vclock() { cat "$FK/vclock" 2>/dev/null || echo 0; }
+stamp() { echo "$(date +%s.%N) $(vclock)" > "$FK/t.$1.$2"; }  # real time + virtual clock at the event
+iso() {  # the event's time as Docker reports it, shifted back by the fake sleeps since
+  [[ -f "$FK/t.$1.$2" ]] || { echo 0001-01-01T00:00:00Z; return; }
+  python3 -I -c 'import sys, datetime
+t, v0 = map(float, open(sys.argv[1]).read().split()); v = float(sys.argv[2])
+print(datetime.datetime.fromtimestamp(t - (v - v0), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))' "$FK/t.$1.$2" "$(vclock)"
+}
 start() {
+  running "$1" || { stamp "$1" started; rm -f "$FK/t.$1.finished"; }
   : > "$FK/run/$1"; : > "$FK/exist/$1"
   if [[ "$1" == mcp-gate && -z "${FAKE_GATE_NOLISTEN:-}" ]]; then
     timeout 120 python3 -I -c 'import socket,sys
@@ -276,6 +349,7 @@ while True: s.accept()[0].close()' "$BROWSEROS_NEO_MCP_PORT" "$FK/gate.ready" >/
 }
 stop() {
   [[ -z "${FAKE_STOP_NOOP:-}" ]] || return 0
+  running "$1" && stamp "$1" finished
   rm -f "$FK/run/$1"
   if [[ "$1" == mcp-gate && -f "$FK/gate.pid" ]]; then
     kill "$(cat "$FK/gate.pid")" 2>/dev/null; wait "$(cat "$FK/gate.pid")" 2>/dev/null
@@ -289,7 +363,11 @@ case "$1" in
   context) [[ "$2" == show ]] && echo default || echo unix:///var/run/docker.sock ;;
   info) echo "${FAKE_ENGINE_ID:-engine-A}" ;;
   image) exit 0 ;;
-  exec)  # handoff: the script arrives on stdin; the report and rc are the test's
+  exec)
+    if [[ " $* " == *" -c "* ]]; then  # the wrapper's live 6080 probe; no stdin
+      echo "${FAKE_PROBE_OUT:-PROBE-OK}"; exit "${FAKE_PROBE_RC:-0}"
+    fi
+    # handoff: the script arrives on stdin; the report and rc are the test's
     sha256sum > "$FK/exec.stdin.sha"
     echo "${FAKE_EXEC_OUT:-{\"result\": \"HANDOFF-READY\"\}}"; exit "${FAKE_EXEC_RC:-0}" ;;
   ps)
@@ -309,6 +387,7 @@ case "$1" in
             viewer) echo "viewer" ;;
             *) echo "mcp-gate 9010/tcp=127.0.0.1:$BROWSEROS_NEO_MCP_PORT" ;;
           esac ;;
+        *State.StartedAt*) echo "$(iso "$svc" started) $(iso "$svc" finished)" ;;
         *Config.Image*) echo "${FAKE_NEO_IMAGE:-$IMAGE}|/data=${FAKE_NEO_DATA:-$BROWSEROS_NEO_DATA};/etc/neo/neo.toml=$CDIR/neo.toml;" ;;
         *) echo "/$id|$P|$BROWSEROS_NEO_DATA|$CDIR/neo.toml|" ;;
       esac
@@ -344,6 +423,10 @@ EOF
 cat > "$fk/bin/sleep" <<EOF
 #!/usr/bin/env bash
 echo "\$1" >> "$fk/sleeps"
+python3 -I -c 'import sys; f=sys.argv[1]
+try: v=float(open(f).read())
+except OSError: v=0.0
+open(f,"w").write(str(v+float(sys.argv[2])))' "$fk/vclock" "\$1"
 if [[ -n "\${FAKE_SLEEP_HOOK:-}" && "\$1" != 0.5 ]]; then eval "\$FAKE_SLEEP_HOOK"; fi
 exit 0
 EOF
@@ -377,6 +460,9 @@ expect "up: checks, starts neo, opens the gate" 0 'agent path: OPEN' -- bash "$W
 [[ -f "$fstate/manifest" ]] && grep -q '^wall_timeout=60$' "$fstate/manifest" && grep -q '^engine_id=engine-A$' "$fstate/manifest" \
   && ok "up writes the manifest (pinned budget, engine)" || no "up writes the manifest"
 gate_listening && ok "gate listener is up" || no "gate listener is up"
+grep -q '^ws6080_mode=755$' "$fstate/manifest" && ok "manifest records the 6080 shim mode" || no "manifest ws6080_mode"
+grep -q '^exec -u neo bneo-life-neo-1 /usr/bin/python3 -I -c import socket' "$fk/calls.all" \
+  && ok "up ran the live 6080/viewer-port probe in Neo" || no "up did not probe 6080"
 
 : > "$fk/sleeps"
 expect "pause --no-wait: CLOSED path but DRAINING, says do not type" 0 'DRAINING, not drained' "!$UNSAFE|^\[agent-ops-kit\] CLOSED:" -- bash "$WRAP" pause --no-wait
@@ -400,15 +486,19 @@ expect "pause: drains pinned budget, CLOSED with explicit limits" 0 'not proof t
 expect "status after drain: CLOSED" 0 'agent path: CLOSED \(gate stopped and pause drained' -- bash "$WRAP" status
 expect "handoff refuses a non-https sign-in origin" nz 'needs an https origin' -- bash "$WRAP" handoff --clear-origin http://accounts.example.com
 expect "handoff refuses an origin with a path" nz 'needs an https origin' -- bash "$WRAP" handoff --clear-origin https://a.example.com/x
+expect "handoff refuses port 99999" nz 'needs an https origin' -- bash "$WRAP" handoff --clear-origin https://a.example.com:99999
+expect "handoff refuses port 0" nz 'needs an https origin' -- bash "$WRAP" handoff --clear-origin https://a.example.com:0
 : > "$fk/calls"
 : > "$fk/calls"
 expect "handoff without --clear-origin is refused before anything" nz 'handoff refused: name every disposable sign-in origin' -- bash "$WRAP" handoff
 ! grep -qE '^(exec|compose|ps|inspect) ' "$fk/calls" && ok "  ... and ran nothing in Neo" || { no "  ... origin-less handoff reached Docker"; cat "$fk/calls"; }
 : > "$fk/calls"
-expect "handoff after a drained pause: HANDOFF-READY" 0 'HANDOFF-READY: browser restarted' "!Sign in now" -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
+expect "handoff after a drained pause: HANDOFF-READY" 0 'HANDOFF-READY: browser process restarted' "!Sign in now|Cache Storage, agent tab or timer survived" -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
 grep -q 'Real-account login is NO-GO' "$fk/out" && grep -q 'disposable' "$fk/out" \
   && grep -q 'Scope: all site data cleared only on https://accounts.example.com;' "$fk/out" \
   && grep -q 'same persistent profile (not the same tab)' "$fk/out" && grep -q 'not proven clean' "$fk/out" \
+  && grep -q 'Cache Storage and other storage on origins with no listed worker were not cleared or checked' "$fk/out" \
+  && grep -q 'cookies sent to those hosts (incl. parent-domain' "$fk/out" \
   && ok "  ... says NO-GO/disposable only, reports scope and residual limits" || { no "  ... handoff success text"; cat "$fk/out"; }
 grep -qE '^exec -i -u neo bneo-life-neo-1 /usr/bin/python3 -I - --clear-origin https://accounts.example.com$' "$fk/calls" \
   && [[ "$(cut -d' ' -f1 "$fk/exec.stdin.sha")" == "$(sha256sum < "$ROOT/docker/browseros-neo/neo-handoff.py" | cut -d' ' -f1)" ]] \
@@ -423,6 +513,26 @@ expect "status: raw gate start under a pause record is INCONSISTENT" nz 'INCONSI
 : > "$fk/calls"
 expect "handoff refused while the gate runs under a CLOSED record" nz 'handoff refused: mcp-gate is running' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
 ! grep -q '^exec ' "$fk/calls" && ok "  ... and ran nothing in Neo" || no "  ... open-gate handoff ran in Neo"
+
+# Stale CLOSED records (review P1): the gate ran after the drain, or a resume failed.
+life bash "$fk/bin/docker" compose -p bneo-life stop mcp-gate   # raw: the gate ran, then exited, after closed_at
+: > "$fk/calls"
+expect "handoff refused: gate ran after the drained record (start/stop times)" nz 'CLOSED record is stale' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
+grep -q 'mcp-gate ran after the drain began' "$fk/out" && ok "  ... names the gate run after the drain" || no "  ... stale reason"
+! grep -q '^exec ' "$fk/calls" && ok "  ... and ran nothing in Neo" || no "  ... stale-record handoff ran in Neo"
+expect "pause drains again" 0 'CLOSED: the agent path has stayed closed' -- bash "$WRAP" pause
+expect "handoff after the new drain: HANDOFF-READY (positive control)" 0 'HANDOFF-READY:' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
+: > "$fk/calls"
+expect "handoff refused when the live 6080 probe fails" nz "6080 lockdown is NOT proven in effect.*Nothing was stopped" "!HANDOFF-READY:" \
+  -- env FAKE_PROBE_OUT="PROBE-BAD: 6080 listeners ['00000000']" FAKE_PROBE_RC=1 bash "$WRAP" handoff --clear-origin https://accounts.example.com
+! grep -q '^exec -i ' "$fk/calls" && ok "  ... and the scrub did not run" || no "  ... scrub ran despite failed probe"
+expect "resume from CLOSED with a gate that never listens fails" nz 'did not accept connections' -- env FAKE_GATE_NOLISTEN=1 bash "$WRAP" resume
+grep -qx 'state=OPENING' "$W" && ! grep -qx 'state=CLOSED' "$W" && ok "  ... record is OPENING, never a stale CLOSED" || no "  ... record after failed resume: $(cat "$W")"
+life bash "$fk/bin/docker" compose -p bneo-life stop mcp-gate   # the gate then exits on its own
+: > "$fk/calls"
+expect "handoff refused after a failed resume and gate exit (not drained)" nz 'handoff refused: the agent path is not drained' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
+! grep -q '^exec ' "$fk/calls" && ok "  ... and ran nothing in Neo" || no "  ... post-failed-resume handoff ran in Neo"
+expect "status after a failed resume and gate exit: not drained" 0 'CLOSED but not drained \(an open attempt' "!agent path: CLOSED \(gate stopped and pause drained" -- bash "$WRAP" status
 
 expect "pause: gate reopened mid-drain is detected" nz 'reopened during the drain' "!$UNSAFE|^\[agent-ops-kit\] CLOSED:" \
   -- env FAKE_SLEEP_HOOK="bash $fk/bin/docker compose -p bneo-life up -d mcp-gate" bash "$WRAP" pause
@@ -471,6 +581,8 @@ mv "$tmp/manifest.moved" "$fstate/manifest"
 # exposure and inspect errors fail closed WITHOUT stopping anything, and name the approved command
 resume_refused "inspect error" 'cannot inspect' FAKE_INSPECT_FAIL=1
 life bash "$fk/bin/docker" compose -p bneo-life up -d neo
+resume_refused "live 6080 probe fails (shim not in effect)" "6080 lockdown is NOT proven in effect.*Nothing was stopped" \
+  FAKE_PROBE_OUT="PROBE-BAD: 6080 upgrade with Origin None answered b'HTTP/1.1 101'" FAKE_PROBE_RC=1
 : > "$fk/calls"
 expect "resume: exposed viewer refuses, says nothing was stopped, names approved down" nz \
   'EXPOSED: unexpected live binding: neo 6081/tcp=0.0.0.0.*Nothing was stopped.*BROWSEROS_NEO_PROJECT=bneo-life .*down --approve-down' \

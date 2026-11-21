@@ -16,16 +16,23 @@ Steps, each verified; any failure exits non-zero with a JSON report:
    process. The managed policy (chromium-policy.json) forces RestoreOnStartup
    to the New Tab page, so no tab comes back.
 2. Over the new browser's loopback CDP port: unregister every service worker
-   registration in the profile and clear service-worker and Cache Storage
-   data for its origin; clear all site data for each --clear-origin (the
-   sign-in origins, so nothing an agent stored there is read by the login
-   page); clear the HTTP cache; close every tab except one about:blank.
+   registration in the profile's listing (the first
+   ServiceWorker.workerRegistrationUpdated after enable; no listing within
+   LISTING_TIMEOUT fails, silence is never read as "none") and clear
+   service-worker and Cache Storage data for its origin; clear all site data
+   for each --clear-origin (the sign-in origins); delete every cookie that
+   would be sent to a --clear-origin host (host-only on that host, or a
+   Domain= cookie on it or a parent domain, so a cookie tossed from a sibling
+   subdomain is included) and every cookie partitioned under a site of that
+   host; clear the HTTP cache; close every tab except one about:blank.
 3. Re-enumerate from a fresh CDP session: zero service-worker registrations,
    zero service-worker/Cache Storage bytes on those origins, zero bytes of
-   any type on each --clear-origin (Storage.getUsageAndQuota), and only
-   about:blank plus the browser's own chrome://*.top-chrome UI targets; the
-   kept about:blank page must still exist and still be about:blank.
-   Anything else fails.
+   any type on each --clear-origin (Storage.getUsageAndQuota, which has no
+   cookie entry), no cookie matching the rule above (Storage.getCookies), and
+   only about:blank plus the browser's own chrome://*.top-chrome UI targets;
+   the kept about:blank page must still exist and still be about:blank.
+   Anything else fails. Cache Storage and other storage on origins that had
+   no service worker and are not a --clear-origin is not cleared or checked.
 
 At least one --clear-origin is required; without it nothing is touched.
 Limits (also in the report): the same persistent profile is resumed by a new
@@ -50,6 +57,9 @@ CDP_PORT = 9110           # pinned by the image's entrypoint
 READY_URL = "http://127.0.0.1:9010/system/ready"
 BROWSER = "/usr/lib/browserclaw/browserclaw"
 ALLOWED_UI = ("chrome://omnibox-popup.top-chrome/",)
+LISTING_TIMEOUT = 30      # seconds to wait for the first registration listing
+LISTING_QUIET = 1.0       # then keep reading this long for follow-up updates
+MAX_MESSAGE = 64 << 20    # a larger CDP message (agent-controlled size) fails
 
 
 class Fail(Exception):
@@ -116,33 +126,51 @@ class CDP:
             raise Fail("CDP handshake refused")
         self.n = 0
         self.events = []
+        self.partial = b""
 
-    def _read(self, n):
-        while len(self.buf) < n:
-            chunk = self.s.recv(65536)
-            if not chunk:
-                raise Fail("CDP connection closed")
-            self.buf += chunk
-        d, self.buf = self.buf[:n], self.buf[n:]
-        return d
+    def _frame(self):
+        """(b1, payload) of the first complete frame in the buffer, or None.
+
+        Nothing is consumed until the whole frame is buffered, so a socket
+        timeout mid-frame (collect() uses short timeouts) loses no bytes.
+        """
+        b = self.buf
+        if len(b) < 2:
+            return None
+        n, off = b[1] & 0x7F, 2
+        if n == 126:
+            if len(b) < 4:
+                return None
+            n, off = int.from_bytes(b[2:4], "big"), 4
+        elif n == 127:
+            if len(b) < 10:
+                return None
+            n, off = int.from_bytes(b[2:10], "big"), 10
+        if n + len(self.partial) > MAX_MESSAGE:
+            raise Fail(f"CDP message larger than {MAX_MESSAGE} bytes")
+        if len(b) < off + n:
+            return None
+        self.buf = b[off + n:]
+        return b[0], b[off:off + n]
 
     def recv(self):
-        msg = b""
         while True:
-            b1, b2 = self._read(2)
-            n = b2 & 0x7F
-            if n == 126:
-                n = int.from_bytes(self._read(2), "big")
-            elif n == 127:
-                n = int.from_bytes(self._read(8), "big")
-            payload = self._read(n)
+            f = self._frame()
+            if f is None:
+                chunk = self.s.recv(65536)  # a timeout here leaves buf/partial intact
+                if not chunk:
+                    raise Fail("CDP connection closed")
+                self.buf += chunk
+                continue
+            b1, payload = f
             op = b1 & 0x0F
             if op == 8:
                 raise Fail("CDP connection closed")
             if op in (9, 10):
                 continue
-            msg += payload
+            self.partial += payload
             if b1 & 0x80:
+                msg, self.partial = self.partial, b""
                 return json.loads(msg)
 
     def send(self, obj):
@@ -173,17 +201,21 @@ class CDP:
             self.events.append(r)
         raise Fail(f"{method}: no answer")
 
-    def collect(self, seconds):
+    def collect(self, seconds, until=None):
+        """Read events for `seconds`, or until until(events) is true; returns whether it was."""
         end = time.time() + seconds
         self.s.settimeout(0.25)
         try:
             while time.time() < end:
+                if until is not None and until(self.events):
+                    return True
                 try:
                     self.events.append(self.recv())
                 except (socket.timeout, TimeoutError):
                     pass
         finally:
             self.s.settimeout(30)
+        return until is not None and until(self.events)
 
     def close(self):
         self.s.close()
@@ -194,17 +226,88 @@ def origin_of(url):
     return f"{u.scheme}://{u.netloc}"
 
 
+def _is_listing(e):
+    return e.get("method") == "ServiceWorker.workerRegistrationUpdated"
+
+
 def registrations(c, session):
-    """Every live service-worker registration in the profile, from a fresh enable."""
+    """Every service-worker registration in the profile, from a fresh enable.
+
+    Chromium answers enable with one workerRegistrationUpdated listing the
+    stored and live registrations (an empty list when there are none). Its
+    absence is a failure, never "zero registrations".
+    """
     c.events = []
     c.call("ServiceWorker.enable", session=session)
-    c.collect(2.0)
+    if not c.collect(LISTING_TIMEOUT, until=lambda ev: any(_is_listing(e) for e in ev)):
+        raise Fail(f"no service-worker registration listing within {LISTING_TIMEOUT}s; "
+                   "cannot show that no registration exists")
+    c.collect(LISTING_QUIET)
     regs = {}
     for e in c.events:
         if e.get("method") == "ServiceWorker.workerRegistrationUpdated":
             for r in e["params"]["registrations"]:
                 regs[r["registrationId"]] = r
     return [r for r in regs.values() if not r.get("isDeleted")]
+
+
+def _host_match(host, domain):
+    return host == domain or host.endswith("." + domain)
+
+
+def _partition_site(ck):
+    pk = ck.get("partitionKey")
+    site = pk.get("topLevelSite") if isinstance(pk, dict) else pk
+    return (urlparse(site).hostname or "").lower() if site else ""
+
+
+def cookie_hits(cookies, clear_origins):
+    """Cookies a sign-in on any --clear-origin could receive or carry.
+
+    A host-only cookie (no leading dot) matches only its host; a Domain=
+    cookie matches its domain and every subdomain (so .example.com set from
+    www.example.com reaches accounts.example.com); a partitioned cookie also
+    matches when its partition's top-level site is the host or a parent of
+    it (sent to embeds of the sign-in page). Paths, ports and Secure are
+    ignored, which only widens the match.
+    """
+    hosts = [urlparse(o).hostname.lower() for o in clear_origins]
+    out = []
+    for ck in cookies:
+        raw = str(ck.get("domain") or "").lower()
+        dom = raw.lstrip(".")
+        site = _partition_site(ck)
+        for h in hosts:
+            if (h == dom if not raw.startswith(".") else _host_match(h, dom)) or (site and _host_match(h, site)):
+                out.append(ck)
+                break
+    return out
+
+
+def cookie_label(ck):
+    site = _partition_site(ck)
+    return f"{ck.get('name')}@{ck.get('domain')}{ck.get('path') or ''}" + (f" [partition {site}]" if site else "")
+
+
+def all_cookies(c):
+    return c.call("Storage.getCookies").get("cookies", [])
+
+
+def delete_cookies(c, session, clear_origins):
+    """Delete every cookie_hits() match, one exact (name, domain, path, partition) at a time."""
+    hits = cookie_hits(all_cookies(c), clear_origins)
+    for ck in hits:
+        p = {"name": ck["name"], "domain": ck["domain"], "path": ck.get("path") or "/"}
+        if ck.get("partitionKey"):
+            p["partitionKey"] = ck["partitionKey"]
+        c.call("Network.deleteCookies", p, session=session)
+    return sorted(cookie_label(ck) for ck in hits)
+
+
+def quit_browser():
+    """neo-quit's own stdout goes to stderr: stdout carries only the JSON report."""
+    return subprocess.run(["/usr/local/bin/neo-quit", str(CDP_PORT)], timeout=20,
+                          stdin=subprocess.DEVNULL, stdout=sys.stderr).returncode
 
 
 def scratch_tab(c):
@@ -244,7 +347,13 @@ def parse_args(argv):
             raise Fail(f"unknown argument {a!r}")
         o = next(it, "")
         u = urlparse(o)
-        if u.scheme != "https" or not u.hostname or u.path not in ("", "/") or u.query or u.fragment or origin_of(o) != o.rstrip("/"):
+        try:
+            port_ok = u.port is None or 1 <= u.port <= 65535
+        except ValueError:
+            port_ok = False
+        if u.scheme != "https" or not u.hostname or u.username is not None or u.password is not None \
+                or "@" in u.netloc or not port_ok or u.path not in ("", "/") or u.query or u.fragment \
+                or origin_of(o) != o.rstrip("/"):
             raise Fail(f"--clear-origin must be an https origin like https://accounts.example.com, got {o!r}")
         clear_origins.append(origin_of(o))
     if not clear_origins:
@@ -266,16 +375,20 @@ def verify(c, sid, keep, sw_origins, clear_origins):
                  if b["usage"] and (types is None or b["storageType"] in types)}
         if usage:
             storage_left.setdefault(o, {}).update(usage)
+    cookies_left = sorted(cookie_label(ck) for ck in cookie_hits(all_cookies(c), clear_origins))
     bad = target_problems(c, keep)
     fields = dict(service_workers_left=sorted(r["scopeURL"] for r in sw_left),
-                  storage_left=storage_left, unexpected_targets=bad)
-    return fields, not (sw_left or storage_left or bad)
+                  storage_left=storage_left, cookies_left=cookies_left, unexpected_targets=bad)
+    return fields, not (sw_left or storage_left or cookies_left or bad)
 
 
 LIMITS = [
     "the browser process restarted on the same persistent profile; no tab was resumed",
-    "only the listed --clear-origin origins had all site data cleared; other origins keep "
-    "cookies/localStorage/IndexedDB/history/preferences (verified zero usage covers only scrubbed origins)",
+    "only the listed --clear-origin origins had all site data cleared; cookies that would be sent to their "
+    "hosts (host-only, parent-domain Domain= cookies, cookies partitioned under their sites) were deleted and "
+    "verified absent; other origins keep cookies/localStorage/IndexedDB/history/preferences",
+    "service-worker/Cache Storage bytes were verified zero only on origins that had a listed service worker; "
+    "Cache Storage on other origins (no worker, not a --clear-origin) was not cleared or checked",
     "this does not prove the whole profile is clean",
     "real-account login remains NO-GO; disposable test accounts only",
 ]
@@ -291,7 +404,7 @@ def main(argv):
     report["old_browser_pid"] = old
 
     # 1. restart the browser process
-    rc = subprocess.run(["/usr/local/bin/neo-quit", str(CDP_PORT)], timeout=20).returncode
+    rc = quit_browser()
     report["neo_quit_rc"] = rc
     try:
         wait(lambda: not os.path.exists(f"/proc/{old}"), 30, "the old browser to exit")
@@ -316,6 +429,7 @@ def main(argv):
         c.call("Storage.clearDataForOrigin", {"origin": o, "storageTypes": "service_workers,cache_storage"}, session=sid)
     for o in clear_origins:
         c.call("Storage.clearDataForOrigin", {"origin": o, "storageTypes": "all"}, session=sid)
+    report["cookies_deleted"] = delete_cookies(c, sid, clear_origins)
     c.call("Network.enable", session=sid)
     c.call("Network.clearBrowserCache", session=sid)
     c.call("Network.disable", session=sid)
@@ -327,6 +441,7 @@ def main(argv):
     report["closed_tabs"] = closed
     report["scope"] = {"service_worker_origins_cleared": sw_origins,
                        "all_site_data_cleared": clear_origins,
+                       "cookies_deleted_for_hosts_and_parent_domains": clear_origins,
                        "http_cache_cleared": True}
     c.close()
 
