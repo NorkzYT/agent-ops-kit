@@ -10,7 +10,7 @@
 #   browseros-neo.sh pause [--no-wait]
 #                               close the agent's MCP path, then drain for the pinned run budget
 #   browseros-neo.sh resume     re-check config/engine/profile against `up`, then reopen the path
-#   browseros-neo.sh handoff [--clear-origin https://ORIGIN]...
+#   browseros-neo.sh handoff --clear-origin https://ORIGIN [--clear-origin ...]
 #                               after a drained pause: restart Neo's browser, remove every
 #                               service worker/Cache Storage, clear each sign-in origin,
 #                               close all tabs, verify; the human then signs in via the viewer
@@ -357,17 +357,18 @@ cmd_pause() {
 }
 
 cmd_handoff() {  # prepare the running browser for a human sign-in; agent path must be drained
-  local a args=()
+  local a args=() origins=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --clear-origin)
         a="${2:-}"
         [[ "$a" =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$ ]] \
           || die "handoff: --clear-origin needs an https origin like https://accounts.example.com (got '${a}')"
-        args+=(--clear-origin "$a"); shift 2 ;;
+        args+=(--clear-origin "$a"); origins+=("$a"); shift 2 ;;
       *) die "handoff: unknown option $1" ;;
     esac
   done
+  (( ${#args[@]} )) || die "handoff refused: name every disposable sign-in origin with --clear-origin https://ORIGIN (site data on them is cleared). Nothing was touched."
   take_lock
   grep -qx 'state=CLOSED' "$STATE_FILE" 2>/dev/null \
     || die "handoff refused: the agent path is not drained (run 'pause' without --no-wait first). Nothing was touched."
@@ -388,8 +389,11 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
     || die "handoff FAILED (rc $rc); do NOT sign in. The browser may have been restarted; nothing was stopped or removed."
   printf 'handoff_at=%s\n' "$(date +%s)" >> "$STATE_FILE"
   log "HANDOFF-READY: browser restarted, no service worker, Cache Storage, agent tab or timer survived (verified)."
-  log "Sign in now through the viewer ('access'). Keep the agent path closed until you are done; 'resume' reopens it"
-  log "and the agent then acts with the signed-in session. docs/browseros-neo.md 'Login status' lists what this does not cover."
+  log "Scope: all site data cleared only on ${origins[*]}; service-worker/Cache Storage on their own origins; HTTP cache."
+  log "A new browser process resumed the same persistent profile (not the same tab); other origins were not cleared and the"
+  log "whole profile is not proven clean."
+  log "Real-account login is NO-GO (docs/browseros-neo.md 'Login status'): use the viewer ('access') only with a disposable"
+  log "test account on those origins. Keep the agent path closed until done; 'resume' hands that session to the agent."
 }
 
 cmd_resume() {

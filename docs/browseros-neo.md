@@ -160,7 +160,12 @@ Limits (why this is not yet GO):
   no agent input, but its own behaviour was not audited.
 - `resume` hands the signed-in session to the agent by design.
 - `--clear-origin` must name every origin the sign-in uses (IdP and app);
-  data on others is not cleared.
+  data on others is not cleared. `handoff` refuses (touching nothing) when
+  none is given, and prints the cleared scope.
+- The browser *process* restarts on the same persistent profile; no tab is
+  resumed. Zero verified usage on the scrubbed origins does not prove the
+  whole profile clean. Verification also fails if the kept `about:blank`
+  page is missing or has navigated.
 
 Until an operator accepts this evidence and these limits, the viewer is for
 watching and for disposable test accounts only.

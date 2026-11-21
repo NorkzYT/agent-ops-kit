@@ -23,8 +23,15 @@ Steps, each verified; any failure exits non-zero with a JSON report:
 3. Re-enumerate from a fresh CDP session: zero service-worker registrations,
    zero service-worker/Cache Storage bytes on those origins, zero bytes of
    any type on each --clear-origin (Storage.getUsageAndQuota), and only
-   about:blank plus the browser's own chrome://*.top-chrome UI targets.
+   about:blank plus the browser's own chrome://*.top-chrome UI targets; the
+   kept about:blank page must still exist and still be about:blank.
    Anything else fails.
+
+At least one --clear-origin is required; without it nothing is touched.
+Limits (also in the report): the same persistent profile is resumed by a new
+browser process (not the same tab); verified zero usage covers only the
+scrubbed origins and does not prove the whole profile clean. Real-account
+login stays NO-GO (docs/browseros-neo.md, 'Login status').
 
 Stdlib only (the image has python3 but no WebSocket client).
 """
@@ -207,17 +214,29 @@ def scratch_tab(c):
 
 
 def target_problems(c, keep):
+    """Every target except the kept about:blank page and allowed browser UI.
+
+    The kept target is not trusted by ID alone: it must still exist, still be
+    a page and still be about:blank, or verification fails.
+    """
     bad = []
+    kept = []
     for t in c.call("Target.getTargets")["targetInfos"]:
         if t["targetId"] == keep:
+            kept.append(t)
+            if t.get("type") != "page" or t.get("url") != "about:blank":
+                bad.append(f"kept target moved: {t.get('type')} {str(t.get('url'))[:120]}")
             continue
         if t["type"] == "browser_ui" and t["url"].startswith(ALLOWED_UI):
             continue
         bad.append(f"{t['type']} {t['url'][:120]}")
+    if not kept:
+        bad.append("kept about:blank target missing")
     return bad
 
 
-def main(argv):
+def parse_args(argv):
+    """--clear-origin ORIGIN, at least once; refused before anything is touched."""
     clear_origins = []
     it = iter(argv)
     for a in it:
@@ -228,9 +247,46 @@ def main(argv):
         if u.scheme != "https" or not u.hostname or u.path not in ("", "/") or u.query or u.fragment or origin_of(o) != o.rstrip("/"):
             raise Fail(f"--clear-origin must be an https origin like https://accounts.example.com, got {o!r}")
         clear_origins.append(origin_of(o))
+    if not clear_origins:
+        raise Fail("at least one explicit --clear-origin is required (the disposable sign-in origins); nothing was touched")
+    return clear_origins
+
+
+def verify(c, sid, keep, sw_origins, clear_origins):
+    """Re-enumerate from a fresh session; returns the report fields and ok."""
+    sw_left = registrations(c, sid)
+    # Storage.getUsageAndQuota needs no frame on the origin (CacheStorage.*
+    # does, and loading the origin would run its code again). Every type left
+    # non-zero on a scrubbed origin fails the handoff.
+    storage_left = {}
+    for o, types in [(o, ("service_workers", "cache_storage")) for o in sw_origins] + \
+                    [(o, None) for o in clear_origins]:
+        u = c.call("Storage.getUsageAndQuota", {"origin": o}, session=sid)
+        usage = {b["storageType"]: b["usage"] for b in u.get("usageBreakdown", [])
+                 if b["usage"] and (types is None or b["storageType"] in types)}
+        if usage:
+            storage_left.setdefault(o, {}).update(usage)
+    bad = target_problems(c, keep)
+    fields = dict(service_workers_left=sorted(r["scopeURL"] for r in sw_left),
+                  storage_left=storage_left, unexpected_targets=bad)
+    return fields, not (sw_left or storage_left or bad)
+
+
+LIMITS = [
+    "the browser process restarted on the same persistent profile; no tab was resumed",
+    "only the listed --clear-origin origins had all site data cleared; other origins keep "
+    "cookies/localStorage/IndexedDB/history/preferences (verified zero usage covers only scrubbed origins)",
+    "this does not prove the whole profile is clean",
+    "real-account login remains NO-GO; disposable test accounts only",
+]
+
+
+def main(argv):
+    clear_origins = parse_args(argv)
 
     report = REPORT
     report["clear_origins"] = clear_origins
+    report["limits"] = LIMITS
     old = one_browser_pid()
     report["old_browser_pid"] = old
 
@@ -269,6 +325,9 @@ def main(argv):
             c.call("Target.closeTarget", {"targetId": t["targetId"]})
             closed.append(t["url"][:120])
     report["closed_tabs"] = closed
+    report["scope"] = {"service_worker_origins_cleared": sw_origins,
+                       "all_site_data_cleared": clear_origins,
+                       "http_cache_cleared": True}
     c.close()
 
     # 3. verify from a fresh connection
@@ -277,23 +336,10 @@ def main(argv):
         raise Fail("the browser restarted again during the scrub")
     c = CDP()
     sid = c.call("Target.attachToTarget", {"targetId": keep, "flatten": True})["sessionId"]
-    left = registrations(c, sid)
-    # Storage.getUsageAndQuota needs no frame on the origin (CacheStorage.*
-    # does, and loading the origin would run its code again). Every type left
-    # non-zero on a scrubbed origin fails the handoff.
-    caches = {}
-    for o, types in [(o, ("service_workers", "cache_storage")) for o in sw_origins] + \
-                    [(o, None) for o in clear_origins]:
-        u = c.call("Storage.getUsageAndQuota", {"origin": o}, session=sid)
-        left = {b["storageType"]: b["usage"] for b in u.get("usageBreakdown", [])
-                if b["usage"] and (types is None or b["storageType"] in types)}
-        if left:
-            caches[o] = left
-    bad = target_problems(c, keep)
+    fields, ok = verify(c, sid, keep, sw_origins, clear_origins)
     c.close()
-    report.update(service_workers_left=[r["scopeURL"] for r in left], storage_left=caches,
-                  unexpected_targets=bad)
-    if left or caches or bad:
+    report.update(fields)
+    if not ok:
         raise Fail("scrub did not verify")
     report["result"] = "HANDOFF-READY"
     return report
