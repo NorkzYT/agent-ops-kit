@@ -46,7 +46,7 @@ else
     [[ -n "$label" ]] || continue
     python3 -I - "$cfg" "$tmp/mut.json" "$expr" <<'EOF'
 import json, sys
-c = json.load(open(sys.argv[1])); n = c["services"]["neo"]; g = c["services"]["mcp-gate"]
+c = json.load(open(sys.argv[1])); n = c["services"]["neo"]; g = c["services"]["mcp-gate"]; v = c["services"]["viewer"]
 exec(sys.argv[3])
 json.dump(c, open(sys.argv[2], "w"))
 EOF
@@ -75,7 +75,25 @@ host API TCP|n["environment"]["CLAW_HOST_TCP"] = "0.0.0.0:9300"
 extra NEO_ARGS|n["environment"]["NEO_ARGS"] = "--remote-debugging-address=0.0.0.0"
 docker socket mount|n["volumes"].append({"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"})
 other data folder|n["volumes"][0]["source"] = "/tmp/elsewhere"
-extra service|c["services"]["viewer"] = dict(g)
+extra service|c["services"]["extra"] = dict(g)
+viewer service removed|c["services"].pop("viewer")
+neo publishes its unchecked websockify 6080|n["ports"][0]["target"] = 6080
+neo publishes 6080 next to the viewer|n["ports"].append({"host_ip": "127.0.0.1", "target": 6080, "published": "16081", "protocol": "tcp"})
+viewer without the Origin plugin|v["entrypoint"] = [a for a in v["entrypoint"] if a not in ("--auth-plugin", "websockify.auth_plugins.ExpectOrigin")]
+viewer accepts another Origin|v["entrypoint"][v["entrypoint"].index("--auth-source") + 1] = "http://127.0.0.1:16080 https://evil.example"
+viewer accepts localhost Origin|v["entrypoint"][v["entrypoint"].index("--auth-source") + 1] = "http://localhost:16080"
+viewer Origin on another port|v["entrypoint"][v["entrypoint"].index("--auth-source") + 1] = "http://127.0.0.1:16081"
+viewer web_auth/extra flag|v["entrypoint"].insert(4, "--verbose")
+viewer target changed|v["entrypoint"][-1] = "neo:6080"
+viewer command added|v["command"] = ["--record", "/tmp/r"]
+viewer own network|v.pop("network_mode"); v["networks"] = {"neo": None}
+viewer host network|v["network_mode"] = "host"
+viewer publishes a port|v["ports"] = [{"host_ip": "127.0.0.1", "target": 6081, "published": "16082", "protocol": "tcp"}]
+viewer as root|v["user"] = "0:0"
+viewer writable root|v["read_only"] = False
+viewer capability|v["cap_add"] = ["NET_RAW"]
+viewer mounts the profile|v["volumes"] = [dict(n["volumes"][0])]
+viewer depends_on removed|v.pop("depends_on")
 gate writable root|g["read_only"] = False
 gate as root|g["user"] = "0:0"
 gate as root:root|g["user"] = "root:root"
@@ -107,7 +125,19 @@ unknown env var|n["environment"]["NEO_EXTRA"] = "1"
 PUID root|n["environment"]["PUID"] = "0"
 restart always|n["restart"] = "always"
 EOF
+  for rp in 5900 6080 6081 9010 9011; do
+    python3 -I "$CHECK" --data "$data" --image "$IMAGE" --compose-dir "$ROOT/docker/browseros-neo" \
+      --project bneo-test --vnc-port "$rp" --mcp-port 19010 < "$cfg" 2>/dev/null \
+      && no "refuses: viewer port $rp (listens inside Neo)" || ok "refuses: viewer port $rp (listens inside Neo)"
+  done
 fi
+
+# --- no automatic destructive Compose operations in the wrapper -------------
+if grep -nE -- '--force-recreate|--renew-anon-volumes|compose (rm|kill)\b' "$WRAP"; then no "wrapper has no --force-recreate/rm/kill"
+else ok "wrapper has no --force-recreate/rm/kill"; fi
+[[ "$(grep -cE 'compose (down|stop)\b' "$WRAP")" == 2 ]] && grep -qE '^  compose stop -t 2 mcp-gate ' "$WRAP" \
+  && grep -qE '^  compose down --remove-orphans$' "$WRAP" \
+  && ok "only two stop/down call sites: pause's gate stop and approved down" || no "unexpected stop/down call sites"
 
 # --- wrapper fail-closed, stub docker -------------------------------------
 stub="$tmp/bin/docker"; mkdir -p "$tmp/bin"
@@ -213,7 +243,7 @@ EOF
 # config` goes to the real CLI. A fake `sleep` records the drain length and
 # can run a hook mid-drain. No real container is created or touched.
 if [[ -n "$REAL_DOCKER" ]] && docker compose version >/dev/null 2>&1; then
-fk="$tmp/fake"; mkdir -p "$fk/run" "$fk/bin"
+fk="$tmp/fake"; mkdir -p "$fk/run" "$fk/exist" "$fk/bin"
 read -r VNC MCP < <(python3 -I -c 'import socket
 a=[socket.socket() for _ in range(2)]
 [s.bind(("127.0.0.1",0)) for s in a]; print(*[s.getsockname()[1] for s in a])')
@@ -223,11 +253,12 @@ cat > "$fk/bin/docker" <<EOF
 FK="$fk"; REAL="$REAL_DOCKER"; IMAGE="$IMAGE"; CDIR="$ROOT/docker/browseros-neo"
 EOF
 cat >> "$fk/bin/docker" <<'EOF'
-echo "$*" >> "$FK/calls"
+echo "$*" >> "$FK/calls"; echo "$*" >> "$FK/calls.all"
 P="${BROWSEROS_NEO_PROJECT:-browseros-neo}"
 running() { [[ -e "$FK/run/$1" ]]; }
+exists() { [[ -e "$FK/exist/$1" ]]; }
 start() {
-  : > "$FK/run/$1"
+  : > "$FK/run/$1"; : > "$FK/exist/$1"
   if [[ "$1" == mcp-gate && -z "${FAKE_GATE_NOLISTEN:-}" ]]; then
     timeout 120 python3 -I -c 'import socket,sys
 s=socket.create_server(("127.0.0.1", int(sys.argv[1]))); open(sys.argv[2],"w").write("up")
@@ -263,8 +294,11 @@ case "$1" in
       svc="${id#"$P"-}"; svc="${svc%-1}"
       case "$fmt" in
         *NetworkSettings.Ports*)
-          if [[ "$svc" == neo ]]; then echo "neo 6080/tcp=${FAKE_NEO_BIND:-127.0.0.1}:$BROWSEROS_NEO_VNC_PORT"
-          else echo "mcp-gate 9010/tcp=127.0.0.1:$BROWSEROS_NEO_MCP_PORT"; fi ;;
+          case "$svc" in
+            neo) echo "neo 6081/tcp=${FAKE_NEO_BIND:-127.0.0.1}:$BROWSEROS_NEO_VNC_PORT" ;;
+            viewer) echo "viewer" ;;
+            *) echo "mcp-gate 9010/tcp=127.0.0.1:$BROWSEROS_NEO_MCP_PORT" ;;
+          esac ;;
         *Config.Image*) echo "${FAKE_NEO_IMAGE:-$IMAGE}|/data=${FAKE_NEO_DATA:-$BROWSEROS_NEO_DATA};/etc/neo/neo.toml=$CDIR/neo.toml;" ;;
         *) echo "/$id|$P|$BROWSEROS_NEO_DATA|$CDIR/neo.toml|" ;;
       esac
@@ -276,21 +310,21 @@ case "$1" in
     case "$sub" in
       config) exec "$REAL" "${orig[@]}" ;;
       ps)
-        q=0 status=""; svcs=()
-        while [[ $# -gt 0 ]]; do case "$1" in -q) q=1 ;; --status) status="$2"; shift ;; *) svcs+=("$1") ;; esac; shift; done
+        q=0 all=0 status=""; svcs=()
+        while [[ $# -gt 0 ]]; do case "$1" in -q) q=1 ;; -aq) q=1; all=1 ;; -a) all=1 ;; --status) status="$2"; shift ;; *) svcs+=("$1") ;; esac; shift; done
         [[ -z "${FAKE_PS_FAIL:-}" ]] || exit 1
-        (( ${#svcs[@]} )) || svcs=(neo mcp-gate)
+        (( ${#svcs[@]} )) || svcs=(neo viewer mcp-gate)
         for s in "${svcs[@]}"; do
-          if running "$s"; then (( q )) && echo "$P-$s-1" || echo "$P-$s-1 running"; fi
+          if running "$s" || { (( all )) && exists "$s"; }; then (( q )) && echo "$P-$s-1" || echo "$P-$s-1 running"; fi
         done ;;
       up)
         [[ -z "${FAKE_UP_FAIL:-}" ]] || exit 1
-        for a in "$@"; do case "$a" in neo|mcp-gate) running "$a" || start "$a" ;; esac; done ;;
+        for a in "$@"; do case "$a" in neo|viewer|mcp-gate) running "$a" || start "$a" ;; esac; done ;;
       stop)
         svcs=(); while [[ $# -gt 0 ]]; do case "$1" in -t) shift ;; *) svcs+=("$1") ;; esac; shift; done
-        (( ${#svcs[@]} )) || svcs=(mcp-gate neo)
+        (( ${#svcs[@]} )) || svcs=(mcp-gate viewer neo)
         for s in "${svcs[@]}"; do stop "$s"; done ;;
-      down) stop mcp-gate; stop neo ;;
+      down) for s in mcp-gate viewer neo; do stop "$s"; rm -f "$FK/exist/$s"; done ;;
       pull) exit 0 ;;
       *) echo "fake compose: unexpected $sub" >&2; exit 99 ;;
     esac ;;
@@ -307,6 +341,7 @@ chmod +x "$fk/bin/docker" "$fk/bin/sleep"
 fdata="$tmp/life/data"; mkdir -p "$fdata"; chmod 700 "$fdata"
 fstate="$tmp/life/state-bneo-life"
 life() {  # life [VAR=val ...] cmd [args]; bounded, output in $fk/out, rc returned
+  echo "== $*" >> "$fk/calls.all"
   env PATH="$fk/bin:$PATH" BROWSEROS_NEO_DOCKER="$fk/bin/docker" BROWSEROS_NEO_DATA="$fdata" \
     BROWSEROS_NEO_PROJECT=bneo-life BROWSEROS_NEO_VNC_PORT="$VNC" BROWSEROS_NEO_MCP_PORT="$MCP" \
     timeout 60 "$@" > "$fk/out" 2>&1
@@ -340,6 +375,10 @@ grep -qx 'state=DRAINING' "$W" && ok "--no-wait records DRAINING" || no "--no-wa
 ! gate_listening && ok "gate port refuses after pause" || no "gate port refuses after pause"
 expect "status after --no-wait: DRAINING, not CLOSED" 0 'agent path: DRAINING' "!$UNSAFE" -- bash "$WRAP" status
 expect "up while DRAINING keeps the gate closed" 0 'stays closed' -- bash "$WRAP" up
+fake_gate_up
+expect "up refuses (does not stop) a gate running under a pause record" nz 'pause recorded .* but mcp-gate is running' -- bash "$WRAP" up
+[[ -e "$fk/run/mcp-gate" ]] && ok "  ... and left it running (no automatic stop)" || no "  ... up stopped the gate itself"
+life bash "$WRAP" pause --no-wait
 ! gate_listening && ok "gate still closed after up" || no "gate still closed after up"
 
 : > "$fk/sleeps"
@@ -394,23 +433,65 @@ mv "$fstate/manifest" "$tmp/manifest.moved"
 resume_refused "no manifest from up" 'no manifest'
 mv "$tmp/manifest.moved" "$fstate/manifest"
 
-# exposure and inspect errors fail closed and stop the viewer too
+# exposure and inspect errors fail closed WITHOUT stopping anything, and name the approved command
 resume_refused "inspect error" 'cannot inspect' FAKE_INSPECT_FAIL=1
 life bash "$fk/bin/docker" compose -p bneo-life up -d neo
 : > "$fk/calls"
-expect "resume: exposed viewer stops the whole pilot" nz 'unexpected live binding: neo 6080/tcp=0.0.0.0' -- env FAKE_NEO_BIND=0.0.0.0 bash "$WRAP" resume
-[[ -z "$(ls "$fk/run")" ]] && ok "exposed viewer: neo stopped too" || no "exposed viewer left running: $(ls "$fk/run")"
-life bash "$fk/bin/docker" compose -p bneo-life up -d neo
+expect "resume: exposed viewer refuses, says nothing was stopped, names approved down" nz \
+  'EXPOSED: unexpected live binding: neo 6081/tcp=0.0.0.0.*Nothing was stopped.*BROWSEROS_NEO_PROJECT=bneo-life .*down --approve-down' \
+  -- env FAKE_NEO_BIND=0.0.0.0 bash "$WRAP" resume
+[[ -e "$fk/run/neo" ]] && ! grep -qE ' (stop|down|rm|kill)( |$)' "$fk/calls" && ok "exposed viewer: nothing stopped automatically" || no "exposed viewer: wrapper stopped something"
 expect "status: exposed viewer reported EXPOSED" nz 'EXPOSED' -- env FAKE_NEO_BIND=0.0.0.0 bash "$WRAP" status
 expect "status: inspect error is UNKNOWN, not OPEN/CLOSED" nz 'UNKNOWN' -- env FAKE_INSPECT_FAIL=1 bash "$WRAP" status
 
-expect "resume: listener never answers -> gate stopped, record kept" nz 'does not accept connections' -- env FAKE_GATE_NOLISTEN=1 bash "$WRAP" resume
-[[ -e "$W" && ! -e "$fk/run/mcp-gate" ]] && ok "failed resume keeps the pause record and gate stopped" || no "failed resume state"
+expect "resume: listener never answers -> refuses, may be OPEN, tells operator to pause" nz 'did not accept connections.*may be OPEN.*Nothing was stopped.*pause' -- env FAKE_GATE_NOLISTEN=1 bash "$WRAP" resume
+[[ -e "$W" && -e "$fk/run/mcp-gate" ]] && ok "failed resume keeps the pause record and does not stop the gate" || no "failed resume state"
+expect "status after failed resume: INCONSISTENT, not CLOSED" nz 'INCONSISTENT' -- bash "$WRAP" status
+expect "operator pause closes it again" 0 'DRAINING, not drained' -- bash "$WRAP" pause --no-wait
 expect "resume: all checks pass -> OPEN, record removed" 0 'agent path OPEN' -- bash "$WRAP" resume
 [[ ! -e "$W" ]] && gate_listening && ok "resume removed the pause record, gate listening" || no "resume final state"
 expect "status after resume: OPEN" 0 'agent path: OPEN' -- bash "$WRAP" status
-expect "down" 0 'stopped; profile kept' -- bash "$WRAP" down
+# up with existing containers never recreates: drift refuses before any compose up
+cp "$fstate/manifest" "$tmp/manifest.bak2"
+sed -i 's/^gate_sha=.*/gate_sha=0000/' "$fstate/manifest"
+: > "$fk/calls"
+expect "up refuses mcp-gate.py drift with existing containers (no recreate)" nz 'up refused: gate_sha changed.*never recreated automatically.*down --approve-down' -- bash "$WRAP" up
+! grep -qE 'compose.* (up|stop|down) ' "$fk/calls" && ok "  ... and touched no container" || no "  ... drifted up touched containers"
+cp "$tmp/manifest.bak2" "$fstate/manifest"
+: > "$fk/calls"
+expect "down without approval is refused and does nothing" nz 'Nothing was done.*down --approve-down' -- bash "$WRAP" down
+! grep -q 'compose' "$fk/calls" && [[ -e "$fk/run/neo" ]] && ok "  ... no compose call, neo still running" || no "  ... unapproved down acted"
+expect "down --approve-down" 0 'stopped; profile kept' -- bash "$WRAP" down --approve-down
 expect "status after down without pause: CLOSED but not drained" 0 'CLOSED but not drained' -- bash "$WRAP" status
+# Every engine call the wrapper made in this whole run, grouped by wrapper command:
+# no --force-recreate anywhere, compose stop only under `pause` (mcp-gate only),
+# compose down only under `down --approve-down`, every compose up uses --no-recreate.
+python3 -I - "$fk/calls.all" <<'PYEOF' && ok "lifecycle audit: no force-recreate; stop only in pause (gate); down only approved; up --no-recreate" || no "lifecycle audit"
+import re, sys
+cmd, bad = "", []
+for line in open(sys.argv[1]):
+    line = line.rstrip("\n")
+    if line.startswith("== "):
+        cmd = line[3:]; continue
+    wrapper = "browseros-neo.sh" in cmd
+    if not wrapper or not line.startswith("compose "):
+        continue
+    sub = re.sub(r"^compose (?:(?:--env-file|-p|--project-directory|-f) \S+ )*", "", line)
+    if "--force-recreate" in line:
+        bad.append((cmd, line))
+    verb = sub.split()[0]
+    if verb == "stop" and (" pause" not in cmd or sub.split()[-1] != "mcp-gate"):
+        bad.append((cmd, line))
+    if verb == "down" and "--approve-down" not in cmd:
+        bad.append((cmd, line))
+    if verb == "up" and "--no-recreate" not in sub and "FAKE_SLEEP_HOOK" not in cmd:  # the hook is the test's raw bypass
+        bad.append((cmd, line))
+    if verb in ("rm", "kill", "restart"):
+        bad.append((cmd, line))
+for b in bad:
+    print("   ", b)
+sys.exit(1 if bad else 0)
+PYEOF
 [[ -f "$fk/gate.pid" ]] && kill "$(cat "$fk/gate.pid")" 2>/dev/null
 fi
 

@@ -10,7 +10,14 @@
 #   - never publishes Neo's 9010 itself; Hermes reaches it through `mcp-gate`,
 #     a plain forwarder that `browseros-neo.sh pause` stops to cut the agent off
 #     while the human keeps the viewer;
-#   - keeps the data folder out of any other container.
+#   - keeps the data folder out of any other container;
+#   - publishes the viewer through `viewer`, a second websockify (from the
+#     same pinned image) that refuses a WebSocket whose Origin is not exactly
+#     http://127.0.0.1:<viewer port>. The image's own websockify on 6080 has
+#     no Origin check (websockify 0.10.0, no --auth-plugin), so a web page in
+#     the operator's browser could otherwise open ws://127.0.0.1:<port> and
+#     drive the desktop. 6080 still listens inside Neo's network namespace;
+#     docs/browseros-neo.md lists what this does not cover.
 name: browseros-neo
 
 x-neo-image: &neo-image "ghcr.io/browseros-ai/neo:0.52.1.2-d32f6ab@sha256:9f6302905f4db0d7d58a13e00b74cfc5c4448c5a7517a36700581a48e102d72e"
@@ -23,7 +30,9 @@ services:
     shm_size: 1g
     stop_grace_period: 20s
     ports:
-      - "127.0.0.1:${BROWSEROS_NEO_VNC_PORT:-16080}:6080"
+      # The viewer port belongs to `viewer` (network_mode service:neo), which
+      # listens on 6081 in Neo's namespace; Neo's own 6080 is not published.
+      - "127.0.0.1:${BROWSEROS_NEO_VNC_PORT:-16080}:6081"
     volumes:
       - "${BROWSEROS_NEO_DATA:?set by scripts/browseros-neo.sh}:/data"
       - "./neo.toml:/etc/neo/neo.toml:ro"
@@ -68,6 +77,39 @@ services:
       neo:
         condition: service_healthy
     networks: [neo]
+    restart: "no"
+
+  viewer:
+    image: *neo-image
+    # websockify 0.10.0's ExpectOrigin plugin rejects the WebSocket upgrade
+    # (403) unless Origin equals one listed source. Static noVNC files are
+    # still served to anyone who reaches the port; they hold no secrets.
+    entrypoint:
+      - /usr/bin/python3
+      - -I
+      - -m
+      - websockify
+      - --web
+      - /usr/share/novnc
+      - --auth-plugin
+      - websockify.auth_plugins.ExpectOrigin
+      - --auth-source
+      - "http://127.0.0.1:${BROWSEROS_NEO_VNC_PORT:-16080}"
+      - "6081"
+      - localhost:5900
+    user: "65534:65534"
+    read_only: true
+    network_mode: "service:neo"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    pids_limit: 64
+    mem_limit: 256m
+    healthcheck:
+      disable: true
+    depends_on:
+      neo:
+        condition: service_healthy
     restart: "no"
 
 networks:

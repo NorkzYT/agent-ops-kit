@@ -3,7 +3,9 @@
 #
 #   browseros-neo.sh check      render the Compose config and refuse anything unsafe
 #   browseros-neo.sh up         check, start Neo, then open the agent path (unless paused)
-#   browseros-neo.sh down       stop and remove the containers (the profile folder stays)
+#   browseros-neo.sh down --approve-down
+#                               stop and remove the containers (the profile folder stays);
+#                               refused without the flag
 #   browseros-neo.sh status     reconcile the pause record with the live gate, port and bindings
 #   browseros-neo.sh pause [--no-wait]
 #                               close the agent's MCP path, then drain for the pinned run budget
@@ -16,6 +18,9 @@
 # ~/.local/share/agent-ops-kit/browseros-neo/data), BROWSEROS_NEO_VNC_PORT
 # (16080), BROWSEROS_NEO_MCP_PORT (19010), BROWSEROS_NEO_PROJECT (browseros-neo).
 # up/down/pause/resume hold one lifecycle lock per profile; a second one fails.
+# Only `down --approve-down` removes containers and only `pause` stops one (the
+# mcp-gate). No other command stops, removes or recreates a container: when a
+# check fails they refuse and print the approved command to run.
 # docs/browseros-neo.md explains what pause does and does not stop.
 set -euo pipefail
 
@@ -156,6 +161,10 @@ manifest_get() {  # manifest_get KEY -> value; fails when the manifest or key is
   local v; v="$(sed -n "s/^$1=//p" "$MANIFEST")"; [[ -n "$v" ]] || return 1; echo "$v"
 }
 
+# The exact operator command for removing the pilot; printed, never run.
+APPROVED_DOWN="scripts/browseros-neo.sh down --approve-down"
+[[ "$PROJECT" == browseros-neo ]] || APPROVED_DOWN="BROWSEROS_NEO_PROJECT=$PROJECT BROWSEROS_NEO_DATA=$DATA $APPROVED_DOWN"
+
 # --- live state -------------------------------------------------------------
 # Every reader fails (non-zero) when Docker cannot answer; callers treat that
 # as "unknown", never as "closed" or "loopback".
@@ -182,28 +191,25 @@ binding_problems() {  # prints every unexpected live binding; returns 2 when Doc
     || return 2
   local svc b rest
   while read -r svc rest; do
-    case "$svc" in neo|mcp-gate) ;; *) echo "unexpected container ${svc:-<unlabelled>}"; continue ;; esac
+    case "$svc" in neo|mcp-gate|viewer) ;; *) echo "unexpected container ${svc:-<unlabelled>}"; continue ;; esac
     for b in $rest; do
       case "$svc $b" in
-        "neo 6080/tcp=127.0.0.1:$VNC_PORT"|"mcp-gate 9010/tcp=127.0.0.1:$MCP_PORT") ;;
+        "neo 6081/tcp=127.0.0.1:$VNC_PORT"|"mcp-gate 9010/tcp=127.0.0.1:$MCP_PORT") ;;
         *) echo "$svc $b" ;;
       esac
     done
   done <<<"$rows"
 }
 
-stop_all_or_die() {  # stop every pilot container and prove it, then fail with $1
-  compose stop -t 5 >/dev/null 2>&1 || true
-  local left; left="$(running_ids 2>/dev/null)" || die "$1; stopping the pilot could not be verified, run 'down' now"
-  [[ -z "$left" ]] || die "$1; pilot containers still running after stop, run 'down' now"
-  die "$1; every pilot container (viewer included) was stopped"
+refuse_running() {  # fail closed WITHOUT stopping anything: say so, and print the approved command
+  die "$1. Nothing was stopped: the pilot may still be running and reachable as reported. Do not use the viewer or type secrets. To remove it (operator approval): $APPROVED_DOWN"
 }
 
-enforce_bindings() {  # up/resume: any unexpected binding or unanswerable inspect stops the whole pilot
+enforce_bindings() {  # up/resume: any unexpected binding or unanswerable inspect refuses (no auto-stop)
   local bad rc=0
   bad="$(binding_problems)" || rc=$?
-  (( rc == 0 )) || stop_all_or_die "cannot inspect the pilot's live bindings (fail closed)"
-  [[ -z "$bad" ]] || stop_all_or_die "unexpected live binding: $(tr '\n' ' ' <<<"$bad")"
+  (( rc == 0 )) || refuse_running "cannot inspect the pilot's live bindings (fail closed)"
+  [[ -z "$bad" ]] || refuse_running "EXPOSED: unexpected live binding: $(tr '\n' ' ' <<<"$bad")"
 }
 
 assert_gate_closed() {  # the agent path is verifiably closed right now, or die
@@ -215,8 +221,20 @@ assert_gate_closed() {  # the agent path is verifiably closed right now, or die
   [[ -z "$foreign" ]] || die "${1:-}another pilot gate is running: $foreign (wrong BROWSEROS_NEO_* environment?)"
 }
 
-stop_gate() {
+stop_gate() {  # only `pause`, an explicit operator command, calls this
   compose stop -t 2 mcp-gate >/dev/null || die "stopping mcp-gate failed; agent path may still be OPEN"
+}
+
+manifest_matches_or_die() {  # $1 = what is refused; every recorded key must equal the current check
+  local fresh="To start clean (operator approval): $APPROVED_DOWN, then 'up'"
+  [[ -f "$MANIFEST" ]] || die "$1 refused: no manifest from 'up' for this profile. Containers were not touched. $fresh"
+  local k want got now
+  now="$(manifest_body)"
+  for k in project data vnc_port mcp_port image engine_id config_sha neo_toml_sha gate_sha wall_timeout; do
+    want="$(manifest_get "$k")" || die "$1 refused: manifest lacks $k. Containers were not touched. $fresh"
+    got="$(sed -n "s/^$k=//p" <<<"$now")"
+    [[ "$got" == "$want" ]] || die "$1 refused: $k changed since 'up' ($want -> $got); existing containers are never recreated automatically. $fresh"
+  done
 }
 
 verify_running_neo() {  # the running Neo is the pinned image on this exact profile folder
@@ -225,7 +243,7 @@ verify_running_neo() {  # the running Neo is the pinned image on this exact prof
   [[ -n "$id" && "$id" != *$'\n'* ]] || die "neo is not running (exactly one container expected); use 'up'"
   row="$("$DOCKER" inspect "$id" --format '{{.Config.Image}}|{{range .Mounts}}{{.Destination}}={{.Source}};{{end}}')" \
     || die "cannot inspect the running neo container"
-  [[ "${row%%|*}" == "$IMAGE" ]] || die "running neo uses image ${row%%|*}, not the pinned image; run 'down' then 'up'"
+  [[ "${row%%|*}" == "$IMAGE" ]] || die "running neo uses image ${row%%|*}, not the pinned image. Nothing was stopped. To replace it (operator approval): $APPROVED_DOWN, then 'up'"
   [[ ";${row#*|}" == *";/data=$DATA;"* ]] || die "running neo does not mount $DATA at /data; wrong BROWSEROS_NEO_DATA?"
 }
 
@@ -235,22 +253,25 @@ cmd_up() {
   take_lock
   ( umask 077; mkdir -p "$DATA" )
   cmd_check
-  # A file bind mount pins the inode Neo started with, and Compose does not
-  # notice a changed neo.toml; recreate Neo whenever the pinned budget file
-  # differs from what the last `up` recorded, so the manifest matches the
-  # running process.
-  local recreate=() ids
-  ids="$(running_ids neo)" || die "cannot query neo"
-  if [[ -n "$ids" && "$(manifest_get neo_toml_sha || true)" != "$(sha "$COMPOSE_DIR/neo.toml")" ]]; then
-    recreate=(--force-recreate)
-    log "neo.toml differs from the running Neo's record; recreating neo"
+  # Never recreate. A file bind mount pins the inode a container started with
+  # and Compose does not notice a changed neo.toml or mcp-gate.py, so existing
+  # containers (running or stopped) are reused only when everything `up`
+  # recorded still matches; otherwise `up` refuses and names the approved
+  # command. --no-recreate also stops Compose replacing a container on its
+  # own when the config hash changed.
+  local ids
+  ids="$(compose ps -aq)" || die "cannot list the pilot's containers"
+  if [[ -n "$ids" ]]; then
+    manifest_matches_or_die "up"
+  else
+    manifest_body > "$MANIFEST.tmp" && mv -f "$MANIFEST.tmp" "$MANIFEST"
   fi
-  manifest_body > "$MANIFEST.tmp" && mv -f "$MANIFEST.tmp" "$MANIFEST"
+  # Paused: the gate must already be stopped; `up` never stops it for you.
+  [[ ! -e "$STATE_FILE" ]] || assert_gate_closed "pause recorded in $STATE_FILE but "
   "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 || compose pull neo
-  compose up -d "${recreate[@]}" --wait --wait-timeout "${BROWSEROS_NEO_WAIT:-240}" neo
+  compose up -d --no-recreate --wait --wait-timeout "${BROWSEROS_NEO_WAIT:-240}" neo viewer
   enforce_bindings
   if [[ -e "$STATE_FILE" ]]; then
-    stop_gate
     assert_gate_closed
     log "agent path stays closed (pause recorded in $STATE_FILE); run 'resume' to reopen it"
   else
@@ -259,9 +280,19 @@ cmd_up() {
   report_status || true
 }
 
-open_gate() {  # start the gate and prove the path is open, or close it again and fail
-  # Always a fresh gate container, so it runs the current, checked mcp-gate.py.
-  compose up -d --no-deps --force-recreate mcp-gate >/dev/null || { stop_gate; die "starting mcp-gate failed; agent path left closed"; }
+gate_failed() {  # the gate did not come up cleanly; report the real state, stop nothing
+  local rc=0
+  gate_running || rc=$?
+  if (( rc == 1 )) && ! port_open "$MCP_PORT"; then
+    die "$1; mcp-gate is not running and 127.0.0.1:$MCP_PORT refuses connections (agent path closed)"
+  fi
+  die "$1; mcp-gate is $([[ $rc == 0 ]] && echo running || echo 'in an unknown state') and the agent path may be OPEN. Nothing was stopped. Close it with: scripts/browseros-neo.sh pause (stops mcp-gate only)"
+}
+
+open_gate() {  # start the gate and prove the path is open; on failure refuse without stopping anything
+  # Callers proved mcp-gate.py's hash equals the manifest; an existing gate
+  # container is started as is, never recreated.
+  compose up -d --no-deps --no-recreate mcp-gate >/dev/null || gate_failed "starting mcp-gate failed"
   enforce_bindings
   local _
   for _ in $(seq 1 20); do
@@ -272,12 +303,11 @@ open_gate() {  # start the gate and prove the path is open, or close it again an
     fi
     sleep 0.5
   done
-  stop_gate
-  assert_gate_closed "gate did not come up; "
-  die "gate started but 127.0.0.1:$MCP_PORT does not accept connections; agent path left closed"
+  gate_failed "gate did not accept connections on 127.0.0.1:$MCP_PORT within 10 s"
 }
 
-cmd_down() {
+cmd_down() {  # the only command that removes containers; needs the explicit flag
+  [[ "${1:-}" == --approve-down ]] || die "down stops and removes the pilot's containers (neo, viewer, mcp-gate) and network for project $PROJECT; the profile folder stays. Nothing was done. Run it only with operator approval: $APPROVED_DOWN"
   take_lock
   compose down --remove-orphans
   log "stopped; profile kept in $DATA"
@@ -299,7 +329,7 @@ cmd_pause() {
   stop_gate
   assert_gate_closed
   log "agent MCP path CLOSED: 127.0.0.1:$MCP_PORT refuses connections, mcp-gate stopped"
-  [[ -z "$drift" ]] || die "DRAINING with unknown budget: $drift. Do not type secrets; run 'down' then 'up' to pin it again"
+  [[ -z "$drift" ]] || die "DRAINING with unknown budget: $drift. Do not type secrets. To pin it again (operator approval): $APPROVED_DOWN, then 'up'"
   if (( nowait )); then
     log "DRAINING, not drained: a browser script already in flight may act for up to $((w + 5)) s more."
     log "Do NOT type secrets yet. Run 'pause' again (without --no-wait) to finish the drain."
@@ -309,13 +339,14 @@ cmd_pause() {
   sleep "$((w + 5))"
   # Re-verify everything after the wait; state observed before it is stale.
   [[ "$(sha "$COMPOSE_DIR/neo.toml")" == "$(manifest_get neo_toml_sha)" ]] \
-    || die "neo.toml changed during the drain; state stays DRAINING; run 'down' then 'up'"
+    || die "neo.toml changed during the drain; state stays DRAINING. To pin it again (operator approval): $APPROVED_DOWN, then 'up'"
   grep -qx 'state=DRAINING' "$STATE_FILE" 2>/dev/null || die "pause record changed during the drain; state unknown"
   assert_gate_closed "agent path reopened during the drain: "
   printf 'state=CLOSED\nclosed_at=%s\n' "$(date +%s)" > "$STATE_FILE"
   log "CLOSED: the agent path has stayed closed for the pinned run budget."
-  log "This is not proof the browser is quiet: page timers, injected scripts, open tabs or settings left"
-  log "by earlier tool calls can outlive the run budget. Check the page in the viewer before typing secrets."
+  log "This is not proof the browser is quiet: page timers, injected scripts, service workers, open tabs"
+  log "or settings left by earlier tool calls can outlive the run budget, and looking at the page cannot"
+  log "show them. Signing in through this pilot is NO-GO (docs/browseros-neo.md, 'Login status')."
 }
 
 cmd_resume() {
@@ -323,14 +354,7 @@ cmd_resume() {
   # Everything `up` checked is re-checked, and must equal what `up` started,
   # BEFORE the gate is started.
   cmd_check
-  [[ -f "$MANIFEST" ]] || die "resume refused: no manifest from 'up' for this profile; use 'up'"
-  local k want got now
-  now="$(manifest_body)"
-  for k in project data vnc_port mcp_port image engine_id config_sha neo_toml_sha gate_sha wall_timeout; do
-    want="$(manifest_get "$k")" || die "resume refused: manifest lacks $k; use 'down' then 'up'"
-    got="$(sed -n "s/^$k=//p" <<<"$now")"
-    [[ "$got" == "$want" ]] || die "resume refused: $k changed since 'up' ($want -> $got); use 'down' then 'up'"
-  done
+  manifest_matches_or_die "resume"
   verify_running_neo
   enforce_bindings
   open_gate
@@ -341,7 +365,7 @@ report_status() {  # read-only reconciliation; non-zero when unsafe or unknown
   local bad rc=0 grc=0 state open=0 foreign foreign_msg
   bad="$(binding_problems)" || rc=$?
   (( rc == 0 )) || { log "agent path: UNKNOWN (cannot inspect live bindings)"; return 1; }
-  [[ -z "$bad" ]] || { log "EXPOSED: unexpected live binding: $(tr '\n' ' ' <<<"$bad")— run 'down' now"; return 1; }
+  [[ -z "$bad" ]] || { log "EXPOSED: unexpected live binding: $(tr '\n' ' ' <<<"$bad")— remove the pilot now (operator approval): $APPROVED_DOWN"; return 1; }
   foreign="$(foreign_gates)" || { log "agent path: UNKNOWN (cannot list pilot gates)"; return 1; }
   [[ -z "$foreign" ]] && foreign_msg="" || foreign_msg="another pilot gate is running: $foreign"
   gate_running || grc=$?
@@ -374,12 +398,14 @@ From your own machine, tunnel it over SSH (SSH is the authentication):
 
   ssh -N -L ${VNC_PORT}:127.0.0.1:${VNC_PORT} <you>@<this-host>
 
-then open http://127.0.0.1:${VNC_PORT}/ locally. Before signing in to anything:
+then open http://127.0.0.1:${VNC_PORT}/ locally: the same local port, and
+127.0.0.1, not localhost. The viewer accepts a WebSocket only with Origin
+http://127.0.0.1:${VNC_PORT}; any other local port or host name is refused.
 
-  scripts/browseros-neo.sh pause     # close the agent path, drain the pinned run budget
-  scripts/browseros-neo.sh status    # must say CLOSED; check the page yourself too
-  ...sign in, finish MFA, close the tunnel...
-  scripts/browseros-neo.sh resume    # give the browser back to the agent
+LOGIN: NO-GO. Do not sign in to accounts through this pilot. The image's own
+noVNC websockify (port 6080 inside Neo) has no Origin check, so a web page the
+agent opens in Neo may be able to drive this desktop. docs/browseros-neo.md,
+"Login status", lists what would have to be verified first.
 EOF
 }
 
@@ -413,12 +439,12 @@ if cfg.get("enabled"):
 case "${1:-}" in
   check) cmd_check ;;
   up) cmd_up ;;
-  down) cmd_down ;;
+  down) shift; cmd_down "${1:-}" ;;
   status) report_status ;;
   pause) shift; cmd_pause "${1:-}" ;;
   resume) cmd_resume ;;
   access) cmd_access ;;
   hermes-snippet) cmd_hermes_snippet ;;
   hermes-commands) cmd_hermes_commands ;;
-  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
