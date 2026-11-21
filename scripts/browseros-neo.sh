@@ -491,7 +491,9 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   log "Cache Storage and other storage on origins with no listed worker were not cleared or checked."
   log "A new browser process resumed the same persistent profile (not the same tab); other origins were not cleared and the"
   log "whole profile is not proven clean."
-  log "Real-account login is NO-GO (docs/browseros-neo.md 'Login status'): use the viewer ('access') only with a disposable"
+  log "localStorage/sessionStorage on those origins were cleared but are not verified (usage does not count them)."
+  log "Real-account login is NO-GO (docs/browseros-neo.md 'Login status'; host processes can reach Neo's MCP port on its"
+  log "bridge address and drive the viewer, paused or not): use the viewer ('access') only with a disposable"
   log "test account on those origins. Keep the agent path closed until done; 'resume' hands that session to the agent."
 }
 
@@ -551,10 +553,12 @@ then open http://127.0.0.1:${VNC_PORT}/ locally: the same local port, and
 127.0.0.1, not localhost. The viewer accepts a WebSocket only with Origin
 http://127.0.0.1:${VNC_PORT}; any other local port or host name is refused.
 
-LOGIN: only after 'pause' (full drain) and then 'handoff' reports
-HANDOFF-READY, and only with the limits in docs/browseros-neo.md, "Login
-status". Neo's own 6080 refuses every WebSocket and pages cannot reach Neo's
-loopback ports (managed policy); the viewer is the only way in.
+LOGIN: real accounts are NO-GO (docs/browseros-neo.md, "Login status"). Host
+processes, including an agent's terminal, can reach Neo's MCP port on its
+bridge address and drive this viewer with a forged Origin, paused or not.
+Disposable test accounts only, after 'pause' (full drain) and 'handoff'
+reports HANDOFF-READY. Neo's own 6080 refuses every WebSocket and pages cannot
+reach Neo's loopback ports (managed policy); that does not stop host processes.
 EOF
 }
 

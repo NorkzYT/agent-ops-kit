@@ -21,8 +21,13 @@ UI = {"targetId": "U1", "type": "browser_ui", "url": "chrome://omnibox-popup.top
 
 
 class FakeCDP:
-    def __init__(self, regs=(), usage=None, targets=(BLANK, UI), cookies=()):
+    # usageBreakdown types the pinned Chromium 155 returns for any origin
+    # (live probe 2026-11-20; localStorage is not among them).
+    CHROMIUM_TYPES = ("cache_storage", "file_systems", "indexeddb", "service_workers")
+
+    def __init__(self, regs=(), usage=None, targets=(BLANK, UI), cookies=(), types=CHROMIUM_TYPES):
         self.regs, self.usage, self.targets = list(regs), usage or {}, list(targets)
+        self.types = tuple(types)
         self.cookies = [dict(c) for c in cookies]
         self.events, self.calls, self.deleted = [], [], []
 
@@ -33,8 +38,9 @@ class FakeCDP:
                                 "params": {"registrations": self.regs}})
             return {}
         if method == "Storage.getUsageAndQuota":
-            return {"usageBreakdown": [{"storageType": k, "usage": v}
-                                       for k, v in self.usage.get(params["origin"], {}).items()]}
+            got = dict.fromkeys(self.types, 0)
+            got.update(self.usage.get(params["origin"], {}))
+            return {"usageBreakdown": [{"storageType": k, "usage": v} for k, v in got.items()]}
         if method == "Target.getTargets":
             return {"targetInfos": self.targets}
         if method == "Storage.getCookies":
@@ -182,6 +188,33 @@ def t_limits_honest():
     text = " ".join(getattr(h, "LIMITS", []))
     assert "same persistent profile" in text and "no tab was resumed" in text, text
     assert "not prove the whole profile" in text and "NO-GO" in text, text
+
+
+def t_breakdown_missing_type_fails_closed():
+    # An empty or partial usageBreakdown is not "zero usage".
+    fields, ok = run_verify(FakeCDP(types=()))
+    assert not ok, fields
+    assert fields.get("storage_unchecked") == {
+        "https://accounts.example.com": list(FakeCDP.CHROMIUM_TYPES),
+        "https://sw.test": ["cache_storage", "service_workers"]}, fields
+
+
+def t_breakdown_missing_indexeddb_on_clear_origin_fails():
+    fields, ok = run_verify(FakeCDP(types=("cache_storage", "file_systems", "service_workers")), sw=())
+    assert not ok and fields.get("storage_unchecked") == {"https://accounts.example.com": ["indexeddb"]}, fields
+
+
+def t_sw_origin_needs_only_sw_types():
+    fields, ok = run_verify(FakeCDP(types=("cache_storage", "service_workers", "file_systems", "indexeddb")))
+    assert ok and fields.get("storage_unchecked") == {}, fields
+
+
+def t_limits_say_localstorage_unverified_and_bridge_bypass():
+    text = " ".join(getattr(h, "LIMITS", []))
+    assert "localStorage and sessionStorage" in text and "not verified" in text, text
+    assert "bridge address" in text and "forged Origin" in text, text
+    doc = (h.__doc__ or "")
+    assert "zero bytes of\n   any type" not in doc and "localStorage/sessionStorage are not verified" in doc, doc
 
 
 # --- cookies (review P1: Domain= cookie tossed from a sibling subdomain) ---------
