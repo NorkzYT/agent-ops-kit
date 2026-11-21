@@ -486,15 +486,15 @@ windows-vm-network-off: ## Remove only the two Tailscale Serve forwarders (unrel
 
 ##@ BrowserOS neo pilot
 
-##> One persistent browser profile in Docker: you sign in over noVNC (SSH tunnel), Hermes drives it over MCP. Loopback only; see docs/browseros-neo.md.
+##> One persistent browser profile in Docker, viewed over noVNC (SSH tunnel), driven by Hermes over MCP. Loopback only; real-account login is NO-GO (docs/browseros-neo.md, Login status).
 browseros-neo-check: ## Render the pilot's Compose config and refuse anything outside its loopback-only envelope
 	@bash scripts/browseros-neo.sh check
 
 browseros-neo-up: ## Check, start BrowserOS neo, then open the agent MCP path unless paused
 	@bash scripts/browseros-neo.sh up
 
-browseros-neo-down: ## Stop the pilot containers (the profile folder is kept)
-	@bash scripts/browseros-neo.sh down
+browseros-neo-down: ## Stop and remove the pilot containers (profile kept); operator approval: APPROVE_DOWN=yes
+	@bash scripts/browseros-neo.sh down $(if $(filter yes,$(APPROVE_DOWN)),--approve-down,)
 
 browseros-neo-status: ## Reconcile the pause record with the live gate, port and bindings (OPEN/DRAINING/CLOSED/INCONSISTENT)
 	@bash scripts/browseros-neo.sh status

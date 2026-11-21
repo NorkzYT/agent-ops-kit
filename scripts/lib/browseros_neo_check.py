@@ -21,7 +21,7 @@ import os
 import re
 import sys
 
-EXPECTED_SERVICES = {"neo", "mcp-gate"}
+EXPECTED_SERVICES = {"neo", "mcp-gate", "viewer"}
 TOP_LEVEL_KEYS = {"name", "services", "networks", "x-neo-image"}
 
 NEO_KEYS = {
@@ -33,6 +33,23 @@ GATE_KEYS = {
     "image", "entrypoint", "command", "user", "read_only", "ports", "volumes", "security_opt",
     "cap_drop", "pids_limit", "mem_limit", "healthcheck", "depends_on", "networks", "restart",
 }
+VIEWER_KEYS = {
+    "image", "entrypoint", "command", "user", "read_only", "network_mode", "security_opt",
+    "cap_drop", "pids_limit", "mem_limit", "healthcheck", "depends_on", "restart",
+}
+# Ports that already listen inside Neo's network namespace. A viewer port equal
+# to one of them would let a page Neo itself loads from that port carry the
+# one Origin the viewer accepts.
+RESERVED_VIEWER_PORTS = {5900, 6080, 6081, 9010, 9011}
+
+
+def viewer_entrypoint(vnc_port):
+    """The image's websockify, refusing any WebSocket whose Origin is not the tunnel's."""
+    return ["/usr/bin/python3", "-I", "-m", "websockify", "--web", "/usr/share/novnc",
+            "--auth-plugin", "websockify.auth_plugins.ExpectOrigin",
+            "--auth-source", f"http://127.0.0.1:{vnc_port}", "6081", "localhost:5900"]
+
+
 GATE_ENTRYPOINT = ["/usr/bin/python3", "-I", "/gate/mcp-gate.py", "9010", "neo", "9010"]
 NEO_CAPS = {"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "KILL"}
 NEO_ENV_KEYS = {
@@ -90,6 +107,8 @@ def check(cfg, data, image, compose_dir, project, vnc_port, mcp_port):
         errs.append(f"expected image is not digest-pinned: {image}")
     if vnc_port == mcp_port:
         errs.append("viewer and MCP ports must differ")
+    if vnc_port in RESERVED_VIEWER_PORTS:
+        errs.append(f"viewer port {vnc_port} is a port Neo listens on internally; pick another")
 
     extra_top = set(cfg) - TOP_LEVEL_KEYS
     if extra_top:
@@ -108,13 +127,17 @@ def check(cfg, data, image, compose_dir, project, vnc_port, mcp_port):
     for name, svc in services.items():
         if name not in EXPECTED_SERVICES:
             continue
-        allowed = NEO_KEYS if name == "neo" else GATE_KEYS
+        allowed = {"neo": NEO_KEYS, "mcp-gate": GATE_KEYS, "viewer": VIEWER_KEYS}[name]
         extra = set(svc) - allowed
         if extra:
             errs.append(f"{name}: keys {sorted(extra)} are not allowed")
         if svc.get("image") != image:
             errs.append(f"{name}: image {svc.get('image')!r} is not the pinned {image!r}")
-        if svc.get("networks") != {"neo": None}:
+        if name == "viewer":
+            if svc.get("network_mode") != "service:neo" or "networks" in svc:
+                errs.append(f"viewer: must share neo's network namespace only (network_mode service:neo), "
+                            f"got network_mode={svc.get('network_mode')!r} networks={svc.get('networks')}")
+        elif svc.get("networks") != {"neo": None}:
             errs.append(f"{name}: networks must be exactly the pilot's 'neo' network, got {svc.get('networks')}")
         if [str(c).upper() for c in svc.get("cap_drop") or []] != ["ALL"]:
             errs.append(f"{name}: cap_drop must be exactly [ALL]")
@@ -125,6 +148,7 @@ def check(cfg, data, image, compose_dir, project, vnc_port, mcp_port):
 
     neo = services.get("neo") or {}
     gate = services.get("mcp-gate") or {}
+    viewer = services.get("viewer") or {}
 
     # neo: the image's own entrypoint/command (it drops to the neo user itself).
     if neo.get("entrypoint") is not None or neo.get("command") is not None:
@@ -136,8 +160,10 @@ def check(cfg, data, image, compose_dir, project, vnc_port, mcp_port):
         errs.append("neo: init must be false (the image runs tini)")
     if neo.get("hostname") != "neo":
         errs.append("neo: hostname must be 'neo'")
-    if _port_tuples(neo) != [("127.0.0.1", 6080, vnc_port, "tcp")]:
-        errs.append(f"neo: must publish only 127.0.0.1:{vnc_port}->6080/tcp, got {_port_tuples(neo)}")
+    # 6081 is the Origin-checking `viewer`; Neo's own 6080 has no Origin check.
+    if _port_tuples(neo) != [("127.0.0.1", 6081, vnc_port, "tcp")]:
+        errs.append(f"neo: must publish only 127.0.0.1:{vnc_port}->6081/tcp (the Origin-checking viewer), "
+                    f"got {_port_tuples(neo)}")
     env = {k: ("" if v is None else str(v)) for k, v in (neo.get("environment") or {}).items()}
     if set(env) != NEO_ENV_KEYS:
         errs.append(f"neo: environment keys must be exactly {sorted(NEO_ENV_KEYS)}, got {sorted(env)}")
@@ -167,6 +193,20 @@ def check(cfg, data, image, compose_dir, project, vnc_port, mcp_port):
     if set(dep) != {"neo"} or (dep.get("neo") or {}).get("condition") != "service_healthy":
         errs.append("mcp-gate: depends_on must be exactly neo: service_healthy")
     _mounts("mcp-gate", gate, {"/gate/mcp-gate.py": (os.path.join(compose_dir, "mcp-gate.py"), True)}, errs)
+
+    # viewer: the image's websockify with Origin enforcement, nothing else.
+    want_ep = viewer_entrypoint(vnc_port)
+    if viewer.get("entrypoint") != want_ep or viewer.get("command") is not None:
+        errs.append(f"viewer: entrypoint must be exactly {want_ep} with no command")
+    if not NONROOT_USER.fullmatch(str(viewer.get("user") or "")):
+        errs.append(f"viewer: user must be numeric non-root uid:gid, got {viewer.get('user')!r}")
+    if viewer.get("read_only") is not True:
+        errs.append("viewer: read_only root filesystem is required")
+    if viewer.get("healthcheck") != {"disable": True}:
+        errs.append("viewer: healthcheck must be disabled")
+    vdep = viewer.get("depends_on") or {}
+    if set(vdep) != {"neo"} or (vdep.get("neo") or {}).get("condition") != "service_healthy":
+        errs.append("viewer: depends_on must be exactly neo: service_healthy")
     return errs
 
 
