@@ -27,12 +27,19 @@ Steps, each verified; any failure exits non-zero with a JSON report:
    host; clear the HTTP cache; close every tab except one about:blank.
 3. Re-enumerate from a fresh CDP session: zero service-worker registrations,
    zero service-worker/Cache Storage bytes on those origins, zero bytes of
-   any type on each --clear-origin (Storage.getUsageAndQuota, which has no
-   cookie entry), no cookie matching the rule above (Storage.getCookies), and
+   every quota-managed type on each --clear-origin (Storage.getUsageAndQuota:
+   on the pinned Chromium 155 its breakdown lists only cache_storage,
+   file_systems, indexeddb and service_workers; a breakdown missing any of
+   the types checked fails), no cookie matching the rule above
+   (Storage.getCookies; usage has no cookie entry), and
    only about:blank plus the browser's own chrome://*.top-chrome UI targets;
    the kept about:blank page must still exist and still be about:blank.
    Anything else fails. Cache Storage and other storage on origins that had
    no service worker and are not a --clear-origin is not cleared or checked.
+   localStorage/sessionStorage are not verified: usage does not count them
+   and DOMStorage needs a frame on the origin (loading it runs its code).
+   clearDataForOrigin("all") removed a planted localStorage value on the
+   pinned image, but handoff does not re-check it.
 
 At least one --clear-origin is required; without it nothing is touched.
 Limits (also in the report): the same persistent profile is resumed by a new
@@ -361,25 +368,40 @@ def parse_args(argv):
     return clear_origins
 
 
+# usageBreakdown types the pinned Chromium 155 reports (observed live,
+# 2026-11-20); every --clear-origin must report all of them.
+QUOTA_TYPES = ("cache_storage", "file_systems", "indexeddb", "service_workers")
+SW_TYPES = ("cache_storage", "service_workers")
+
+
 def verify(c, sid, keep, sw_origins, clear_origins):
     """Re-enumerate from a fresh session; returns the report fields and ok."""
     sw_left = registrations(c, sid)
     # Storage.getUsageAndQuota needs no frame on the origin (CacheStorage.*
-    # does, and loading the origin would run its code again). Every type left
-    # non-zero on a scrubbed origin fails the handoff.
-    storage_left = {}
-    for o, types in [(o, ("service_workers", "cache_storage")) for o in sw_origins] + \
-                    [(o, None) for o in clear_origins]:
+    # does, and loading the origin would run its code again). It counts only
+    # quota-managed storage (QUOTA_TYPES on the pinned Chromium; no
+    # localStorage, sessionStorage or cookies). Every type left non-zero on a
+    # scrubbed origin fails the handoff, and so does a breakdown that omits a
+    # type being checked (a vacuous zero is never "clean").
+    storage_left, storage_unchecked = {}, {}
+    for o, types in [(o, SW_TYPES) for o in sw_origins] + [(o, QUOTA_TYPES) for o in clear_origins]:
         u = c.call("Storage.getUsageAndQuota", {"origin": o}, session=sid)
-        usage = {b["storageType"]: b["usage"] for b in u.get("usageBreakdown", [])
-                 if b["usage"] and (types is None or b["storageType"] in types)}
+        breakdown = u.get("usageBreakdown", [])
+        reported = {b["storageType"] for b in breakdown}
+        missing = sorted(set(types) - reported)
+        if missing:
+            storage_unchecked.setdefault(o, set()).update(missing)
+        usage = {b["storageType"]: b["usage"] for b in breakdown
+                 if b["usage"] and (types is QUOTA_TYPES or b["storageType"] in types)}
         if usage:
             storage_left.setdefault(o, {}).update(usage)
+    storage_unchecked = {o: sorted(v) for o, v in storage_unchecked.items()}
     cookies_left = sorted(cookie_label(ck) for ck in cookie_hits(all_cookies(c), clear_origins))
     bad = target_problems(c, keep)
     fields = dict(service_workers_left=sorted(r["scopeURL"] for r in sw_left),
-                  storage_left=storage_left, cookies_left=cookies_left, unexpected_targets=bad)
-    return fields, not (sw_left or storage_left or cookies_left or bad)
+                  storage_left=storage_left, storage_unchecked=storage_unchecked,
+                  cookies_left=cookies_left, unexpected_targets=bad)
+    return fields, not (sw_left or storage_left or storage_unchecked or cookies_left or bad)
 
 
 LIMITS = [
@@ -389,8 +411,12 @@ LIMITS = [
     "verified absent; other origins keep cookies/localStorage/IndexedDB/history/preferences",
     "service-worker/Cache Storage bytes were verified zero only on origins that had a listed service worker; "
     "Cache Storage on other origins (no worker, not a --clear-origin) was not cleared or checked",
+    "verified zero usage covers quota-managed storage only (cache_storage, file_systems, indexeddb, "
+    "service_workers); localStorage and sessionStorage on --clear-origin origins were cleared but not verified",
     "this does not prove the whole profile is clean",
-    "real-account login remains NO-GO; disposable test accounts only",
+    "real-account login remains NO-GO; disposable test accounts only: host processes (including an agent's "
+    "terminal) can reach Neo's unauthenticated MCP/settings ports on its bridge address and drive the viewer "
+    "with a forged Origin, gate paused or not",
 ]
 
 

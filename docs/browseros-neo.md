@@ -4,10 +4,13 @@ One dedicated, persistent browser profile in a container, viewed through
 noVNC, that Hermes drives over MCP. This is a pilot: nothing here is installed,
 started or wired into Hermes until an operator runs the steps below.
 
-> **Signing in to real accounts through this pilot is NO-GO** until an
-> operator accepts the [Login status](#login-status) evidence and limits.
-> Both gates now have controls and a recorded live test; the status itself
-> has not been changed.
+> **Signing in to real accounts through this pilot is NO-GO.** This is an
+> unresolved engineering boundary, not a pending product decision: any host
+> process, including an agent's terminal tool, can reach Neo's
+> unauthenticated MCP/settings port on its bridge address and drive the
+> viewer with a forged `Origin`, whether the gate is paused or not
+> ([Login status](#login-status), "Host-process bypass"). Operator
+> acceptance of the evidence below cannot lift NO-GO while that holds.
 
 ## What runs
 
@@ -71,7 +74,8 @@ ssh -N -L 16080:127.0.0.1:16080 <you>@<host>     # from your own machine
 The `viewer` websockify accepts a WebSocket only when `Origin` is exactly
 `http://127.0.0.1:<viewer port>`; other sites, `localhost`, another port,
 `https`, `null` and a missing Origin get 403. This stops a web page in the
-operator's own browser from opening the desktop. It does not check `Host`,
+operator's own browser from opening the desktop. It does not stop a
+non-browser host process, which can send any `Origin`. It does not check `Host`,
 does not authenticate; Neo's own 6080 is handled separately (see
 [Login status](#login-status)).
 
@@ -97,8 +101,10 @@ Never paste credentials into chat; the Hermes entry hides Neo's
 
 ## Login status
 
-**NO-GO for real user login until an operator decision.** Changing this
-status needs an explicit operator decision, not a doc edit. What is now in
+**NO-GO for real user login.** The blocker is engineering, not a decision
+still owed: see "Host-process bypass" below. Lifting NO-GO needs that
+boundary closed and re-proven, then an explicit operator decision; a doc edit
+does neither. What is now in
 place for the two gates, and proven on the pinned image
 (`ghcr.io/browseros-ai/neo:0.52.1.2-d32f6ab@sha256:9f63…2d72e`, Chromium 155)
 by `scripts/test_browseros_neo_handoff_live.sh` (the cookie step, the
@@ -149,7 +155,10 @@ offline, against mocks; re-run the live test before relying on them):
    partitioned under its sites), clears the HTTP cache and closes every tab but one
    `about:blank`. It then re-verifies from a fresh CDP connection (no
    registrations, zero service-worker/Cache Storage bytes on those origins,
-   zero bytes of any kind on each `--clear-origin`, no matching cookie in
+   zero bytes of every quota-managed type on each `--clear-origin`
+   (`Storage.getUsageAndQuota`; on the pinned Chromium its breakdown lists only
+   `cache_storage`, `file_systems`, `indexeddb`, `service_workers`, and a
+   breakdown missing a checked type fails), no matching cookie in
    `Storage.getCookies` (usage has no cookie entry), no other target) and
    prints `HANDOFF-READY` or fails. `handoff` re-checks that the gate is
    still closed and the record still `CLOSED` afterwards. Before the scrub
@@ -161,7 +170,27 @@ offline, against mocks; re-run the live test before relying on them):
      1 s beacon timer is silent, no attacker tab or worker exists, and the
      same URL is served by the network with no worker and no caches.
 
-Limits (why this is not yet GO):
+Host-process bypass (why this is NO-GO, not just "not yet GO"):
+
+- In the pinned image Neo listens on `0.0.0.0` for 9010 (MCP + `/v1` +
+  settings), 9011 and the viewer's 6081 (observed with `netstat` in the
+  kept test container, 2026-11-20). On the compose `neo` network, a normal
+  bridge, every host process can reach them on Neo's bridge address without
+  authentication; an earlier live run showed 9010 answering there while the
+  gate was paused. `mcp-gate` is only the published loopback path; pausing
+  it cuts Hermes' configured MCP client, not a process that targets the
+  bridge.
+- The `Origin` check on the viewer only stops browsers. A host process can
+  open `127.0.0.1:<viewer port>` (or 6081 on the bridge) with the expected
+  `Origin`, then watch and type into the desktop while the human signs in.
+- Not fixable inside this pilot without inventing a boundary: an `internal`
+  Docker network removes Neo's internet access but the host still reaches
+  container addresses; rebinding 9010 to loopback is not a documented image
+  setting and would still leave the viewer. Closing it needs the agent's
+  processes off this host's network namespace (or a separate, authenticated
+  viewer/MCP path), which is a separate design and deployment, not done here.
+
+Limits:
 
 - Proven only for this image digest and its Chromium build; the Local
   Network Access policy and websockify behaviour must be re-proven after any
@@ -170,6 +199,12 @@ Limits (why this is not yet GO):
   one) are not blocked by the policy; for them only the Origin checks hold
   (6080 refuses everything, 6081 needs `http://127.0.0.1:<viewer port>`).
   A loopback page can read 9010's error response (`403 unsupported request`).
+- `handoff` verifies only quota-managed storage. localStorage and
+  sessionStorage are not counted by `Storage.getUsageAndQuota` (a 200 kB
+  localStorage value read as zero usage while an IndexedDB control read
+  10951 bytes on the pinned image), and `DOMStorage` needs a frame on the
+  origin, which would run its code. `clearDataForOrigin("all")` removed the
+  planted value in that probe, but `handoff` does not re-check it.
 - `handoff` does not clear cookies (other than those sent to a
   `--clear-origin` host), localStorage, IndexedDB, Cache Storage on origins
   with no listed service worker, history,
@@ -255,7 +290,7 @@ It does **not**:
 - Stop other host processes. Neo's own ports (9010 MCP + `/v1` + settings,
   9011 TLS, 6080 unchecked noVNC, 6081 Origin-checked viewer) listen on the
   container's bridge address without authentication, and any local user or process (including an agent's terminal
-  tool) can reach them there, paused or not. Docker cannot isolate a bridge
+  tool) can reach them there, paused or not (see "Host-process bypass"). Docker cannot isolate a bridge
   from the host unless the network is internal, and Neo needs the internet.
   Treat the host as single-tenant and trusted.
 - Lock the screen. Xvnc runs with `-AlwaysShared` and no VNC auth; every

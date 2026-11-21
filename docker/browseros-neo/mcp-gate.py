@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""Plain TCP forwarder: the only path from the host to Neo's MCP port.
+"""Plain TCP forwarder: the published loopback path from the host to Neo's MCP port.
 
-Runs as its own container on the pilot's private network. `browseros-neo.sh
+It is not the only path. Neo's MCP port (9010, with /v1 and settings) listens
+on 0.0.0.0 in the pinned image, so any host process can reach it on the `neo`
+bridge address without authentication, whether this gate runs or not
+(docs/browseros-neo.md, "Login status"). Stopping the gate cuts Hermes'
+configured MCP connection, not a host process that targets the bridge.
+
+Runs as its own container on the pilot's `neo` bridge network (a normal,
+host-reachable bridge). `browseros-neo.sh
 pause` stops this container, so the host's loopback MCP port refuses new
 connections and open ones are cut, while Neo and its noVNC viewer keep
 running for the human. It is a cut-off switch, not a filter: while it runs it
