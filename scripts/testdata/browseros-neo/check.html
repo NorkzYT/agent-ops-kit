@@ -1,0 +1,6 @@
+<!doctype html><title>check</title><script>
+window.__done=false; window.__results={};
+(async()=>{ const regs = await navigator.serviceWorker.getRegistrations(); window.__results.regs = regs.map(r=>r.scope);
+ window.__results.caches = await caches.keys(); const a = localStorage.getItem("hb"); await new Promise(r=>setTimeout(r,3000));
+ window.__results.hb_advanced = localStorage.getItem("hb") !== a; window.__results.hb = a; window.__done=true; })();
+</script>server check page

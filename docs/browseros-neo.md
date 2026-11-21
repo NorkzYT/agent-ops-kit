@@ -4,15 +4,16 @@ One dedicated, persistent browser profile in a container, viewed through
 noVNC, that Hermes drives over MCP. This is a pilot: nothing here is installed,
 started or wired into Hermes until an operator runs the steps below.
 
-> **Signing in to real accounts through this pilot is NO-GO.** See
-> [Login status](#login-status). The viewer is for watching and for
-> disposable test accounts only until those gates are proven.
+> **Signing in to real accounts through this pilot is NO-GO** until an
+> operator accepts the [Login status](#login-status) evidence and limits.
+> Both gates now have controls and a recorded live test; the status itself
+> has not been changed.
 
 ## What runs
 
 | Piece | Source | Host binding |
 |---|---|---|
-| `neo` — BrowserOS neo, Xvnc, websockify/noVNC (6080, no Origin check, not published), claw-server | upstream image, pinned by digest | publishes `127.0.0.1:16080` → 6081 (the `viewer`) |
+| `neo` — BrowserOS neo, Xvnc, noVNC on 6080 through `websockify-6080` (127.0.0.1 only, every WebSocket refused, not published), claw-server; managed Chromium policy `chromium-policy.json` | upstream image, pinned by digest | publishes `127.0.0.1:16080` → 6081 (the `viewer`) |
 | `viewer` — a second websockify from the same image, `--auth-plugin ExpectOrigin`, listening on 6081 in Neo's network namespace | same image, read-only, uid 65534, no capabilities | none of its own (`network_mode: service:neo`) |
 | `mcp-gate` — plain TCP forwarder to Neo's MCP port (`docker/browseros-neo/mcp-gate.py`) | same image, read-only, uid 65534, no capabilities | MCP `127.0.0.1:19010` |
 
@@ -71,7 +72,7 @@ The `viewer` websockify accepts a WebSocket only when `Origin` is exactly
 `http://127.0.0.1:<viewer port>`; other sites, `localhost`, another port,
 `https`, `null` and a missing Origin get 403. This stops a web page in the
 operator's own browser from opening the desktop. It does not check `Host`,
-does not authenticate, and does nothing for Neo's own 6080 (see
+does not authenticate; Neo's own 6080 is handled separately (see
 [Login status](#login-status)).
 
 Do not publish 16080 or 19010 on another interface, a reverse proxy, a tunnel
@@ -82,11 +83,12 @@ service or Tailscale Serve/Funnel. `make browseros-neo-access` prints this.
 ```bash
 make browseros-neo-pause       # close the agent path, then drain the pinned run budget (65 s)
 make browseros-neo-status      # must say "agent path: CLOSED" (not proof of quiet; see below)
-# use the viewer — NOT for real-account sign-in (Login status: NO-GO)
+scripts/browseros-neo.sh handoff --clear-origin https://accounts.example.com   # see Login status
+# use the viewer (sign-in only per Login status)
 make browseros-neo-resume      # re-checks everything `up` checked, then reopens the path
 ```
 
-`up`, `down`, `pause` and `resume` hold one lifecycle lock per profile
+`up`, `down`, `pause`, `handoff` and `resume` hold one lifecycle lock per profile
 (`state-<project>/lock` next to the profile folder); a second one refuses
 instead of waiting, so a `resume` cannot reopen the path during a drain.
 
@@ -95,29 +97,73 @@ Never paste credentials into chat; the Hermes entry hides Neo's
 
 ## Login status
 
-**NO-GO for real user login.** Do not sign in to accounts you care about
-through this pilot. Two things are unproven:
+**NO-GO for real user login until an operator decision.** Changing this
+status needs an explicit operator decision, not a doc edit. What is now in
+place for the two gates, and proven on the pinned image
+(`ghcr.io/browseros-ai/neo:0.52.1.2-d32f6ab@sha256:9f63…2d72e`, Chromium 155)
+by `scripts/test_browseros_neo_handoff_live.sh`:
 
-1. **Cross-origin access to the desktop from inside Neo.** The image's own
-   websockify (6080, websockify 0.10.0, no `--auth-plugin`) still listens in
-   Neo's network namespace with no Origin check, and Xvnc (5900) has no VNC
-   auth and runs `-AlwaysShared`. A page the agent opens in Neo can try
-   `ws://127.0.0.1:6080` and, if it connects, see the screen and drive the
-   desktop while a human types. The `viewer` service only protects the
-   published port from pages in the *operator's* browser. Not yet done:
-   disabling or Origin-checking 6080 inside the image, or proving a Neo page
-   cannot reach it.
-2. **Quiescence.** `CLOSED` means the agent's MCP path has been closed for
-   the pinned run budget. It is not proof that nothing agent-planted is still
-   running: page timers, injected scripts and listeners, service workers,
-   open tabs, extensions or settings changed through the forwarded API can
-   outlive it, and looking at the page cannot show them. Not yet done: a
-   mechanism that clears or verifies that state, and a test proving no
-   agent-planted code survives into the human session.
+1. **A page in Neo cannot reach Neo's VNC/WebSocket ports.**
+   - `websockify-6080` is mounted read-only over `/usr/local/bin/websockify`
+     (ahead of `/usr/bin` on the image's PATH). It accepts only the
+     entrypoint's exact arguments and runs the image's websockify on
+     `127.0.0.1:6080` with `ExpectOrigin` set to a value no browser sends, so
+     every WebSocket upgrade gets 403 while the healthcheck's static noVNC
+     page still loads. Anything else exits and the entrypoint stops Neo.
+   - `chromium-policy.json` (managed policy, read-only) sets
+     `LocalNetworkAccessBlockedForUrls: ["*"]`: pages on public or private
+     addresses cannot open any request or WebSocket to Neo's loopback ports
+     (5900, 6080, 6081, 9010, 9110, 9210), with no prompt. It also restores
+     only the New Tab page on start, blocks extension installs and disables
+     background mode.
+   - Live result: a positive control (an unchecked websockify) is opened by
+     a loopback page and its RFB banner read; with the controls, every
+     WebSocket from a loopback page to 6080/6081/5900/CDP fails, CDP and Xvnc
+     HTTP fail, and a public page is blocked on every port including the
+     control.
+2. **Agent-planted code does not survive into the sign-in.** After
+   `pause` (full drain, state `CLOSED`) `handoff` re-checks the gate,
+   manifest, image, profile and bindings, then runs the checked-out
+   `docker/browseros-neo/neo-handoff.py` inside Neo as `neo` (on stdin, not
+   mounted): it quits the browser the image's way (CDP `Browser.close`,
+   SIGTERM only as fallback) and waits for the entrypoint to start a new
+   one, so every page, timer, injected script, worker and per-session CDP
+   override dies; then over the new browser's loopback CDP it unregisters
+   every service worker, clears service-worker and Cache Storage data for
+   their origins, clears all site data for each `--clear-origin` (the
+   sign-in origins), clears the HTTP cache and closes every tab but one
+   `about:blank`. It then re-verifies from a fresh CDP connection (no
+   registrations, zero service-worker/Cache Storage bytes on those origins,
+   zero bytes of any kind on each `--clear-origin`, no other target) and
+   prints `HANDOFF-READY` or fails. `handoff` re-checks that the gate is
+   still closed and the record still `CLOSED` afterwards.
+   - Live result: a planted service worker answers before the handoff
+     (negative control); after it the old browser PID is gone, the planted
+     1 s beacon timer is silent, no attacker tab or worker exists, and the
+     same URL is served by the network with no worker and no caches.
 
-Until both are proven by a recorded test on the pinned image, the viewer is
-for watching and for disposable test accounts only. Changing this status
-needs an explicit operator decision, not a doc edit.
+Limits (why this is not yet GO):
+
+- Proven only for this image digest and its Chromium build; the Local
+  Network Access policy and websockify behaviour must be re-proven after any
+  image change.
+- Pages served *from* Neo's loopback (none exist unless the agent serves
+  one) are not blocked by the policy; for them only the Origin checks hold
+  (6080 refuses everything, 6081 needs `http://127.0.0.1:<viewer port>`).
+  A loopback page can read 9010's error response (`403 unsupported request`).
+- `handoff` does not clear cookies, localStorage, IndexedDB, history,
+  bookmarks, downloads, permissions or other preferences on origins other
+  than the `--clear-origin` ones; agent-planted data there is dormant but
+  runs again if the human visits that origin. Settings the agent changed
+  through the forwarded API are not reset or inspected.
+- claw-server keeps running across the handoff; with the gate closed it gets
+  no agent input, but its own behaviour was not audited.
+- `resume` hands the signed-in session to the agent by design.
+- `--clear-origin` must name every origin the sign-in uses (IdP and app);
+  data on others is not cleared.
+
+Until an operator accepts this evidence and these limits, the viewer is for
+watching and for disposable test accounts only.
 
 ## What pause does and does not do
 
@@ -250,7 +296,8 @@ exclusions registers all five. It never reads or writes the live Hermes home.
   `COMPOSE_FILE`, `.env` and profiles are ignored so the checked config is
   the one that runs.
 - `check` is an allowlist: exact service and top-level keys, exact mount
-  sources (`/data` = the profile folder, `neo.toml` and `mcp-gate.py` from
+  sources (`/data` = the profile folder, `neo.toml`, `websockify-6080`,
+  `chromium-policy.json` (read-only) and `mcp-gate.py` from
   `docker/browseros-neo`), the image's own entrypoint for Neo, the exact gate
   entrypoint, a numeric non-root gate user, only `no-new-privileges`, and the
   single default-bridge `neo` network. `volumes_from`, `tmpfs`, `sysctls`,
@@ -277,7 +324,18 @@ exclusions registers all five. It never reads or writes the live Hermes home.
 bash scripts/test_browseros_neo.sh    # offline: no containers started
 bash scripts/test_browseros_neo_hermes_registration.sh   # opt-in, local Hermes, isolated home
 BROWSEROS_NEO_IMAGE_ROOT=<extracted image root> bash scripts/test_browseros_neo_viewer_origin.sh   # opt-in
+BROWSEROS_NEO_LIVE=1 bash scripts/test_browseros_neo_handoff_live.sh   # opt-in, pinned image present
 ```
+
+`test_browseros_neo_handoff_live.sh` runs one throwaway container from the
+rendered `neo` service (same image, mounts, limits, environment) with
+`--network none`, no published ports, a scratch profile and the entrypoint
+under `timeout` (exits by itself, default 900 s). It attacks 5900/6080/6081/
+9010/9110/9210 from a loopback and a "public" page (test-only
+`--ip-address-space-overrides`), plants a service worker, Cache Storage
+entry and timer, runs `neo-handoff.py`, and checks nothing survives. It
+never stops or removes a container; it keeps the container and scratch
+folder and prints them.
 
 `test_browseros_neo.sh` also drives `up`/`pause`/`status`/`resume`/`down`
 against a bounded fake Docker (containers are files, the gate is a real
