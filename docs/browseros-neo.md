@@ -263,19 +263,23 @@ make browseros-neo-resume         # hands the signed-in session to the agent
   `check`, manifest match, stale-record check, pinned image on this profile,
   loopback-only bindings, live 6080 probe, scrub and verification, and the
   gate still closed afterwards.
-- On success it appends `trust_mode=same-host-dev` and
-  `trust_accepted_at=<epoch>` to the pause record and prints the terms;
-  `status` shows `login mode: SAME-HOST DEVELOPMENT`. The acceptance applies
-  to that one sign-in: `resume`, `up` or the next `pause` rewrites the
-  record, so the next sign-in needs the flag again.
+- Every `handoff` first removes the previous handoff's `handoff_at` and
+  `trust_*` lines from the pause record, so a refused or failed handoff
+  leaves no acceptance behind. On success it writes one `handoff_at`, and
+  with the flag one `trust_mode=same-host-dev` and `trust_accepted_at=<epoch>`,
+  and prints the terms; `status` shows `login mode: SAME-HOST DEVELOPMENT`.
+  The acceptance applies to that one sign-in: the next `handoff` (with or
+  without the flag), `resume`, `up` or the next `pause` removes it, so the
+  next sign-in needs the flag again.
 - What the operator accepts (no isolation guarantee): every process on the
   host, including an agent's terminal tool and any other local user, can
   reach Neo's unauthenticated MCP/settings port on its bridge address and
   watch or drive the viewer with a forged `Origin`, paused or not; anything
   running as the operator's UID can read the profile folder and its sessions.
 - Operator duties the wrapper cannot enforce: the host is single-operator
-  and not shared, multi-user or production; no agent task runs on the host
-  while you are signed in; credentials go only into the viewer, never into
+  and not shared, multi-user or production; from `pause` until you finish
+  typing and run `resume`, no other agent task runs on the host (after
+  `resume` the agent drives the signed-in profile); credentials go only into the viewer, never into
   chat; revoke the account's sessions if the host or an agent misbehaves.
   Prefer an account whose sessions you can revoke from another device.
 - Without the flag `handoff` behaves as before (NO-GO wording, disposable
