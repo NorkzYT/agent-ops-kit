@@ -486,6 +486,40 @@ class TestRegisterWiring(unittest.TestCase):
         self.assertIsNone(router._gpt_catalog)
 
 
+
+class CiWorkflowDiscoveryTest(unittest.TestCase):
+    """Static check: CI's shell-tests job must discover the router suites.
+
+    Parses .github/workflows/ci.yml as text (no YAML dependency, nothing run)
+    and matches each `unittest discover -s scripts/tests -p '<pattern>'` step
+    in the shell-tests job against the suite file names.
+    """
+
+    CI = os.path.join(os.path.dirname(__file__), "..", "..", ".github", "workflows", "ci.yml")
+
+    def _shell_test_patterns(self):
+        import re
+        with open(self.CI, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        start = lines.index("  shell-tests:")
+        job = []
+        for line in lines[start + 1:]:
+            if re.match(r"^  [A-Za-z0-9_-]+:\s*$", line):
+                break
+            job.append(line)
+        rx = re.compile(r"^\s+- run: python3 -m unittest discover -s scripts/tests -p '([^']+)' -v\s*$")
+        return [m.group(1) for m in map(rx.match, job) if m]
+
+    def test_shell_tests_job_discovers_model_router_suites(self):
+        import fnmatch
+        patterns = self._shell_test_patterns()
+        self.assertTrue(patterns, "no unittest discover steps found in shell-tests")
+        for suite in ("test_model_catalog.py", "test_model_router.py"):
+            self.assertTrue(os.path.isfile(os.path.join(os.path.dirname(__file__), suite)), suite)
+            self.assertTrue(any(fnmatch.fnmatch(suite, p) for p in patterns),
+                            f"{suite} not discovered by shell-tests patterns {patterns}")
+
+
 if __name__ == "__main__":
     logging.getLogger(LOGGER).setLevel(logging.INFO)
     unittest.main()
