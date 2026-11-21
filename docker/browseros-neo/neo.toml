@@ -1,0 +1,9 @@
+# BrowserOS neo server behaviour for the agent-ops-kit pilot (mounted read-only
+# at /etc/neo/neo.toml). Only keys the pinned image documents are set.
+#
+# The run budget is pinned explicitly because `browseros-neo.sh pause` waits
+# this long (plus a margin) for a script already in flight to stop before it
+# tells the operator the browser is theirs. Change both together.
+
+[run]
+wall_timeout_seconds = 60

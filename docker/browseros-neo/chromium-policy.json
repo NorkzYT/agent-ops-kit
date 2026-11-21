@@ -1,0 +1,6 @@
+{
+  "LocalNetworkAccessBlockedForUrls": ["*"],
+  "RestoreOnStartup": 5,
+  "ExtensionInstallBlocklist": ["*"],
+  "BackgroundModeEnabled": false
+}

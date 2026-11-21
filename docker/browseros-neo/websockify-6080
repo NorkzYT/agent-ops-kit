@@ -1,0 +1,29 @@
+#!/usr/bin/python3 -I
+"""Stand-in for the image's `websockify`, mounted read-only at /usr/local/bin/websockify.
+
+The pinned image's entrypoint starts `websockify --web /usr/share/novnc 6080
+localhost:5900` (websockify 0.10.0, no auth plugin, all interfaces). Any page
+Neo loads could open ws://127.0.0.1:6080 and drive the desktop (proved on the
+pinned image: an http://127.0.0.1 page read the RFB banner). /usr/local/bin
+comes before /usr/bin on the image's PATH, so the entrypoint runs this file
+instead. It accepts only that exact invocation and runs the same websockify
+bound to 127.0.0.1 with an ExpectOrigin source no browser can send, so every
+WebSocket upgrade gets 403 while the static noVNC page (the image healthcheck
+fetches it) is still served. The human uses the `viewer` service (6081).
+Anything else exits non-zero, which makes the entrypoint stop the container.
+"""
+import os
+import sys
+
+EXPECTED = ["--web", "/usr/share/novnc", "6080", "localhost:5900"]
+# Origins are scheme://host[:port] or "null"; this token is neither.
+NEVER_ORIGIN = "agent-ops-kit-neo-6080-websocket-disabled"
+
+if sys.argv[1:] != EXPECTED:
+    sys.stderr.write(f"websockify-6080: refusing unexpected arguments {sys.argv[1:]!r}\n")
+    sys.exit(2)
+os.execv("/usr/bin/python3", [
+    "/usr/bin/python3", "-I", "-m", "websockify", "--web", "/usr/share/novnc",
+    "--auth-plugin", "websockify.auth_plugins.ExpectOrigin", "--auth-source", NEVER_ORIGIN,
+    "127.0.0.1:6080", "localhost:5900",
+])
