@@ -14,8 +14,9 @@
 #                               after a drained pause: restart Neo's browser, remove listed service
 #                               workers (+ their origins' Cache Storage), clear each sign-in origin and
 #                               cookies sent to it, close all tabs, verify the scrubbed scope only.
-#                               --trusted-host-dev records the operator's same-host development
-#                               acceptance for this sign-in (trusted host, NOT isolation)
+#                               --trusted-host-dev is the operator's same-host development
+#                               acknowledgment for this invocation only (trusted host, NOT
+#                               isolation); nothing is recorded and `status` never shows it
 #   browseros-neo.sh access     print how to reach the viewer from another machine
 #   browseros-neo.sh hermes-snippet    print the reference Hermes mcp_servers entry
 #   browseros-neo.sh hermes-commands   print the native `hermes config set` commands for it
@@ -326,9 +327,9 @@ cmd_up() {
     manifest_body > "$MANIFEST.tmp" && mv -f "$MANIFEST.tmp" "$MANIFEST"
   fi
   # Paused: the gate must already be stopped; `up` never stops it for you.
-  # A new `up` may start a new browser: any earlier handoff (and same-host
-  # acceptance) no longer describes it, so the record keeps only the pause.
-  [[ ! -e "$STATE_FILE" ]] || { assert_gate_closed "pause recorded in $STATE_FILE but "; clear_handoff_record; }
+  # Advisory lines an older wrapper appended (handoff_at, trust_*) are never
+  # trusted; they are stripped so the record keeps only the pause.
+  [[ ! -e "$STATE_FILE" ]] || { assert_gate_closed "pause recorded in $STATE_FILE but "; strip_legacy_handoff_lines; }
   "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 || compose pull neo
   compose up -d --no-recreate --wait --wait-timeout "${BROWSEROS_NEO_WAIT:-240}" neo viewer
   enforce_bindings
@@ -336,6 +337,7 @@ cmd_up() {
   if [[ -e "$STATE_FILE" ]]; then
     assert_gate_closed
     log "agent path stays closed (pause recorded in $STATE_FILE); run 'resume' to reopen it"
+    log "Any earlier handoff no longer applies (the browser may be new): run 'pause' and 'handoff' again before signing in."
   else
     open_gate
   fi
@@ -372,11 +374,13 @@ open_gate() {  # start the gate and prove the path is open; on failure refuse wi
   gate_failed "gate did not accept connections on 127.0.0.1:$MCP_PORT within 10 s"
 }
 
-clear_handoff_record() {  # drop earlier handoff_at/trust_* lines; keep the pause state itself
+strip_legacy_handoff_lines() {  # drop handoff_at/trust_* lines older wrappers wrote; keep the pause state
+  # Nothing reads them: sign-in permission is only ever the output of the
+  # current successful `handoff`, never a persisted record.
   [[ -e "$STATE_FILE" ]] || return 0
   ( umask 077; sed -e '/^handoff_at=/d' -e '/^trust_mode=/d' -e '/^trust_accepted_at=/d' "$STATE_FILE" > "$STATE_FILE.tmp" \
       && mv -f "$STATE_FILE.tmp" "$STATE_FILE" ) \
-    || die "cannot clear the earlier handoff from $STATE_FILE; do NOT sign in"
+    || die "cannot strip old handoff lines from $STATE_FILE; do NOT sign in"
 }
 
 cmd_down() {  # the only command that removes containers; needs the explicit flag
@@ -478,9 +482,7 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   take_lock
   grep -qx 'state=CLOSED' "$STATE_FILE" 2>/dev/null \
     || die "handoff refused: the agent path is not drained (run 'pause' without --no-wait first). Nothing was touched."
-  # A new handoff supersedes the last one: its record (and any same-host
-  # acceptance) is removed now, so a refusal or failure below leaves none.
-  clear_handoff_record
+  strip_legacy_handoff_lines
   assert_gate_closed "handoff refused: "
   cmd_check
   manifest_matches_or_die "handoff"
@@ -498,8 +500,6 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   grep -qx 'state=CLOSED' "$STATE_FILE" 2>/dev/null || die "handoff: pause record changed during the scrub; do NOT sign in"
   (( rc == 0 )) && python3 -I -c 'import json,sys; sys.exit(json.loads(sys.argv[1]).get("result") != "HANDOFF-READY")' "$report" 2>/dev/null \
     || die "handoff FAILED (rc $rc); do NOT sign in. The browser may have been restarted; nothing was stopped or removed."
-  printf 'handoff_at=%s\n' "$(date +%s)" >> "$STATE_FILE"
-  (( ! trusted )) || printf 'trust_mode=same-host-dev\ntrust_accepted_at=%s\n' "$(date +%s)" >> "$STATE_FILE"
   log "HANDOFF-READY: browser process restarted (old pages, timers and running workers ended); no service-worker"
   log "registration listed; only one about:blank tab (verified)."
   log "Scope: all site data cleared only on ${origins[*]}; cookies sent to those hosts (incl. parent-domain and"
@@ -517,11 +517,11 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   log "bridge address and drive the viewer, paused or not): use the viewer ('access') only with a disposable"
   log "test account on those origins. Keep the agent path closed until done; 'resume' hands that session to the agent."
   log "(An operator running this in a single-operator development VM who accepts the trusted-host assumption"
-  log "records that per sign-in with --trusted-host-dev; docs/browseros-neo.md 'Same-host development'.)"
+  log "acknowledges that per sign-in with --trusted-host-dev; docs/browseros-neo.md 'Same-host development'.)"
 }
 
 trusted_host_notice() {  # the exact terms of the operator's same-host development acceptance
-  log "SAME-HOST DEVELOPMENT (trusted-host assumption accepted by the operator, recorded in $STATE_FILE):"
+  log "SAME-HOST DEVELOPMENT (trusted-host assumption acknowledged by the operator for this handoff only; not recorded):"
   log "you may sign in to your own account through the viewer while supervising it. This is NOT isolation and"
   log "carries no isolation guarantee: every process on this host, including an agent's terminal tool and any"
   log "other local user, can reach Neo's unauthenticated MCP/settings port on its bridge address and watch or"
@@ -568,8 +568,8 @@ report_status() {  # read-only reconciliation; non-zero when unsafe or unknown
     log "agent path: CLOSED but not drained (an open attempt did not complete and may have opened it). Run 'pause' before typing secrets."
   elif [[ "$state" == CLOSED ]]; then
     log "agent path: CLOSED (gate stopped and pause drained the pinned run budget; page side effects can still outlive it)"
-    ! grep -qx 'trust_mode=same-host-dev' "$STATE_FILE" \
-      || log "login mode: SAME-HOST DEVELOPMENT accepted for this handoff (trusted host, NOT isolation; general status NO-GO)"
+    log "CLOSED alone is not handoff success: status records no handoff or sign-in permission. Sign in only right"
+    log "after a 'handoff' run in this pause printed HANDOFF-READY and exited 0; real-account login stays NO-GO."
   elif [[ "$state" == DRAINING ]]; then
     local dl; dl="$(sed -n 's/^deadline=//p' "$STATE_FILE")"
     log "agent path: DRAINING (closed, drain not completed; deadline $dl). Do NOT type secrets; run 'pause' to finish."
@@ -599,8 +599,9 @@ reach Neo's loopback ports (managed policy); that does not stop host processes.
 
 Same-host development exception: in a single-operator development VM whose
 operator accepts the trusted-host assumption, 'handoff --trusted-host-dev'
-records that acceptance for one sign-in. Every check still runs and no
-isolation is added; only what the wrapper says you may sign in to changes.
+acknowledges that for that one invocation; nothing is recorded and 'status'
+never shows it. Every check still runs and no isolation is added; only what
+that handoff's own output says you may sign in to changes.
 EOF
 }
 
@@ -646,5 +647,5 @@ case "${1:-}" in
   access) cmd_access ;;
   hermes-snippet) cmd_hermes_snippet ;;
   hermes-commands) cmd_hermes_commands ;;
-  *) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

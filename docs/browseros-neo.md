@@ -13,8 +13,9 @@ started or wired into Hermes until an operator runs the steps below.
 > acceptance of the evidence below cannot lift NO-GO while that holds.
 >
 > **Same-host development exception.** An operator who runs the pilot in
-> their own single-operator development VM may accept the trusted-host
-> assumption for one sign-in with `handoff --trusted-host-dev`
+> their own single-operator development VM may acknowledge the trusted-host
+> assumption for one sign-in with `handoff --trusted-host-dev` (that one
+> invocation only; nothing is recorded and `status` never shows it)
 > ([Same-host development](#same-host-development-trusted-host-not-isolation)).
 > That is an accepted risk, not a closed boundary: it adds no isolation and
 > skips no check, and the general status above stays NO-GO.
@@ -93,9 +94,10 @@ service or Tailscale Serve/Funnel. `make browseros-neo-access` prints this.
 
 ```bash
 make browseros-neo-pause       # close the agent path, then drain the pinned run budget (65 s)
-make browseros-neo-status      # must say "agent path: CLOSED" (not proof of quiet; see below)
+make browseros-neo-status      # must say "agent path: CLOSED" (not proof of quiet, not handoff success)
 scripts/browseros-neo.sh handoff --clear-origin https://accounts.example.com   # see Login status
-# use the viewer (sign-in only per Login status)
+# use the viewer only right after that handoff printed HANDOFF-READY and exited 0
+# (sign-in only per Login status)
 make browseros-neo-resume      # re-checks everything `up` checked, then reopens the path
 ```
 
@@ -257,20 +259,25 @@ scripts/browseros-neo.sh handoff --trusted-host-dev \
 make browseros-neo-resume         # hands the signed-in session to the agent
 ```
 
-- `--trusted-host-dev` changes only the outcome text and the record. Every
+- `--trusted-host-dev` is an operator acknowledgment for that one
+  invocation, not state: it changes only that handoff's own outcome text.
+  Nothing is written to the pause record and `status` never reports a
+  login mode. Every
   gate of a normal `handoff` still runs and can still refuse: drained
   `CLOSED` record, gate stopped and port closed, no other pilot gate, full
   `check`, manifest match, stale-record check, pinned image on this profile,
   loopback-only bindings, live 6080 probe, scrub and verification, and the
   gate still closed afterwards.
-- Every `handoff` first removes the previous handoff's `handoff_at` and
-  `trust_*` lines from the pause record, so a refused or failed handoff
-  leaves no acceptance behind. On success it writes one `handoff_at`, and
-  with the flag one `trust_mode=same-host-dev` and `trust_accepted_at=<epoch>`,
-  and prints the terms; `status` shows `login mode: SAME-HOST DEVELOPMENT`.
-  The acceptance applies to that one sign-in: the next `handoff` (with or
-  without the flag), `resume`, `up` or the next `pause` removes it, so the
-  next sign-in needs the flag again.
+- The only sign-in permission is the output of the `handoff` you just ran:
+  `HANDOFF-READY` with exit 0 (and, with the flag, the same-host terms). If
+  you did not see that output for this pause, or anything ran since
+  (`up`, `resume`, `down`, a Neo restart, a gate start outside the
+  wrapper), run `pause` and `handoff` again. `status` saying `CLOSED` is not
+  handoff success. Each sign-in needs the flag again.
+- Older revisions appended `handoff_at`, `trust_mode` and
+  `trust_accepted_at` lines to the pause record. They are never read or
+  trusted; `handoff` (on admission) and a paused `up` strip them, and
+  `pause`/`resume` rewrite the record.
 - What the operator accepts (no isolation guarantee): every process on the
   host, including an agent's terminal tool and any other local user, can
   reach Neo's unauthenticated MCP/settings port on its bridge address and
@@ -299,7 +306,7 @@ bindings, and exits non-zero for anything unsafe or unknown):
 |---|---|
 | `OPEN` | gate running, no pause recorded |
 | `DRAINING` | path closed, drain not finished (`pause --no-wait`, an interrupted pause, or a pause that found drift). Do not type secrets. |
-| `CLOSED` | path closed and `pause` re-verified it after the full drain |
+| `CLOSED` | path closed and `pause` re-verified it after the full drain. Not handoff success and no sign-in permission: status records neither; only a `handoff` run's own `HANDOFF-READY` output (exit 0) allows sign-in |
 | `CLOSED but not drained` | gate stopped without a pause (e.g. after `down`), or an open attempt (`up`/`resume`) did not complete (record `OPENING`, written before the gate starts, so a failed resume never leaves a stale `CLOSED`); run `pause` first |
 | `INCONSISTENT` | a pause is recorded but the path is open (raw `docker compose up`, failed stop) |
 | `EXPOSED` / `UNKNOWN` | a non-loopback binding, or Docker could not answer; nothing is assumed |
