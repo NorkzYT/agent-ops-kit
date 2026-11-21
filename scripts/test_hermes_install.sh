@@ -111,6 +111,7 @@ ck "hermes .env not left as placeholder"  "! grep -q '^CLAUDE_MAX_PROXY_API_KEY=
 ck "honcho.json written, rendered"        "[[ -f '$hj' ]] && ! grep -q '__[A-Z0-9_]*__' '$hj'"
 ck "capability skills are activation-gated" "[[ ! -e '$hh/skills/agent-ops-kit/gstack-qa' && ! -e '$hh/skills/agent-ops-kit/problem-definition' ]]"
 ck "other kit skills still install"       "[[ -f '$hh/skills/agent-ops-kit/kanban-workflow/SKILL.md' ]]"
+ck "browseros-neo skill installs, Neo not enabled" "[[ -f '$hh/skills/agent-ops-kit/browseros-neo-browser/SKILL.md' ]] && ! grep -q 'browseros_neo' '$cfg'"
 ck "installer names the gated skills"     "grep -q 'activation-gated (docs/capability-activation.md): .*gstack-qa' '$tmp/out.log'"
 
 # --- capability gate fails closed: in a private copy of the kit (never this checkout), a

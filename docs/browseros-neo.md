@@ -1,8 +1,10 @@
 # BrowserOS neo pilot (Docker + noVNC + Hermes MCP)
 
 One dedicated, persistent browser profile in a container, viewed through
-noVNC, that Hermes drives over MCP. This is a pilot: nothing here is installed,
-started or wired into Hermes until an operator runs the steps below.
+noVNC, that Hermes drives over MCP. This is a pilot: nothing here is started or
+wired into Hermes until an operator runs the steps below. The only piece the
+kit installer copies is the preferred-browser skill, which Hermes hides until
+Neo's tools are registered ("Preferred browser").
 
 > **Signing in to real accounts through this pilot is NO-GO.** This is an
 > unresolved engineering boundary, not a pending product decision: any host
@@ -371,7 +373,8 @@ The commands write `enabled: false` first, then the URL, `trust: untrusted`
 and the tool exclusions, and `enabled: true` last, so the server is never
 enabled without its exclusions. `hermes mcp add` is not used: it offers
 "enable all tools" before any exclusion is set. `hermes-snippet` prints the
-same entry as YAML for review. This pilot runs none of them.
+same entry as YAML for review. Neither runs them; `hermes-enable` below does,
+only when asked.
 
 The last command is the activation, and no gateway restart is needed or
 wanted. In the installed Hermes (`~/.hermes/hermes-agent` at `6b21d0564d`,
@@ -395,12 +398,121 @@ treats an absent `enabled` as on, which is why the sequence starts with
 `hermes-commands` prints this warning on stderr; stdout carries only the
 commands.
 
+### Opt-in setup for another machine
+
+Each operator activates Neo on their own host; nothing in the kit enables it
+for them. `scripts/hermes-install.sh` never writes `mcp_servers`. After `up`:
+
+```bash
+bash scripts/browseros-neo.sh hermes-enable --approve-activation   # the home `hermes config path` names
+bash scripts/browseros-neo.sh hermes-disable                       # revoke; entry kept
+```
+
+Which Hermes home: the helper asks `hermes config path` once (Hermes'
+own order: `HERMES_HOME`, else the sticky active profile, else `~/.hermes`),
+prints that path, and runs every later `hermes` call with `HERMES_HOME`
+pinned to it. For a profile, say so explicitly:
+`HERMES_HOME=~/.hermes/profiles/<name> bash scripts/browseros-neo.sh hermes-enable --approve-activation`.
+Each profile is a separate registration; enabling one does not enable another.
+
+`hermes-enable` (`scripts/lib/browseros_neo_hermes.py`) runs the same native
+`hermes config set` sequence as `hermes-commands`, so Hermes writes each key
+and every other setting stays as it was. It:
+
+- refuses without `--approve-activation` or a `hermes` CLI, and unless this
+  pilot's own gate is verified open with the read-only checks `resume` runs
+  before opening it: local Docker engine, the rendered config and every
+  manifest value from `up` unchanged, the pinned Neo on this profile folder,
+  only the expected `127.0.0.1` bindings, this project's `mcp-gate` running,
+  no other pilot gate, no pause recorded, and the port accepting connections.
+  Any other listener on the port is refused. This proves which container
+  publishes the port, not who answers on it: there is no cryptographic peer
+  authentication. It holds the lifecycle lock while it runs, so `pause`
+  during `hermes-enable` fails fast and must be rerun; nothing is written;
+- reads the entry from the config file itself and cross-checks it with
+  `hermes config get`. A missing file or key is "absent"; an unreadable file,
+  invalid YAML or a non-mapping is an error (exit 5) and nothing is written.
+  Hermes' own `config get` says "not set" for an unparseable file, so it is
+  never trusted alone;
+- refuses, unchanged, an existing `browseros_neo` entry whose values differ
+  from the reference (different URL, exclusions, trust ...): an operator's
+  override is never overwritten. An entry holding a subset of the reference
+  (an interrupted earlier run, or after `hermes-disable`) is completed;
+- does nothing when the entry already matches and is enabled;
+- writes `enabled false` first and proves it from the file and `hermes config
+  get` before staging any other key (an existing enabled entry whose disable
+  does not persist is never staged); before `enabled true`, the last write, it
+  proves the entry is still `enabled: false` and holds every reference value
+  (exclusion list, trust, URL, timeouts ...), so a `config set` that exits 0
+  without persisting, or persists another value, never enables the entry;
+- reads the entry back after `enabled true`; on any failed step or a
+  mismatch it sets `enabled false` again and proves it from the file. Only
+  when there was no entry before and the entry still holds nothing but
+  reference values does it unset it; an entry another writer changed meanwhile
+  is left disabled. If `enabled false` cannot be proven it prints the revoke
+  command and exits 4;
+- prints key names, never values, and shortens and redacts any child output;
+- writes no secrets: the entry has no headers or tokens.
+
+`hermes-disable` exits 0 only when the entry is validly absent or
+`enabled: false` is read back from the file; an unparseable or unreadable
+config exits 5 and says the entry is NOT proven disabled.
+
+Both hold one exclusive lock per Hermes home,
+`<real path of the home>/browseros-neo-hermes.lock`, from the first read to the
+last write, read-back or rollback, so kit worktrees, symlinked homes and
+profile aliases of the same home serialize: a `hermes-disable` started during
+an enable waits and then wins, and one enable's rollback cannot remove a later
+enable's entry. The wait is `BROWSEROS_NEO_HERMES_LOCK_WAIT` seconds (default
+120), then exit 6 with nothing done. The lock does not stop writers outside
+these commands (`hermes config set` or `edit` by hand, Hermes itself); avoid
+editing the entry while they run.
+
+Port mismatch: if the registered `url` names another port than this Neo's
+`BROWSEROS_NEO_MCP_PORT`, `hermes-enable` refuses and names `.url`. Either
+run Neo on the registered port, or run `hermes-disable`, review the entry
+(`hermes config get mcp_servers.browseros_neo`), remove it with
+`hermes config unset mcp_servers.browseros_neo` only if nothing of yours is
+in it, then run `hermes-enable` again. The kit never does this for you.
+
+It does not restart the gateway. Run it against the live home only with that
+host's activation approval.
+
+### Preferred browser
+
+Hermes has no setting that makes an MCP server "the" browser. Its native
+browser selector is a CDP override (`/browser connect`, `BROWSER_CDP_URL`,
+`browser.cdp_url`); pointing it at Neo would need Neo's CDP published, which
+skips the gate (`pause`), the tool exclusions and the approval prompts, so the
+kit does not do it. Disabling Hermes' native browser tools would remove the
+fallback, so it does not do that either.
+
+Instead the kit ships the skill `hermes/skills/browseros-neo-browser`,
+installed with the other kit skills by `scripts/hermes-install.sh`. Its
+frontmatter sets `requires_toolsets: [mcp-browseros_neo]`. In the installed
+Hermes that condition is applied only when the system-prompt skills index is
+built (`agent/prompt_builder.py`): the skill is left out of that index while
+Neo's tools are not registered. It is not hidden elsewhere: `hermes skills
+list`, `skills_list` and an explicit `skill_view(name='browseros-neo-browser')`
+can still show or load it on a host that never enabled Neo. Nothing makes Neo
+the enforced default either: the skill is model guidance, and the agent can
+still pick another browser tool. It tells the agent to use Neo for ordinary
+browsing unless the user names another browser; to fall back only to Hermes'
+own native browser tools, saying so, when Neo errors or times out, never to
+the user's signed-in browser or another authenticated session unless the user
+asks for it; when Neo is paused, to stop that task and tell the user rather
+than continue it in another browser; never to enter secrets or move a sign-in
+between browsers; and never to reach Neo around a pause. Disable the skill per
+host with Hermes' usual skill settings.
+
 Exclusions verified at registration, not only in a tool listing:
 `scripts/test_browseros_neo_hermes_registration.sh` (opt-in; needs a local
 Hermes install) runs the printed commands in a throwaway `HERMES_HOME`,
 points them at a stdlib fake MCP server that lists `credentials`,
 `payment_cards`, `solve_captcha` and two browser tools, and calls Hermes'
-real `discover_mcp_tools()`. Only the two browser tools land in the
+real `discover_mcp_tools()`. It also copies the preferred-browser skill into
+the throwaway home and builds Hermes' real skills index from the registered
+tools: the skill is listed after `enabled true` and not before. Only the two browser tools land in the
 `mcp-browseros_neo` toolset, trust is `untrusted`, and a control run without
 exclusions registers all five. A staged run applies every command but the
 last and calls `reconcile_mcp_servers_with_config()` (the gateway's
@@ -476,6 +588,8 @@ reads or writes the live Hermes home.
 ```bash
 bash scripts/test_browseros_neo.sh    # offline: no containers started
 bash scripts/test_browseros_neo_hermes_registration.sh   # opt-in, local Hermes, isolated home
+bash scripts/test_browseros_neo_hermes_enable.sh   # opt-in, local Hermes, isolated HOME + HERMES_HOME
+bash scripts/test_browseros_neo_hermes_txn.sh   # offline, fake hermes CLI: lock, malformed config, redaction
 BROWSEROS_NEO_IMAGE_ROOT=<extracted image root> bash scripts/test_browseros_neo_viewer_origin.sh   # opt-in
 BROWSEROS_NEO_LIVE=1 bash scripts/test_browseros_neo_handoff_live.sh   # opt-in, pinned image present
 ```

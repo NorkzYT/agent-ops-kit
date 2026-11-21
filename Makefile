@@ -32,7 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
-	    browseros-neo-check browseros-neo-up browseros-neo-down browseros-neo-status browseros-neo-pause browseros-neo-resume browseros-neo-access test-browseros-neo \
+	    browseros-neo-check browseros-neo-up browseros-neo-down browseros-neo-status browseros-neo-pause browseros-neo-resume browseros-neo-access browseros-neo-hermes-enable browseros-neo-hermes-disable test-browseros-neo \
 	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
@@ -508,10 +508,17 @@ browseros-neo-resume: ## Re-check config/engine/profile against `up`, then reope
 browseros-neo-access: ## Print the SSH tunnel and sign-in steps for the viewer
 	@bash scripts/browseros-neo.sh access
 
+browseros-neo-hermes-enable: ## Opt-in: register Neo in the current HERMES_HOME (disabled first, enabled last); needs APPROVE_ACTIVATION=yes
+	@bash scripts/browseros-neo.sh hermes-enable $(if $(filter yes,$(APPROVE_ACTIVATION)),--approve-activation,)
+
+browseros-neo-hermes-disable: ## Set mcp_servers.browseros_neo.enabled false in the current HERMES_HOME (entry kept)
+	@bash scripts/browseros-neo.sh hermes-disable
+
 ##@ Tests (offline)
 
 test-browseros-neo: ## Run the BrowserOS neo pilot config/wrapper/gate tests (offline, starts no containers)
 	@bash scripts/test_browseros_neo.sh
+	@bash scripts/test_browseros_neo_hermes_txn.sh
 
 test-router: ## Run the model-router unit + zero-egress privacy canary suite (offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_*.py'
