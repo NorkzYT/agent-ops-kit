@@ -421,7 +421,20 @@ case "$1" in
         done ;;
       up)
         [[ -z "${FAKE_UP_FAIL:-}" ]] || exit 1
-        for a in "$@"; do case "$a" in neo|viewer|mcp-gate) running "$a" || start "$a" ;; esac; done ;;
+        # Real Compose: services are started first, then --wait fails for any
+        # listed service whose healthcheck is disabled (viewer, mcp-gate).
+        wait=0; for a in "$@"; do [[ "$a" == --wait ]] && wait=1; done
+        for a in "$@"; do case "$a" in
+          viewer) [[ -n "${FAKE_VIEWER_UP_FAIL:-}" ]] && { echo "fake: viewer start failed" >&2; exit 1; }
+                  running viewer || { start viewer; [[ -z "${FAKE_VIEWER_EXITS:-}" ]] || { stop viewer; : > "$FK/exist/viewer"; }; } ;;
+          neo|mcp-gate) running "$a" || start "$a" ;;
+        esac; done
+        if (( wait )); then
+          for a in "$@"; do case "$a" in
+            viewer|mcp-gate) echo "container $P-$a-1 has no healthcheck configured" >&2; exit 1 ;;
+            neo) [[ -z "${FAKE_NEO_UNHEALTHY:-}" ]] || { echo "container $P-neo-1 is unhealthy" >&2; exit 1; } ;;
+          esac; done
+        fi ;;
       stop)
         svcs=(); while [[ $# -gt 0 ]]; do case "$1" in -t) shift ;; *) svcs+=("$1") ;; esac; shift; done
         (( ${#svcs[@]} )) || svcs=(mcp-gate viewer neo)
@@ -468,6 +481,41 @@ expect() {  # expect LABEL want_rc(0|nz) pattern [!antipattern] -- cmd...
 }
 UNSAFE='browser is yours|safe to type'
 W="$fstate/agent-paused"
+
+# --- up vs Compose --wait (live 1fe2d41: viewer has no healthcheck) -------
+rawdk() { life bash "$fk/bin/docker" compose -p bneo-life "$@"; }  # raw fake engine, not the wrapper
+rawdk up -d --no-recreate --wait --wait-timeout 240 neo viewer; rc=$?
+(( rc == 1 )) && grep -qx 'container bneo-life-viewer-1 has no healthcheck configured' "$fk/out" \
+  && [[ -e "$fk/run/neo" && -e "$fk/run/viewer" ]] \
+  && ok "fixture reproduces live error: --wait over viewer exits 1 after starting both" || no "fixture --wait viewer (rc=$rc)"
+rawdk down >/dev/null; rm -f "$fk"/t.*
+up_refused() {  # LABEL PATTERN VAR=val...: up fails, gate never started, nothing stopped
+  local label="$1" pat="$2"; shift 2
+  : > "$fk/calls"
+  expect "up refuses: $label" nz "$pat" "!agent path: OPEN" -- env "$@" bash "$WRAP" up
+  ! grep -q 'up -d --no-deps --no-recreate mcp-gate' "$fk/calls" && ! gate_listening \
+    && ok "  ... gate not started" || no "  ... gate started on $label"
+  ! grep -qE '^compose .* (stop|down|rm|kill|restart)( |$)' "$fk/calls" && ok "  ... nothing stopped" || no "  ... something stopped on $label"
+}
+up_refused "neo unhealthy" 'neo did not become healthy.*Nothing was stopped' FAKE_NEO_UNHEALTHY=1
+[[ ! -e "$fk/run/viewer" ]] && ok "  ... viewer not started when neo is unhealthy" || no "  ... viewer started though neo unhealthy"
+up_refused "viewer start fails" 'starting viewer failed; neo is left running' FAKE_VIEWER_UP_FAIL=1
+[[ -e "$fk/run/neo" ]] && ok "  ... neo left running" || no "  ... neo not left running"
+up_refused "viewer exits right away" 'viewer is not running after compose up' FAKE_VIEWER_EXITS=1
+# Live recovery: neo + viewer already running from the failed old `up`, no
+# gate. `up` must reuse them as they are (no restart) and open the gate.
+rawdk up -d viewer >/dev/null
+neo_t0="$(cat "$fk/t.neo.started")"; viewer_t0="$(cat "$fk/t.viewer.started")"
+: > "$fk/calls"
+expect "up: neo+viewer already running, gate absent -> reused, gate opened" 0 'agent path: OPEN' -- bash "$WRAP" up
+grep -qE '^compose .* up -d --no-recreate --wait --wait-timeout [0-9]+ neo$' "$fk/calls" \
+  && ok "  ... --wait covers neo only" || no "  ... --wait not neo-only: $(grep ' up ' "$fk/calls" | tr '\n' ';')"
+grep -qE '^compose .* up -d --no-deps --no-recreate viewer$' "$fk/calls" && ! grep -qE -- '--wait.*viewer|viewer.*--wait' "$fk/calls" \
+  && ok "  ... viewer started without --wait, --no-deps" || no "  ... viewer up line"
+[[ "$(cat "$fk/t.neo.started")" == "$neo_t0" && "$(cat "$fk/t.viewer.started")" == "$viewer_t0" ]] \
+  && ok "  ... running neo/viewer not restarted" || no "  ... neo/viewer restarted"
+# Reset the fake engine for the main state-machine run below.
+rawdk down >/dev/null; rm -f "$fk"/t.* "$fk/calls"; rm -rf "$fstate"
 
 expect "up: checks, starts neo, opens the gate" 0 'agent path: OPEN' -- bash "$WRAP" up
 [[ -f "$fstate/manifest" ]] && grep -q '^wall_timeout=60$' "$fstate/manifest" && grep -q '^engine_id=engine-A$' "$fstate/manifest" \

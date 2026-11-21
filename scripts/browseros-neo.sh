@@ -331,7 +331,7 @@ cmd_up() {
   # trusted; they are stripped so the record keeps only the pause.
   [[ ! -e "$STATE_FILE" ]] || { assert_gate_closed "pause recorded in $STATE_FILE but "; strip_legacy_handoff_lines; }
   "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 || compose pull neo
-  compose up -d --no-recreate --wait --wait-timeout "${BROWSEROS_NEO_WAIT:-240}" neo viewer
+  start_neo_and_viewer
   enforce_bindings
   probe_neo_ports
   if [[ -e "$STATE_FILE" ]]; then
@@ -342,6 +342,24 @@ cmd_up() {
     open_gate
   fi
   report_status || true
+}
+
+start_neo_and_viewer() {  # neo healthy, then viewer running; reuses existing containers, stops nothing
+  # `compose up --wait` fails with "container ... has no healthcheck
+  # configured" for any listed service whose healthcheck is disabled (the
+  # viewer), even after starting it. So only neo, which has a healthcheck, is
+  # waited on; the viewer is then started without --wait (--no-deps: neo is
+  # not touched again) and must be running.
+  compose up -d --no-recreate --wait --wait-timeout "${BROWSEROS_NEO_WAIT:-240}" neo \
+    || die "neo did not become healthy (compose up --wait neo failed); viewer not started. Nothing was stopped. Inspect: $DOCKER compose -p $PROJECT ps"
+  local id
+  id="$(running_ids neo)" || die "cannot query neo after it became healthy"
+  [[ -n "$id" && "$id" != *$'\n'* ]] || die "neo is not running after compose up --wait (exactly one container expected)"
+  compose up -d --no-deps --no-recreate viewer \
+    || die "starting viewer failed; neo is left running. Nothing was stopped."
+  id="$(running_ids viewer)" || die "cannot query viewer after starting it"
+  [[ -n "$id" && "$id" != *$'\n'* ]] \
+    || die "viewer is not running after compose up (exactly one container expected); neo is left running. Nothing was stopped. Logs: $DOCKER compose -p $PROJECT logs viewer"
 }
 
 gate_failed() {  # the gate did not come up cleanly; report the real state, stop nothing
