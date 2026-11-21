@@ -10,6 +10,10 @@
 #   browseros-neo.sh pause [--no-wait]
 #                               close the agent's MCP path, then drain for the pinned run budget
 #   browseros-neo.sh resume     re-check config/engine/profile against `up`, then reopen the path
+#   browseros-neo.sh handoff [--clear-origin https://ORIGIN]...
+#                               after a drained pause: restart Neo's browser, remove every
+#                               service worker/Cache Storage, clear each sign-in origin,
+#                               close all tabs, verify; the human then signs in via the viewer
 #   browseros-neo.sh access     print how to reach the viewer from another machine
 #   browseros-neo.sh hermes-snippet    print the reference Hermes mcp_servers entry
 #   browseros-neo.sh hermes-commands   print the native `hermes config set` commands for it
@@ -21,6 +25,7 @@
 # Only `down --approve-down` removes containers and only `pause` stops one (the
 # mcp-gate). No other command stops, removes or recreates a container: when a
 # check fails they refuse and print the approved command to run.
+# `handoff` restarts the browser process inside the running Neo, not a container.
 # docs/browseros-neo.md explains what pause does and does not stop.
 set -euo pipefail
 
@@ -152,6 +157,8 @@ engine_id=$ENGINE_ID
 config_sha=$CONFIG_SHA
 neo_toml_sha=$(sha "$COMPOSE_DIR/neo.toml")
 gate_sha=$(sha "$COMPOSE_DIR/mcp-gate.py")
+ws6080_sha=$(sha "$COMPOSE_DIR/websockify-6080")
+policy_sha=$(sha "$COMPOSE_DIR/chromium-policy.json")
 wall_timeout=$(wall_timeout)
 EOF
 }
@@ -230,7 +237,7 @@ manifest_matches_or_die() {  # $1 = what is refused; every recorded key must equ
   [[ -f "$MANIFEST" ]] || die "$1 refused: no manifest from 'up' for this profile. Containers were not touched. $fresh"
   local k want got now
   now="$(manifest_body)"
-  for k in project data vnc_port mcp_port image engine_id config_sha neo_toml_sha gate_sha wall_timeout; do
+  for k in project data vnc_port mcp_port image engine_id config_sha neo_toml_sha gate_sha ws6080_sha policy_sha wall_timeout; do
     want="$(manifest_get "$k")" || die "$1 refused: manifest lacks $k. Containers were not touched. $fresh"
     got="$(sed -n "s/^$k=//p" <<<"$now")"
     [[ "$got" == "$want" ]] || die "$1 refused: $k changed since 'up' ($want -> $got); existing containers are never recreated automatically. $fresh"
@@ -346,7 +353,43 @@ cmd_pause() {
   log "CLOSED: the agent path has stayed closed for the pinned run budget."
   log "This is not proof the browser is quiet: page timers, injected scripts, service workers, open tabs"
   log "or settings left by earlier tool calls can outlive the run budget, and looking at the page cannot"
-  log "show them. Signing in through this pilot is NO-GO (docs/browseros-neo.md, 'Login status')."
+  log "show them. Before signing in, run 'handoff' (docs/browseros-neo.md, 'Login status')."
+}
+
+cmd_handoff() {  # prepare the running browser for a human sign-in; agent path must be drained
+  local a args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --clear-origin)
+        a="${2:-}"
+        [[ "$a" =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$ ]] \
+          || die "handoff: --clear-origin needs an https origin like https://accounts.example.com (got '${a}')"
+        args+=(--clear-origin "$a"); shift 2 ;;
+      *) die "handoff: unknown option $1" ;;
+    esac
+  done
+  take_lock
+  grep -qx 'state=CLOSED' "$STATE_FILE" 2>/dev/null \
+    || die "handoff refused: the agent path is not drained (run 'pause' without --no-wait first). Nothing was touched."
+  assert_gate_closed "handoff refused: "
+  cmd_check
+  manifest_matches_or_die "handoff"
+  verify_running_neo
+  enforce_bindings
+  local id report rc=0
+  id="$(running_ids neo)" || die "cannot query neo"
+  log "handoff: restarting Neo's browser and scrubbing agent-planted state (up to ~4 min)..."
+  report="$("$DOCKER" exec -i -u neo "$id" /usr/bin/python3 -I - "${args[@]}" < "$COMPOSE_DIR/neo-handoff.py")" || rc=$?
+  printf '%s\n' "$report"
+  # The scrub ran with the gate closed; prove it is still closed and still the same record.
+  assert_gate_closed "handoff: agent path reopened during the scrub: "
+  grep -qx 'state=CLOSED' "$STATE_FILE" 2>/dev/null || die "handoff: pause record changed during the scrub; do NOT sign in"
+  (( rc == 0 )) && python3 -I -c 'import json,sys; sys.exit(json.loads(sys.argv[1]).get("result") != "HANDOFF-READY")' "$report" 2>/dev/null \
+    || die "handoff FAILED (rc $rc); do NOT sign in. The browser may have been restarted; nothing was stopped or removed."
+  printf 'handoff_at=%s\n' "$(date +%s)" >> "$STATE_FILE"
+  log "HANDOFF-READY: browser restarted, no service worker, Cache Storage, agent tab or timer survived (verified)."
+  log "Sign in now through the viewer ('access'). Keep the agent path closed until you are done; 'resume' reopens it"
+  log "and the agent then acts with the signed-in session. docs/browseros-neo.md 'Login status' lists what this does not cover."
 }
 
 cmd_resume() {
@@ -402,10 +445,10 @@ then open http://127.0.0.1:${VNC_PORT}/ locally: the same local port, and
 127.0.0.1, not localhost. The viewer accepts a WebSocket only with Origin
 http://127.0.0.1:${VNC_PORT}; any other local port or host name is refused.
 
-LOGIN: NO-GO. Do not sign in to accounts through this pilot. The image's own
-noVNC websockify (port 6080 inside Neo) has no Origin check, so a web page the
-agent opens in Neo may be able to drive this desktop. docs/browseros-neo.md,
-"Login status", lists what would have to be verified first.
+LOGIN: only after 'pause' (full drain) and then 'handoff' reports
+HANDOFF-READY, and only with the limits in docs/browseros-neo.md, "Login
+status". Neo's own 6080 refuses every WebSocket and pages cannot reach Neo's
+loopback ports (managed policy); the viewer is the only way in.
 EOF
 }
 
@@ -443,8 +486,9 @@ case "${1:-}" in
   status) report_status ;;
   pause) shift; cmd_pause "${1:-}" ;;
   resume) cmd_resume ;;
+  handoff) shift; cmd_handoff "$@" ;;
   access) cmd_access ;;
   hermes-snippet) cmd_hermes_snippet ;;
   hermes-commands) cmd_hermes_commands ;;
-  *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

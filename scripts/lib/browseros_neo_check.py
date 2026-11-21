@@ -173,8 +173,13 @@ def check(cfg, data, image, compose_dir, project, vnc_port, mcp_port):
     for key in ("PUID", "PGID"):
         if not re.fullmatch(r"[1-9][0-9]*", env.get(key, "")):
             errs.append(f"neo: {key} must be a non-root numeric id, got {env.get(key)!r}")
+    # websockify-6080 shadows the image's websockify (6080: loopback, every
+    # WebSocket refused); chromium-policy.json blocks page -> loopback access.
     _mounts("neo", neo, {"/data": (data, False),
-                         "/etc/neo/neo.toml": (os.path.join(compose_dir, "neo.toml"), True)}, errs)
+                         "/etc/neo/neo.toml": (os.path.join(compose_dir, "neo.toml"), True),
+                         "/usr/local/bin/websockify": (os.path.join(compose_dir, "websockify-6080"), True),
+                         "/etc/chromium/policies/managed/agent-ops-kit.json":
+                             (os.path.join(compose_dir, "chromium-policy.json"), True)}, errs)
 
     # mcp-gate: exact forwarder, non-root, read-only.
     if gate.get("entrypoint") != GATE_ENTRYPOINT or gate.get("command") is not None:

