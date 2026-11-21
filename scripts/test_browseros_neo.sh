@@ -506,6 +506,9 @@ expect "handoff refuses port 0" nz 'needs an https origin' -- bash "$WRAP" hando
 expect "handoff without --clear-origin is refused before anything" nz 'handoff refused: name every disposable sign-in origin' -- bash "$WRAP" handoff
 ! grep -qE '^(exec|compose|ps|inspect) ' "$fk/calls" && ok "  ... and ran nothing in Neo" || { no "  ... origin-less handoff reached Docker"; cat "$fk/calls"; }
 : > "$fk/calls"
+# Handoff persists nothing: sign-in permission is only the current handoff's own output.
+no_handoff() { [[ "$(grep -c '^state=CLOSED$' "$W")" == 1 ]] && ! grep -qE '^(handoff_at|trust_mode|trust_accepted_at)=' "$W"; }
+legacy_lines() { printf 'handoff_at=1\ntrust_mode=same-host-dev\ntrust_accepted_at=1\n' >> "$W"; }
 expect "handoff after a drained pause: HANDOFF-READY" 0 'HANDOFF-READY: browser process restarted' "!Sign in now|Cache Storage, agent tab or timer survived" -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
 grep -q 'Real-account login is NO-GO' "$fk/out" && grep -q 'disposable' "$fk/out" \
   && grep -q 'Scope: all site data cleared only on https://accounts.example.com;' "$fk/out" \
@@ -516,7 +519,7 @@ grep -q 'Real-account login is NO-GO' "$fk/out" && grep -q 'disposable' "$fk/out
 grep -qE '^exec -i -u neo bneo-life-neo-1 /usr/bin/python3 -I - --clear-origin https://accounts.example.com$' "$fk/calls" \
   && [[ "$(cut -d' ' -f1 "$fk/exec.stdin.sha")" == "$(sha256sum < "$ROOT/docker/browseros-neo/neo-handoff.py" | cut -d' ' -f1)" ]] \
   && ok "  ... ran the checked-out neo-handoff.py as neo, on stdin" || { no "  ... handoff exec call"; cat "$fk/calls"; }
-grep -qx 'state=CLOSED' "$W" && grep -q '^handoff_at=' "$W" && ok "  ... record stays CLOSED, handoff_at added" || no "  ... record: $(cat "$W")"
+no_handoff && ok "  ... record stays CLOSED, nothing about the handoff persisted" || no "  ... record: $(cat "$W")"
 ! grep -qE 'compose.* (up|stop|down|rm|kill|restart) ' "$fk/calls" && ok "  ... touched no container" || no "  ... handoff touched containers"
 expect "handoff: script failure says do NOT sign in" nz 'handoff FAILED \(rc 1\); do NOT sign in' "!HANDOFF-READY:" -- env FAKE_EXEC_RC=1 FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff --clear-origin https://accounts.example.com
 expect "handoff: rc 0 without HANDOFF-READY is a failure" nz 'handoff FAILED \(rc 0\)' "!HANDOFF-READY:" -- env FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff --clear-origin https://accounts.example.com
@@ -535,23 +538,23 @@ grep -q 'mcp-gate ran after the drain began' "$fk/out" && ok "  ... names the ga
 ! grep -q '^exec ' "$fk/calls" && ok "  ... and ran nothing in Neo" || no "  ... stale-record handoff ran in Neo"
 expect "pause drains again" 0 'CLOSED: the agent path has stayed closed' -- bash "$WRAP" pause
 expect "handoff after the new drain: HANDOFF-READY (positive control)" 0 'HANDOFF-READY:' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
-grep -q 'Real-account login is NO-GO' "$fk/out" && ! grep -q 'SAME-HOST DEVELOPMENT' "$fk/out" && ! grep -q '^trust_mode=' "$W" \
-  && ok "  ... without --trusted-host-dev: NO-GO text, no trust mode recorded" || { no "  ... default handoff trust text/record"; cat "$W"; }
+grep -q 'Real-account login is NO-GO' "$fk/out" && ! grep -q 'SAME-HOST DEVELOPMENT' "$fk/out" && no_handoff \
+  && ok "  ... without --trusted-host-dev: NO-GO text, nothing recorded" || { no "  ... default handoff trust text/record"; cat "$W"; }
 
-# Same-host development (operator-accepted trusted host): every gate still runs;
-# only the sign-in wording and the record change. Never "isolated", never a bare GO.
+# Same-host development (operator-acknowledged trusted host, per invocation): every
+# gate still runs; only the handoff's own sign-in wording changes, nothing is recorded. Never "isolated", never a bare GO.
 : > "$fk/calls"
 expect "handoff --trusted-host-dev without an origin is refused before anything" nz 'handoff refused: name every disposable sign-in origin' -- bash "$WRAP" handoff --trusted-host-dev
 ! grep -qE '^(exec|compose|ps|inspect) ' "$fk/calls" && ok "  ... and reached no Docker call" || no "  ... reached Docker"
 : > "$fk/calls"
 expect "handoff --trusted-host-dev still refuses a failed live 6080 probe" nz "6080 lockdown is NOT proven in effect" "!HANDOFF-READY:|SAME-HOST" \
   -- env FAKE_PROBE_OUT="PROBE-BAD: x" FAKE_PROBE_RC=1 bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com
-! grep -q '^exec -i ' "$fk/calls" && ! grep -q '^trust_mode=' "$W" && ok "  ... no scrub, no trust mode recorded" || no "  ... failed trusted handoff ran or recorded"
+! grep -q '^exec -i ' "$fk/calls" && no_handoff && ok "  ... no scrub, nothing recorded" || no "  ... failed trusted handoff ran or recorded"
 expect "handoff --trusted-host-dev still fails when the scrub fails" nz 'handoff FAILED' "!SAME-HOST" \
   -- env FAKE_EXEC_RC=1 FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff --clear-origin https://accounts.example.com --trusted-host-dev
-! grep -q '^trust_mode=' "$W" && ok "  ... no trust mode recorded" || no "  ... failed scrub recorded trust mode"
+no_handoff && ok "  ... nothing recorded" || no "  ... failed scrub recorded something"
 : > "$fk/calls"
-expect "handoff --trusted-host-dev after a drain: HANDOFF-READY + same-host terms" 0 'SAME-HOST DEVELOPMENT \(trusted-host assumption accepted' \
+expect "handoff --trusted-host-dev after a drain: HANDOFF-READY + same-host terms" 0 'SAME-HOST DEVELOPMENT \(trusted-host assumption acknowledged by the operator for this handoff only; not recorded' \
   "!Real-account login is NO-GO \(|isolated\b|is safe|GO for real" -- bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com
 grep -q 'HANDOFF-READY:' "$fk/out" && grep -q 'This is NOT isolation' "$fk/out" && grep -q 'no isolation guarantee' "$fk/out" \
   && grep -q "agent's terminal tool" "$fk/out" && grep -q 'Not for shared, multi-user or production hosts' "$fk/out" \
@@ -559,40 +562,39 @@ grep -q 'HANDOFF-READY:' "$fk/out" && grep -q 'This is NOT isolation' "$fk/out" 
   && grep -q "From 'pause' until you finish" "$fk/out" && grep -q "run no other agent task on this host" "$fk/out" \
   && ! grep -q 'While signed in, run no agent' "$fk/out" \
   && ok "  ... names the trusted-host assumption, the bypass and the residual NO-GO" || { no "  ... trusted text"; cat "$fk/out"; }
-grep -qx 'trust_mode=same-host-dev' "$W" && grep -q '^trust_accepted_at=[0-9]' "$W" && grep -qx 'state=CLOSED' "$W" \
-  && ok "  ... record: CLOSED + trust_mode=same-host-dev + time" || no "  ... record: $(cat "$W")"
+no_handoff && ok "  ... record: CLOSED only, no acknowledgment persisted" || no "  ... record: $(cat "$W")"
 grep -qE '^exec -i -u neo bneo-life-neo-1 /usr/bin/python3 -I - --clear-origin https://accounts.example.com$' "$fk/calls" \
   && grep -q '^exec -u neo bneo-life-neo-1 /usr/bin/python3 -I -c import socket' "$fk/calls" \
   && ! grep -qE 'compose.* (up|stop|down|rm|kill|restart) ' "$fk/calls" \
   && ok "  ... same probe and scrub as the default path; touched no container" || { no "  ... trusted handoff calls"; cat "$fk/calls"; }
-expect "status shows the same-host development mode" 0 'login mode: SAME-HOST DEVELOPMENT accepted.*NOT isolation' -- bash "$WRAP" status
-# The record is per sign-in: one current handoff, superseded by every new handoff, failed or not.
-one_handoff() { [[ "$(grep -c '^handoff_at=' "$W")" == 1 && "$(grep -c '^trust_mode=' "$W")" == "$1" \
-  && "$(grep -c '^trust_accepted_at=' "$W")" == "$1" && "$(grep -c '^state=CLOSED$' "$W")" == 1 ]]; }
-no_handoff() { grep -qx 'state=CLOSED' "$W" && ! grep -qE '^(handoff_at|trust_mode|trust_accepted_at)=' "$W"; }
-expect "repeated handoff --trusted-host-dev: HANDOFF-READY" 0 'SAME-HOST DEVELOPMENT' -- bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com
-one_handoff 1 && ok "  ... record holds one handoff_at and one trust entry (not appended)" || no "  ... repeated record: $(tr '\n' ' ' < "$W")"
-expect "handoff without the flag after a trusted one: NO-GO text" 0 'Real-account login is NO-GO' "!SAME-HOST DEVELOPMENT \(trusted-host" -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
-one_handoff 0 && ok "  ... earlier same-host acceptance removed; one handoff_at" || no "  ... record: $(tr '\n' ' ' < "$W")"
-expect "status after a flagless handoff shows no same-host mode" 0 'agent path: CLOSED' "!login mode: SAME-HOST" -- bash "$WRAP" status
-life bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com; one_handoff 1 || no "  ... trusted re-handoff setup"
+expect "status after a trusted handoff: CLOSED, says CLOSED is not handoff success, no mode shown" 0 \
+  'CLOSED alone is not handoff success: status records no handoff or sign-in permission' "!SAME-HOST|login mode|accepted" -- bash "$WRAP" status
+grep -q 'agent path: CLOSED (gate stopped and pause drained' "$fk/out" && grep -q 'real-account login stays NO-GO' "$fk/out" \
+  && ok "  ... normal CLOSED line kept, general NO-GO stated" || { no "  ... status CLOSED text"; cat "$fk/out"; }
+# Advisory lines an older wrapper wrote are never trusted: status ignores them, every admitted transition strips them.
+legacy_lines
+expect "status ignores old handoff/trust lines" 0 'CLOSED alone is not handoff success' "!SAME-HOST|login mode|accepted" -- bash "$WRAP" status
+expect "handoff without the flag over old trust lines: NO-GO text" 0 'Real-account login is NO-GO' "!SAME-HOST DEVELOPMENT \(trusted-host" -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
+no_handoff && ok "  ... old lines stripped, nothing new recorded" || no "  ... record: $(tr '\n' ' ' < "$W")"
+legacy_lines
 expect "trusted acceptance then a failed scrub: do NOT sign in" nz 'handoff FAILED' "!SAME-HOST" \
   -- env FAKE_EXEC_RC=1 FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff --clear-origin https://accounts.example.com --trusted-host-dev
-no_handoff && ok "  ... earlier handoff and acceptance invalidated by the failed handoff" || no "  ... record after failed handoff: $(tr '\n' ' ' < "$W")"
-expect "status after the failed handoff shows no same-host mode" 0 'agent path: CLOSED' "!login mode: SAME-HOST" -- bash "$WRAP" status
-life bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com; one_handoff 1 || no "  ... trusted re-handoff setup"
+no_handoff && ok "  ... old lines stripped by the failed handoff" || no "  ... record after failed handoff: $(tr '\n' ' ' < "$W")"
+expect "status after the failed handoff: not handoff success" 0 'CLOSED alone is not handoff success' "!SAME-HOST|login mode" -- bash "$WRAP" status
+legacy_lines
 expect "up while paused after a trusted handoff keeps the gate closed" 0 'stays closed' -- bash "$WRAP" up
-no_handoff && ok "  ... up removes the earlier handoff and acceptance, keeps CLOSED" || no "  ... record after up: $(tr '\n' ' ' < "$W")"
-life bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com; one_handoff 1 || no "  ... trusted re-handoff setup"
+grep -q "Any earlier handoff no longer applies.*run 'pause' and 'handoff' again" "$fk/out" && ok "  ... up says an earlier handoff no longer applies" || no "  ... paused up handoff notice"
+no_handoff && ok "  ... up strips old handoff lines, keeps CLOSED" || no "  ... record after up: $(tr '\n' ' ' < "$W")"
+legacy_lines
 : > "$fk/calls"
 expect "handoff refused when the live 6080 probe fails" nz "6080 lockdown is NOT proven in effect.*Nothing was stopped" "!HANDOFF-READY:" \
   -- env FAKE_PROBE_OUT="PROBE-BAD: 6080 listeners ['00000000']" FAKE_PROBE_RC=1 bash "$WRAP" handoff --clear-origin https://accounts.example.com
 ! grep -q '^exec -i ' "$fk/calls" && ok "  ... and the scrub did not run" || no "  ... scrub ran despite failed probe"
-no_handoff && ok "  ... a handoff refused after admission still invalidates the earlier acceptance" || no "  ... record after refused handoff: $(tr '\n' ' ' < "$W")"
-life bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com; one_handoff 1 || no "  ... trusted handoff before resume"
+no_handoff && ok "  ... a handoff refused after admission still strips old lines" || no "  ... record after refused handoff: $(tr '\n' ' ' < "$W")"
+legacy_lines
 expect "resume from CLOSED with a gate that never listens fails" nz 'did not accept connections' -- env FAKE_GATE_NOLISTEN=1 bash "$WRAP" resume
 grep -qx 'state=OPENING' "$W" && ! grep -qx 'state=CLOSED' "$W" && ok "  ... record is OPENING, never a stale CLOSED" || no "  ... record after failed resume: $(cat "$W")"
-! grep -q '^trust_mode=' "$W" && ok "  ... same-host acceptance does not survive a resume attempt (per sign-in)" || no "  ... trust_mode survived resume"
+! grep -qE '^(handoff_at|trust_mode|trust_accepted_at)=' "$W" && ok "  ... old handoff lines do not survive a resume attempt" || no "  ... old lines survived resume"
 life bash "$fk/bin/docker" compose -p bneo-life stop mcp-gate   # the gate then exits on its own
 : > "$fk/calls"
 expect "handoff refused after a failed resume and gate exit (not drained)" nz 'handoff refused: the agent path is not drained' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com

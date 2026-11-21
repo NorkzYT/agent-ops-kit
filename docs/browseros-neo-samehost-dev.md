@@ -1,5 +1,14 @@
 # BrowserOS neo: same-host development candidate (on 12fe982)
 
+> **Historical.** This records the 12fe982 candidate and its evidence as
+> run then; the evidence is unchanged. Superseded behaviour: that revision
+> recorded `trust_mode=same-host-dev`/`trust_accepted_at` (and later
+> `handoff_at`) in the pause record and `status` printed a login mode. Current
+> behaviour: `--trusted-host-dev` is an invocation-only acknowledgment,
+> nothing is recorded, `status` shows no login mode and says `CLOSED` alone
+> is not handoff success, and old lines are stripped, never trusted
+> (`docs/browseros-neo.md`, "Same-host development").
+
 Operator decision (2026-11-21): run the pilot in this development VM, on
 the same host as the agents, and accept that limitation. This is not proof
 of isolation. It does not authorize weakening any control, public
