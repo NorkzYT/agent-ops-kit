@@ -27,8 +27,9 @@ orchestrator ceiling (``agent.reasoning_effort: high``) would rule out xhigh.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Optional, Sequence, Tuple
 
 # Ordered low -> high. The index is the degrade walk order.
 TIERS = ("routine", "medium", "elevated", "high", "max")
@@ -52,6 +53,47 @@ GPT_TIER_FALLBACKS = {
     "elevated": ("gpt-5.6-terra",),
     "high": ("gpt-5.6-sol",),
 }
+
+# Strict GPT model id: ``gpt-<major>[.<minor>]-<family>``, lowercase ASCII, no
+# leading zeros, at most three digits per component, nothing before or after.
+# Anything else (case variants, whitespace, suffixes like ``-preview``,
+# ``openai/`` prefixes, three-part versions) is not a family model.
+_GPT_ID_RE = re.compile(r"gpt-(0|[1-9][0-9]{0,2})(?:\.(0|[1-9][0-9]{0,2}))?-(luna|terra|sol|astra)")
+_FAMILY_TIER = {"luna": "routine", "terra": "elevated", "sol": "high", "astra": "max"}
+
+# Tiers resolved to the NEWEST strictly-parsed model of their family when the
+# live set is known (``gpt-6.2-sol`` beats ``gpt-6.1-sol``; ``gpt-6.10-sol``
+# beats ``gpt-6.9-sol``). The tier itself — and the Astra authorization that
+# gates ``max`` — is decided before this; the live set only picks the version.
+NEWEST_FAMILY_TIERS = {"high": "sol", "max": "astra"}
+
+
+def parse_family_model(model_id: object) -> Optional[Tuple[str, Tuple[int, int]]]:
+    """``(family, (major, minor))`` for a strict GPT family id, else ``None``.
+
+    A missing minor is ``0`` (``gpt-6-astra`` is version 6.0)."""
+    if not isinstance(model_id, str):
+        return None
+    m = _GPT_ID_RE.fullmatch(model_id)
+    if m is None:
+        return None
+    return m.group(3), (int(m.group(1)), int(m.group(2) or 0))
+
+
+def newest_family_model(family: str, ids: Iterable[object]) -> Optional[str]:
+    """The highest-version strict id of ``family`` in ``ids`` (numeric order),
+    or ``None``. Ties (``gpt-6`` vs ``gpt-6.0``) break on the id string so the
+    choice is deterministic."""
+    best: Optional[Tuple[Tuple[int, int], str]] = None
+    for mid in ids:
+        parsed = parse_family_model(mid)
+        if parsed is None or parsed[0] != family:
+            continue
+        key = (parsed[1], mid)  # type: ignore[assignment]
+        if best is None or key[0] > best[0] or (key[0] == best[0] and key[1] < best[1]):
+            best = key  # type: ignore[assignment]
+    return best[1] if best else None
+
 
 # Coding family: opus is the default, fable the hard-engineering escalation.
 CODING_TIER_MODELS = {
@@ -139,10 +181,18 @@ def coding_effort(tier: str, effort: str, reasons: Iterable[str], *, ceiling: st
 
 
 def alias_to_tier(name: str) -> Optional[str]:
-    """Map a model id or short alias to a tier, or None if unknown."""
-    if not name:
+    """Map a model id or short alias to a tier, or None if unknown.
+
+    Besides the fixed aliases, any strict GPT family id maps to its family's
+    tier (``gpt-7-astra`` -> ``max``), so a newer Astra is still gated as
+    max-tier at the execution seam."""
+    if not name or not isinstance(name, str):
         return None
-    return _ALIAS_TO_TIER.get(name.strip().lower())
+    tier = _ALIAS_TO_TIER.get(name.strip().lower())
+    if tier is not None:
+        return tier
+    parsed = parse_family_model(name)
+    return _FAMILY_TIER[parsed[0]] if parsed else None
 
 
 def _available_lower(available: Iterable[str]) -> set:
@@ -185,7 +235,10 @@ def resolve_model(
     exists does it step up — and the ``max`` tier is excluded from that upward
     walk unless ``allow_max`` is set, so a missing lower model can never silently
     upgrade a request to Astra. Without ``allow_max`` the start tier itself is
-    also capped at ``high`` (the automatic Sol ceiling). Within a tier the
+    also capped at ``high`` (the automatic Sol ceiling). With a known live set
+    the ``high``/``max`` tiers pick the newest strict Sol/Astra id advertised
+    (``NEWEST_FAMILY_TIERS``), so an older version is chosen only when the newer
+    one is absent. Otherwise within a tier the
     primary model is tried before its ``GPT_TIER_FALLBACKS`` (gpt-6.1-terra, then
     gpt-5.6-terra; gpt-6.1-sol, then gpt-5.6-sol). Returns ``None`` when nothing allowed is available (caller
     decides: keep, degrade, or refuse).
@@ -197,11 +250,17 @@ def resolve_model(
     if not allow_max and tier == "max":
         tier = "high"
     avail = _available_lower(available) if available is not None else None
+    # Exact ids as advertised (strict parsing rejects case/whitespace variants).
+    live = [a for a in available if isinstance(a, str)] if available is not None else []
     start = TIERS.index(tier)
 
     def pick(t: str) -> Optional[str]:
         if avail is None:
             return table[t]
+        if not coding and t in NEWEST_FAMILY_TIERS:
+            newest = newest_family_model(NEWEST_FAMILY_TIERS[t], live)
+            if newest:
+                return newest
         fallbacks = () if coding else GPT_TIER_FALLBACKS.get(t, ())
         for candidate in (table[t],) + fallbacks:
             if candidate.lower() in avail:

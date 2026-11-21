@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 
 from . import aux_guard
+from . import model_catalog
 from .router import Router
 from .router_config import load_settings
 from .specialist_hook import SpecialistHook
@@ -43,7 +44,7 @@ logger = logging.getLogger("hermes.plugin.model_router")
 
 def register(ctx) -> None:
     settings = load_settings(getattr(ctx, "get_config", None))
-    router = Router(settings)
+    router = Router(settings, gpt_catalog=model_catalog.from_settings(settings))
     ctx.register_middleware("llm_request", router.on_llm_request)
     ctx.register_middleware("llm_execution", router.on_llm_execution)
     aux_guard.install(aux_guard.proxy_urls(settings))
@@ -61,7 +62,7 @@ def register(ctx) -> None:
                        "only a #privacy marker in the current turn keeps a request local")
     logger.info(
         "model_router registered (privacy=%s complexity=%s local=%s specialists=%s mode=%s) "
-        "local_models=routine:%s,fallback:%s,agent:%s classifier=%s coding_effort=%s",
+        "local_models=routine:%s,fallback:%s,agent:%s classifier=%s coding_effort=%s gpt_catalog=%s",
         settings.privacy_routing,
         settings.complexity_routing,
         "configured" if (settings.ollama_base_url and settings.local_chain("routine")) else "unset",
@@ -75,6 +76,7 @@ def register(ctx) -> None:
         if specialists.classifier_ready or settings.specialist_classifier == "none"
         else f"{settings.specialist_classifier}-unavailable",
         f"auto/{settings.coding_effort_ceiling}" if settings.coding_effort_routing else "off",
+        settings.gpt_catalog,
     )
 
 

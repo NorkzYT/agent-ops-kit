@@ -50,6 +50,11 @@ def _coding_ceiling(raw: Any) -> str:
     return value if value in ("low", "medium", "high", "xhigh", "max") else "max"
 
 
+def _catalog_mode(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in ("live", "off") else "live"
+
+
 def _astra_policy(raw: Any) -> str:
     value = str(raw or "").strip().lower()
     return value if value in ("task", "always", "never") else "task"
@@ -98,6 +103,14 @@ class RouterSettings:
     # Live-available model ids (kept in sync by the probe); empty = trust config.
     available_gpt_models: List[str] = field(default_factory=list)
     available_coding_models: List[str] = field(default_factory=list)
+    # Live orchestrator catalog (model_catalog.py): "live" = GET <base>/models on
+    # CLIProxyAPI (cached ttl seconds) so the Sol/Astra tiers pick the newest
+    # advertised version; "off" = static table / available_gpt_models only.
+    # '' base URL = cliproxy_base_url(); the key is read from the named env var.
+    gpt_catalog: str = "live"
+    gpt_catalog_ttl: float = 300.0
+    gpt_catalog_base_url: str = ""
+    gpt_catalog_key_env: str = "CLIPROXY_API_KEY"
     # Specialist-router pilot (specialists.py). Off unless explicitly enabled;
     # when on it only ADDS a routing note to the orchestrator's current turn.
     specialist_routing: bool = False
@@ -205,6 +218,13 @@ def load_settings(getter: Optional[Callable[[str, Any], Any]] = None) -> RouterS
         private_paths=_split(val("private_paths", "MODEL_ROUTER_PRIVATE_PATHS", [])),
         available_gpt_models=_split(val("available_gpt_models", "MODEL_ROUTER_GPT_MODELS", [])),
         available_coding_models=_split(val("available_coding_models", "MODEL_ROUTER_CODING_MODELS", [])),
+        gpt_catalog=_catalog_mode(val("gpt_catalog", "MODEL_ROUTER_GPT_CATALOG", "live")),
+        gpt_catalog_ttl=_seconds(val("gpt_catalog_ttl_seconds", "MODEL_ROUTER_GPT_CATALOG_TTL", 300.0),
+                                 300.0, cap=3600.0),
+        gpt_catalog_base_url=str(val("gpt_catalog_base_url", "MODEL_ROUTER_GPT_CATALOG_BASE_URL", "")
+                                 or "").strip(),
+        gpt_catalog_key_env=str(val("gpt_catalog_key_env", "MODEL_ROUTER_GPT_CATALOG_KEY_ENV",
+                                    "CLIPROXY_API_KEY") or "CLIPROXY_API_KEY").strip(),
         specialist_routing=_truthy(val("specialist_routing", "MODEL_ROUTER_SPECIALISTS", None), False),
         specialist_max_profiles=_int(val("specialist_max_profiles", "MODEL_ROUTER_SPECIALIST_MAX", 4), 4),
         specialist_profiles=_split(val("specialist_profiles", "MODEL_ROUTER_SPECIALIST_PROFILES", [])),
