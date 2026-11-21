@@ -171,12 +171,14 @@ ids are never taken from message text, old turns or tool output. Luna/Terra
 keep their static ids (with the live set used only for availability). The
 coding seam (claude-max-proxy) never consults this catalog.
 
-Fetching: content-free bodiless GET, 3 s timeout, 512 KiB / 2000-id caps, no
-environment proxy, no redirects. A success is cached `gpt_catalog_ttl_seconds`
-(default 300); a failure is retried after 30 s; a failed refresh keeps the last
-good set for up to 15 min. The fetch runs synchronously on the first
-orchestrator request after the cache expires, so that request can wait up to
-the timeout. A `#privacy` turn never triggers a fetch. When the catalog is
+Fetching: content-free bodiless GET, 3 s socket timeout (applied per blocking
+socket operation — connect, each read — not a hard total deadline), 512 KiB /
+2000-id caps, no environment proxy, no redirects. A success is cached
+`gpt_catalog_ttl_seconds` (default 300); a failure is retried after 30 s; a
+failed refresh keeps serving the last good set while it is younger than
+max(15 min, `gpt_catalog_ttl_seconds`). The fetch runs synchronously on the
+first orchestrator request after the cache expires, so that request waits for
+it; a slow but steadily responding endpoint can exceed 3 s in total. A `#privacy` turn never triggers a fetch. When the catalog is
 unavailable (no key, HTTP error, timeout, malformed body) routing falls back to
 `available_gpt_models` if set, else the static table (`gpt-6.1-sol`,
 `gpt-6-astra`) — the pre-catalog behaviour. Logs carry only

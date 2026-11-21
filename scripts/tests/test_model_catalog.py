@@ -293,6 +293,39 @@ class TestLiveCatalog(unittest.TestCase):
         self.assertIsInstance(cat, catalog_mod.GptModelCatalog)
         self.assertEqual(cat.url, "http://127.0.0.1:9/v1/models")
 
+    def test_from_settings_never_uses_specialist_classifier_endpoint(self):
+        # The classifier endpoint/key are a separate credential boundary: the
+        # catalog bearer (gpt_catalog_key_env) must never go to it.
+        spec = "http://specialist.invalid:7001/v1"
+        env = {"CLIPROXY_BASE_URL": "http://cliproxy.invalid:7002/v1/", "CLIPROXY_PORT": "7003",
+               "SYNTH_CATALOG_KEY": "k-catalog", "SYNTH_SPECIALIST_KEY": "k-spec"}
+        base = dict(gpt_catalog="live", gpt_catalog_key_env="SYNTH_CATALOG_KEY",
+                    specialist_classifier="cliproxy", specialist_classifier_base_url=spec,
+                    specialist_classifier_key_env="SYNTH_SPECIALIST_KEY")
+        with mock.patch.dict(os.environ, env):
+            cat = catalog_mod.from_settings(config_mod.RouterSettings(**base))
+            self.assertEqual(cat.url, "http://cliproxy.invalid:7002/v1/models")
+            self.assertEqual(cat.key_env, "SYNTH_CATALOG_KEY")
+            explicit = catalog_mod.from_settings(config_mod.RouterSettings(
+                **base, gpt_catalog_base_url="http://catalog.invalid:7004/v1"))
+            self.assertEqual(explicit.url, "http://catalog.invalid:7004/v1/models")
+        env.pop("CLIPROXY_BASE_URL")
+        with mock.patch.dict(os.environ, env):
+            os.environ.pop("CLIPROXY_BASE_URL", None)
+            cat = catalog_mod.from_settings(config_mod.RouterSettings(**base))
+            self.assertEqual(cat.url, "http://127.0.0.1:7003/v1/models")
+            os.environ.pop("CLIPROXY_PORT")
+            cat = catalog_mod.from_settings(config_mod.RouterSettings(**base))
+            self.assertEqual(cat.url, "http://127.0.0.1:8317/v1/models")
+        # The bearer actually sent goes to the CLIProxyAPI host, not the classifier's.
+        opener = FakeOpener(_models("gpt-6.2-sol"))
+        with mock.patch.dict(os.environ, {**env, "CLIPROXY_BASE_URL": "http://cliproxy.invalid:7002/v1"}):
+            cat = catalog_mod.from_settings(config_mod.RouterSettings(**base))
+            cat._opener = opener
+            self.assertEqual(cat.snapshot(), ("gpt-6.2-sol",))
+        self.assertEqual(opener.requests[0][0].full_url, "http://cliproxy.invalid:7002/v1/models")
+        self.assertEqual(opener.requests[0][0].get_header("Authorization"), "Bearer k-catalog")
+
     def test_settings_parse_catalog_knobs(self):
         env = {"MODEL_ROUTER_GPT_CATALOG": "bogus", "MODEL_ROUTER_GPT_CATALOG_TTL": "-5"}
         with mock.patch.dict(os.environ, env):

@@ -106,7 +106,8 @@ class RouterSettings:
     # Live orchestrator catalog (model_catalog.py): "live" = GET <base>/models on
     # CLIProxyAPI (cached ttl seconds) so the Sol/Astra tiers pick the newest
     # advertised version; "off" = static table / available_gpt_models only.
-    # '' base URL = cliproxy_base_url(); the key is read from the named env var.
+    # '' base URL = $CLIPROXY_BASE_URL or http://127.0.0.1:$CLIPROXY_PORT/v1 (never the
+    # specialist classifier's base URL); the key is read from the named env var.
     gpt_catalog: str = "live"
     gpt_catalog_ttl: float = 300.0
     gpt_catalog_base_url: str = ""

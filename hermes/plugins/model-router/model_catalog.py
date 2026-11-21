@@ -10,10 +10,11 @@ reads model ids from conversation text.
 Safety properties:
 
 * Content-free: the request is a bodiless GET; no prompt, session or task data.
-* Bounded: short timeout, response size and id-count caps; a success is cached
-  for ``ttl`` seconds and a failure for ``retry`` seconds, so at most one fetch
-  per window reaches the proxy. A failed refresh keeps serving the last good
-  snapshot only while it is younger than ``stale`` seconds.
+* Bounded: short per-socket-operation timeout (not a hard total deadline),
+  response size and id-count caps; a success is cached for ``ttl`` seconds and
+  a failure for ``retry`` seconds, so at most one fetch per window reaches the
+  proxy. A failed refresh keeps serving the last good snapshot only while it
+  is younger than ``max(stale, ttl)`` seconds.
 * Fail-safe: any error (missing key, HTTP error, timeout, malformed body) is
   "unavailable"; the router then falls back to the configured static list or
   the static tier table, exactly as before this module existed.
@@ -116,7 +117,7 @@ class GptModelCatalog:
         return _parse(raw)
 
     def snapshot(self) -> Optional[Tuple[str, ...]]:
-        """Current advertised ids, the last good set within ``stale``, or None."""
+        """Current advertised ids, the last good set within ``max(stale, ttl)``, or None."""
         with self._lock:
             now = self._clock()
             if now >= self._next_fetch:
@@ -135,10 +136,25 @@ class GptModelCatalog:
             return None
 
 
+def catalog_base_url(settings: Any) -> str:
+    """Catalog endpoint: explicit ``gpt_catalog_base_url``, else $CLIPROXY_BASE_URL,
+    else ``http://127.0.0.1:$CLIPROXY_PORT/v1`` (port default 8317).
+
+    Never ``specialist_classifier_base_url``: that endpoint has its own key, and
+    the catalog bearer (``gpt_catalog_key_env``) must not be sent to it.
+    """
+    explicit = ((getattr(settings, "gpt_catalog_base_url", "") or "").strip()
+                or os.environ.get("CLIPROXY_BASE_URL", "").strip())
+    if explicit:
+        return explicit.rstrip("/")
+    port = os.environ.get("CLIPROXY_PORT", "").strip() or "8317"
+    return f"http://127.0.0.1:{port}/v1"
+
+
 def from_settings(settings: Any) -> Optional[GptModelCatalog]:
     """The live catalog for the orchestrator proxy, or None when switched off."""
     if getattr(settings, "gpt_catalog", "off") != "live":
         return None
-    base = (getattr(settings, "gpt_catalog_base_url", "") or "").strip() or settings.cliproxy_base_url()
+    base = catalog_base_url(settings)
     return GptModelCatalog(base, getattr(settings, "gpt_catalog_key_env", "") or "CLIPROXY_API_KEY",
                            ttl=getattr(settings, "gpt_catalog_ttl", 300.0))
