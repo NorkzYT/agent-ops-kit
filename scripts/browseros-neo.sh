@@ -11,9 +11,9 @@
 #                               close the agent's MCP path, then drain for the pinned run budget
 #   browseros-neo.sh resume     re-check config/engine/profile against `up`, then reopen the path
 #   browseros-neo.sh handoff --clear-origin https://ORIGIN [--clear-origin ...]
-#                               after a drained pause: restart Neo's browser, remove every
-#                               service worker/Cache Storage, clear each sign-in origin,
-#                               close all tabs, verify; the human then signs in via the viewer
+#                               after a drained pause: restart Neo's browser, remove listed service
+#                               workers (+ their origins' Cache Storage), clear each sign-in origin and
+#                               cookies sent to it, close all tabs, verify the scrubbed scope only
 #   browseros-neo.sh access     print how to reach the viewer from another machine
 #   browseros-neo.sh hermes-snippet    print the reference Hermes mcp_servers entry
 #   browseros-neo.sh hermes-commands   print the native `hermes config set` commands for it
@@ -158,6 +158,7 @@ config_sha=$CONFIG_SHA
 neo_toml_sha=$(sha "$COMPOSE_DIR/neo.toml")
 gate_sha=$(sha "$COMPOSE_DIR/mcp-gate.py")
 ws6080_sha=$(sha "$COMPOSE_DIR/websockify-6080")
+ws6080_mode=$(stat -c %a -- "$COMPOSE_DIR/websockify-6080")
 policy_sha=$(sha "$COMPOSE_DIR/chromium-policy.json")
 wall_timeout=$(wall_timeout)
 EOF
@@ -237,7 +238,7 @@ manifest_matches_or_die() {  # $1 = what is refused; every recorded key must equ
   [[ -f "$MANIFEST" ]] || die "$1 refused: no manifest from 'up' for this profile. Containers were not touched. $fresh"
   local k want got now
   now="$(manifest_body)"
-  for k in project data vnc_port mcp_port image engine_id config_sha neo_toml_sha gate_sha ws6080_sha policy_sha wall_timeout; do
+  for k in project data vnc_port mcp_port image engine_id config_sha neo_toml_sha gate_sha ws6080_sha ws6080_mode policy_sha wall_timeout; do
     want="$(manifest_get "$k")" || die "$1 refused: manifest lacks $k. Containers were not touched. $fresh"
     got="$(sed -n "s/^$k=//p" <<<"$now")"
     [[ "$got" == "$want" ]] || die "$1 refused: $k changed since 'up' ($want -> $got); existing containers are never recreated automatically. $fresh"
@@ -252,6 +253,55 @@ verify_running_neo() {  # the running Neo is the pinned image on this exact prof
     || die "cannot inspect the running neo container"
   [[ "${row%%|*}" == "$IMAGE" ]] || die "running neo uses image ${row%%|*}, not the pinned image. Nothing was stopped. To replace it (operator approval): $APPROVED_DOWN, then 'up'"
   [[ ";${row#*|}" == *";/data=$DATA;"* ]] || die "running neo does not mount $DATA at /data; wrong BROWSEROS_NEO_DATA?"
+}
+
+# Live proof, inside Neo's network namespace, that the 6080 shim is the
+# websockify actually running (a non-executable shim makes PATH lookup fall
+# through to the image's unchecked one): 6080 listens on 127.0.0.1 only and
+# answers 403 to every WebSocket upgrade, and nothing listens on the viewer
+# port (a listener there would carry the one Origin the viewer accepts).
+# Point-in-time only.
+PORT_PROBE='import socket, sys
+vnc = int(sys.argv[1]); bad = []
+nov = int(sys.argv[2]) if len(sys.argv) > 2 else 6080  # tests only; the wrapper never passes it
+def listeners(port):
+    out = []
+    for f in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            rows = open(f).read().splitlines()[1:]
+        except OSError:
+            continue
+        for r in rows:
+            c = r.split()
+            if c[3] == "0A" and int(c[1].rsplit(":", 1)[1], 16) == port:
+                out.append(c[1].rsplit(":", 1)[0])
+    return out
+l6080 = listeners(nov)
+if not l6080 or set(l6080) != {"0100007F"}:
+    bad.append("6080 listeners %r (want 127.0.0.1 only)" % l6080)
+if listeners(vnc):
+    bad.append("something listens on the viewer port %d inside Neo" % vnc)
+for origin in (None, "null", "http://127.0.0.1:6080", "http://127.0.0.1:%d" % vnc, "http://localhost:6080"):
+    try:
+        s = socket.create_connection(("127.0.0.1", nov), timeout=5)
+        s.sendall(("GET /websockify HTTP/1.1\r\nHost: 127.0.0.1:6080\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                   "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+                   + ("" if origin is None else "Origin: %s\r\n" % origin) + "\r\n").encode())
+        line = s.recv(256).split(b"\r\n", 1)[0]; s.close()
+    except OSError as e:
+        line = repr(e).encode()
+    if not (line.startswith(b"HTTP/1.") and line.split()[1:2] == [b"403"]):
+        bad.append("6080 upgrade with Origin %r answered %r (want 403)" % (origin, line[:80]))
+print("PROBE-BAD: " + "; ".join(bad) if bad else "PROBE-OK"); sys.exit(1 if bad else 0)'
+
+probe_neo_ports() {  # refuse (stopping nothing) unless the live probe says PROBE-OK
+  local id out rc=0
+  id="$(running_ids neo)" || die "cannot query neo"
+  [[ -n "$id" && "$id" != *$'\n'* ]] || die "neo is not running (exactly one container expected)"
+  out="$("$DOCKER" exec -u neo "$id" /usr/bin/python3 -I -c "$PORT_PROBE" "$VNC_PORT" </dev/null 2>&1)" || rc=$?
+  (( rc == 0 )) && [[ "$out" == PROBE-OK ]] \
+    || refuse_running "Neo's 6080 lockdown is NOT proven in effect (${out:-no output}, rc $rc)"
+  log "6080 probe ok: loopback only, every WebSocket upgrade 403; viewer port $VNC_PORT free inside Neo"
 }
 
 # --- commands ---------------------------------------------------------------
@@ -278,6 +328,7 @@ cmd_up() {
   "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 || compose pull neo
   compose up -d --no-recreate --wait --wait-timeout "${BROWSEROS_NEO_WAIT:-240}" neo viewer
   enforce_bindings
+  probe_neo_ports
   if [[ -e "$STATE_FILE" ]]; then
     assert_gate_closed
     log "agent path stays closed (pause recorded in $STATE_FILE); run 'resume' to reopen it"
@@ -298,7 +349,11 @@ gate_failed() {  # the gate did not come up cleanly; report the real state, stop
 
 open_gate() {  # start the gate and prove the path is open; on failure refuse without stopping anything
   # Callers proved mcp-gate.py's hash equals the manifest; an existing gate
-  # container is started as is, never recreated.
+  # container is started as is, never recreated. The record says OPENING
+  # before the gate can start, so a failed or partial open never leaves a
+  # stale CLOSED (drained) record behind: only a new full `pause` restores it.
+  ( umask 077; printf 'state=OPENING\nsince=%s\n' "$(date +%s)" > "$STATE_FILE.tmp" && mv -f "$STATE_FILE.tmp" "$STATE_FILE" ) \
+    || die "cannot record OPENING in $STATE_FILE; the gate was not started"
   compose up -d --no-deps --no-recreate mcp-gate >/dev/null || gate_failed "starting mcp-gate failed"
   enforce_bindings
   local _
@@ -356,13 +411,52 @@ cmd_pause() {
   log "show them. Before signing in, run 'handoff' (docs/browseros-neo.md, 'Login status')."
 }
 
+gate_quiet_since_drain() {  # the gate container last stopped at least the full drain before closed_at
+  # A CLOSED record is a claim about the past; the gate container's own
+  # StartedAt/FinishedAt show whether it ran after the drain began (e.g. it
+  # was started and stopped outside the wrapper). No gate container at all
+  # (removed by an operator `down`) leaves nothing to compare and is accepted.
+  local closed w ids rows
+  closed="$(sed -n 's/^closed_at=//p' "$STATE_FILE")"
+  [[ "$closed" =~ ^[0-9]+$ ]] || die "handoff refused: the CLOSED record has no closed_at. Run 'pause' again."
+  w="$(manifest_get wall_timeout)" || die "handoff refused: manifest lacks wall_timeout"
+  ids="$(compose ps -aq mcp-gate)" || die "handoff refused: cannot list the mcp-gate container"
+  [[ -n "$ids" ]] || return 0
+  # shellcheck disable=SC2086
+  rows="$("$DOCKER" inspect $ids --format '{{.State.StartedAt}} {{.State.FinishedAt}}')" \
+    || die "handoff refused: cannot inspect the mcp-gate container's start/stop times"
+  python3 -I -c '
+import sys
+from datetime import datetime, timezone
+closed, budget = int(sys.argv[1]), int(sys.argv[2]) + 5
+def ts(v):
+    if v.startswith("0001-01-01"):
+        return None
+    if not v.endswith("Z"):
+        raise SystemExit("unexpected Docker timestamp %r" % v)
+    head = v[:-1].partition(".")[0]  # whole seconds, floored like closed_at
+    return int(datetime.strptime(head, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+bad = []
+for row in sys.argv[3].splitlines():
+    if not row.strip():
+        continue
+    started, finished = (ts(x) for x in row.split())
+    if started is None:
+        continue
+    if finished is None or finished < started or finished + budget > closed:
+        bad.append(row)
+sys.exit("mcp-gate ran after the drain began (StartedAt/FinishedAt %s, closed_at %d)" % (bad, closed) if bad else 0)
+' "$closed" "$w" "$rows" || die "handoff refused: the CLOSED record is stale. Run 'pause' (full drain) again. Nothing was touched."
+}
+
 cmd_handoff() {  # prepare the running browser for a human sign-in; agent path must be drained
   local a args=() origins=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --clear-origin)
         a="${2:-}"
-        [[ "$a" =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$ ]] \
+        [[ "$a" =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:([1-9][0-9]{0,4}))?$ ]] \
+          && { [[ -z "${BASH_REMATCH[3]}" ]] || (( BASH_REMATCH[3] <= 65535 )); } \
           || die "handoff: --clear-origin needs an https origin like https://accounts.example.com (got '${a}')"
         args+=(--clear-origin "$a"); origins+=("$a"); shift 2 ;;
       *) die "handoff: unknown option $1" ;;
@@ -375,8 +469,10 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   assert_gate_closed "handoff refused: "
   cmd_check
   manifest_matches_or_die "handoff"
+  gate_quiet_since_drain
   verify_running_neo
   enforce_bindings
+  probe_neo_ports
   local id report rc=0
   id="$(running_ids neo)" || die "cannot query neo"
   log "handoff: restarting Neo's browser and scrubbing agent-planted state (up to ~4 min)..."
@@ -388,8 +484,11 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   (( rc == 0 )) && python3 -I -c 'import json,sys; sys.exit(json.loads(sys.argv[1]).get("result") != "HANDOFF-READY")' "$report" 2>/dev/null \
     || die "handoff FAILED (rc $rc); do NOT sign in. The browser may have been restarted; nothing was stopped or removed."
   printf 'handoff_at=%s\n' "$(date +%s)" >> "$STATE_FILE"
-  log "HANDOFF-READY: browser restarted, no service worker, Cache Storage, agent tab or timer survived (verified)."
-  log "Scope: all site data cleared only on ${origins[*]}; service-worker/Cache Storage on their own origins; HTTP cache."
+  log "HANDOFF-READY: browser process restarted (old pages, timers and running workers ended); no service-worker"
+  log "registration listed; only one about:blank tab (verified)."
+  log "Scope: all site data cleared only on ${origins[*]}; cookies sent to those hosts (incl. parent-domain and"
+  log "partitioned) deleted and verified absent; service-worker/Cache Storage on origins that had a worker; HTTP cache."
+  log "Cache Storage and other storage on origins with no listed worker were not cleared or checked."
   log "A new browser process resumed the same persistent profile (not the same tab); other origins were not cleared and the"
   log "whole profile is not proven clean."
   log "Real-account login is NO-GO (docs/browseros-neo.md 'Login status'): use the viewer ('access') only with a disposable"
@@ -404,6 +503,7 @@ cmd_resume() {
   manifest_matches_or_die "resume"
   verify_running_neo
   enforce_bindings
+  probe_neo_ports
   open_gate
 }
 
@@ -427,6 +527,8 @@ report_status() {  # read-only reconciliation; non-zero when unsafe or unknown
     log "agent path: OPEN at http://127.0.0.1:$MCP_PORT/mcp"
   elif [[ ! -e "$STATE_FILE" ]]; then
     log "agent path: CLOSED but not drained (gate stopped, no pause recorded). Run 'pause' before typing secrets."
+  elif [[ "$state" == OPENING ]]; then
+    log "agent path: CLOSED but not drained (an open attempt did not complete and may have opened it). Run 'pause' before typing secrets."
   elif [[ "$state" == CLOSED ]]; then
     log "agent path: CLOSED (gate stopped and pause drained the pinned run budget; page side effects can still outlive it)"
   elif [[ "$state" == DRAINING ]]; then

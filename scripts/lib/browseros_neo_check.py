@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import sys
 
 EXPECTED_SERVICES = {"neo", "mcp-gate", "viewer"}
@@ -37,10 +38,32 @@ VIEWER_KEYS = {
     "image", "entrypoint", "command", "user", "read_only", "network_mode", "security_opt",
     "cap_drop", "pids_limit", "mem_limit", "healthcheck", "depends_on", "restart",
 }
-# Ports that already listen inside Neo's network namespace. A viewer port equal
-# to one of them would let a page Neo itself loads from that port carry the
-# one Origin the viewer accepts.
-RESERVED_VIEWER_PORTS = {5900, 6080, 6081, 9010, 9011}
+# Ports that already listen inside Neo's network namespace (Xvnc 5900, noVNC
+# 6080, viewer 6081, claw-server/MCP 9010/9011, CDP 9110, 9210). A viewer
+# port equal to one of them would let a page Neo itself loads from that port
+# carry the one Origin the viewer accepts. A listener the agent opens later
+# on 127.0.0.1:<viewer port> is not covered here; the wrapper's live probe
+# checks that nothing in Neo's namespace listens on the viewer port.
+RESERVED_VIEWER_PORTS = {5900, 6080, 6081, 9010, 9011, 9110, 9210}
+
+
+def shim_problems(path):
+    """websockify-6080 must be runnable, or PATH lookup silently falls through
+    to the image's /usr/bin/websockify (all interfaces, no Origin check)."""
+    try:
+        st = os.lstat(path)
+        vfs = os.statvfs(path)
+    except OSError as exc:
+        return [f"neo: 6080 shim {path} unreadable: {exc}"]
+    errs = []
+    if not stat.S_ISREG(st.st_mode):
+        errs.append(f"neo: 6080 shim {path} must be a regular file (not a symlink)")
+    if st.st_mode & 0o111 != 0o111:
+        errs.append(f"neo: 6080 shim {path} has mode {stat.S_IMODE(st.st_mode):o}; it must be executable by "
+                    "user, group and other (0755), or the image's unchecked websockify runs instead")
+    if vfs.f_flag & os.ST_NOEXEC:
+        errs.append(f"neo: 6080 shim {path} is on a noexec filesystem; the image's unchecked websockify would run instead")
+    return errs
 
 
 def viewer_entrypoint(vnc_port):
@@ -180,6 +203,7 @@ def check(cfg, data, image, compose_dir, project, vnc_port, mcp_port):
                          "/usr/local/bin/websockify": (os.path.join(compose_dir, "websockify-6080"), True),
                          "/etc/chromium/policies/managed/agent-ops-kit.json":
                              (os.path.join(compose_dir, "chromium-policy.json"), True)}, errs)
+    errs.extend(shim_problems(os.path.join(compose_dir, "websockify-6080")))
 
     # mcp-gate: exact forwarder, non-root, read-only.
     if gate.get("entrypoint") != GATE_ENTRYPOINT or gate.get("command") is not None:

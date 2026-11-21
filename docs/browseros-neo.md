@@ -101,7 +101,10 @@ Never paste credentials into chat; the Hermes entry hides Neo's
 status needs an explicit operator decision, not a doc edit. What is now in
 place for the two gates, and proven on the pinned image
 (`ghcr.io/browseros-ai/neo:0.52.1.2-d32f6ab@sha256:9f63…2d72e`, Chromium 155)
-by `scripts/test_browseros_neo_handoff_live.sh`:
+by `scripts/test_browseros_neo_handoff_live.sh` (the cookie step, the
+required service-worker listing, the frame-safe CDP reader and the live
+6080/viewer-port probe were added after that run and are proven only
+offline, against mocks; re-run the live test before relying on them):
 
 1. **A page in Neo cannot reach Neo's VNC/WebSocket ports.**
    - `websockify-6080` is mounted read-only over `/usr/local/bin/websockify`
@@ -110,6 +113,14 @@ by `scripts/test_browseros_neo_handoff_live.sh`:
      `127.0.0.1:6080` with `ExpectOrigin` set to a value no browser sends, so
      every WebSocket upgrade gets 403 while the healthcheck's static noVNC
      page still loads. Anything else exits and the entrypoint stops Neo.
+     The shim only takes effect if it is executable: PATH lookup skips a
+     non-executable file and would run the image's unchecked websockify. The
+     checker refuses a shim that is not executable by user, group and other
+     or sits on a `noexec` filesystem, the manifest records its mode, and
+     `up`, `resume` and `handoff` run a live probe inside Neo's namespace
+     (6080 listens on 127.0.0.1 only and answers 403 to every upgrade;
+     nothing listens on the viewer port) and refuse, stopping nothing, if it
+     fails. The probe is point-in-time.
    - `chromium-policy.json` (managed policy, read-only) sets
      `LocalNetworkAccessBlockedForUrls: ["*"]`: pages on public or private
      addresses cannot open any request or WebSocket to Neo's loopback ports
@@ -129,14 +140,22 @@ by `scripts/test_browseros_neo_handoff_live.sh`:
    SIGTERM only as fallback) and waits for the entrypoint to start a new
    one, so every page, timer, injected script, worker and per-session CDP
    override dies; then over the new browser's loopback CDP it unregisters
-   every service worker, clears service-worker and Cache Storage data for
+   every service worker in the registration listing (no listing within
+   30 s fails; silence is never "none"), clears service-worker and Cache Storage data for
    their origins, clears all site data for each `--clear-origin` (the
-   sign-in origins), clears the HTTP cache and closes every tab but one
+   sign-in origins), deletes every cookie that would be sent to a
+   `--clear-origin` host (host-only, `Domain=` cookies on it or a parent
+   domain, such as one tossed from a sibling subdomain, and cookies
+   partitioned under its sites), clears the HTTP cache and closes every tab but one
    `about:blank`. It then re-verifies from a fresh CDP connection (no
    registrations, zero service-worker/Cache Storage bytes on those origins,
-   zero bytes of any kind on each `--clear-origin`, no other target) and
+   zero bytes of any kind on each `--clear-origin`, no matching cookie in
+   `Storage.getCookies` (usage has no cookie entry), no other target) and
    prints `HANDOFF-READY` or fails. `handoff` re-checks that the gate is
-   still closed and the record still `CLOSED` afterwards.
+   still closed and the record still `CLOSED` afterwards. Before the scrub
+   it also refuses a stale `CLOSED` record: the gate container's
+   `FinishedAt` plus the run budget + 5 s must be at or before `closed_at`
+   (a gate started and stopped outside the wrapper after the drain fails).
    - Live result: a planted service worker answers before the handoff
      (negative control); after it the old browser PID is gone, the planted
      1 s beacon timer is silent, no attacker tab or worker exists, and the
@@ -151,11 +170,20 @@ Limits (why this is not yet GO):
   one) are not blocked by the policy; for them only the Origin checks hold
   (6080 refuses everything, 6081 needs `http://127.0.0.1:<viewer port>`).
   A loopback page can read 9010's error response (`403 unsupported request`).
-- `handoff` does not clear cookies, localStorage, IndexedDB, history,
+- `handoff` does not clear cookies (other than those sent to a
+  `--clear-origin` host), localStorage, IndexedDB, Cache Storage on origins
+  with no listed service worker, history,
   bookmarks, downloads, permissions or other preferences on origins other
   than the `--clear-origin` ones; agent-planted data there is dormant but
   runs again if the human visits that origin. Settings the agent changed
   through the forwarded API are not reset or inspected.
+- Not provable here: that an unknown hostile page cannot find another way
+  into the desktop or the profile (the checks cover the listed ports and
+  origins only), or anything about another process running as the same
+  host UID as Neo's files (it can read or change the profile directly).
+- Whether the pinned Chromium answers `ServiceWorker.enable` with an empty
+  listing when there are no registrations was not observed after this
+  change; if it does not, `handoff` fails closed.
 - claw-server keeps running across the handoff; with the gate closed it gets
   no agent input, but its own behaviour was not audited.
 - `resume` hands the signed-in session to the agent by design.
@@ -185,7 +213,7 @@ bindings, and exits non-zero for anything unsafe or unknown):
 | `OPEN` | gate running, no pause recorded |
 | `DRAINING` | path closed, drain not finished (`pause --no-wait`, an interrupted pause, or a pause that found drift). Do not type secrets. |
 | `CLOSED` | path closed and `pause` re-verified it after the full drain |
-| `CLOSED but not drained` | gate stopped without a pause (e.g. after `down`); run `pause` first |
+| `CLOSED but not drained` | gate stopped without a pause (e.g. after `down`), or an open attempt (`up`/`resume`) did not complete (record `OPENING`, written before the gate starts, so a failed resume never leaves a stale `CLOSED`); run `pause` first |
 | `INCONSISTENT` | a pause is recorded but the path is open (raw `docker compose up`, failed stop) |
 | `EXPOSED` / `UNKNOWN` | a non-loopback binding, or Docker could not answer; nothing is assumed |
 
