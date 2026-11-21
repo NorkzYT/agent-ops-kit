@@ -10,10 +10,12 @@
 #   browseros-neo.sh pause [--no-wait]
 #                               close the agent's MCP path, then drain for the pinned run budget
 #   browseros-neo.sh resume     re-check config/engine/profile against `up`, then reopen the path
-#   browseros-neo.sh handoff --clear-origin https://ORIGIN [--clear-origin ...]
+#   browseros-neo.sh handoff --clear-origin https://ORIGIN [--clear-origin ...] [--trusted-host-dev]
 #                               after a drained pause: restart Neo's browser, remove listed service
 #                               workers (+ their origins' Cache Storage), clear each sign-in origin and
-#                               cookies sent to it, close all tabs, verify the scrubbed scope only
+#                               cookies sent to it, close all tabs, verify the scrubbed scope only.
+#                               --trusted-host-dev records the operator's same-host development
+#                               acceptance for this sign-in (trusted host, NOT isolation)
 #   browseros-neo.sh access     print how to reach the viewer from another machine
 #   browseros-neo.sh hermes-snippet    print the reference Hermes mcp_servers entry
 #   browseros-neo.sh hermes-commands   print the native `hermes config set` commands for it
@@ -450,9 +452,10 @@ sys.exit("mcp-gate ran after the drain began (StartedAt/FinishedAt %s, closed_at
 }
 
 cmd_handoff() {  # prepare the running browser for a human sign-in; agent path must be drained
-  local a args=() origins=()
+  local a args=() origins=() trusted=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --trusted-host-dev) trusted=1; shift ;;
       --clear-origin)
         a="${2:-}"
         [[ "$a" =~ ^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:([1-9][0-9]{0,4}))?$ ]] \
@@ -484,6 +487,7 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   (( rc == 0 )) && python3 -I -c 'import json,sys; sys.exit(json.loads(sys.argv[1]).get("result") != "HANDOFF-READY")' "$report" 2>/dev/null \
     || die "handoff FAILED (rc $rc); do NOT sign in. The browser may have been restarted; nothing was stopped or removed."
   printf 'handoff_at=%s\n' "$(date +%s)" >> "$STATE_FILE"
+  (( ! trusted )) || printf 'trust_mode=same-host-dev\ntrust_accepted_at=%s\n' "$(date +%s)" >> "$STATE_FILE"
   log "HANDOFF-READY: browser process restarted (old pages, timers and running workers ended); no service-worker"
   log "registration listed; only one about:blank tab (verified)."
   log "Scope: all site data cleared only on ${origins[*]}; cookies sent to those hosts (incl. parent-domain and"
@@ -492,9 +496,27 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   log "A new browser process resumed the same persistent profile (not the same tab); other origins were not cleared and the"
   log "whole profile is not proven clean."
   log "localStorage/sessionStorage on those origins were cleared but are not verified (usage does not count them)."
+  if (( trusted )); then
+    trusted_host_notice
+    log "Keep the agent path closed until done; 'resume' hands that signed-in session to the agent."
+    return 0
+  fi
   log "Real-account login is NO-GO (docs/browseros-neo.md 'Login status'; host processes can reach Neo's MCP port on its"
   log "bridge address and drive the viewer, paused or not): use the viewer ('access') only with a disposable"
   log "test account on those origins. Keep the agent path closed until done; 'resume' hands that session to the agent."
+  log "(An operator running this in a single-operator development VM who accepts the trusted-host assumption"
+  log "records that per sign-in with --trusted-host-dev; docs/browseros-neo.md 'Same-host development'.)"
+}
+
+trusted_host_notice() {  # the exact terms of the operator's same-host development acceptance
+  log "SAME-HOST DEVELOPMENT (trusted-host assumption accepted by the operator, recorded in $STATE_FILE):"
+  log "you may sign in to your own account through the viewer while supervising it. This is NOT isolation and"
+  log "carries no isolation guarantee: every process on this host, including an agent's terminal tool and any"
+  log "other local user, can reach Neo's unauthenticated MCP/settings port on its bridge address and watch or"
+  log "drive this viewer with a forged Origin, gate paused or not; anything running as your UID can read the"
+  log "profile folder (sessions). Not for shared, multi-user or production hosts. While signed in, run no agent"
+  log "task on this host (the wrapper cannot enforce that), never paste credentials into chat, and revoke the"
+  log "account's sessions if the host or an agent misbehaves. The general real-account status stays NO-GO."
 }
 
 cmd_resume() {
@@ -533,6 +555,8 @@ report_status() {  # read-only reconciliation; non-zero when unsafe or unknown
     log "agent path: CLOSED but not drained (an open attempt did not complete and may have opened it). Run 'pause' before typing secrets."
   elif [[ "$state" == CLOSED ]]; then
     log "agent path: CLOSED (gate stopped and pause drained the pinned run budget; page side effects can still outlive it)"
+    ! grep -qx 'trust_mode=same-host-dev' "$STATE_FILE" \
+      || log "login mode: SAME-HOST DEVELOPMENT accepted for this handoff (trusted host, NOT isolation; general status NO-GO)"
   elif [[ "$state" == DRAINING ]]; then
     local dl; dl="$(sed -n 's/^deadline=//p' "$STATE_FILE")"
     log "agent path: DRAINING (closed, drain not completed; deadline $dl). Do NOT type secrets; run 'pause' to finish."
@@ -559,6 +583,11 @@ bridge address and drive this viewer with a forged Origin, paused or not.
 Disposable test accounts only, after 'pause' (full drain) and 'handoff'
 reports HANDOFF-READY. Neo's own 6080 refuses every WebSocket and pages cannot
 reach Neo's loopback ports (managed policy); that does not stop host processes.
+
+Same-host development exception: in a single-operator development VM whose
+operator accepts the trusted-host assumption, 'handoff --trusted-host-dev'
+records that acceptance for one sign-in. Every check still runs and no
+isolation is added; only what the wrapper says you may sign in to changes.
 EOF
 }
 
@@ -567,6 +596,10 @@ cmd_hermes_snippet() {
 }
 
 cmd_hermes_commands() {  # native `hermes config set` sequence: disabled first, enabled last
+  # The warning goes to stderr so stdout stays runnable commands only.
+  echo "# Review first. Against the live Hermes home the LAST command activates Neo: a running gateway" >&2
+  echo "# connects newly enabled mcp_servers on its next housekeeping tick (MCP config reconcile), no" >&2
+  echo "# restart needed. Run only with activation approval, after 'up'. Revoke: set .enabled false." >&2
   cmd_hermes_snippet | python3 -I -c '
 import shlex, sys, yaml
 (name, cfg), = yaml.safe_load(sys.stdin)["mcp_servers"].items()
@@ -600,5 +633,5 @@ case "${1:-}" in
   access) cmd_access ;;
   hermes-snippet) cmd_hermes_snippet ;;
   hermes-commands) cmd_hermes_commands ;;
-  *) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

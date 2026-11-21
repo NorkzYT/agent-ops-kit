@@ -16,7 +16,12 @@ ok() { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 no() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
 
 tmp="$(mktemp -d)"; [[ -d "$tmp" && "$tmp" != / ]] || { echo "mktemp failed" >&2; exit 1; }
-trap '[[ -f "$tmp/fake/gate.pid" ]] && kill "$(cat "$tmp/fake/gate.pid")" 2>/dev/null; rm -rf "$tmp"' EXIT
+# BROWSEROS_NEO_TEST_KEEP=1 keeps the scratch folder (and prints it) instead of deleting it.
+if [[ "${BROWSEROS_NEO_TEST_KEEP:-}" == 1 ]]; then
+  trap '[[ -f "$tmp/fake/gate.pid" ]] && kill "$(cat "$tmp/fake/gate.pid")" 2>/dev/null; echo "scratch kept: $tmp"' EXIT
+else
+  trap '[[ -f "$tmp/fake/gate.pid" ]] && kill "$(cat "$tmp/fake/gate.pid")" 2>/dev/null; rm -rf "$tmp"' EXIT
+fi
 data="$tmp/neo data/data"; mkdir -p "$data"; chmod 700 "$data"
 REAL_DOCKER="$(command -v docker || true)"
 
@@ -157,6 +162,11 @@ EOF
     ! check2 && grep -q "6080 shim .* has mode $m; it must be executable" "$tmp/check2.err" \
       && ok "refuses: 6080 shim mode $m (PATH fallthrough)" || { no "refuses: 6080 shim mode $m"; cat "$tmp/check2.err"; }
   done
+  for m in 775 757 777; do  # 775 is what a checkout under umask 002 produces
+    chmod "$m" "$cd2/websockify-6080"
+    ! check2 && grep -q "6080 shim .* has mode $m; it must not be writable by group or other" "$tmp/check2.err" \
+      && ok "refuses: 6080 shim mode $m (writable by group/other)" || { no "refuses: 6080 shim mode $m"; cat "$tmp/check2.err"; }
+  done
   chmod 755 "$cd2/websockify-6080"
 fi
 
@@ -271,7 +281,7 @@ assert s["trust"] == "untrusted"
 assert {"credentials", "payment_cards", "solve_captcha"} <= set(s["tools"]["exclude"])
 assert "headers" not in s and s["timeout"] > 60
 EOF
-cmds="$(BROWSEROS_NEO_MCP_PORT=29999 bash "$WRAP" hermes-commands)"
+cmds="$(BROWSEROS_NEO_MCP_PORT=29999 bash "$WRAP" hermes-commands 2>"$tmp/hc.err")"
 python3 -I - "$cmds" <<'EOF' && ok "hermes-commands: native config set, disabled first, exclusions before enable, enabled last" || { no "hermes-commands"; printf '%s\n' "$cmds"; }
 import shlex, sys
 lines = [" ".join(shlex.split(l)) for l in sys.argv[1].splitlines()]
@@ -282,6 +292,9 @@ assert ex and lines[ex[0]].endswith("[credentials,payment_cards,solve_captcha]")
 assert any(l.endswith(".trust untrusted") for l in lines)
 assert any(l.endswith(".url http://127.0.0.1:29999/mcp") for l in lines)
 EOF
+grep -q 'the LAST command activates Neo' "$tmp/hc.err" && grep -q 'restart needed' "$tmp/hc.err" \
+  && ! grep -q '^#' <<<"$cmds" && ok "hermes-commands: stderr says enabling is the live activation (no restart); stdout commands only" \
+  || { no "hermes-commands activation warning"; cat "$tmp/hc.err"; }
 
 # --- MCP gate: forwards, then refuses once stopped --------------------------
 python3 -I - "$ROOT/docker/browseros-neo/mcp-gate.py" <<'EOF' && ok "mcp-gate forwards bytes and refuses after stop" || no "mcp-gate forwards/refuses"
@@ -460,7 +473,7 @@ expect "up: checks, starts neo, opens the gate" 0 'agent path: OPEN' -- bash "$W
 [[ -f "$fstate/manifest" ]] && grep -q '^wall_timeout=60$' "$fstate/manifest" && grep -q '^engine_id=engine-A$' "$fstate/manifest" \
   && ok "up writes the manifest (pinned budget, engine)" || no "up writes the manifest"
 gate_listening && ok "gate listener is up" || no "gate listener is up"
-grep -q '^ws6080_mode=755$' "$fstate/manifest" && ok "manifest records the 6080 shim mode" || no "manifest ws6080_mode"
+grep -qx "ws6080_mode=$(stat -c %a "$ROOT/docker/browseros-neo/websockify-6080")" "$fstate/manifest" && ok "manifest records the 6080 shim mode (as on disk)" || no "manifest ws6080_mode"
 grep -q '^exec -u neo bneo-life-neo-1 /usr/bin/python3 -I -c import socket' "$fk/calls.all" \
   && ok "up ran the live 6080/viewer-port probe in Neo" || no "up did not probe 6080"
 
@@ -522,12 +535,42 @@ grep -q 'mcp-gate ran after the drain began' "$fk/out" && ok "  ... names the ga
 ! grep -q '^exec ' "$fk/calls" && ok "  ... and ran nothing in Neo" || no "  ... stale-record handoff ran in Neo"
 expect "pause drains again" 0 'CLOSED: the agent path has stayed closed' -- bash "$WRAP" pause
 expect "handoff after the new drain: HANDOFF-READY (positive control)" 0 'HANDOFF-READY:' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
+grep -q 'Real-account login is NO-GO' "$fk/out" && ! grep -q 'SAME-HOST DEVELOPMENT' "$fk/out" && ! grep -q '^trust_mode=' "$W" \
+  && ok "  ... without --trusted-host-dev: NO-GO text, no trust mode recorded" || { no "  ... default handoff trust text/record"; cat "$W"; }
+
+# Same-host development (operator-accepted trusted host): every gate still runs;
+# only the sign-in wording and the record change. Never "isolated", never a bare GO.
+: > "$fk/calls"
+expect "handoff --trusted-host-dev without an origin is refused before anything" nz 'handoff refused: name every disposable sign-in origin' -- bash "$WRAP" handoff --trusted-host-dev
+! grep -qE '^(exec|compose|ps|inspect) ' "$fk/calls" && ok "  ... and reached no Docker call" || no "  ... reached Docker"
+: > "$fk/calls"
+expect "handoff --trusted-host-dev still refuses a failed live 6080 probe" nz "6080 lockdown is NOT proven in effect" "!HANDOFF-READY:|SAME-HOST" \
+  -- env FAKE_PROBE_OUT="PROBE-BAD: x" FAKE_PROBE_RC=1 bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com
+! grep -q '^exec -i ' "$fk/calls" && ! grep -q '^trust_mode=' "$W" && ok "  ... no scrub, no trust mode recorded" || no "  ... failed trusted handoff ran or recorded"
+expect "handoff --trusted-host-dev still fails when the scrub fails" nz 'handoff FAILED' "!SAME-HOST" \
+  -- env FAKE_EXEC_RC=1 FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff --clear-origin https://accounts.example.com --trusted-host-dev
+! grep -q '^trust_mode=' "$W" && ok "  ... no trust mode recorded" || no "  ... failed scrub recorded trust mode"
+: > "$fk/calls"
+expect "handoff --trusted-host-dev after a drain: HANDOFF-READY + same-host terms" 0 'SAME-HOST DEVELOPMENT \(trusted-host assumption accepted' \
+  "!Real-account login is NO-GO \(|isolated\b|is safe|GO for real" -- bash "$WRAP" handoff --trusted-host-dev --clear-origin https://accounts.example.com
+grep -q 'HANDOFF-READY:' "$fk/out" && grep -q 'This is NOT isolation' "$fk/out" && grep -q 'no isolation guarantee' "$fk/out" \
+  && grep -q "agent's terminal tool" "$fk/out" && grep -q 'Not for shared, multi-user or production hosts' "$fk/out" \
+  && grep -q 'never paste credentials into chat' "$fk/out" && grep -q 'general real-account status stays NO-GO' "$fk/out" \
+  && ok "  ... names the trusted-host assumption, the bypass and the residual NO-GO" || { no "  ... trusted text"; cat "$fk/out"; }
+grep -qx 'trust_mode=same-host-dev' "$W" && grep -q '^trust_accepted_at=[0-9]' "$W" && grep -qx 'state=CLOSED' "$W" \
+  && ok "  ... record: CLOSED + trust_mode=same-host-dev + time" || no "  ... record: $(cat "$W")"
+grep -qE '^exec -i -u neo bneo-life-neo-1 /usr/bin/python3 -I - --clear-origin https://accounts.example.com$' "$fk/calls" \
+  && grep -q '^exec -u neo bneo-life-neo-1 /usr/bin/python3 -I -c import socket' "$fk/calls" \
+  && ! grep -qE 'compose.* (up|stop|down|rm|kill|restart) ' "$fk/calls" \
+  && ok "  ... same probe and scrub as the default path; touched no container" || { no "  ... trusted handoff calls"; cat "$fk/calls"; }
+expect "status shows the same-host development mode" 0 'login mode: SAME-HOST DEVELOPMENT accepted.*NOT isolation' -- bash "$WRAP" status
 : > "$fk/calls"
 expect "handoff refused when the live 6080 probe fails" nz "6080 lockdown is NOT proven in effect.*Nothing was stopped" "!HANDOFF-READY:" \
   -- env FAKE_PROBE_OUT="PROBE-BAD: 6080 listeners ['00000000']" FAKE_PROBE_RC=1 bash "$WRAP" handoff --clear-origin https://accounts.example.com
 ! grep -q '^exec -i ' "$fk/calls" && ok "  ... and the scrub did not run" || no "  ... scrub ran despite failed probe"
 expect "resume from CLOSED with a gate that never listens fails" nz 'did not accept connections' -- env FAKE_GATE_NOLISTEN=1 bash "$WRAP" resume
 grep -qx 'state=OPENING' "$W" && ! grep -qx 'state=CLOSED' "$W" && ok "  ... record is OPENING, never a stale CLOSED" || no "  ... record after failed resume: $(cat "$W")"
+! grep -q '^trust_mode=' "$W" && ok "  ... same-host acceptance does not survive a resume attempt (per sign-in)" || no "  ... trust_mode survived resume"
 life bash "$fk/bin/docker" compose -p bneo-life stop mcp-gate   # the gate then exits on its own
 : > "$fk/calls"
 expect "handoff refused after a failed resume and gate exit (not drained)" nz 'handoff refused: the agent path is not drained' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com

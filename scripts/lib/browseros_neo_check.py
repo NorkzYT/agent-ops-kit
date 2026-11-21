@@ -61,6 +61,11 @@ def shim_problems(path):
     if st.st_mode & 0o111 != 0o111:
         errs.append(f"neo: 6080 shim {path} has mode {stat.S_IMODE(st.st_mode):o}; it must be executable by "
                     "user, group and other (0755), or the image's unchecked websockify runs instead")
+    if st.st_mode & 0o022:
+        # A checkout made under umask 002 gives 0775; the shim then runs as the
+        # 6080 listener from a file other host users may rewrite.
+        errs.append(f"neo: 6080 shim {path} has mode {stat.S_IMODE(st.st_mode):o}; it must not be writable by "
+                    "group or other (chmod go-w, i.e. 0755)")
     if vfs.f_flag & os.ST_NOEXEC:
         errs.append(f"neo: 6080 shim {path} is on a noexec filesystem; the image's unchecked websockify would run instead")
     return errs

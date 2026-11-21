@@ -11,6 +11,13 @@ started or wired into Hermes until an operator runs the steps below.
 > viewer with a forged `Origin`, whether the gate is paused or not
 > ([Login status](#login-status), "Host-process bypass"). Operator
 > acceptance of the evidence below cannot lift NO-GO while that holds.
+>
+> **Same-host development exception.** An operator who runs the pilot in
+> their own single-operator development VM may accept the trusted-host
+> assumption for one sign-in with `handoff --trusted-host-dev`
+> ([Same-host development](#same-host-development-trusted-host-not-isolation)).
+> That is an accepted risk, not a closed boundary: it adds no isolation and
+> skips no check, and the general status above stays NO-GO.
 
 ## What runs
 
@@ -107,10 +114,12 @@ boundary closed and re-proven, then an explicit operator decision; a doc edit
 does neither. What is now in
 place for the two gates, and proven on the pinned image
 (`ghcr.io/browseros-ai/neo:0.52.1.2-d32f6ab@sha256:9f63…2d72e`, Chromium 155)
-by `scripts/test_browseros_neo_handoff_live.sh` (the cookie step, the
-required service-worker listing, the frame-safe CDP reader and the live
-6080/viewer-port probe were added after that run and are proven only
-offline, against mocks; re-run the live test before relying on them):
+by `scripts/test_browseros_neo_handoff_live.sh`. It was re-run on
+2026-11-21 against the `neo-handoff.py` of `12fe982` (unchanged since), 34
+passed and 0 failed. That run exercised the required service-worker listing,
+the frame-safe CDP reader and the cookie step; no cookie was planted, so
+`cookies_deleted` was empty. The wrapper's live 6080/viewer-port probe
+(`PORT_PROBE`) is proven only offline, against controlled loopback listeners:
 
 1. **A page in Neo cannot reach Neo's VNC/WebSocket ports.**
    - `websockify-6080` is mounted read-only over `/usr/local/bin/websockify`
@@ -217,8 +226,10 @@ Limits:
   origins only), or anything about another process running as the same
   host UID as Neo's files (it can read or change the profile directly).
 - Whether the pinned Chromium answers `ServiceWorker.enable` with an empty
-  listing when there are no registrations was not observed after this
-  change; if it does not, `handoff` fails closed.
+  listing on a profile that never had a registration is still not observed
+  directly. The 2026-11-21 live run had a planted worker, and verification
+  passed after unregistering it. If Chromium does not answer, `handoff`
+  fails closed.
 - claw-server keeps running across the handoff; with the gate closed it gets
   no agent input, but its own behaviour was not audited.
 - `resume` hands the signed-in session to the agent by design.
@@ -232,6 +243,43 @@ Limits:
 
 Until an operator accepts this evidence and these limits, the viewer is for
 watching and for disposable test accounts only.
+
+### Same-host development (trusted host, not isolation)
+
+For a development VM that one operator owns and uses alone, the operator
+may accept the host-process bypass instead of closing it:
+
+```bash
+make browseros-neo-pause          # full drain; status must say CLOSED
+scripts/browseros-neo.sh handoff --trusted-host-dev \
+  --clear-origin https://accounts.example.com --clear-origin https://app.example.com
+# sign in through the viewer yourself (SSH tunnel, 'access'); type nothing into chat
+make browseros-neo-resume         # hands the signed-in session to the agent
+```
+
+- `--trusted-host-dev` changes only the outcome text and the record. Every
+  gate of a normal `handoff` still runs and can still refuse: drained
+  `CLOSED` record, gate stopped and port closed, no other pilot gate, full
+  `check`, manifest match, stale-record check, pinned image on this profile,
+  loopback-only bindings, live 6080 probe, scrub and verification, and the
+  gate still closed afterwards.
+- On success it appends `trust_mode=same-host-dev` and
+  `trust_accepted_at=<epoch>` to the pause record and prints the terms;
+  `status` shows `login mode: SAME-HOST DEVELOPMENT`. The acceptance applies
+  to that one sign-in: `resume`, `up` or the next `pause` rewrites the
+  record, so the next sign-in needs the flag again.
+- What the operator accepts (no isolation guarantee): every process on the
+  host, including an agent's terminal tool and any other local user, can
+  reach Neo's unauthenticated MCP/settings port on its bridge address and
+  watch or drive the viewer with a forged `Origin`, paused or not; anything
+  running as the operator's UID can read the profile folder and its sessions.
+- Operator duties the wrapper cannot enforce: the host is single-operator
+  and not shared, multi-user or production; no agent task runs on the host
+  while you are signed in; credentials go only into the viewer, never into
+  chat; revoke the account's sessions if the host or an agent misbehaves.
+  Prefer an account whose sessions you can revoke from another device.
+- Without the flag `handoff` behaves as before (NO-GO wording, disposable
+  accounts only).
 
 ## What pause does and does not do
 
@@ -311,9 +359,30 @@ bash scripts/browseros-neo.sh hermes-commands   # prints the commands; review, t
 The commands write `enabled: false` first, then the URL, `trust: untrusted`
 and the tool exclusions, and `enabled: true` last, so the server is never
 enabled without its exclusions. `hermes mcp add` is not used: it offers
-"enable all tools" before any exclusion is set. Apply with the
-operator-approved gateway restart (docs/install.md). This pilot does neither.
-`hermes-snippet` prints the same entry as YAML for review.
+"enable all tools" before any exclusion is set. `hermes-snippet` prints the
+same entry as YAML for review. This pilot runs none of them.
+
+The last command is the activation, and no gateway restart is needed or
+wanted. In the installed Hermes (`~/.hermes/hermes-agent` at `6b21d0564d`,
+read only), a running gateway's housekeeping runs the chore
+"MCP config reconcile" (`gateway/run.py` chores list →
+`gateway/run_profile_reconcile.py::_mcp_config_reconciler` →
+`tools/mcp_tool_discovery.py::reconcile_mcp_servers_with_config`) on every
+tick after the first. It connects any enabled `mcp_servers` entry that is
+not live and disconnects one set `enabled: false`. `mcp_server_enabled`
+treats an absent `enabled` as on, which is why the sequence starts with
+`enabled false`. Startup (`gateway/run.py` → `discover_mcp_tools`) and
+`/reload-mcp` take the same path. So:
+
+- Activate: run the printed commands against the live home (separate
+  approval), after `up` succeeded. The gateway connects on its next tick.
+- Revoke: `hermes config set mcp_servers.browseros_neo.enabled false`. The
+  next tick disconnects it. `pause` also cuts the path at once.
+- Tools appear as the `mcp-browseros_neo` toolset (`mcp__browseros_neo__*`).
+  `trust: untrusted` means every call asks for approval.
+
+`hermes-commands` prints this warning on stderr; stdout carries only the
+commands.
 
 Exclusions verified at registration, not only in a tool listing:
 `scripts/test_browseros_neo_hermes_registration.sh` (opt-in; needs a local
@@ -322,7 +391,12 @@ points them at a stdlib fake MCP server that lists `credentials`,
 `payment_cards`, `solve_captcha` and two browser tools, and calls Hermes'
 real `discover_mcp_tools()`. Only the two browser tools land in the
 `mcp-browseros_neo` toolset, trust is `untrusted`, and a control run without
-exclusions registers all five. It never reads or writes the live Hermes home.
+exclusions registers all five. A staged run applies every command but the
+last and calls `reconcile_mcp_servers_with_config()` (the gateway's
+no-restart path): no tool and no request to the server. After the final
+`enabled true` the same call registers the two filtered tools. Each probe is
+a fresh process; the gateway's tick timing itself is not exercised. It never
+reads or writes the live Hermes home.
 
 - `trust: untrusted`: Neo marks no tool `readOnlyHint: true`, so every Neo tool
   call asks for approval (Allow once / Session / Always per tool). This is the
@@ -394,6 +468,16 @@ bash scripts/test_browseros_neo_hermes_registration.sh   # opt-in, local Hermes,
 BROWSEROS_NEO_IMAGE_ROOT=<extracted image root> bash scripts/test_browseros_neo_viewer_origin.sh   # opt-in
 BROWSEROS_NEO_LIVE=1 bash scripts/test_browseros_neo_handoff_live.sh   # opt-in, pinned image present
 ```
+
+`BROWSEROS_NEO_TEST_KEEP=1` makes `test_browseros_neo.sh` and the
+registration test keep their scratch folder and print its path instead of
+deleting it. Pair it with `TMPDIR=<private scratch>` for a reproducible,
+inspectable run. The viewer and live tests always keep theirs.
+
+The checker refuses a `websockify-6080` that is writable by group or other.
+A checkout made under umask 002 gets mode 0775, so run
+`chmod go-w docker/browseros-neo/websockify-6080` before `up` or the suite.
+Git tracks the file as 100755.
 
 `test_browseros_neo_handoff_live.sh` runs one throwaway container from the
 rendered `neo` service (same image, mounts, limits, environment) with

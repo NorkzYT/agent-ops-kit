@@ -2,7 +2,9 @@
 # Not part of config.yaml.tmpl and never hand-merged: `scripts/browseros-neo.sh
 # hermes-commands` turns it into native `hermes config set` commands
 # (enabled false first, enabled true last); an operator runs them after the
-# pilot is up and applies them with the normal approved gateway restart.
+# pilot is up, with activation approval. No gateway restart: a running
+# gateway's MCP config reconcile connects the entry once it is enabled
+# (docs/browseros-neo.md, "Hermes connection").
 # `hermes-snippet` prints it with the configured port filled in.
 #
 # - url is the mcp-gate's loopback port, never Neo's 9010 directly, so

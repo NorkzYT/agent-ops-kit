@@ -20,7 +20,12 @@ command -v hermes >/dev/null 2>&1 || { echo "skip: hermes not installed"; exit 0
 base="$HOME/.hermes/cache/scratch"; [[ -d "$base" && ! -L "$base" ]] || base="${TMPDIR:-/tmp}"
 tmp="$(mktemp -d -p "$base" neo-hermes-reg.XXXXXX)"; [[ -d "$tmp" && "$tmp" != / ]] || { echo "mktemp failed" >&2; exit 1; }
 fake_pid=""
-trap '[[ -n "$fake_pid" ]] && kill "$fake_pid" 2>/dev/null; rm -rf "$tmp"' EXIT
+# BROWSEROS_NEO_TEST_KEEP=1 keeps the throwaway homes (and prints the folder) instead of deleting them.
+if [[ "${BROWSEROS_NEO_TEST_KEEP:-}" == 1 ]]; then
+  trap '[[ -n "$fake_pid" ]] && kill "$fake_pid" 2>/dev/null; echo "scratch kept: $tmp"' EXIT
+else
+  trap '[[ -n "$fake_pid" ]] && kill "$fake_pid" 2>/dev/null; rm -rf "$tmp"' EXIT
+fi
 pass=0; fail=0
 ok() { printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 no() { printf '  FAIL %s\n' "$1"; fail=$((fail+1)); }
@@ -58,6 +63,8 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         msg = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
         m, i = msg.get("method"), msg.get("id")
+        with open(sys.argv[2], "a") as f:
+            f.write(str(m) + "\n")
         if i is None: return self._send(202)
         if m == "initialize":
             r = {"protocolVersion": msg["params"].get("protocolVersion", "2025-03-26"),
@@ -80,12 +87,17 @@ import hermes_bootstrap  # noqa: F401  (same start-up as the hermes launcher)
 from tools.mcp_tool_discovery import discover_mcp_tools
 from tools.registry import registry
 from tools import mcp_tool as core
-discover_mcp_tools()
+if len(sys.argv) > 3 and sys.argv[3] == "reconcile":
+    # The running gateway's no-restart path: its housekeeping tick calls this.
+    from tools.mcp_tool_discovery import reconcile_mcp_servers_with_config
+    reconcile_mcp_servers_with_config()
+else:
+    discover_mcp_tools()
 print(json.dumps({"tools": sorted(registry.get_tool_names_for_toolset("mcp-browseros_neo")),
                   "trust": {str(k): v for k, v in core._server_trust_levels.items()}}), flush=True)
 os._exit(0)
 EOF
-timeout 300 python3 -I "$tmp/fake_mcp.py" "$port" & fake_pid=$!
+timeout 300 python3 -I "$tmp/fake_mcp.py" "$port" "$tmp/requests.log" & fake_pid=$!
 for _ in $(seq 1 50); do python3 -I -c 'import socket,sys; socket.create_connection(("127.0.0.1",int(sys.argv[1])),1)' "$port" 2>/dev/null && break; sleep 0.1; done
 
 register() {  # register HOME_NAME with_exclusions(0|1) -> JSON on stdout
@@ -95,7 +107,7 @@ register() {  # register HOME_NAME with_exclusions(0|1) -> JSON on stdout
     [[ "$2" == 1 || "$cmd" != *".tools.exclude "* ]] || continue
     # shellcheck disable=SC2086  # the printed commands are shell words
     eval "HERMES_HOME=\"$home\" timeout 60 $cmd" >/dev/null || { echo "config set failed: $cmd" >&2; return 1; }
-  done < <(BROWSEROS_NEO_MCP_PORT="$port" bash "$WRAP" hermes-commands)
+  done < <(BROWSEROS_NEO_MCP_PORT="$port" bash "$WRAP" hermes-commands 2>/dev/null)
   HERMES_HOME="$home" timeout 90 "$PY" -I "$tmp/probe.py" "$tmp" "$PYPATH" 2>"$tmp/$1.err"
 }
 
@@ -113,6 +125,24 @@ r = json.loads(sys.argv[1])
 assert len(r["tools"]) == 5 and "mcp__browseros_neo__credentials" in r["tools"], r
 EOF
 grep -q 'enabled: true' "$tmp/home-excl/config.yaml" && ok "throwaway config ends enabled" || no "throwaway config enabled"
+
+# Staged: every command but the last (enabled true). The gateway's MCP config
+# reconcile (no restart) must connect nothing; after the last one it must
+# register the filtered tools. Shows the last command is the activation.
+home="$tmp/home-staged"; mkdir -p "$home"; mapfile -t cmds < <(BROWSEROS_NEO_MCP_PORT="$port" bash "$WRAP" hermes-commands 2>/dev/null)
+staged_ok=1
+for cmd in "${cmds[@]:0:${#cmds[@]}-1}"; do
+  eval "HERMES_HOME=\"$home\" timeout 60 $cmd" >/dev/null || staged_ok=0
+done
+: > "$tmp/requests.log"
+pre="$(HERMES_HOME="$home" timeout 90 "$PY" -I "$tmp/probe.py" "$tmp" "$PYPATH" reconcile 2>"$tmp/staged-pre.err")" || staged_ok=0
+pre_reqs="$(wc -l < "$tmp/requests.log")"
+python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["tools"] == [], r' "$pre" 2>/dev/null && (( staged_ok && pre_reqs == 0 )) \
+  && ok "before 'enabled true': reconcile registers no tool and sends the server no request" || no "staged pre-enable: $pre (requests $pre_reqs)"
+eval "HERMES_HOME=\"$home\" timeout 60 ${cmds[-1]}" >/dev/null && [[ "${cmds[-1]}" == *".enabled true" ]] || no "staged final command: ${cmds[-1]}"
+post="$(HERMES_HOME="$home" timeout 90 "$PY" -I "$tmp/probe.py" "$tmp" "$PYPATH" reconcile 2>"$tmp/staged-post.err")"
+python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["tools"] == ["mcp__browseros_neo__navigate_page", "mcp__browseros_neo__take_snapshot"], r' "$post" 2>/dev/null \
+  && ok "after 'enabled true': reconcile alone (no restart) registers the two filtered tools" || { no "staged post-enable: $post"; tail -5 "$tmp/staged-post.err"; }
 
 echo "browseros-neo hermes registration: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
