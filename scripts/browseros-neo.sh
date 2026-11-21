@@ -326,7 +326,9 @@ cmd_up() {
     manifest_body > "$MANIFEST.tmp" && mv -f "$MANIFEST.tmp" "$MANIFEST"
   fi
   # Paused: the gate must already be stopped; `up` never stops it for you.
-  [[ ! -e "$STATE_FILE" ]] || assert_gate_closed "pause recorded in $STATE_FILE but "
+  # A new `up` may start a new browser: any earlier handoff (and same-host
+  # acceptance) no longer describes it, so the record keeps only the pause.
+  [[ ! -e "$STATE_FILE" ]] || { assert_gate_closed "pause recorded in $STATE_FILE but "; clear_handoff_record; }
   "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 || compose pull neo
   compose up -d --no-recreate --wait --wait-timeout "${BROWSEROS_NEO_WAIT:-240}" neo viewer
   enforce_bindings
@@ -368,6 +370,13 @@ open_gate() {  # start the gate and prove the path is open; on failure refuse wi
     sleep 0.5
   done
   gate_failed "gate did not accept connections on 127.0.0.1:$MCP_PORT within 10 s"
+}
+
+clear_handoff_record() {  # drop earlier handoff_at/trust_* lines; keep the pause state itself
+  [[ -e "$STATE_FILE" ]] || return 0
+  ( umask 077; sed -e '/^handoff_at=/d' -e '/^trust_mode=/d' -e '/^trust_accepted_at=/d' "$STATE_FILE" > "$STATE_FILE.tmp" \
+      && mv -f "$STATE_FILE.tmp" "$STATE_FILE" ) \
+    || die "cannot clear the earlier handoff from $STATE_FILE; do NOT sign in"
 }
 
 cmd_down() {  # the only command that removes containers; needs the explicit flag
@@ -469,6 +478,9 @@ cmd_handoff() {  # prepare the running browser for a human sign-in; agent path m
   take_lock
   grep -qx 'state=CLOSED' "$STATE_FILE" 2>/dev/null \
     || die "handoff refused: the agent path is not drained (run 'pause' without --no-wait first). Nothing was touched."
+  # A new handoff supersedes the last one: its record (and any same-host
+  # acceptance) is removed now, so a refusal or failure below leaves none.
+  clear_handoff_record
   assert_gate_closed "handoff refused: "
   cmd_check
   manifest_matches_or_die "handoff"
@@ -514,8 +526,9 @@ trusted_host_notice() {  # the exact terms of the operator's same-host developme
   log "carries no isolation guarantee: every process on this host, including an agent's terminal tool and any"
   log "other local user, can reach Neo's unauthenticated MCP/settings port on its bridge address and watch or"
   log "drive this viewer with a forged Origin, gate paused or not; anything running as your UID can read the"
-  log "profile folder (sessions). Not for shared, multi-user or production hosts. While signed in, run no agent"
-  log "task on this host (the wrapper cannot enforce that), never paste credentials into chat, and revoke the"
+  log "profile folder (sessions). Not for shared, multi-user or production hosts. From 'pause' until you finish"
+  log "typing and run 'resume', run no other agent task on this host (the wrapper cannot enforce that; after"
+  log "'resume' the agent drives this signed-in profile). Never paste credentials into chat, and revoke the"
   log "account's sessions if the host or an agent misbehaves. The general real-account status stays NO-GO."
 }
 
