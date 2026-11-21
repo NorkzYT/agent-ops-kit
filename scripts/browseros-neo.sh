@@ -20,6 +20,12 @@
 #   browseros-neo.sh access     print how to reach the viewer from another machine
 #   browseros-neo.sh hermes-snippet    print the reference Hermes mcp_servers entry
 #   browseros-neo.sh hermes-commands   print the native `hermes config set` commands for it
+#   browseros-neo.sh hermes-enable --approve-activation
+#                               opt-in: run those commands against the current HERMES_HOME
+#                               (enabled false first, enabled true last); refused without the
+#                               flag or while the MCP gate is closed; idempotent; an existing
+#                               entry with other values is refused; a failure rolls back
+#   browseros-neo.sh hermes-disable    set mcp_servers.browseros_neo.enabled false (entry kept)
 #
 # Settings (environment): BROWSEROS_NEO_DATA (profile folder, default
 # ~/.local/share/agent-ops-kit/browseros-neo/data), BROWSEROS_NEO_VNC_PORT
@@ -654,6 +660,22 @@ if cfg.get("enabled"):
 '
 }
 
+HERMES_HELPER="$ROOT/scripts/lib/browseros_neo_hermes.py"
+
+cmd_hermes_enable() {  # opt-in only; the explicit flag is the operator's activation choice
+  [[ "${1:-}" == "--approve-activation" && $# -eq 1 ]] \
+    || die "hermes-enable needs --approve-activation (it enables Neo in the current Hermes home); nothing changed. Review 'hermes-commands' first."
+  command -v "${BROWSEROS_NEO_HERMES:-hermes}" >/dev/null 2>&1 || die "hermes CLI not found; nothing changed"
+  port_open "$MCP_PORT" \
+    || die "the MCP gate on 127.0.0.1:$MCP_PORT is closed (not 'up', or paused); nothing changed"
+  python3 -I "$HERMES_HELPER" enable /dev/stdin < <(cmd_hermes_snippet)
+}
+
+cmd_hermes_disable() {
+  command -v "${BROWSEROS_NEO_HERMES:-hermes}" >/dev/null 2>&1 || die "hermes CLI not found; nothing changed"
+  python3 -I "$HERMES_HELPER" disable
+}
+
 case "${1:-}" in
   check) cmd_check ;;
   up) cmd_up ;;
@@ -665,5 +687,7 @@ case "${1:-}" in
   access) cmd_access ;;
   hermes-snippet) cmd_hermes_snippet ;;
   hermes-commands) cmd_hermes_commands ;;
-  *) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  hermes-enable) shift; cmd_hermes_enable "$@" ;;
+  hermes-disable) cmd_hermes_disable ;;
+  *) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

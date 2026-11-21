@@ -93,16 +93,34 @@ if len(sys.argv) > 3 and sys.argv[3] == "reconcile":
     reconcile_mcp_servers_with_config()
 else:
     discover_mcp_tools()
+# The kit's preferred-browser skill, as the installer copies it, through Hermes' own skills index
+# built from the tools this probe registered (agent/system_prompt.py::_skills_prompt).
+from pathlib import Path
+import model_tools
+from agent.prompt_builder import build_skills_system_prompt
+tools = set(registry.get_all_tool_names())
+toolsets = {model_tools.get_toolset_for_tool(t) for t in tools} - {None, ""}
+index = build_skills_system_prompt(available_tools=tools, available_toolsets=toolsets,
+                                   skills_dir_override=Path(home) / "skills")
 print(json.dumps({"tools": sorted(registry.get_tool_names_for_toolset("mcp-browseros_neo")),
-                  "trust": {str(k): v for k, v in core._server_trust_levels.items()}}), flush=True)
+                  "trust": {str(k): v for k, v in core._server_trust_levels.items()},
+                  "skill_listed": "browseros-neo-browser" in index,
+                  "control_listed": "neo-skill-control" in index}), flush=True)
 os._exit(0)
 EOF
 timeout 300 python3 -I "$tmp/fake_mcp.py" "$port" "$tmp/requests.log" & fake_pid=$!
 for _ in $(seq 1 50); do python3 -I -c 'import socket,sys; socket.create_connection(("127.0.0.1",int(sys.argv[1])),1)' "$port" 2>/dev/null && break; sleep 0.1; done
 
+install_skills() {  # the kit skill as scripts/hermes-install.sh copies it, plus an ungated control skill
+  mkdir -p "$1/skills/agent-ops-kit/neo-skill-control"
+  cp -rf "$ROOT/hermes/skills/browseros-neo-browser" "$1/skills/agent-ops-kit/"
+  printf -- '---\nname: neo-skill-control\ndescription: "ungated control"\n---\nbody\n' > "$1/skills/agent-ops-kit/neo-skill-control/SKILL.md"
+}
+
 register() {  # register HOME_NAME with_exclusions(0|1) -> JSON on stdout
   local home="$tmp/$1" cmd
   mkdir -p "$home"
+  install_skills "$home"
   while IFS= read -r cmd; do
     [[ "$2" == 1 || "$cmd" != *".tools.exclude "* ]] || continue
     # shellcheck disable=SC2086  # the printed commands are shell words
@@ -117,6 +135,7 @@ import json, sys
 r = json.loads(sys.argv[1])
 assert r["tools"] == ["mcp__browseros_neo__navigate_page", "mcp__browseros_neo__take_snapshot"], r
 assert r["trust"].get("browseros_neo") == "untrusted", r
+assert r["skill_listed"] and r["control_listed"], r
 EOF
 ctl="$(register home-ctl 0)" || { no "control registration"; cat "$tmp/home-ctl.err"; }
 python3 -I - "$ctl" <<'EOF' && ok "control without exclusions registers all five (the probe sees them)" || no "control registration: $ctl"
@@ -129,7 +148,7 @@ grep -q 'enabled: true' "$tmp/home-excl/config.yaml" && ok "throwaway config end
 # Staged: every command but the last (enabled true). The gateway's MCP config
 # reconcile (no restart) must connect nothing; after the last one it must
 # register the filtered tools. Shows the last command is the activation.
-home="$tmp/home-staged"; mkdir -p "$home"; mapfile -t cmds < <(BROWSEROS_NEO_MCP_PORT="$port" bash "$WRAP" hermes-commands 2>/dev/null)
+home="$tmp/home-staged"; mkdir -p "$home"; install_skills "$home"; mapfile -t cmds < <(BROWSEROS_NEO_MCP_PORT="$port" bash "$WRAP" hermes-commands 2>/dev/null)
 staged_ok=1
 for cmd in "${cmds[@]:0:${#cmds[@]}-1}"; do
   eval "HERMES_HOME=\"$home\" timeout 60 $cmd" >/dev/null || staged_ok=0
@@ -137,12 +156,12 @@ done
 : > "$tmp/requests.log"
 pre="$(HERMES_HOME="$home" timeout 90 "$PY" -I "$tmp/probe.py" "$tmp" "$PYPATH" reconcile 2>"$tmp/staged-pre.err")" || staged_ok=0
 pre_reqs="$(wc -l < "$tmp/requests.log")"
-python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["tools"] == [], r' "$pre" 2>/dev/null && (( staged_ok && pre_reqs == 0 )) \
-  && ok "before 'enabled true': reconcile registers no tool and sends the server no request" || no "staged pre-enable: $pre (requests $pre_reqs)"
+python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["tools"] == [] and r["control_listed"] and not r["skill_listed"], r' "$pre" 2>/dev/null && (( staged_ok && pre_reqs == 0 )) \
+  && ok "before 'enabled true': reconcile registers no tool, sends no request; preferred-browser skill not listed" || no "staged pre-enable: $pre (requests $pre_reqs)"
 eval "HERMES_HOME=\"$home\" timeout 60 ${cmds[-1]}" >/dev/null && [[ "${cmds[-1]}" == *".enabled true" ]] || no "staged final command: ${cmds[-1]}"
 post="$(HERMES_HOME="$home" timeout 90 "$PY" -I "$tmp/probe.py" "$tmp" "$PYPATH" reconcile 2>"$tmp/staged-post.err")"
-python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["tools"] == ["mcp__browseros_neo__navigate_page", "mcp__browseros_neo__take_snapshot"], r' "$post" 2>/dev/null \
-  && ok "after 'enabled true': reconcile alone (no restart) registers the two filtered tools" || { no "staged post-enable: $post"; tail -5 "$tmp/staged-post.err"; }
+python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["tools"] == ["mcp__browseros_neo__navigate_page", "mcp__browseros_neo__take_snapshot"] and r["skill_listed"], r' "$post" 2>/dev/null \
+  && ok "after 'enabled true': reconcile alone (no restart) registers the two filtered tools; skill listed" || { no "staged post-enable: $post"; tail -5 "$tmp/staged-post.err"; }
 
 echo "browseros-neo hermes registration: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
