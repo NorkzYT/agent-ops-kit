@@ -1,8 +1,9 @@
 # Hermes mcp_servers entry for the BrowserOS neo pilot (docs/browseros-neo.md).
-# Not part of config.yaml.tmpl: an operator merges it into ~/.hermes/config.yaml
-# by hand, after the pilot is up, and applies it with the normal approved
-# gateway restart. `scripts/browseros-neo.sh hermes-snippet` prints it with
-# the configured port filled in.
+# Not part of config.yaml.tmpl and never hand-merged: `scripts/browseros-neo.sh
+# hermes-commands` turns it into native `hermes config set` commands
+# (enabled false first, enabled true last); an operator runs them after the
+# pilot is up and applies them with the normal approved gateway restart.
+# `hermes-snippet` prints it with the configured port filled in.
 #
 # - url is the mcp-gate's loopback port, never Neo's 9010 directly, so
 #   `browseros-neo.sh pause` cuts Hermes off.

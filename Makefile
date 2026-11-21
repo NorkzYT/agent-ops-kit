@@ -496,13 +496,13 @@ browseros-neo-up: ## Check, start BrowserOS neo, then open the agent MCP path un
 browseros-neo-down: ## Stop the pilot containers (the profile folder is kept)
 	@bash scripts/browseros-neo.sh down
 
-browseros-neo-status: ## Pilot containers, live bindings, agent path open/paused
+browseros-neo-status: ## Reconcile the pause record with the live gate, port and bindings (OPEN/DRAINING/CLOSED/INCONSISTENT)
 	@bash scripts/browseros-neo.sh status
 
-browseros-neo-pause: ## Close the agent MCP path and wait out in-flight runs before you take over the viewer
+browseros-neo-pause: ## Close the agent MCP path, then drain the pinned run budget (CLOSED is not proof the page is quiet)
 	@bash scripts/browseros-neo.sh pause
 
-browseros-neo-resume: ## Reopen the agent MCP path after you finish in the viewer
+browseros-neo-resume: ## Re-check config/engine/profile against `up`, then reopen the agent MCP path
 	@bash scripts/browseros-neo.sh resume
 
 browseros-neo-access: ## Print the SSH tunnel and sign-in steps for the viewer

@@ -62,26 +62,62 @@ service or Tailscale Serve/Funnel. `make browseros-neo-access` prints this.
 ### Sign in, then hand back
 
 ```bash
-make browseros-neo-pause       # agent path closed; waits 65 s for in-flight runs
+make browseros-neo-pause       # close the agent path, then drain the pinned run budget (65 s)
+make browseros-neo-status      # must say "agent path: CLOSED"; look at the page yourself too
 # sign in through the viewer, including MFA; close the tunnel
-make browseros-neo-resume      # agent path reopened
+make browseros-neo-resume      # re-checks everything `up` checked, then reopens the path
 ```
+
+`up`, `down`, `pause` and `resume` hold one lifecycle lock per profile
+(`state-<project>/lock` next to the profile folder); a second one refuses
+instead of waiting, so a `resume` cannot reopen the path during a drain.
 
 You type credentials into the page yourself. Never paste them into chat; the
 Hermes entry hides Neo's `credentials` and `payment_cards` tools.
 
 ## What pause does and does not do
 
-Pause stops the `mcp-gate` container. Verified on the pinned image:
+Pause records the pause, stops the `mcp-gate` container and verifies the gate
+is not running, `127.0.0.1:19010` refuses connections and no other project's
+pilot gate is running. Verified on the pinned image: Hermes' `mcp test` then
+fails and the viewer keeps working.
 
-- `127.0.0.1:19010` refuses connections; `hermes mcp test browseros_neo` fails
-  (exit 1); the viewer keeps working.
+States (`status` reconciles the record with the live gate, port and
+bindings, and exits non-zero for anything unsafe or unknown):
+
+| Status | Meaning |
+|---|---|
+| `OPEN` | gate running, no pause recorded |
+| `DRAINING` | path closed, drain not finished (`pause --no-wait`, an interrupted pause, or a pause that found drift). Do not type secrets. |
+| `CLOSED` | path closed and `pause` re-verified it after the full drain |
+| `CLOSED but not drained` | gate stopped without a pause (e.g. after `down`); run `pause` first |
+| `INCONSISTENT` | a pause is recorded but the path is open (raw `docker compose up`, failed stop) |
+| `EXPOSED` / `UNKNOWN` | a non-loopback binding, or Docker could not answer; nothing is assumed |
+
 - Open MCP connections are cut. A script Neo already started keeps running
   inside Neo until its run budget (60 s, `neo.toml`) ends: in testing a script
-  wrote to the page about 4 s after the client was cut. That is why pause
-  waits 65 s before saying the browser is yours.
-- The paused state is a file next to the profile; `up` honours it and leaves
+  wrote to the page about 4 s after the client was cut. Pause therefore waits
+  the budget + 5 s and re-verifies the gate, port and budget file before it
+  reports `CLOSED`. `pause --no-wait` only closes the path and reports
+  `DRAINING`.
+- The budget is pinned: `up` records the sha256 of `neo.toml` (and of the
+  rendered config, `mcp-gate.py` and the engine ID) in `state-<project>/manifest`
+  and recreates Neo when `neo.toml` changed, because a file bind mount keeps
+  the inode Neo started with. If `neo.toml` differs from that record, pause
+  still closes the path but stays `DRAINING` with an unknown deadline and
+  fails; `down` then `up` pins it again.
+- **`CLOSED` is not proof the browser is quiet.** The run budget bounds a
+  `run` script, not everything a tool call can leave behind: page timers,
+  injected scripts and listeners, open tabs, downloads or settings changed
+  through the forwarded API can outlive it. The wrapper never says the browser
+  is safe to type into; look at the page before you enter secrets.
+- The pause record is a file next to the profile; `up` honours it and leaves
   the gate stopped until `resume`.
+- `resume` re-runs every `check` (engine, profile, rendered config) and
+  refuses unless the project, profile, ports, image, engine ID, rendered config,
+  `neo.toml`, `mcp-gate.py` and run budget equal what `up` recorded, and the
+  running Neo is the pinned image on this profile folder. All of that happens
+  before the gate starts. The gate is always a fresh container.
 
 It does **not**:
 
@@ -99,13 +135,28 @@ It does **not**:
 ## Hermes connection
 
 Hermes connects with its native MCP client over Streamable HTTP; no Hermes code
-changes. Print the entry with the configured port and merge it into
-`~/.hermes/config.yaml` by hand, then apply it with the operator-approved
-gateway restart (docs/install.md). This pilot does not do either.
+changes. Do not hand-edit `~/.hermes/config.yaml`. Register the entry with
+Hermes' own config commands, which validate each key:
 
 ```bash
-bash scripts/browseros-neo.sh hermes-snippet
+bash scripts/browseros-neo.sh hermes-commands   # prints the commands; review, then run them
 ```
+
+The commands write `enabled: false` first, then the URL, `trust: untrusted`
+and the tool exclusions, and `enabled: true` last, so the server is never
+enabled without its exclusions. `hermes mcp add` is not used: it offers
+"enable all tools" before any exclusion is set. Apply with the
+operator-approved gateway restart (docs/install.md). This pilot does neither.
+`hermes-snippet` prints the same entry as YAML for review.
+
+Exclusions verified at registration, not only in a tool listing:
+`scripts/test_browseros_neo_hermes_registration.sh` (opt-in; needs a local
+Hermes install) runs the printed commands in a throwaway `HERMES_HOME`,
+points them at a stdlib fake MCP server that lists `credentials`,
+`payment_cards`, `solve_captcha` and two browser tools, and calls Hermes'
+real `discover_mcp_tools()`. Only the two browser tools land in the
+`mcp-browseros_neo` toolset, trust is `untrusted`, and a control run without
+exclusions registers all five. It never reads or writes the live Hermes home.
 
 - `trust: untrusted`: Neo marks no tool `readOnlyHint: true`, so every Neo tool
   call asks for approval (Allow once / Session / Always per tool). This is the
@@ -146,14 +197,35 @@ bash scripts/browseros-neo.sh hermes-snippet
   group/other-accessible, inside the repo, or mounted by another container.
   `COMPOSE_FILE`, `.env` and profiles are ignored so the checked config is
   the one that runs.
-- After start, the live bindings are re-read; a non-loopback binding stops
-  the gate and fails.
+- `check` is an allowlist: exact service and top-level keys, exact mount
+  sources (`/data` = the profile folder, `neo.toml` and `mcp-gate.py` from
+  `docker/browseros-neo`), the image's own entrypoint for Neo, the exact gate
+  entrypoint, a numeric non-root gate user, only `no-new-privileges`, and the
+  single default-bridge `neo` network. `volumes_from`, `tmpfs`, `sysctls`,
+  `extra_hosts`, `command`, external/macvlan networks and the like are refused
+  because they are not on the list.
+- The profile path must be canonical (`realpath` of itself: no symlinked
+  parent, `..`, `//` or trailing `/`), outside this checkout and the main
+  checkout, and no other container may mount it, a parent of it or a folder
+  inside it.
+- After `up`/`resume` start anything, the live bindings are re-read. An
+  unexpected binding (the viewer included) or an inspect error stops every
+  pilot container, verifies the stop, and fails.
 
 ## Test
 
 ```bash
 bash scripts/test_browseros_neo.sh    # offline: no containers started
+bash scripts/test_browseros_neo_hermes_registration.sh   # opt-in, local Hermes, isolated home
 ```
+
+`test_browseros_neo.sh` also drives `up`/`pause`/`status`/`resume`/`down`
+against a bounded fake Docker (containers are files, the gate is a real
+loopback listener, `compose config` is the real CLI): `--no-wait` stays
+`DRAINING`, a held lock refuses, a gate reopened mid-drain or a silent stop
+failure is caught, a raw gate start under a pause is `INCONSISTENT`, resume
+refuses engine/config/`neo.toml`/image/profile drift before starting the gate,
+and an exposed viewer or inspect error stops the whole pilot.
 
 Live checks (start, Hermes `mcp test`, page drive, pause/resume, in-flight run,
 persistence across `down`/`up`) were run once by hand in a scratch project
