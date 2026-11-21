@@ -22,11 +22,14 @@ REAL_DOCKER="$(command -v docker || true)"
 
 # --- static ---------------------------------------------------------------
 bash -n "$WRAP" && ok "wrapper parses" || no "wrapper parses"
-python3 -m py_compile "$CHECK" "$ROOT/docker/browseros-neo/mcp-gate.py" && ok "python compiles" || no "python compiles"
+python3 -m py_compile "$CHECK" "$ROOT/docker/browseros-neo/mcp-gate.py" "$ROOT/docker/browseros-neo/neo-handoff.py" && ok "python compiles" || no "python compiles"
 [[ "$IMAGE" == ghcr.io/browseros-ai/neo:*@sha256:* ]] && ok "wrapper pins image by digest" || no "wrapper pins image by digest"
 grep -qF "\"$IMAGE\"" "$ROOT/docker/browseros-neo/compose.yaml" && ok "compose uses the wrapper's pinned image" || no "compose/wrapper image mismatch"
 wt="$(python3 -I -c 'import tomllib,sys; print(tomllib.load(open(sys.argv[1],"rb"))["run"]["wall_timeout_seconds"])' "$ROOT/docker/browseros-neo/neo.toml")"
 [[ "$wt" == 60 ]] && ok "neo.toml pins run budget (60s)" || no "neo.toml run budget ($wt)"
+
+python3 -I "$ROOT/scripts/test_browseros_neo_handoff_unit.py" > "$tmp/hu.out" 2>&1 \
+  && ok "neo-handoff.py verification (pure mocks): $(tail -1 "$tmp/hu.out")" || { no "neo-handoff.py unit"; cat "$tmp/hu.out"; }
 
 # --- rendered config + checker --------------------------------------------
 if [[ -z "$REAL_DOCKER" ]] || ! docker compose version >/dev/null 2>&1; then
@@ -380,7 +383,7 @@ expect "pause --no-wait: CLOSED path but DRAINING, says do not type" 0 'DRAINING
 grep -qx 'state=DRAINING' "$W" && ok "--no-wait records DRAINING" || no "--no-wait records DRAINING"
 [[ ! -s "$fk/sleeps" ]] && ok "--no-wait does not wait" || no "--no-wait does not wait"
 : > "$fk/calls"
-expect "handoff refused while DRAINING" nz 'handoff refused: the agent path is not drained' -- bash "$WRAP" handoff
+expect "handoff refused while DRAINING" nz 'handoff refused: the agent path is not drained' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
 ! grep -q '^exec ' "$fk/calls" && ok "  ... and ran nothing in Neo" || no "  ... DRAINING handoff ran in Neo"
 ! gate_listening && ok "gate port refuses after pause" || no "gate port refuses after pause"
 expect "status after --no-wait: DRAINING, not CLOSED" 0 'agent path: DRAINING' "!$UNSAFE" -- bash "$WRAP" status
@@ -398,19 +401,27 @@ expect "status after drain: CLOSED" 0 'agent path: CLOSED \(gate stopped and pau
 expect "handoff refuses a non-https sign-in origin" nz 'needs an https origin' -- bash "$WRAP" handoff --clear-origin http://accounts.example.com
 expect "handoff refuses an origin with a path" nz 'needs an https origin' -- bash "$WRAP" handoff --clear-origin https://a.example.com/x
 : > "$fk/calls"
-expect "handoff after a drained pause: HANDOFF-READY" 0 'HANDOFF-READY: browser restarted' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
+: > "$fk/calls"
+expect "handoff without --clear-origin is refused before anything" nz 'handoff refused: name every disposable sign-in origin' -- bash "$WRAP" handoff
+! grep -qE '^(exec|compose|ps|inspect) ' "$fk/calls" && ok "  ... and ran nothing in Neo" || { no "  ... origin-less handoff reached Docker"; cat "$fk/calls"; }
+: > "$fk/calls"
+expect "handoff after a drained pause: HANDOFF-READY" 0 'HANDOFF-READY: browser restarted' "!Sign in now" -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
+grep -q 'Real-account login is NO-GO' "$fk/out" && grep -q 'disposable' "$fk/out" \
+  && grep -q 'Scope: all site data cleared only on https://accounts.example.com;' "$fk/out" \
+  && grep -q 'same persistent profile (not the same tab)' "$fk/out" && grep -q 'not proven clean' "$fk/out" \
+  && ok "  ... says NO-GO/disposable only, reports scope and residual limits" || { no "  ... handoff success text"; cat "$fk/out"; }
 grep -qE '^exec -i -u neo bneo-life-neo-1 /usr/bin/python3 -I - --clear-origin https://accounts.example.com$' "$fk/calls" \
   && [[ "$(cut -d' ' -f1 "$fk/exec.stdin.sha")" == "$(sha256sum < "$ROOT/docker/browseros-neo/neo-handoff.py" | cut -d' ' -f1)" ]] \
   && ok "  ... ran the checked-out neo-handoff.py as neo, on stdin" || { no "  ... handoff exec call"; cat "$fk/calls"; }
 grep -qx 'state=CLOSED' "$W" && grep -q '^handoff_at=' "$W" && ok "  ... record stays CLOSED, handoff_at added" || no "  ... record: $(cat "$W")"
 ! grep -qE 'compose.* (up|stop|down|rm|kill|restart) ' "$fk/calls" && ok "  ... touched no container" || no "  ... handoff touched containers"
-expect "handoff: script failure says do NOT sign in" nz 'handoff FAILED \(rc 1\); do NOT sign in' "!HANDOFF-READY:" -- env FAKE_EXEC_RC=1 FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff
-expect "handoff: rc 0 without HANDOFF-READY is a failure" nz 'handoff FAILED \(rc 0\)' "!HANDOFF-READY:" -- env FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff
+expect "handoff: script failure says do NOT sign in" nz 'handoff FAILED \(rc 1\); do NOT sign in' "!HANDOFF-READY:" -- env FAKE_EXEC_RC=1 FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff --clear-origin https://accounts.example.com
+expect "handoff: rc 0 without HANDOFF-READY is a failure" nz 'handoff FAILED \(rc 0\)' "!HANDOFF-READY:" -- env FAKE_EXEC_OUT='{"result": "FAILED"}' bash "$WRAP" handoff --clear-origin https://accounts.example.com
 
 fake_gate_up
 expect "status: raw gate start under a pause record is INCONSISTENT" nz 'INCONSISTENT' "!agent path: (PAUSED|CLOSED)" -- bash "$WRAP" status
 : > "$fk/calls"
-expect "handoff refused while the gate runs under a CLOSED record" nz 'handoff refused: mcp-gate is running' -- bash "$WRAP" handoff
+expect "handoff refused while the gate runs under a CLOSED record" nz 'handoff refused: mcp-gate is running' -- bash "$WRAP" handoff --clear-origin https://accounts.example.com
 ! grep -q '^exec ' "$fk/calls" && ok "  ... and ran nothing in Neo" || no "  ... open-gate handoff ran in Neo"
 
 expect "pause: gate reopened mid-drain is detected" nz 'reopened during the drain' "!$UNSAFE|^\[agent-ops-kit\] CLOSED:" \
