@@ -439,6 +439,12 @@ and every other setting stays as it was. It:
   override is never overwritten. An entry holding a subset of the reference
   (an interrupted earlier run, or after `hermes-disable`) is completed;
 - does nothing when the entry already matches and is enabled;
+- writes `enabled false` first and proves it from the file and `hermes config
+  get` before staging any other key (an existing enabled entry whose disable
+  does not persist is never staged); before `enabled true`, the last write, it
+  proves the entry is still `enabled: false` and holds every reference value
+  (exclusion list, trust, URL, timeouts ...), so a `config set` that exits 0
+  without persisting, or persists another value, never enables the entry;
 - reads the entry back after `enabled true`; on any failed step or a
   mismatch it sets `enabled false` again and proves it from the file. Only
   when there was no entry before and the entry still holds nothing but

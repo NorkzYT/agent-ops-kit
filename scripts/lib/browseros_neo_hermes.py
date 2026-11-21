@@ -20,7 +20,11 @@ validates and writes each key and unrelated config is untouched.
   the last write/read-back/rollback. It waits BROWSEROS_NEO_HERMES_LOCK_WAIT seconds (default
   120), then exits 6 with nothing changed. It does not stop `hermes config set`, `hermes config
   edit` or a manual edit run outside these commands.
-- enable writes `enabled false` first, every other key next, `enabled true` last. An existing
+- enable writes `enabled false` first, every other key next, `enabled true` last, with two
+  verification points from the file and Hermes' view: after the first write it proves
+  `enabled: false` before staging any key, and before `enabled true` it proves the entry is
+  still false and holds every reference value (exclusions, trust, url ...), so a CLI write that
+  exits 0 without persisting never gets the entry enabled. An existing
   entry is reused only when each key it has equals the reference value; any other value is an
   operator override and is refused (exit 3), never overwritten. An entry that already matches
   is a no-op. On any failure it sets `enabled false` again, checks the file, and only when there
@@ -262,6 +266,24 @@ def set_disabled(path):
     return e is not None and e.get("enabled") is False
 
 
+def check_disabled(path):
+    """Verification point 1, after the first write: nothing is staged unless `enabled: false` persisted."""
+    e = state(path)
+    if e is None or e.get("enabled") is not False:
+        raise RuntimeError(f"`enabled false` was not read back for {BASE}; no key staged")
+
+
+def check_staged(path, cfg):
+    """Verification point 2, before `enabled true`: still disabled and every reference value persisted."""
+    e = state(path)
+    if e is None or e.get("enabled") is not False:
+        raise RuntimeError(f"{BASE} is no longer `enabled: false` before enable; `enabled true` not written")
+    diff = conflicts(e, cfg) + missing(e, cfg)
+    if diff:
+        raise RuntimeError(f"staged {BASE} does not match the reference ({', '.join(diff)}); "
+                           "`enabled true` not written")
+
+
 def port_hint(keys):
     if f"{BASE}.url" in keys:
         return (" The registered url differs from this Neo's MCP port: either run Neo on the registered "
@@ -284,13 +306,18 @@ def enable(cfg, path):
             log(f"{BASE} already matches the reference and is enabled; nothing changed")
             return 0
     applied = []
+    steps = plan(cfg)
     try:
-        for argv in plan(cfg):
+        for i, argv in enumerate(steps):
+            if i == len(steps) - 1:
+                check_staged(path, cfg)
             p = run(argv)
             if p.returncode != 0:
                 raise RuntimeError(f"`{shlex.join(['hermes'] + argv[1:3])} ...` failed "
                                    f"(rc {p.returncode}: {redact(p.stderr or p.stdout)})")
             applied.append(argv)
+            if i == 0:
+                check_disabled(path)
         after = state(path)
         if resolve_config_path() != path:
             raise RuntimeError("`hermes config path` changed during the run")

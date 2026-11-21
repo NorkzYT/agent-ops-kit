@@ -11,6 +11,7 @@ Test controls (environment):
                         $FAKE_HERMES_DIR/release (60 s at most)
   FAKE_HERMES_FAIL      "<verb> <key>" that fails with FAKE_HERMES_FAIL_MSG on stderr, exit 9
   FAKE_HERMES_NOOP      "<verb> <key>" that exits 0 without writing (a CLI that claims success)
+  FAKE_HERMES_WRONG     "set <key>" that exits 0 but writes FAKE_HERMES_WRONG_VALUE instead
 """
 import json
 import os
@@ -72,7 +73,10 @@ def main(argv):
                 return 0
             node = node.setdefault(part, {})
         if argv[1] == "set":
-            node[parts[-1]] = yaml.safe_load(argv[3])
+            val = argv[3]
+            if os.environ.get("FAKE_HERMES_WRONG") == verb_key:
+                val = os.environ.get("FAKE_HERMES_WRONG_VALUE", "wrong")
+            node[parts[-1]] = yaml.safe_load(val)
         else:
             node.pop(parts[-1], None)
         tmp = cfg + ".tmp"

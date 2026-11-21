@@ -10,7 +10,9 @@
 # that `enabled: false` was really persisted; one lock per canonical Hermes
 # home serializes enable/disable across processes and home aliases (a disable
 # waits for a running enable and wins; two enables cannot roll back each
-# other's work); a held lock times out with nothing changed; rollback never
+# other's work); a held lock times out with nothing changed; `enabled true` is
+# issued only after `enabled false` and the full reference policy were read back
+# (a set that exits 0 without persisting never enables); rollback never
 # removes an entry another writer changed; child output and config values are
 # redacted. The scratch folder is kept and printed (pruned by the scratch policy).
 set -uo pipefail
@@ -182,6 +184,54 @@ helper redo e enable "$tmp/snippet.yaml"; rc2=$?
   && ! grep -q "NEOTESTSECRET" "$tmp"/*.out \
   && ok "child stderr and a refused entry's values are redacted (no secret in any output)" \
   || { no "redaction (rc $rc/$rc2)"; grep -l NEOTESTSECRET "$tmp"/*.out; }
+
+# 9. Verification points: `enabled true` is issued only after `enabled false` and the full
+#    reference policy were read back. Exclusions that the CLI "sets" without persisting, or
+#    persists wrong, never get the entry enabled, not even briefly.
+never_true() { ! grep -qE "^$2 config set mcp_servers\.browseros_neo\.enabled true" "$tmp/$1.calls" 2>/dev/null; }
+staged() { grep -E "^$2 config set mcp_servers\.browseros_neo\." "$tmp/$1.calls" 2>/dev/null | grep -vqE '\.enabled (true|false)$'; }
+seed exnoop
+FAKE_HERMES_NOOP="set mcp_servers.browseros_neo.tools.exclude" helper exnoop e enable "$tmp/snippet.yaml"; rc=$?
+(( rc != 0 )) && never_true exnoop e && [[ "$(entry exnoop)" == null ]] \
+  && ok "exclusion set exits 0 but writes nothing: exit $rc, enabled true never issued, entry rolled back" \
+  || { no "exclusion no-op (rc $rc): $(entry exnoop)"; grep -E '^e config set' "$tmp/exnoop.calls"; cat "$tmp/exnoop.e.out"; }
+seed exwrong
+FAKE_HERMES_WRONG="set mcp_servers.browseros_neo.tools.exclude" FAKE_HERMES_WRONG_VALUE="[credentials]" \
+  helper exwrong e enable "$tmp/snippet.yaml"; rc=$?
+(( rc != 0 )) && never_true exwrong e \
+  && ok "exclusion persisted with a wrong (shorter) list: exit $rc, enabled true never issued" \
+  || { no "exclusion wrong (rc $rc): $(entry exwrong)"; grep -E '^e config set' "$tmp/exwrong.calls"; cat "$tmp/exwrong.e.out"; }
+seed trwrong
+FAKE_HERMES_WRONG="set mcp_servers.browseros_neo.trust" FAKE_HERMES_WRONG_VALUE="trusted" \
+  helper trwrong e enable "$tmp/snippet.yaml"; rc=$?
+(( rc != 0 )) && never_true trwrong e \
+  && [[ "$(python3 -I -c 'import json,sys; e=json.loads(sys.argv[1]); print(e and e["enabled"])' "$(entry trwrong)")" == False ]] \
+  && ok "trust persisted wrong: exit $rc, enabled true never issued, entry left disabled" \
+  || { no "trust wrong (rc $rc): $(entry trwrong)"; cat "$tmp/trwrong.e.out"; }
+seed partial "  browseros_neo:
+    enabled: true
+    url: http://127.0.0.1:$PORT/mcp
+"
+cp "$tmp/partial/config.yaml" "$tmp/partial.orig"
+FAKE_HERMES_NOOP="set mcp_servers.browseros_neo.enabled" helper partial e enable "$tmp/snippet.yaml"; rc=$?
+(( rc != 0 )) && never_true partial e && ! staged partial e && cmp -s "$tmp/partial/config.yaml" "$tmp/partial.orig" \
+  && ok "partial enabled entry, initial disable exits 0 without writing: exit $rc, no key staged, enabled true never issued" \
+  || { no "partial enabled noop disable (rc $rc): $(entry partial)"; grep -E '^e config set' "$tmp/partial.calls"; cat "$tmp/partial.e.out"; }
+seed order
+helper order e enable "$tmp/snippet.yaml"; rc=$?
+python3 -I - "$tmp/order.calls" <<'EOF2'; order=$?
+import sys
+c = [l.split(None, 1)[1].strip() for l in open(sys.argv[1]) if l.startswith("e ")]
+B = "mcp_servers.browseros_neo"
+off, on = c.index(f"config set {B}.enabled false"), c.index(f"config set {B}.enabled true")
+st = [i for i, x in enumerate(c) if x.startswith(f"config set {B}.") and not x.startswith(f"config set {B}.enabled ")]
+get = lambda a, b: any(x.startswith(f"config get --json {B}") for x in c[a + 1:b])
+sys.exit(0 if st and off < min(st) and max(st) < on and get(off, min(st)) and get(max(st), on)
+         and get(on, len(c)) and on == max(i for i, x in enumerate(c) if x.startswith("config set")) else 1)
+EOF2
+(( rc == 0 && order == 0 )) && same_json "$(entry order)" "$REF_ENABLED" \
+  && ok "enable order: set false, read back, stage keys, read back, set true (last write), read back" \
+  || { no "enable order (rc $rc, order $order)"; cat "$tmp/order.calls"; }
 
 echo "browseros-neo hermes txn: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
