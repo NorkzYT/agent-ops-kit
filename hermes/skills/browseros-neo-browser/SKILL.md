@@ -12,10 +12,13 @@ metadata:
 
 # BrowserOS neo as the preferred browser
 
-Hermes lists this skill only while the `browseros_neo` MCP server's tools are
-registered (an operator ran `scripts/browseros-neo.sh hermes-enable
---approve-activation`; docs/browseros-neo.md). It is a preference, not a
-switch: Hermes' native browser tools stay available and unchanged.
+Hermes leaves this skill out of the system-prompt skills index unless the
+`browseros_neo` MCP server's tools are registered (an operator ran
+`scripts/browseros-neo.sh hermes-enable --approve-activation`;
+docs/browseros-neo.md). It can still be listed or opened explicitly when Neo
+is not connected; if `mcp__browseros_neo__*` tools are not in your tool list,
+ignore this skill. It is a preference, not a switch and not enforced: Hermes'
+native browser tools stay available and unchanged.
 
 ## Choosing a browser
 
@@ -24,9 +27,13 @@ switch: Hermes' native browser tools stay available and unchanged.
 2. Otherwise, for ordinary browsing (open a page, read it, click, fill a
    non-secret form, screenshot), use the `mcp__browseros_neo__*` tools. The
    operator watches this browser through its noVNC viewer.
-3. Use the native browser tools instead when Neo's tools error, time out or
-   are not listed (paused or stopped). Say once that Neo was unavailable. Do
-   not retry Neo in a loop.
+3. When Neo's tools error or time out, use Hermes' native browser tools
+   instead and say once that Neo was unavailable. Do not retry Neo in a loop.
+   Never fall back to the user's signed-in browser, `/browser connect`, or
+   any other session with an account signed in, unless the user asks for it.
+4. When Neo is paused (the operator's `pause`; its tools vanish or refuse),
+   stop the task that needed Neo and tell the user. Do not continue it in
+   another browser to get around the pause.
 
 ## Privacy and accounts
 

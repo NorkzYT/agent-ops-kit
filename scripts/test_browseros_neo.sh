@@ -713,6 +713,52 @@ expect "operator pause closes it again" 0 'DRAINING, not drained' -- bash "$WRAP
 expect "resume: all checks pass -> OPEN, record removed" 0 'agent path OPEN' -- bash "$WRAP" resume
 [[ ! -e "$W" ]] && gate_listening && ok "resume removed the pause record, gate listening" || no "resume final state"
 expect "status after resume: OPEN" 0 'agent path: OPEN' -- bash "$WRAP" status
+
+# hermes-enable registers only this pilot's verified Compose gate (fake `hermes`, throwaway
+# HOME/HERMES_HOME; read-only engine checks). A refusal never reaches the Hermes CLI.
+FH="$ROOT/scripts/testdata/browseros-neo/fake-hermes.py"
+hh="$tmp/hermes-home"; mkdir -p "$hh" "$tmp/hermes-user"; printf 'model:\n  default: m\n' > "$hh/config.yaml"
+cp "$hh/config.yaml" "$tmp/hermes.orig"
+HENV=(env HOME="$tmp/hermes-user" HERMES_HOME="$hh" BROWSEROS_NEO_HERMES="$FH" FAKE_HERMES_LOG="$tmp/hermes.calls")
+henable_refused() {  # LABEL PATTERN [VAR=val...]
+  local label="$1" pat="$2"; shift 2
+  : > "$fk/calls"
+  expect "hermes-enable refused: $label" nz "$pat" -- "${HENV[@]}" "$@" bash "$WRAP" hermes-enable --approve-activation
+  [[ ! -s "$tmp/hermes.calls" ]] && cmp -s "$hh/config.yaml" "$tmp/hermes.orig" \
+    && ! grep -qE '^compose .* (up|stop|down|rm|kill|restart)( |$)' "$fk/calls" \
+    && ok "  ... Hermes never called, config unchanged, no container touched" || no "  ... $label reached Hermes or Docker writes"
+}
+henable_refused "exposed binding (synthetic mismatch)" 'EXPOSED: unexpected live binding' FAKE_NEO_BIND=0.0.0.0
+henable_refused "engine differs from the manifest" 'engine_id changed' FAKE_ENGINE_ID=engine-B
+henable_refused "running neo on another image" 'not the pinned image' FAKE_NEO_IMAGE=ghcr.io/browseros-ai/neo:latest
+henable_refused "another project's gate running" 'another pilot gate is running' FAKE_FOREIGN_GATE="other-gate-1 otherproj"
+( exec 8>>"$fstate/lock"; flock 8; /bin/sleep 5 ) & lp=$!
+for _ in $(seq 1 50); do flock -n "$fstate/lock" true 2>/dev/null || break; /bin/sleep 0.05; done
+henable_refused "lifecycle lock held" 'lifecycle lock .* is held'
+wait "$lp" 2>/dev/null; flock -w 10 "$fstate/lock" true || no "test lock holder did not release"
+rawdk stop mcp-gate >/dev/null
+timeout 30 python3 -I -c 'import socket,sys
+s=socket.create_server(("127.0.0.1", int(sys.argv[1])))
+while True: s.accept()[0].close()' "$MCP" & tcp_pid=$!
+for _ in $(seq 1 50); do gate_listening && break; /bin/sleep 0.05; done
+henable_refused "arbitrary TCP listener on the MCP port, gate stopped" "mcp-gate is not running; a listener on 127.0.0.1:$MCP is not proof"
+kill "$tcp_pid" 2>/dev/null; wait "$tcp_pid" 2>/dev/null
+life bash "$WRAP" pause --no-wait
+henable_refused "pause recorded" 'a pause is recorded'
+expect "resume after the hermes-enable refusals: OPEN" 0 'agent path OPEN' -- bash "$WRAP" resume
+: > "$fk/calls"
+expect "hermes-enable: verified gate -> entry enabled" 0 'gate verified.*|enabled \(' -- "${HENV[@]}" bash "$WRAP" hermes-enable --approve-activation
+python3 -I - "$hh/config.yaml" "$MCP" "$tmp/hermes.calls" <<'PYEOF' && ok "  ... url is this gate's port, enabled true written last" || no "  ... enabled entry: $(cat "$hh/config.yaml")"
+import sys, yaml
+e = yaml.safe_load(open(sys.argv[1]))["mcp_servers"]["browseros_neo"]
+assert e["enabled"] is True and e["url"] == f"http://127.0.0.1:{sys.argv[2]}/mcp" and e["tools"]["exclude"], e
+sets = [l.split()[3:] for l in open(sys.argv[3]) if l.split()[1:3] == ["config", "set"]]
+assert sets[0] == ["mcp_servers.browseros_neo.enabled", "false"] and sets[-1] == ["mcp_servers.browseros_neo.enabled", "true"], sets
+PYEOF
+! grep -qE '^compose .* (up|stop|down|rm|kill|restart)( |$)' "$fk/calls" && ok "  ... read-only engine checks only" || no "  ... hermes-enable touched a container"
+expect "hermes-disable: enabled false read back" 0 'disabled in' -- "${HENV[@]}" bash "$WRAP" hermes-disable
+python3 -I -c 'import sys,yaml; assert yaml.safe_load(open(sys.argv[1]))["mcp_servers"]["browseros_neo"]["enabled"] is False' "$hh/config.yaml" \
+  && ok "  ... entry kept, enabled false" || no "  ... disable result"
 # up with existing containers never recreates: drift refuses before any compose up
 cp "$fstate/manifest" "$tmp/manifest.bak2"
 sed -i 's/^gate_sha=.*/gate_sha=0000/' "$fstate/manifest"

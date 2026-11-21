@@ -518,6 +518,7 @@ browseros-neo-hermes-disable: ## Set mcp_servers.browseros_neo.enabled false in 
 
 test-browseros-neo: ## Run the BrowserOS neo pilot config/wrapper/gate tests (offline, starts no containers)
 	@bash scripts/test_browseros_neo.sh
+	@bash scripts/test_browseros_neo_hermes_txn.sh
 
 test-router: ## Run the model-router unit + zero-egress privacy canary suite (offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_*.py'
