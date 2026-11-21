@@ -12,7 +12,7 @@ Secrets stay in `.env`; only routing knobs live in `config.yaml`.
 
 | Role | Provider | Endpoint | Models |
 |------|----------|----------|--------|
-| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-6.1-terra`, `gpt-6.1-sol` (fallback `gpt-5.6-sol`), `gpt-6-astra` |
+| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-6.1-terra`, newest live Sol (static `gpt-6.1-sol`, fallback `gpt-5.6-sol`), newest live Astra (static `gpt-6-astra`) — see [Newest Sol/Astra](#newest-solastra-live-catalog) |
 | Coding (delegation) | claude-max-proxy (Claude Max) | `:3456/v1` | `opus`, `sonnet`, `haiku`, `fable`, `default` |
 | Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` (or a Tailscale host) | routine `qwen3.5:27b`, fallback `qwen3.6:27b`, agent `qwen3.8:27b` ([Local model roles](#local-model-roles)) |
 
@@ -24,8 +24,17 @@ Responses `input`). System prompts, assistant output, tool results, pasted
 transcripts, fenced code and `>`-quoted lines are never signals, so a short
 status question stays cheap no matter how much history the session carries,
 and control tags inside quoted logs are inert. The model is rewritten **within
-its own family**; only managed aliases are touched — a deliberate exact id is
-left alone.
+its own family**. *Managed* models are the short aliases (`luna`, `terra`,
+`sol`, `astra`, `opus`, `fable`) and every strict GPT family id
+`gpt-<major>[.<minor>]-<luna|terra|sol|astra>` (e.g. `gpt-6.2-sol`,
+`gpt-7-astra`); a managed model is re-routed per task, so configuring or
+`/model`-selecting `gpt-6.1-sol` does **not** pin it. Any other id (e.g.
+`gpt-6.2-sol-preview`, a custom name) is unmanaged and sent exactly as
+configured — that, or `complexity_routing: false`, is the only way to pin an
+exact model. There is **no exact-model control in message text**: writing
+"use gpt-6.2-sol" (or any model id) in a message selects nothing; only the
+leading control lines below change routing, and they pick a *tier*, never a
+specific id.
 
 **Wire-format provenance (Discord):** the Hermes gateway ships each user turn
 as one flat string with runtime material around the sender's text (verified
@@ -53,8 +62,8 @@ templates so a Hermes upgrade that changes them fails loudly.
 | status / lookup / report question | routine | `gpt-5.6-luna` | low | `opus` |
 | ordinary execution / delegation | medium | `gpt-6.1-terra` | medium | `opus` |
 | ambiguous / multi-constraint planning | elevated | `gpt-6.1-terra` | medium | `opus` |
-| genuinely hard (debug/architecture/security), or leading `#sol` | high | `gpt-6.1-sol` | medium–high | `fable` |
-| explicitly authorized max | max | `gpt-6-astra` | high | `fable` |
+| genuinely hard (debug/architecture/security), or leading `#sol` | high | newest live Sol (static `gpt-6.1-sol`) | medium–high | `fable` |
+| explicitly authorized max | max | newest live Astra (static `gpt-6-astra`) | high | `fable` |
 
 Sol requires **substantive** complexity (two distinct hard categories, or one
 plus another strong signal — length, dense constraints, pasted code); a single
@@ -70,9 +79,11 @@ Precedence when that line is exactly one tag: coding force (`#opus`/`#fable`)
 - A **leading standalone** `#opus` or `#fable` line **forces the Claude coding
   model** for that request, overriding complexity (see *Forced coding* below).
 - A **leading standalone** `#max` or `#astra` line (the first non-empty line of
-  the task, containing only the tag) authorizes `gpt-6-astra` for that task.
+  the task, containing only the tag) authorizes the max tier (the newest live
+  Astra, static `gpt-6-astra`) for that task.
 - A **leading standalone** `#sol` line forces the hard tier for that task:
-  `gpt-6.1-sol` on the orchestrator (`fable` on the coding seam). It never
+  the newest live Sol on the orchestrator (static `gpt-6.1-sol`; `fable` on
+  the coding seam). It never
   grants Astra; effort still follows the task body (at least `medium`, never
   above the request ceiling); a `continue` turn keeps Sol like any hard task.
   Inline/quoted/non-sender `#sol` is inert.
@@ -135,6 +146,46 @@ its configured model, and an *unauthorized Astra request* that cannot be
 downgraded is **refused with a typed response** at the execution seam instead
 of being sent. `make route-smoke` probes both proxies and proves every tier
 resolves to a live model.
+
+### Newest Sol/Astra (live catalog)
+
+With `gpt_catalog: live` (default) the router reads CLIProxyAPI's
+`GET /v1/models` (bearer from `$CLIPROXY_API_KEY`, or the variable named by
+`gpt_catalog_key_env`) and uses that set as the live availability for
+orchestrator requests. The **high** tier then picks the newest advertised
+strict Sol id and an **authorized max** tier the newest strict Astra id,
+ordered numerically by `(major, minor)` — `gpt-6.2-sol` beats `gpt-6.1-sol`,
+`gpt-6.10-sol` beats `gpt-6.9-sol`, `gpt-7-sol` beats both; `gpt-6-astra` is
+version 6.0. Matching is exact: case variants, whitespace, prefixes
+(`openai/…`), suffixes (`-preview`, `-mini`), leading zeros and three-part
+versions are ignored. An older version is used only when the newer one is not
+advertised (availability fallback), after which the usual downward walk
+applies.
+
+What it does **not** change: the tier is still decided from the current task
+first; the catalog only picks the version inside that tier. Astra stays
+gated by the per-task `#max`/`#astra` authorization and `astra_policy` — a
+newer Astra in the catalog is never selected without it, and the execution
+seam refuses any unauthorized strict Astra id (`gpt-7-astra` included). Model
+ids are never taken from message text, old turns or tool output. Luna/Terra
+keep their static ids (with the live set used only for availability). The
+coding seam (claude-max-proxy) never consults this catalog.
+
+Fetching: content-free bodiless GET, 3 s socket timeout (applied per blocking
+socket operation — connect, each read — not a hard total deadline), 512 KiB /
+2000-id caps, no environment proxy, no redirects. A success is cached
+`gpt_catalog_ttl_seconds` (default 300); a failure is retried after 30 s; a
+failed refresh keeps serving the last good set while it is younger than
+max(15 min, `gpt_catalog_ttl_seconds`). The fetch runs synchronously on the
+first orchestrator request after the cache expires, so that request waits for
+it; a slow but steadily responding endpoint can exceed 3 s in total. A `#privacy` turn never triggers a fetch. When the catalog is
+unavailable (no key, HTTP error, timeout, malformed body) routing falls back to
+`available_gpt_models` if set, else the static table (`gpt-6.1-sol`,
+`gpt-6-astra`) — the pre-catalog behaviour. Logs carry only
+`catalog=live|static|off|unavailable|private|error` and
+`gpt catalog ok ids=<n>` / `unavailable:<kind>`, never the key, body or ids.
+Limitation: an advertised id is assumed usable; if CLIProxyAPI lists a model
+the account cannot run, the call fails through normal provider error handling.
 
 ## Reasoning effort
 
@@ -624,6 +675,10 @@ and their `.env` fallbacks:
 | `coding_effort_routing` | `MODEL_ROUTER_CODING_EFFORT` | per-task Claude effort for managed coding requests (default **true**; see [Reasoning effort](#reasoning-effort)) |
 | `coding_effort_ceiling` | `MODEL_ROUTER_CODING_EFFORT_CEILING` | cap for the coding effort: `low`/`medium`/`high`/`xhigh`/`max` (default `max`; anything else loads as `max`) |
 | `astra_policy` | `MODEL_ROUTER_ASTRA` | `task` (default: leading standalone `#max`/`#astra` line authorizes), `always` (legacy allow), `never` |
+| `gpt_catalog` | `MODEL_ROUTER_GPT_CATALOG` | `live` (default: newest Sol/Astra from CLIProxyAPI `/v1/models`) or `off` (static table / `available_gpt_models`); anything else loads as `live` |
+| `gpt_catalog_ttl_seconds` | `MODEL_ROUTER_GPT_CATALOG_TTL` | catalog cache TTL (default 300, max 3600) |
+| `gpt_catalog_base_url` | `MODEL_ROUTER_GPT_CATALOG_BASE_URL` | catalog base URL; empty = `$CLIPROXY_BASE_URL` or `http://127.0.0.1:$CLIPROXY_PORT/v1` |
+| `gpt_catalog_key_env` | `MODEL_ROUTER_GPT_CATALOG_KEY_ENV` | name of the env var holding the bearer (default `CLIPROXY_API_KEY`; the value is never stored in config) |
 | `task_ttl_seconds` | `MODEL_ROUTER_TASK_TTL` | sliding TTL for per-session task state / authorization (default 1800) |
 | `ollama_base_url` | `OLLAMA_BASE_URL` | host-reachable **local** endpoint (a non-local URL is refused) |
 | `ollama_model` | `OLLAMA_CHAT_MODEL` | legacy single model: the default for every unset role (rendered as the routine model) |

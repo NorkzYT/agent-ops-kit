@@ -11,10 +11,10 @@ payload is never sent to them by compression or title generation; see
   rewrites model **and** reasoning effort *within the request's family*:
   - orchestrator (CLIProxyAPI): status/lookup→`gpt-5.6-luna` (low effort),
     ordinary work→`gpt-6.1-terra` (medium), ambiguous/planning→`gpt-6.1-terra`,
-    genuinely hard (or a leading standalone `#sol` line)→`gpt-6.1-sol`, with
-    `gpt-5.6-terra`/`gpt-5.6-sol` only as same-tier fallbacks when a live
-    probe lacks the 6.1 model;
-    `gpt-6-astra` ONLY when the current task
+    genuinely hard (or a leading standalone `#sol` line)→the newest Sol the
+    live CLIProxyAPI catalog advertises (static `gpt-6.1-sol`, with
+    `gpt-5.6-terra`/`gpt-5.6-sol` only as same-tier fallbacks);
+    the newest live Astra (static `gpt-6-astra`) ONLY when the current task
     starts with a standalone `#max`/`#astra` control line (per-task, TTL-bound,
     never bleeding to the next task or session). The automatic ceiling is Sol.
   - delegated coding (claude-max-proxy): `opus` by default, `fable` only for
@@ -44,7 +44,8 @@ payload is never sent to them by compression or title generation; see
   cannot re-authorize Astra from the same historical message. Effort is only
   rewritten on fields the request already carries (both Chat Completions and
   Responses shapes), never above the configured ceiling. It only rewrites
-  models it manages (known aliases) and degrades to an available tier when a
+  models it manages (aliases and strict `gpt-N[.M]-<family>` ids; text in a
+  message never selects a model) and degrades to an available tier when a
   live `/v1/models` probe says the first choice is gone; a missing lower tier
   never silently upgrades to Astra — an unauthorized Astra request that
   cannot be downgraded is refused with a typed response at the execution
@@ -113,7 +114,9 @@ plugins:
         ollama_agent_model: "qwen3.8:27b"               # difficult private turns + private coding
         private_terms: []                               # ignored by routing (#privacy only)
         private_paths: []                               # ignored by routing (#privacy only)
-        available_gpt_models: []                        # optional probe cache
+        gpt_catalog: live                               # live | off (newest Sol/Astra)
+        gpt_catalog_ttl_seconds: 300
+        available_gpt_models: []                        # static fallback when catalog unavailable
         available_coding_models: []
         specialist_routing: false        # pilot; docs/specialist-routing.md
         specialist_max_profiles: 4

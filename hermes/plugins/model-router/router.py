@@ -202,8 +202,13 @@ def _usage_summary(response: Any) -> str:
 
 class Router:
     def __init__(self, settings: RouterSettings, *, backend: Optional[LocalBackend] = None,
-                 backend_factory: Optional[Callable[[str], Any]] = None) -> None:
+                 backend_factory: Optional[Callable[[str], Any]] = None,
+                 gpt_catalog: Any = None) -> None:
         self.settings = settings
+        # Live orchestrator model catalog (``model_catalog.GptModelCatalog`` or
+        # any object with ``snapshot() -> Optional[Sequence[str]]``). None keeps
+        # the static table / ``available_gpt_models`` behaviour.
+        self._gpt_catalog = gpt_catalog
         # ``backend`` (tests) answers for every local model; otherwise each
         # model in the role chain gets its own client on the same endpoint.
         self._backend = backend
@@ -450,6 +455,32 @@ class Router:
         while len(self._decisions) > 512:
             self._decisions.popitem(last=False)
 
+    def _gpt_available(self, request: Any) -> tuple:
+        """``(available ids or None, label)`` for an orchestrator request.
+
+        The live catalog is consulted only for a public turn: a ``#privacy``
+        turn (or any marker-check error) causes no catalog fetch at all. When
+        the catalog is off, unavailable or errors, the configured static list
+        (or None = trust the static tier table) is used. The label is
+        content-free: live | static | off | unavailable | private | error.
+        """
+        static = list(self.settings.available_gpt_models) or None
+        if self._gpt_catalog is None:
+            return static, "static" if static else "off"
+        try:
+            if self.settings.privacy_routing and pm.decide(request).private:
+                return static, "private"
+        except Exception:
+            return static, "private"
+        try:
+            snap = self._gpt_catalog.snapshot()
+        except Exception:
+            return static, "error"
+        ids = [m for m in (snap or ()) if isinstance(m, str)]
+        if not ids:  # None or an empty list: nothing trustworthy to route on
+            return static, "unavailable"
+        return ids, "live"
+
     # --------------------------------------------------------- forced coding
     def _route_forced_coding(
         self, request: Dict[str, Any], rid: str, session_id: str, coding: bool,
@@ -543,8 +574,6 @@ class Router:
             rid = str(kwargs.get("api_request_id") or "")
             coding = _is_coding_family(request, current, base_url)
             family = "coding" if coding else "gpt"
-            available = (self.settings.available_coding_models if coding
-                         else self.settings.available_gpt_models)
 
             task = ti.extract_current_user_task(request)
             prev = self._tasks.get(session_id)
@@ -588,7 +617,11 @@ class Router:
                     task.task_hash, tier, decision.effort, authorized,
                 ))
 
-            chosen = cx.resolve_model(tier, family=family, available=available or None,
+            if coding:
+                available, catalog = (self.settings.available_coding_models or None), "-"
+            else:
+                available, catalog = self._gpt_available(request)
+            chosen = cx.resolve_model(tier, family=family, available=available,
                                       allow_max=authorized)
             sid8, task8 = _hash8(session_id), (task.task_hash[:8] if task.task_hash else "-")
 
@@ -599,9 +632,9 @@ class Router:
                 self._record_decision(rid, {"authorized": authorized, "task8": task8})
                 logger.info(
                     "model_router: route rid=%s sid=%s task=%s family=%s tier=%s auth=%d "
-                    "model=%s->%s effort=- reasons=%s outcome=%s",
+                    "model=%s->%s effort=- reasons=%s outcome=%s catalog=%s",
                     rid or "-", sid8, task8, family, tier, int(authorized),
-                    current, current, decision.label, outcome,
+                    current, current, decision.label, outcome, catalog,
                 )
                 return None
 
@@ -640,10 +673,10 @@ class Router:
             outcome = "rewritten" if (model_changed or effort_changed) else "unchanged"
             logger.info(
                 "model_router: route rid=%s sid=%s task=%s family=%s tier=%s auth=%d "
-                "model=%s->%s effort=%s reasons=%s outcome=%s",
+                "model=%s->%s effort=%s reasons=%s outcome=%s catalog=%s",
                 rid or "-", sid8, task8, family, tier, int(authorized),
                 current, chosen if model_changed else current, effort_note,
-                decision.label, outcome,
+                decision.label, outcome, catalog,
             )
             if not (model_changed or effort_changed):
                 return None
