@@ -32,6 +32,7 @@ endef
 	    models honcho-health doctor route-smoke test-router specialist-route specialist-logs specialist-logs-follow specialist-status specialist-install specialist-enable specialist-disable test-specialists test-specialist-activate \
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
+	    browseros-neo-check browseros-neo-up browseros-neo-down browseros-neo-status browseros-neo-pause browseros-neo-resume browseros-neo-access test-browseros-neo \
 	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
@@ -483,7 +484,34 @@ windows-vm-network-status: ## Verify the loopback services and the two Tailscale
 windows-vm-network-off: ## Remove only the two Tailscale Serve forwarders (unrelated Serve/Funnel config is left intact)
 	@bash scripts/windows-vm-network.sh off
 
+##@ BrowserOS neo pilot
+
+##> One persistent browser profile in Docker: you sign in over noVNC (SSH tunnel), Hermes drives it over MCP. Loopback only; see docs/browseros-neo.md.
+browseros-neo-check: ## Render the pilot's Compose config and refuse anything outside its loopback-only envelope
+	@bash scripts/browseros-neo.sh check
+
+browseros-neo-up: ## Check, start BrowserOS neo, then open the agent MCP path unless paused
+	@bash scripts/browseros-neo.sh up
+
+browseros-neo-down: ## Stop the pilot containers (the profile folder is kept)
+	@bash scripts/browseros-neo.sh down
+
+browseros-neo-status: ## Pilot containers, live bindings, agent path open/paused
+	@bash scripts/browseros-neo.sh status
+
+browseros-neo-pause: ## Close the agent MCP path and wait out in-flight runs before you take over the viewer
+	@bash scripts/browseros-neo.sh pause
+
+browseros-neo-resume: ## Reopen the agent MCP path after you finish in the viewer
+	@bash scripts/browseros-neo.sh resume
+
+browseros-neo-access: ## Print the SSH tunnel and sign-in steps for the viewer
+	@bash scripts/browseros-neo.sh access
+
 ##@ Tests (offline)
+
+test-browseros-neo: ## Run the BrowserOS neo pilot config/wrapper/gate tests (offline, starts no containers)
+	@bash scripts/test_browseros_neo.sh
 
 test-router: ## Run the model-router unit + zero-egress privacy canary suite (offline)
 	@python3 -m unittest discover -s scripts/tests -p 'test_*.py'

@@ -1,0 +1,29 @@
+# Hermes mcp_servers entry for the BrowserOS neo pilot (docs/browseros-neo.md).
+# Not part of config.yaml.tmpl: an operator merges it into ~/.hermes/config.yaml
+# by hand, after the pilot is up, and applies it with the normal approved
+# gateway restart. `scripts/browseros-neo.sh hermes-snippet` prints it with
+# the configured port filled in.
+#
+# - url is the mcp-gate's loopback port, never Neo's 9010 directly, so
+#   `browseros-neo.sh pause` cuts Hermes off.
+# - trust: untrusted makes every write-capable Neo tool (anything without a
+#   readOnlyHint) ask for approval first. The hint comes from Neo itself.
+# - timeout sits above Neo's 60 s run budget (neo.toml), as upstream advises.
+# - credentials and payment_cards take passwords/cards as tool arguments, and
+#   Neo stores every tool call's arguments and a screenshot for 7 days; the
+#   human signs in through the viewer instead. solve_captcha sends page data
+#   to a third-party CAPTCHA provider using keys baked into the public image.
+# - No headers or secrets: the endpoint has no authentication, which is why it
+#   is loopback-only.
+mcp_servers:
+  browseros_neo:
+    url: "http://127.0.0.1:__BROWSEROS_NEO_MCP_PORT__/mcp"
+    enabled: true
+    trust: untrusted
+    timeout: 90
+    connect_timeout: 15
+    supports_parallel_tool_calls: false
+    tools:
+      exclude: [credentials, payment_cards, solve_captcha]
+      resources: false
+      prompts: false
