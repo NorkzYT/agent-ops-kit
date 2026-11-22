@@ -1,5 +1,6 @@
-// Shared paths and the owned-fixture catalogue. Everything the pilot writes
-// lives under reports/ (gitignored) or a per-run temp dir.
+// Shared paths and the owned-fixture catalogue. Reports go to a new run
+// directory under reports/ (gitignored) or --out (lib/output.mjs); tool homes
+// and Chrome profiles are per-run temp dirs.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

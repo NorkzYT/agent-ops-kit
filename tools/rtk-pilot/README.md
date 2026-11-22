@@ -53,13 +53,36 @@ Cases (`cases.json`): failing pytest run, all-skipped suite, a timeout log, a
 252-line diff with one real logic change. Modes are a fixed table:
 `rtk log` (stdin), `rtk diff -` (stdin), `rtk summary cat <fixture>`.
 
-## Result on the kit dev VM (2026-11-22)
+## Result on the kit dev VM (2026-11-22): no-go
 
-Unmeasured. The release binary dies with `SIGILL` (exit 132) on this host's
-Xeon E5-2680 v2 (no AVX2/BMI2), including `rtk --version`. All four cases
-recorded `status=crashed`, `reduction=null`; runner exit 3. Building from
-source was not done: it runs upstream build scripts and fetches crates, which
-needs its own review. Next step: run the same command on a host with a newer
-CPU, or review a pinned source build. Adoption gate (from the research note):
-≥25% lower median output, no lost markers, unchanged exit classification
-(the last is not measurable by this replay pilot; see above).
+**Official binary: unmeasured.** The pinned v1.2.1 OSS release binary dies with
+`SIGILL` (exit 132) on this host's Xeon E5-2680 v2 (no AVX2/BMI2), including
+`rtk --version` (gdb: `vpbroadcastq … %ymm3`). All four cases recorded
+`status=crashed`, `reduction=null`; runner exit 3.
+
+**Local source build: measured, fails the gate.** A local baseline built from
+the v1.2.1 tag commit (`d0f0399a…`, `x86_64-unknown-linux-gnu`, binary sha256
+`ff6b87a6…2dad30`, no AVX2/BMI2 instructions) runs (`rtk --version` exit 0).
+It is not the pinned binary: the run used a scratch lock for that digest, and
+`rtk.lock.json` is unchanged. Replay result (`summary.json` in a private
+scratch dir), runner exit **1**:
+
+| case | reduction | lost markers | verdict |
+|---|---|---|---|
+| failing-tests | 66.0% | none | kept |
+| all-skipped | 69.4% | `DATABASE_URL not set` | **lossy** |
+| timeout | 44.0% | none | kept |
+| long-diff | 0.0% | none | kept |
+
+`rtk summary cat` on the all-skipped pytest log reduces it to "0 passed, 3
+skipped" and drops the skip reason, which is the line that says why nothing
+ran. Median reduction (55%) clears the 25% bar, but the gate also needs no lost
+markers, so RTK is **not adopted**.
+
+Not tested and not approved: producer-exit / exit-classification parity (every
+case is `producer_exit_parity: "not-tested"`; a replay has no producer process,
+see above) and any guard parity with the kit's own wrappers. No `rtk init`,
+hook, install or PATH change was made or is approved. Reopening needs a new
+release or filter that keeps skip reasons, a live wrapped run for exit parity,
+and a separate install/hook review. Adoption gate (from the research note):
+≥25% lower median output, no lost markers, unchanged exit classification.

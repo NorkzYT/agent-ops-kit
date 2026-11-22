@@ -4,7 +4,8 @@ import test from 'node:test';
 import { classify, engine, engineEnv, fileScan, renderedScan } from '../scripts/run-impeccable.mjs';
 import { launchChrome } from '../scripts/lib/chrome.mjs';
 import { startServer } from '../scripts/lib/server.mjs';
-import { runScript } from './helpers.mjs';
+import { mkTmp } from '../scripts/lib/paths.mjs';
+import { isolatedHome, runScript } from './helpers.mjs';
 
 let eng; let env; let home;
 test.before(() => {
@@ -54,11 +55,14 @@ test('rendered scan over CDP on 127.0.0.1 finds the seeded low contrast', async 
 });
 
 test('run-impeccable CLI: findings exit 0 (advisory), scan error exit 1 (distinct)', () => {
-  const ok = runScript('run-impeccable.mjs', ['--no-render', '--file', 'fixtures/queue-bad.html']);
+  const out = mkTmp('impeccable-out');
+  const cliHome = isolatedHome();
+  test.after(() => { for (const d of [out, cliHome]) fs.rmSync(d, { recursive: true, force: true }); });
+  const ok = runScript('run-impeccable.mjs', ['--no-render', '--file', 'fixtures/queue-bad.html', '--out', out], { HOME: cliHome });
   assert.equal(ok.code, 0, ok.stderr);
   assert.match(ok.stdout, /ADVISORY/);
   assert.match(ok.stdout, /findings, \d+ finding\(s\) \[low-contrast\]/);
-  const err = runScript('run-impeccable.mjs', ['--no-render', '--file', 'fixtures/does-not-exist.html']);
+  const err = runScript('run-impeccable.mjs', ['--no-render', '--file', 'fixtures/does-not-exist.html', '--out', out], { HOME: cliHome });
   assert.equal(err.code, 1);
   assert.match(err.stderr, /SCAN ERROR/);
   assert.doesNotMatch(err.stdout, /advisory and do not fail/);

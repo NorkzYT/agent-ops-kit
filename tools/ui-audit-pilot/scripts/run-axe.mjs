@@ -3,15 +3,20 @@
 //   node scripts/run-axe.mjs [--page bad|clean] ...   (default: bad and clean)
 //   node scripts/run-axe.mjs --url http://127.0.0.1:<port>/<page>.html  (a fixture
 //     already served by scripts/serve.mjs; any other host is refused)
-// Writes reports/axe-<page>.json. Exit: 0 no violations, 2 violations found,
+//   node scripts/run-axe.mjs --project /abs/site [--page-path index.html ...] [--out dir]
+//     (your own static pages, served by this script on 127.0.0.1; lib/project.mjs)
+// Writes axe-<page>.json into a new run directory: reports/<run-id>/ (or
+// <--out>/<run-id>/, lib/output.mjs; nothing existing is overwritten or deleted). Exit: 0 no violations, 2 violations found,
 // 1 scan error (no report is a clean report).
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { connect, launchChrome, pageTarget } from './lib/chrome.mjs';
-import { REPORTS, ensureDir, pageFile } from './lib/paths.mjs';
+import { REPORTS, pageFile } from './lib/paths.mjs';
+import { assertUniqueNames, runDirFor, writeNew } from './lib/output.mjs';
 import { startServer } from './lib/server.mjs';
+import { PROJECT_OPTIONS, projectArgs, projectTarget } from './lib/project.mjs';
 import { assertLoopbackTarget } from './lib/target.mjs';
 
 const require = createRequire(import.meta.url);
@@ -29,8 +34,26 @@ function summarize(results) {
   };
 }
 
-export async function auditPage(name, rawUrl, { chrome }) {
-  const url = assertLoopbackTarget(rawUrl);
+// Only the navigation target is guarded (lib/target.mjs). Subresources the page
+// requests are not blocked by this runner: non-127.0.0.1 hosts go to Chrome's
+// dead proxy / NOTFOUND resolver, but 127.0.0.1 on ANY port is reachable. Both
+// kinds are recorded so they are visible in the report, not silently audited.
+export function classifyRequests(requests, target) {
+  const origin = new URL(target).origin;
+  const nonLoopback = [];
+  const otherLoopback = [];
+  for (const u of requests) {
+    if (u.startsWith('data:') || u.startsWith('about:') || u.startsWith('blob:')) continue;
+    let p;
+    try { p = new URL(u); } catch { nonLoopback.push(u); continue; }
+    if (p.hostname !== '127.0.0.1') nonLoopback.push(u);
+    else if (p.origin !== origin) otherLoopback.push(u);
+  }
+  return { nonLoopback, otherLoopback };
+}
+
+export async function auditPage(name, rawUrl, { chrome, allowed }) {
+  const url = assertLoopbackTarget(rawUrl, allowed);
   const tgt = await pageTarget(chrome.port);
   const cdp = await connect(tgt.webSocketDebuggerUrl);
   const requests = [];
@@ -51,33 +74,38 @@ export async function auditPage(name, rawUrl, { chrome }) {
     });
     if (res.exceptionDetails) throw new Error(`axe.run failed: ${res.exceptionDetails.exception?.description || res.exceptionDetails.text}`);
     const raw = JSON.parse(res.result.value);
-    const nonLoopback = requests.filter((u) => { try { const h = new URL(u).hostname; return !['127.0.0.1'].includes(h) && !u.startsWith('data:') && !u.startsWith('about:'); } catch { return true; } });
-    return { tool: 'axe-core', axeVersion: raw.testEngine?.version || AXE_VERSION, page: name, url, timestamp: raw.timestamp, nonLoopbackRequests: nonLoopback, ...summarize(raw), raw };
+    const { nonLoopback, otherLoopback } = classifyRequests(requests, url);
+    return { tool: 'axe-core', axeVersion: raw.testEngine?.version || AXE_VERSION, page: name, url, timestamp: raw.timestamp, nonLoopbackRequests: nonLoopback, otherLoopbackRequests: otherLoopback, ...summarize(raw), raw };
   } finally {
     cdp.close();
   }
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { page: { type: 'string', multiple: true }, url: { type: 'string' }, out: { type: 'string' } } });
+  const { values } = parseArgs({ options: { page: { type: 'string', multiple: true }, url: { type: 'string' }, out: { type: 'string' }, ...PROJECT_OPTIONS } });
   // Validate every target before a server or browser starts.
+  const project = projectArgs(values);
   const fixedUrl = values.url ? assertLoopbackTarget(values.url) : null;
   const pages = fixedUrl ? ['url'] : values.page?.length ? values.page : ['bad', 'clean'];
-  if (!fixedUrl) pages.forEach(pageFile);
-  const outDir = ensureDir(values.out ? path.resolve(values.out) : REPORTS);
-  const srv = await startServer();
+  if (!fixedUrl && !project) { pages.forEach(pageFile); assertUniqueNames(pages); }
+  const outDir = runDirFor(values, project, { fallback: REPORTS });
+  const srv = await startServer(project ? project.root : undefined);
   let chrome;
   let violations = 0;
   try {
+    const targets = project ? projectTarget(srv, project.pages) : null;
+    const jobs = targets ? targets.pages.map((p) => [p.name, p.url]) : pages.map((name) => [name, fixedUrl || srv.url(pageFile(name))]);
     chrome = await launchChrome();
-    for (const name of pages) {
-      const report = await auditPage(name, fixedUrl || srv.url(pageFile(name)), { chrome });
+    for (const [name, url] of jobs) {
+      const report = await auditPage(name, url, { chrome, allowed: targets?.allowed });
+      if (project) report.project = project.root;
       const file = path.join(outDir, `axe-${name}.json`);
-      fs.writeFileSync(file, JSON.stringify(report, null, 2));
+      writeNew(file, JSON.stringify(report, null, 2));
       violations += report.violations.length;
       console.log(`axe ${report.axeVersion} ${name}: ${report.violations.length} violation rule(s) [${report.violations.map((v) => v.id).join(', ')}], ` +
         `${report.needsManualReview.length} needs-manual-review [${report.needsManualReview.map((v) => v.id).join(', ')}], ${report.passCount} passed -> ${path.relative(process.cwd(), file)}`);
       if (report.nonLoopbackRequests.length) console.error(`WARNING ${name}: non-loopback requests attempted: ${report.nonLoopbackRequests.join(' ')}`);
+      if (report.otherLoopbackRequests.length) console.error(`WARNING ${name}: requests to other 127.0.0.1 ports (not blocked): ${report.otherLoopbackRequests.join(' ')}`);
     }
   } finally {
     if (chrome) await chrome.close();

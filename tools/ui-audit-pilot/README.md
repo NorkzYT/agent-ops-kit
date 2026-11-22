@@ -1,7 +1,8 @@
 # UI audit pilot (axe-core, Lighthouse CI, Impeccable detector)
 
 A bounded, project-local pilot: three pinned tools run against owned static
-fixtures served from `127.0.0.1` on an ephemeral port. Nothing is installed
+fixtures, or your own static pages (`--project`), served from `127.0.0.1` on
+an ephemeral port. Nothing is installed
 globally, no installer scripts run, nothing is uploaded, and no hook or plugin
 is added to Claude Code or Hermes. It produces local evidence to attach to a
 design review (`hermes/skills/gstack-design-review`); it complements, and does
@@ -37,7 +38,8 @@ npm ci --ignore-scripts
 ```
 
 Needs Node 22+ on `PATH` and Chrome at `/usr/bin/google-chrome`
-(override with `UI_AUDIT_CHROME`).
+(override with `UI_AUDIT_CHROME`; it also reaches LHCI as `--chromePath`).
+`make tool-pilots-check` reports what is missing.
 
 ## Fixtures
 
@@ -57,12 +59,14 @@ npm test
 
 ## Run each audit
 
-Reports go to `reports/` (gitignored).
+Each run writes into a new directory `reports/<run-id>/` (gitignored), or
+`<--out>/<run-id>/`; existing reports are never deleted or overwritten
+(`scripts/lib/output.mjs`). `--run-id` shares one directory between runners.
 
 ```bash
-npm run audit:axe          # reports/axe-bad.json, reports/axe-clean.json
-npm run audit:lhci         # reports/lhci/<page>/upload/ (HTML + JSON + manifest)
-npm run audit:impeccable   # reports/impeccable.sarif, reports/impeccable-<page>.json
+npm run audit:axe          # <run>/axe-bad.json, <run>/axe-clean.json
+npm run audit:lhci         # <run>/lhci/<page>/upload/ (HTML + JSON + manifest)
+npm run audit:impeccable   # <run>/impeccable.sarif, <run>/impeccable-rendered-<page>.json, <run>/impeccable-summary.json
 ```
 
 Pick pages with `--page`, for example `node scripts/run-axe.mjs --page clean`.
@@ -77,6 +81,26 @@ Exit codes:
 
 The default `audit:axe` and `audit:lhci` runs include the seeded pages, so they
 exit 2 by design.
+
+## Your own project
+
+Fresh machine setup and the Make entry point: `docs/tool-pilots.md`.
+
+```bash
+node scripts/run-axe.mjs --project /abs/dist --page-path index.html --page-path docs/a.html --out /abs/reports
+node scripts/run-lhci.mjs --project /abs/dist --page-path index.html --out /abs/reports
+node scripts/run-impeccable.mjs --project /abs/dist --page-path index.html --out /abs/reports
+```
+
+The script serves only that directory itself; guards (`scripts/lib/project.mjs`,
+checked before a browser starts) refuse `/`, `$HOME` and its parents, hidden
+directories under `$HOME`, system trees, pages outside the directory or in
+hidden paths. `--out` (also in fixture mode) is refused if it is `/`, `$HOME` or
+a parent, hidden under `$HOME`, a system tree, a symlink, an existing file,
+inside the served directory, or the served directory / a parent of it. The
+default report base is `reports/project-<name>-<hash>`. The server 404s
+hidden files and non-web types. `--project` cannot be mixed with `--url`,
+`--page` or `--file`; `--url` stays fixture-only.
 
 ## Manual checks on the same fixtures
 
@@ -93,24 +117,30 @@ node scripts/run-axe.mjs --url http://127.0.0.1:<port>/queue-clean.html
 
 ## Boundaries
 
-- Targets: only `http://127.0.0.1:<port>/<owned fixture page>` (for example
-  `/queue-clean.html`). `localhost`, other hosts, IPv6, `https:`, `file:`,
+- Targets (navigation only): only `http://127.0.0.1:<port>/<owned fixture page>` (for example
+  `/queue-clean.html`), or with `--project` the selected pages of the
+  directory the script serves itself (see "Your own project"). `localhost`, other hosts, IPv6, `https:`, `file:`,
   credentials, any other path, query strings and fragments are refused before
   a browser starts. The port is not verified to be `serve.mjs`: only pass a
   port you started. Impeccable file targets must stay inside `fixtures/`.
+  This guards the URL the browser is sent to, not the page's subresources:
+  a page can load from `127.0.0.1` on any port (other local services), and
+  run-axe lists those requests as `otherLoopbackRequests` without blocking.
 - Environment: Chrome, LHCI/Lighthouse and the Impeccable engine get a minimal
   environment (`scripts/lib/env.mjs`): fixed `PATH`, a throwaway private
   `HOME` with `XDG_*` dirs inside it, a short `TMPDIR`, `DO_NOT_TRACK=1`,
   `NO_UPDATE_NOTIFIER=1`. Nothing else is inherited: no tokens, no proxies, no
   `LHCI_*` config overrides, no `IMPECCABLE_*` hosts, no `NODE_OPTIONS`
   (`tests/env.test.mjs` sets hostile values and checks they are absent).
-- Network: Chrome launches with background networking, component updates,
-  sync and pings off, and its proxied non-loopback traffic goes to a closed
-  proxy port (`--proxy-server=http://127.0.0.1:9`). The axe runner also
-  records any non-loopback request the page attempts. Network isolation is
-  **not proven**: the proxy flag is not a sandbox, and the LHCI and Impeccable
-  processes themselves run with normal host networking; no test captures
-  their traffic.
+- Network: there is **no network isolation**. Chrome launches with
+  background networking, component updates, sync and pings off, and its
+  proxied non-loopback traffic goes to a closed proxy port
+  (`--proxy-server=http://127.0.0.1:9`); loopback bypasses that proxy. The
+  axe/Impeccable Chrome also maps every host except 127.0.0.1 to NOTFOUND;
+  the LHCI Chrome does not, so `localhost` subresources resolve there. The
+  axe runner records non-loopback and other-loopback requests. The proxy flag
+  is not a sandbox, and the LHCI and Impeccable processes run with normal
+  host networking; no test captures their traffic.
 - Uploads: `lighthouserc.json` uses `upload.target: filesystem` with a relative
   `outputDir`. `run-lhci` refuses any other target, server URL, token or LHCI
   server config. Lighthouse error reporting is off (`enableErrorReporting: false`).

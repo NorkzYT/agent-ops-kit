@@ -4,17 +4,24 @@
 //   node scripts/run-lhci.mjs [--page clean|regression|bad] ...  (default: clean and regression)
 //   node scripts/run-lhci.mjs --url http://127.0.0.1:<port>/<page>.html  (fixture served
 //     by scripts/serve.mjs; any other host is refused)
-// Each page runs in reports/lhci/<page>/ (its own .lighthouseci/), reports land in
-// reports/lhci/<page>/upload/. Nothing leaves the machine: the config must be
-// filesystem-only. Exit: 0 assertions pass, 2 an assertion failed, 1 tool error.
+//   node scripts/run-lhci.mjs --project /abs/site [--page-path index.html ...] [--out dir]
+//     (your own static pages, served by this script on 127.0.0.1; lib/project.mjs)
+// Each run gets a new run directory, reports/<run-id>/ or <--out>/<run-id>/
+// (lib/output.mjs). Each page runs in <run dir>/lhci/<page>/ (its own, newly
+// created .lighthouseci/); reports land in <run dir>/lhci/<page>/upload/. An
+// existing page directory is refused, never deleted or reused. Uploads are
+// filesystem-only (the config is checked); this is not network isolation, see
+// README "Boundaries". Exit: 0 assertions pass, 2 an assertion failed, 1 tool error.
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { privateEnv } from './lib/env.mjs';
-import { REPORTS, ROOT, ensureDir, pageFile } from './lib/paths.mjs';
+import { CHROME, REPORTS, ROOT, pageFile } from './lib/paths.mjs';
+import { OutputRefused, assertUniqueNames, mkdirNew, runDirFor, writeNew } from './lib/output.mjs';
 import { run } from './lib/proc.mjs';
 import { startServer } from './lib/server.mjs';
+import { PROJECT_OPTIONS, projectArgs, projectTarget } from './lib/project.mjs';
 import { assertLoopbackTarget } from './lib/target.mjs';
 
 const require = createRequire(import.meta.url);
@@ -42,16 +49,21 @@ export function lhciEnv() {
   return privateEnv('lhci-home', { CI: '1' });
 }
 
-export async function lhciPage(name, rawUrl, { outRoot = path.join(REPORTS, 'lhci') } = {}) {
+const PAGE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
+// outRoot is a directory inside this run's new run dir; <outRoot>/<name> must
+// not exist yet. Nothing is removed: a leftover directory is a refusal.
+export async function lhciPage(name, rawUrl, { outRoot, allowed } = {}) {
+  if (!outRoot) throw new OutputRefused('refused output: lhciPage needs an outRoot inside a new run directory');
+  if (!PAGE_NAME.test(name)) throw new OutputRefused(`refused output: page name ${JSON.stringify(name)} must match ${PAGE_NAME}`);
   const rc = JSON.parse(fs.readFileSync(RC, 'utf8'));
   checkUploadConfig(rc);
-  const url = assertLoopbackTarget(rawUrl);
-  const cwd = path.join(outRoot, name);
-  fs.rmSync(cwd, { recursive: true, force: true });
-  ensureDir(cwd);
+  const url = assertLoopbackTarget(rawUrl, allowed);
+  fs.mkdirSync(outRoot, { recursive: true });
+  const cwd = mkdirNew(path.join(outRoot, name));
   const { env, home } = lhciEnv();
   const steps = [
-    ['collect', [LHCI, 'collect', `--config=${RC}`, `--url=${url}`]],
+    ['collect', [LHCI, 'collect', `--config=${RC}`, `--url=${url}`, `--chromePath=${CHROME}`]],
     ['assert', [LHCI, 'assert', `--config=${RC}`]],
     ['upload', [LHCI, 'upload', `--config=${RC}`, '--target=filesystem', `--outputDir=${path.join(cwd, 'upload')}`]],
   ];
@@ -77,18 +89,23 @@ export async function lhciPage(name, rawUrl, { outRoot = path.join(REPORTS, 'lhc
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { page: { type: 'string', multiple: true }, url: { type: 'string' } } });
+  const { values } = parseArgs({ options: { page: { type: 'string', multiple: true }, url: { type: 'string' }, out: { type: 'string' }, ...PROJECT_OPTIONS } });
+  const project = projectArgs(values);
   const fixedUrl = values.url ? assertLoopbackTarget(values.url) : null;
   const pages = fixedUrl ? ['url'] : values.page?.length ? values.page : ['clean', 'regression'];
-  if (!fixedUrl) pages.forEach(pageFile);
+  if (!fixedUrl && !project) { pages.forEach(pageFile); assertUniqueNames(pages); }
   checkUploadConfig(JSON.parse(fs.readFileSync(RC, 'utf8')));
-  const srv = await startServer();
+  const outRoot = path.join(runDirFor(values, project, { fallback: REPORTS }), 'lhci');
+  const srv = await startServer(project ? project.root : undefined);
   const summary = [];
   try {
-    for (const name of pages) {
-      const r = await lhciPage(name, fixedUrl || srv.url(pageFile(name)));
+    const targets = project ? projectTarget(srv, project.pages) : null;
+    const jobs = targets ? targets.pages.map((p) => [p.name, p.url]) : pages.map((name) => [name, fixedUrl || srv.url(pageFile(name))]);
+    for (const [name, url] of jobs) {
+      const r = await lhciPage(name, url, { outRoot, allowed: targets?.allowed });
+      if (project) r.project = project.root;
       summary.push(r);
-      fs.writeFileSync(path.join(r.dir, 'pilot-summary.json'), JSON.stringify(r, null, 2));
+      writeNew(path.join(r.dir, 'pilot-summary.json'), JSON.stringify(r, null, 2));
       const failed = (r.failedAssertions || []).map((a) => `${a.level}:${a.auditId}`).join(', ');
       console.log(`lhci ${name}: ${r.status} (collect=${r.steps.collect.code} assert=${r.steps.assert?.code} upload=${r.steps.upload?.code})${failed ? ` failed [${failed}]` : ''} -> ${path.relative(process.cwd(), r.dir)}/upload`);
       if (r.status === 'error') for (const s of Object.values(r.steps)) if (s.code !== 0) console.error(s.stderr.slice(-3000));

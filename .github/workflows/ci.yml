@@ -130,6 +130,7 @@ jobs:
       - run: make test-marketing-video
       - run: ENGINE=remotion bash scripts/marketing-video.sh test
       - run: make test-rtk-pilot
+      - run: make test-tool-pilots
 
   shellcheck:
     name: ShellCheck (touched operator scripts)
@@ -148,6 +149,7 @@ jobs:
             scripts/test_stack_render.sh scripts/test_knowledge_sync.sh scripts/test_knowledge_stage.sh scripts/test_knowledge_refresh.sh scripts/test_hermes_profile.sh \
             scripts/test_windows_worker_install.sh \
             scripts/test_windows_chrome_devtools_mcp.sh \
+            scripts/tool-pilots.sh scripts/test_tool_pilots.sh scripts/ui-audit-project.sh \
             scripts/browseros-neo.sh scripts/test_browseros_neo.sh scripts/test_browseros_neo_hermes_registration.sh scripts/test_browseros_neo_hermes_enable.sh scripts/test_browseros_neo_hermes_txn.sh \
             install.sh .claude/scripts/test_install.sh \
             .claude/bootstrap/linux_devtools.sh

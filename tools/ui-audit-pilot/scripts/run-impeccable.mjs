@@ -2,9 +2,13 @@
 // Advisory Impeccable detector run on owned fixtures only.
 //   node scripts/run-impeccable.mjs [--page bad|clean ...] [--file fixtures/<f>.html ...]
 // 1. File scan (SARIF 2.1.0) of fixtures/ (or the given --file paths, which must
-//    stay inside fixtures/) -> reports/impeccable.sarif
+//    stay inside fixtures/) -> <run dir>/impeccable.sarif
+//   node scripts/run-impeccable.mjs --project /abs/site [--page-path index.html ...] [--out dir]
+//    file + rendered scans of your own selected pages (lib/project.mjs guards)
 // 2. Rendered scan of each page served on 127.0.0.1, attached over --cdp to a
-//    Chrome this script launched (background networking off) -> reports/impeccable-<page>.json
+//    Chrome this script launched (background networking off) -> <run dir>/impeccable-rendered-<page>.json
+// The run dir is new per run: reports/<run-id>/ or <--out>/<run-id>/ (lib/output.mjs);
+// the summary is impeccable-summary.json, which no page name can collide with.
 // The engine binary comes from the pinned @impeccable/cli-<os>-<arch> package and
 // is checked against the checksum manifest shipped in the pinned `impeccable`
 // package; there is no download fallback. Detector exit codes: 0 clean, 2 findings,
@@ -16,10 +20,12 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { connect, launchChrome, pageTarget } from './lib/chrome.mjs';
-import { FIXTURES, REPORTS, ROOT, ensureDir, pageFile } from './lib/paths.mjs';
+import { FIXTURES, REPORTS, ROOT, pageFile } from './lib/paths.mjs';
+import { assertUniqueNames, runDirFor, writeNew } from './lib/output.mjs';
 import { privateEnv } from './lib/env.mjs';
 import { run } from './lib/proc.mjs';
 import { startServer } from './lib/server.mjs';
+import { PROJECT_OPTIONS, projectArgs, projectTarget } from './lib/project.mjs';
 import { assertLoopbackTarget } from './lib/target.mjs';
 
 const require = createRequire(import.meta.url);
@@ -60,15 +66,21 @@ export function classify(code) {
   return 'unexpected-exit';
 }
 
+// Report files. Page names are [a-z0-9-] only, so the rendered prefix keeps a
+// page called "summary" from replacing impeccable-summary.json.
+export const SUMMARY_FILE = 'impeccable-summary.json';
+export const SARIF_FILE = 'impeccable.sarif';
+export const renderedFile = (name) => `impeccable-rendered-${name}.json`;
+
 function insideFixtures(p) {
   const abs = path.resolve(ROOT, p);
   if (abs !== FIXTURES && !abs.startsWith(FIXTURES + path.sep)) throw new Error(`refused file target outside fixtures/: ${p}`);
   return path.relative(ROOT, abs) || '.';
 }
 
-export async function fileScan(targets, { env, bin }) {
+export async function fileScan(targets, { env, bin, cwd = ROOT }) {
   const args = ['detect', '--sarif', '--no-config', ...targets];
-  const r = await run(bin, args, { cwd: ROOT, env, timeoutMs: 120000 });
+  const r = await run(bin, args, { cwd, env, timeoutMs: 120000 });
   let sarif = null;
   try { sarif = JSON.parse(r.stdout); } catch { /* reported below */ }
   let outcome = classify(r.code);
@@ -78,8 +90,8 @@ export async function fileScan(targets, { env, bin }) {
   return { kind: 'file', command: [bin, ...args], code: r.code, outcome, stdout: r.stdout, stderr: r.stderr, sarif, findings: results.map((x) => ({ ruleId: x.ruleId, level: x.level, uri: x.locations?.[0]?.physicalLocation?.artifactLocation?.uri, message: x.message?.text })) };
 }
 
-export async function renderedScan(name, { chrome, srv, env, bin }) {
-  const url = assertLoopbackTarget(srv.url(pageFile(name)));
+export async function renderedScan(name, { chrome, srv, env, bin, url: rawUrl, target, allowed, cwd = ROOT }) {
+  const url = assertLoopbackTarget(rawUrl || srv.url(pageFile(name)), allowed);
   const t = await pageTarget(chrome.port);
   const cdp = await connect(t.webSocketDebuggerUrl);
   try {
@@ -89,8 +101,8 @@ export async function renderedScan(name, { chrome, srv, env, bin }) {
     if (nav.errorText) throw new Error(`navigation failed: ${nav.errorText}`);
     await loaded;
   } finally { cdp.close(); }
-  const args = ['detect', '--json', '--no-config', '--cdp', String(chrome.port), '--target', pageFile(name)];
-  const r = await run(bin, args, { cwd: ROOT, env, timeoutMs: 120000 });
+  const args = ['detect', '--json', '--no-config', '--cdp', String(chrome.port), '--target', target || pageFile(name)];
+  const r = await run(bin, args, { cwd, env, timeoutMs: 120000 });
   let findings = null;
   try { findings = JSON.parse(r.stdout); } catch { /* reported below */ }
   let outcome = classify(r.code);
@@ -99,26 +111,30 @@ export async function renderedScan(name, { chrome, srv, env, bin }) {
 }
 
 async function main() {
-  const { values } = parseArgs({ options: { page: { type: 'string', multiple: true }, file: { type: 'string', multiple: true }, 'no-render': { type: 'boolean' } } });
+  const { values } = parseArgs({ options: { page: { type: 'string', multiple: true }, file: { type: 'string', multiple: true }, 'no-render': { type: 'boolean' }, out: { type: 'string' }, ...PROJECT_OPTIONS } });
+  const project = projectArgs(values);
   const pages = values.page?.length ? values.page : ['bad', 'clean'];
-  pages.forEach(pageFile);
-  const files = (values.file?.length ? values.file : ['fixtures']).map(insideFixtures);
+  if (!project) { pages.forEach(pageFile); assertUniqueNames(pages); }
+  const files = project ? project.pages : (values.file?.length ? values.file : ['fixtures']).map(insideFixtures);
+  const cwd = project ? project.root : ROOT;
+  const outDir = runDirFor(values, project, { fallback: REPORTS });
   const eng = engine();
   const { env, home } = engineEnv();
-  ensureDir(REPORTS);
   const scans = [];
   try {
-    const fsScan = await fileScan(files, { env, bin: eng.bin });
-    if (fsScan.sarif) fs.writeFileSync(path.join(REPORTS, 'impeccable.sarif'), JSON.stringify(fsScan.sarif, null, 2));
+    const fsScan = await fileScan(files, { env, bin: eng.bin, cwd });
+    if (fsScan.sarif) writeNew(path.join(outDir, SARIF_FILE), JSON.stringify(fsScan.sarif, null, 2));
     scans.push(fsScan);
     if (!values['no-render']) {
-      const srv = await startServer();
+      const srv = await startServer(project ? project.root : undefined);
       let chrome;
       try {
+        const targets = project ? projectTarget(srv, project.pages) : null;
+        const jobs = targets ? targets.pages.map((p) => ({ name: p.name, url: p.url, target: p.pathname })) : pages.map((name) => ({ name }));
         chrome = await launchChrome();
-        for (const name of pages) {
-          const s = await renderedScan(name, { chrome, srv, env, bin: eng.bin });
-          fs.writeFileSync(path.join(REPORTS, `impeccable-${name}.json`), JSON.stringify(s, null, 2));
+        for (const j of jobs) {
+          const s = await renderedScan(j.name, { chrome, srv, env, bin: eng.bin, url: j.url, target: j.target, allowed: targets?.allowed, cwd });
+          writeNew(path.join(outDir, renderedFile(j.name)), JSON.stringify(s, null, 2));
           scans.push(s);
         }
       } finally {
@@ -129,9 +145,9 @@ async function main() {
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
-  const summary = { tool: 'impeccable', shimVersion: eng.shimVersion, engineVersion: eng.version, engineSha256: eng.sha256, scans: scans.map(({ stdout, sarif, ...s }) => s) };
-  fs.writeFileSync(path.join(REPORTS, 'impeccable-summary.json'), JSON.stringify(summary, null, 2));
-  console.log(`impeccable ${eng.shimVersion} (engine ${eng.version}, sha256 ${eng.sha256.slice(0, 12)}...) ADVISORY:`);
+  const summary = { tool: 'impeccable', project: project?.root, shimVersion: eng.shimVersion, engineVersion: eng.version, engineSha256: eng.sha256, scans: scans.map(({ stdout, sarif, ...s }) => s) };
+  writeNew(path.join(outDir, SUMMARY_FILE), JSON.stringify(summary, null, 2));
+  console.log(`impeccable ${eng.shimVersion} (engine ${eng.version}, sha256 ${eng.sha256.slice(0, 12)}...) ADVISORY -> ${path.relative(process.cwd(), outDir) || '.'}:`);
   let errors = 0;
   for (const s of scans) {
     const label = s.kind === 'file' ? `file scan [${files.join(' ')}]` : `rendered ${s.page}`;

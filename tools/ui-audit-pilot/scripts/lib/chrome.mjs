@@ -1,5 +1,6 @@
-// Launch the system Chrome headless with background networking off and all
-// non-loopback traffic sent to a dead proxy, then talk CDP over Node's
+// Launch the system Chrome headless with background networking off and proxied
+// non-loopback requests sent to a dead proxy (not a sandbox: loopback, i.e.
+// 127.0.0.1 on any port, is reachable), then talk CDP over Node's
 // built-in WebSocket (no puppeteer dependency).
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -24,7 +25,8 @@ export const QUIET_FLAGS = [
   '--no-pings',
   '--password-store=basic',
   '--use-mock-keychain',
-  // Loopback bypasses the proxy implicitly; everything else hits a closed port.
+  // Loopback bypasses the proxy implicitly; other proxied requests hit a closed
+  // port. Traffic Chrome does not route through the proxy is not covered.
   '--proxy-server=http://127.0.0.1:9',
 ];
 

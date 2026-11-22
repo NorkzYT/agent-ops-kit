@@ -33,7 +33,7 @@ endef
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    browseros-neo-check browseros-neo-up browseros-neo-down browseros-neo-status browseros-neo-pause browseros-neo-resume browseros-neo-access browseros-neo-hermes-enable browseros-neo-hermes-disable test-browseros-neo \
-	    marketing-video-install marketing-video-render marketing-video-gates test-marketing-video test-rtk-pilot ui-audit-install ui-audit test-ui-audit-pilot \
+	    marketing-video-install marketing-video-render marketing-video-gates test-marketing-video test-rtk-pilot ui-audit-install ui-audit ui-audit-project test-ui-audit-pilot tool-pilots-check tool-pilots-install test-tool-pilots \
 	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
@@ -530,17 +530,34 @@ marketing-video-gates: ## HyperFrames: claims, rights and project-asset gates on
 
 ##@ Tool pilots (local, advisory)
 
-##> Bounded pilots on owned fixtures only: axe-core, Lighthouse CI (filesystem upload) and the Impeccable detector (advisory) against 127.0.0.1 fixtures (tools/ui-audit-pilot); RTK output-compression replay on captured fixtures (tools/rtk-pilot). No hooks, no global installs, no uploads.
+##> Project-local pilots: axe-core, Lighthouse CI (filesystem upload) and the Impeccable detector (advisory) against owned fixtures or your own static pages served on 127.0.0.1 (tools/ui-audit-pilot); RTK output-compression replay on captured fixtures (tools/rtk-pilot). No hooks, no global installs, no uploads. Fresh machine: make tool-pilots-check, then TOOL_PILOTS_ALLOW_DOWNLOADS=1 make tool-pilots-install (docs/tool-pilots.md).
+# TOOLS, PROJECT, PAGES and OUT reach the scripts through the environment (make
+# exports command-line variables), never pasted into recipe text, so values with
+# spaces or quotes pass through unchanged.
+tool-pilots-check: ## Check Node 22+, npm, Chrome, FFmpeg, python3 and the installed pins; downloads nothing [TOOLS=ui-audit,hyperframes]
+	@bash scripts/tool-pilots.sh check
+
+##| Downloads the pinned packages from the npm registry into tools/<tool>/node_modules only; refuses without TOOL_PILOTS_ALLOW_DOWNLOADS=1.
+tool-pilots-install: ## Project-local npm ci --ignore-scripts for each pilot (explicit opt-in) [TOOLS=ui-audit,hyperframes]
+	@bash scripts/tool-pilots.sh install
+
 ui-audit-install: ## Install the pinned UI-audit pilot deps project-locally (npm ci --ignore-scripts)
 	@cd tools/ui-audit-pilot && npm ci --ignore-scripts --no-audit --no-fund
 
 ui-audit: ## Run axe, Lighthouse CI and Impeccable on the owned fixtures; reports stay in tools/ui-audit-pilot/reports (exit 2 = seeded findings)
 	@cd tools/ui-audit-pilot && rc=0; for s in axe lhci impeccable; do npm run --silent audit:$$s || rc=$$?; done; exit $$rc
 
+##| PROJECT is an absolute directory of built static pages (not your home, /, a hidden or system dir); the pilot serves only that directory on 127.0.0.1 and only navigates to the listed pages (other localhost URLs are refused as targets; pages can still load subresources from other 127.0.0.1 ports; no network isolation). Each run writes a new OUT/<run-id>/ (default OUT tools/ui-audit-pilot/reports/project-<name>-<hash>), never into PROJECT, and never deletes or overwrites existing reports. make exits 2 on any failure; the script's own code (shown as Error 1 = tool error/refused, Error 2 = findings) is in docs/tool-pilots.md.
+ui-audit-project: ## Run axe, Lighthouse CI and Impeccable on your own static pages [PROJECT=/abs/dir PAGES=index.html,docs/a.html OUT=]
+	@bash scripts/ui-audit-project.sh
+
 ##@ Tests (offline)
 
 test-ui-audit-pilot: ## Run the UI-audit pilot tests (real axe/LHCI/Impeccable on 127.0.0.1 fixtures; needs ui-audit-install and Chrome)
 	@cd tools/ui-audit-pilot && npm test
+
+test-tool-pilots: ## Run the tool-pilots setup/check script tests with stub node/npm/chrome (offline; downloads nothing)
+	@bash scripts/test_tool_pilots.sh
 
 test-rtk-pilot: ## Run the RTK replay-pilot runner tests with stub binaries (offline; no real rtk, no hook, no network)
 	@python3 -m unittest discover -s tools/rtk-pilot/tests -p 'test_*.py'

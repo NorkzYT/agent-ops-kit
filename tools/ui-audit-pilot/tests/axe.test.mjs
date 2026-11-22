@@ -6,7 +6,7 @@ import { auditPage } from '../scripts/run-axe.mjs';
 import { launchChrome } from '../scripts/lib/chrome.mjs';
 import { mkTmp, pageFile } from '../scripts/lib/paths.mjs';
 import { startServer } from '../scripts/lib/server.mjs';
-import { runScript } from './helpers.mjs';
+import { isolatedHome, runDirs, runScript } from './helpers.mjs';
 
 let srv; let chrome; const reports = {};
 
@@ -52,13 +52,16 @@ test('axe runs made no non-loopback requests', () => {
 
 test('run-axe CLI: exit 2 on seeded page, 0 on clean, reports written', () => {
   const out = mkTmp('axe-out');
+  const home = isolatedHome();
   try {
-    const bad = runScript('run-axe.mjs', ['--page', 'bad', '--out', out]);
+    const bad = runScript('run-axe.mjs', ['--page', 'bad', '--out', out], { HOME: home });
     assert.equal(bad.code, 2, bad.stderr);
     assert.match(bad.stdout, /needs-manual-review \[color-contrast\]/);
-    const clean = runScript('run-axe.mjs', ['--page', 'clean', '--out', out]);
+    const clean = runScript('run-axe.mjs', ['--page', 'clean', '--out', out], { HOME: home });
     assert.equal(clean.code, 0, clean.stderr);
-    const rep = JSON.parse(fs.readFileSync(path.join(out, 'axe-bad.json'), 'utf8'));
+    const dirs = runDirs(out);
+    assert.equal(dirs.length, 2, 'each run writes into its own new run directory');
+    const rep = JSON.parse(fs.readFileSync(path.join(dirs.find((d) => fs.existsSync(path.join(d, 'axe-bad.json'))), 'axe-bad.json'), 'utf8'));
     assert.ok(rep.violations.some((v) => v.id === 'label'));
-  } finally { fs.rmSync(out, { recursive: true, force: true }); }
+  } finally { for (const d of [out, home]) fs.rmSync(d, { recursive: true, force: true }); }
 });
