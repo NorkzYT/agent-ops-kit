@@ -1,0 +1,22 @@
+{
+  "name": "ui-audit-pilot",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bounded local UI audit pilot: axe-core, Lighthouse CI and the Impeccable detector against owned 127.0.0.1 fixtures.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"tests/*.test.mjs\"",
+    "audit:axe": "node scripts/run-axe.mjs",
+    "audit:lhci": "node scripts/run-lhci.mjs",
+    "audit:impeccable": "node scripts/run-impeccable.mjs"
+  },
+  "devDependencies": {
+    "@lhci/cli": "0.16.1",
+    "axe-core": "4.14.1",
+    "impeccable": "4.10.0"
+  }
+}

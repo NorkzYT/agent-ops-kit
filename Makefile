@@ -33,6 +33,7 @@ endef
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    browseros-neo-check browseros-neo-up browseros-neo-down browseros-neo-status browseros-neo-pause browseros-neo-resume browseros-neo-access browseros-neo-hermes-enable browseros-neo-hermes-disable test-browseros-neo \
+	    marketing-video-install marketing-video-render marketing-video-gates test-marketing-video test-rtk-pilot ui-audit-install ui-audit test-ui-audit-pilot \
 	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
@@ -514,7 +515,39 @@ browseros-neo-hermes-enable: ## Opt-in: register Neo in the current HERMES_HOME 
 browseros-neo-hermes-disable: ## Set mcp_servers.browseros_neo.enabled false in the current HERMES_HOME (entry kept)
 	@bash scripts/browseros-neo.sh hermes-disable
 
+##@ Marketing video
+
+##> New videos render with HyperFrames (pinned, local; Chrome behind a dead proxy, no network-isolation proof); ENGINE=remotion selects the legacy Remotion lane explicitly. No fallback between engines. Claims and asset-rights gates run before any render (docs/marketing-video.md).
+marketing-video-install: ## Install the pinned engine deps project-locally with npm ci --ignore-scripts [ENGINE=hyperframes|remotion]
+	@bash scripts/marketing-video.sh install
+
+##| Without PROPS/PROVENANCE/OUT it renders the tracked synthetic sample into tools/<engine>/out.
+marketing-video-render: ## Gates, then render + QA [PROPS= PROVENANCE= OUT= ASSETS= RATIOS=16:9,9:16 QUALITY=draft|looks|delivery ENGINE=hyperframes|remotion]
+	@bash scripts/marketing-video.sh render $(if $(PROPS),--props "$(PROPS)",) $(if $(PROVENANCE),--provenance "$(PROVENANCE)",) $(if $(OUT),--out "$(OUT)",) $(if $(ASSETS),--assets "$(ASSETS)",) $(if $(RATIOS),--ratios "$(RATIOS)",) $(if $(QUALITY),--quality "$(QUALITY)",)
+
+marketing-video-gates: ## HyperFrames: claims, rights and project-asset gates only; builds the project, renders nothing [PROPS= PROVENANCE= OUT= ASSETS=]
+	@bash scripts/marketing-video.sh gates $(if $(PROPS),--props "$(PROPS)",) $(if $(PROVENANCE),--provenance "$(PROVENANCE)",) $(if $(OUT),--out "$(OUT)",) $(if $(ASSETS),--assets "$(ASSETS)",)
+
+##@ Tool pilots (local, advisory)
+
+##> Bounded pilots on owned fixtures only: axe-core, Lighthouse CI (filesystem upload) and the Impeccable detector (advisory) against 127.0.0.1 fixtures (tools/ui-audit-pilot); RTK output-compression replay on captured fixtures (tools/rtk-pilot). No hooks, no global installs, no uploads.
+ui-audit-install: ## Install the pinned UI-audit pilot deps project-locally (npm ci --ignore-scripts)
+	@cd tools/ui-audit-pilot && npm ci --ignore-scripts --no-audit --no-fund
+
+ui-audit: ## Run axe, Lighthouse CI and Impeccable on the owned fixtures; reports stay in tools/ui-audit-pilot/reports (exit 2 = seeded findings)
+	@cd tools/ui-audit-pilot && rc=0; for s in axe lhci impeccable; do npm run --silent audit:$$s || rc=$$?; done; exit $$rc
+
 ##@ Tests (offline)
+
+test-ui-audit-pilot: ## Run the UI-audit pilot tests (real axe/LHCI/Impeccable on 127.0.0.1 fixtures; needs ui-audit-install and Chrome)
+	@cd tools/ui-audit-pilot && npm test
+
+test-rtk-pilot: ## Run the RTK replay-pilot runner tests with stub binaries (offline; no real rtk, no hook, no network)
+	@python3 -m unittest discover -s tools/rtk-pilot/tests -p 'test_*.py'
+
+test-marketing-video: ## Run the marketing-video gate/builder tests and the engine dispatcher tests (offline, no render) [ENGINE=hyperframes|remotion]
+	@bash scripts/marketing-video.sh test
+	@bash scripts/test_marketing_video.sh
 
 test-browseros-neo: ## Run the BrowserOS neo pilot config/wrapper/gate tests (offline, starts no containers)
 	@bash scripts/test_browseros_neo.sh

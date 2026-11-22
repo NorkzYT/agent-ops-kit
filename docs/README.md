@@ -12,6 +12,9 @@ The root `README.md` is the fast path. These pages hold the detail.
 | [proxies.md](proxies.md) | ChatGPT and Claude Max subscriptions as OpenAI-compatible APIs |
 | [browser-use.md](browser-use.md) | Browser automation: local Chromium vs Browser Use Cloud, rules |
 | [browseros-neo.md](browseros-neo.md) | Pilot: BrowserOS neo in Docker, noVNC viewer over SSH (real-account login NO-GO), Hermes MCP, pause/resume, opt-in `hermes-enable`, preferred-browser skill |
+| [marketing-video.md](marketing-video.md) | Marketing videos: pinned local HyperFrames default, explicit legacy Remotion lane (no fallback), claims/rights/project-asset gates, QA, `make marketing-video-*` |
+| [../tools/ui-audit-pilot/README.md](../tools/ui-audit-pilot/README.md) | Pilot: axe-core, Lighthouse CI (filesystem upload only) and the Impeccable detector (advisory) on owned 127.0.0.1 fixtures; `make ui-audit` |
+| [../tools/rtk-pilot/README.md](../tools/rtk-pilot/README.md) | Experiment: RTK output-compression replay on captured fixtures (pinned binary, no hook/proxy); result on the dev VM: unmeasured (SIGILL) |
 | [profiles-and-teams.md](profiles-and-teams.md) | Specialist agents with their own knowledge, and Kanban teams |
 | [discord-kanban-workflow.md](discord-kanban-workflow.md) | The standard engineering path: Discord request → Kanban → the coordinator writes and pushes an exact SHA (Claude Opus/Fable) → Mac/Windows peers test it and return evidence → automatic fix/retest rounds → independent review → report in the same thread; setup and runbook |
 | [engineering-completion.md](engineering-completion.md) | The coordinator owns a task until it is complete: stages and criteria, source-bound evidence, bounded recovery and genuine blocks, implementation handoff vs final completion, ledger metrics; the current milestone and deferred backlog |

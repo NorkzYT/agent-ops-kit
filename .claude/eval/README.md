@@ -14,8 +14,13 @@ bash .claude/eval/run-eval.sh --modes "minimal native" --tasks py-evenodd
 bash .claude/eval/test_eval.sh                      # E2E self-test (mock runners)
 ```
 
-Output: a results TSV (`mode  task  runner  pass  seconds  tokens`) under
-`results/`, plus a scoreboard:
+Output: a results TSV (`mode  task  runner  pass  seconds  tokens  runner_status`)
+under `results/`, plus a scoreboard. `tokens=NA` means unmeasured (no/invalid usage),
+never 0. `runner_status` is `ok`, `error`, `timeout`, `missing`, or `NA` (runner
+wrote none, e.g. mocks); a failed runner never skips `verify.sh`. The real runner's
+metrics also carry `runner_exit` and, when reported, `cache_read_tokens` /
+`cache_creation_tokens` (kept out of `tokens`); non-empty model stderr is appended
+to `<results>.tsv.stderr.log`.
 
 ```
 MODE         PASS      AVG_S

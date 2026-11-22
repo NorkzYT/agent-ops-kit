@@ -1,0 +1,28 @@
+{
+  "campaign": "unlicensed-negative-control",
+  "assets": [
+    {
+      "id": "aud_tone",
+      "type": "audio",
+      "path": "props/assets/audio/sample-tone.wav",
+      "source": "generated",
+      "generator": "ffmpeg lavfi sine synthesis via tools/remotion-marketing/scripts/generate-tone.mjs",
+      "license": "generated-original",
+      "commercialUse": true,
+      "rightsHolder": "campaign owner",
+      "acquiredFrom": "generated locally",
+      "notes": "Original sine-pad tone. No third-party samples, melodies or recordings are used."
+    },
+    {
+      "id": "img_stock_photo",
+      "type": "image",
+      "path": "tests/fixtures/assets/images/stock-photo.png",
+      "source": "stock site download",
+      "license": "all-rights-reserved",
+      "commercialUse": false,
+      "rightsHolder": "unknown third party",
+      "acquiredFrom": "synthetic negative control",
+      "notes": "Synthetic negative control: no licence was obtained, so every gate must refuse it."
+    }
+  ]
+}

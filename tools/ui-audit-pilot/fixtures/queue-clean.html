@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Owned fixture: a small work-queue dashboard used as the clean control for the local UI audit pilot.">
+<title>Work queue (clean control)</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1a1a1a; background: #ffffff; }
+  header, main, footer { padding: 16px 24px; }
+  header { border-bottom: 1px solid #d0d0d0; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .meta { color: #4a4a4a; }
+  form { display: flex; gap: 12px; align-items: end; margin-bottom: 16px; flex-wrap: wrap; }
+  label { display: block; font-weight: 600; }
+  input, select, button { font: inherit; padding: 6px 10px; }
+  button { background: #0b5394; color: #ffffff; border: 0; border-radius: 4px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #d0d0d0; }
+  .status { font-weight: 600; color: #1a1a1a; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Work queue</h1>
+  <p class="meta">Three items waiting, one in review.</p>
+</header>
+<main>
+  <h2>Filter</h2>
+  <form action="#" onsubmit="return false">
+    <div>
+      <label for="q">Search items</label>
+      <input id="q" name="q" type="search">
+    </div>
+    <div>
+      <label for="state">State</label>
+      <select id="state" name="state">
+        <option>All</option>
+        <option>Waiting</option>
+        <option>In review</option>
+      </select>
+    </div>
+    <button type="submit">Apply filter</button>
+  </form>
+  <h2>Items</h2>
+  <table>
+    <caption>Queued items</caption>
+    <thead><tr><th scope="col">Item</th><th scope="col">Owner</th><th scope="col">State</th></tr></thead>
+    <tbody>
+      <tr><td>Rotate staging certificate</td><td>Ops</td><td class="status">Waiting</td></tr>
+      <tr><td>Review onboarding copy</td><td>Docs</td><td class="status">In review</td></tr>
+      <tr><td>Refresh fixture data</td><td>QA</td><td class="status">Waiting</td></tr>
+      <tr><td>Archive old reports</td><td>Ops</td><td class="status">Waiting</td></tr>
+    </tbody>
+  </table>
+</main>
+<footer><p class="meta">Owned test fixture. Not a real service.</p></footer>
+</body>
+</html>

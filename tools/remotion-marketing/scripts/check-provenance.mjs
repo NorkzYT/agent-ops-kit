@@ -13,6 +13,9 @@ export const COMMERCIAL_LICENSES = new Set([
   'cc-by-sa',
   'purchased-royalty-free',
   'licensed-commercial',
+  // SIL Open Font License 1.1: fonts may be embedded and bundled in commercial
+  // work; they may not be sold on their own.
+  'ofl-1.1',
 ]);
 
 const REQUIRED_FIELDS = [

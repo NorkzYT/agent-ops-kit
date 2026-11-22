@@ -7,11 +7,12 @@ campaign. The `marketing-video-system` skill drives the pipeline from here.
 slug=my-campaign
 cp -r tools/remotion-marketing/templates/campaign data/marketing/video/$slug
 # fill brief.md, facts.json, provenance.json, props.json
-cd tools/remotion-marketing && npm ci
-node scripts/render-campaign.mjs \
-  --props ../../data/marketing/video/$slug/props.json \
-  --provenance ../../data/marketing/video/$slug/provenance.json \
-  --out ../../data/marketing/video/$slug --ratios 16:9,9:16 --draft true
+mkdir -p data/marketing/video/$slug/assets   # media mapped by props.assetPaths
+make marketing-video-install
+make marketing-video-render PROPS=data/marketing/video/$slug/props.json \
+  PROVENANCE=data/marketing/video/$slug/provenance.json \
+  OUT=data/marketing/video/$slug RATIOS=16:9,9:16 QUALITY=draft
+# legacy lane, only on explicit request: ENGINE=remotion make marketing-video-render ...
 ```
 
 Files:
@@ -21,5 +22,5 @@ Files:
 - `props.json` — typed storyboard (see `src/schema.ts`).
 - `provenance.json` — rights record for every asset used.
 
-Renders (`poster.png`, `draft.mp4`, `final.<ratio>.mp4`, `qa.<ratio>.json`) land
+Renders (`poster.png`, `final.<ratio>.mp4`, `qa.<ratio>.json`, `project.<ratio>/`) land
 next to these files and stay gitignored.

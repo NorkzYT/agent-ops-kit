@@ -1,0 +1,31 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.3.4, pluggy-1.5.0
+rootdir: /work/synthetic
+collected 12 items
+
+tests/test_queue.py ....F.s..                                            [ 75%]
+tests/test_billing.py ..F                                                [100%]
+
+=================================== FAILURES ===================================
+____________________________ test_queue_drains_fifo ____________________________
+
+    def test_queue_drains_fifo():
+        q = Queue()
+        q.push(1); q.push(2)
+>       assert q.pop() == 1
+E       assert 2 == 1
+E        +  where 2 = <bound method Queue.pop of <Queue size=1>>()
+
+tests/test_queue.py:41: AssertionError
+_________________________ test_invoice_rounds_half_up __________________________
+
+    def test_invoice_rounds_half_up():
+>       assert round_cents(Decimal("0.125")) == Decimal("0.13")
+E       AssertionError: assert Decimal('0.12') == Decimal('0.13')
+
+tests/test_billing.py:17: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_queue.py::test_queue_drains_fifo - assert 2 == 1
+FAILED tests/test_billing.py::test_invoice_rounds_half_up - AssertionError: assert Decimal('0.12') == Decimal('0.13')
+SKIPPED [1] tests/test_queue.py:55: needs redis
+=================== 2 failed, 9 passed, 1 skipped in 0.42s ====================

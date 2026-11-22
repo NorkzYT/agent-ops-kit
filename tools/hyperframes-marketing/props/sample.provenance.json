@@ -1,0 +1,43 @@
+{
+  "campaign": "sample-demo",
+  "assets": [
+    {
+      "id": "aud_tone",
+      "type": "audio",
+      "path": "props/assets/audio/sample-tone.wav",
+      "source": "generated",
+      "generator": "ffmpeg lavfi sine synthesis via tools/remotion-marketing/scripts/generate-tone.mjs",
+      "license": "generated-original",
+      "commercialUse": true,
+      "rightsHolder": "campaign owner",
+      "acquiredFrom": "generated locally",
+      "notes": "Original sine-pad tone. No third-party samples, melodies or recordings are used."
+    },
+    {
+      "id": "fnt_regular",
+      "type": "font",
+      "path": "props/assets/fonts/LiberationSans-Regular.ttf",
+      "source": "system-package",
+      "license": "ofl-1.1",
+      "commercialUse": true,
+      "rightsHolder": "Red Hat, Inc. and Google Corporation (Liberation Fonts)",
+      "acquiredFrom": "Ubuntu package fonts-liberation 1:2.1.5-3 (/usr/share/doc/fonts-liberation/copyright: SIL-OFL-1.1)",
+      "localSource": "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      "sha256": "4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144",
+      "notes": "Embedded unmodified in the render only; OFL forbids selling the font by itself. Copied by render-campaign after sha256 verification."
+    },
+    {
+      "id": "fnt_bold",
+      "type": "font",
+      "path": "props/assets/fonts/LiberationSans-Bold.ttf",
+      "source": "system-package",
+      "license": "ofl-1.1",
+      "commercialUse": true,
+      "rightsHolder": "Red Hat, Inc. and Google Corporation (Liberation Fonts)",
+      "acquiredFrom": "Ubuntu package fonts-liberation 1:2.1.5-3 (/usr/share/doc/fonts-liberation/copyright: SIL-OFL-1.1)",
+      "localSource": "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+      "sha256": "3973aa5054fb467dd5627245d3dc82e37bf16fe075756156a570455871351582",
+      "notes": "Embedded unmodified in the render only; OFL forbids selling the font by itself. Copied by render-campaign after sha256 verification."
+    }
+  ]
+}

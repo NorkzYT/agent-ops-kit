@@ -1,0 +1,10 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-8.3.4, pluggy-1.5.0
+rootdir: /work/synthetic
+collected 3 items
+
+tests/test_pg.py sss                                                     [100%]
+
+=========================== short test summary info ============================
+SKIPPED [3] tests/test_pg.py:9: DATABASE_URL not set
+============================== 3 skipped in 0.03s ==============================

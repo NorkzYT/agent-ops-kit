@@ -1,0 +1,252 @@
+diff --git a/app/config.py b/app/config.py
+index 1111111..2222222 100644
+--- a/app/config.py
++++ b/app/config.py
+@@ -1,3 +1,3 @@
+ # setting 0
+-OLD_KEY_0 = 0
++NEW_KEY_0 = 0
+@@ -6,3 +6,3 @@
+ # setting 1
+-OLD_KEY_1 = 1
++NEW_KEY_1 = 1
+@@ -11,3 +11,3 @@
+ # setting 2
+-OLD_KEY_2 = 2
++NEW_KEY_2 = 2
+@@ -16,3 +16,3 @@
+ # setting 3
+-OLD_KEY_3 = 3
++NEW_KEY_3 = 3
+@@ -21,3 +21,3 @@
+ # setting 4
+-OLD_KEY_4 = 4
++NEW_KEY_4 = 4
+@@ -26,3 +26,3 @@
+ # setting 5
+-OLD_KEY_5 = 5
++NEW_KEY_5 = 5
+@@ -31,3 +31,3 @@
+ # setting 6
+-OLD_KEY_6 = 6
++NEW_KEY_6 = 6
+@@ -36,3 +36,3 @@
+ # setting 7
+-OLD_KEY_7 = 7
++NEW_KEY_7 = 7
+@@ -41,3 +41,3 @@
+ # setting 8
+-OLD_KEY_8 = 8
++NEW_KEY_8 = 8
+@@ -46,3 +46,3 @@
+ # setting 9
+-OLD_KEY_9 = 9
++NEW_KEY_9 = 9
+@@ -51,3 +51,3 @@
+ # setting 10
+-OLD_KEY_10 = 10
++NEW_KEY_10 = 10
+@@ -56,3 +56,3 @@
+ # setting 11
+-OLD_KEY_11 = 11
++NEW_KEY_11 = 11
+@@ -61,3 +61,3 @@
+ # setting 12
+-OLD_KEY_12 = 12
++NEW_KEY_12 = 12
+@@ -66,3 +66,3 @@
+ # setting 13
+-OLD_KEY_13 = 13
++NEW_KEY_13 = 13
+@@ -71,3 +71,3 @@
+ # setting 14
+-OLD_KEY_14 = 14
++NEW_KEY_14 = 14
+@@ -76,3 +76,3 @@
+ # setting 15
+-OLD_KEY_15 = 15
++NEW_KEY_15 = 15
+@@ -81,3 +81,3 @@
+ # setting 16
+-OLD_KEY_16 = 16
++NEW_KEY_16 = 16
+@@ -86,3 +86,3 @@
+ # setting 17
+-OLD_KEY_17 = 17
++NEW_KEY_17 = 17
+@@ -91,3 +91,3 @@
+ # setting 18
+-OLD_KEY_18 = 18
++NEW_KEY_18 = 18
+@@ -96,3 +96,3 @@
+ # setting 19
+-OLD_KEY_19 = 19
++NEW_KEY_19 = 19
+@@ -101,3 +101,3 @@
+ # setting 20
+-OLD_KEY_20 = 20
++NEW_KEY_20 = 20
+@@ -106,3 +106,3 @@
+ # setting 21
+-OLD_KEY_21 = 21
++NEW_KEY_21 = 21
+@@ -111,3 +111,3 @@
+ # setting 22
+-OLD_KEY_22 = 22
++NEW_KEY_22 = 22
+@@ -116,3 +116,3 @@
+ # setting 23
+-OLD_KEY_23 = 23
++NEW_KEY_23 = 23
+@@ -121,3 +121,3 @@
+ # setting 24
+-OLD_KEY_24 = 24
++NEW_KEY_24 = 24
+@@ -126,3 +126,3 @@
+ # setting 25
+-OLD_KEY_25 = 25
++NEW_KEY_25 = 25
+@@ -131,3 +131,3 @@
+ # setting 26
+-OLD_KEY_26 = 26
++NEW_KEY_26 = 26
+@@ -136,3 +136,3 @@
+ # setting 27
+-OLD_KEY_27 = 27
++NEW_KEY_27 = 27
+@@ -141,3 +141,3 @@
+ # setting 28
+-OLD_KEY_28 = 28
++NEW_KEY_28 = 28
+@@ -146,3 +146,3 @@
+ # setting 29
+-OLD_KEY_29 = 29
++NEW_KEY_29 = 29
+@@ -151,3 +151,3 @@
+ # setting 30
+-OLD_KEY_30 = 30
++NEW_KEY_30 = 30
+@@ -156,3 +156,3 @@
+ # setting 31
+-OLD_KEY_31 = 31
++NEW_KEY_31 = 31
+@@ -161,3 +161,3 @@
+ # setting 32
+-OLD_KEY_32 = 32
++NEW_KEY_32 = 32
+@@ -166,3 +166,3 @@
+ # setting 33
+-OLD_KEY_33 = 33
++NEW_KEY_33 = 33
+@@ -171,3 +171,3 @@
+ # setting 34
+-OLD_KEY_34 = 34
++NEW_KEY_34 = 34
+@@ -176,3 +176,3 @@
+ # setting 35
+-OLD_KEY_35 = 35
++NEW_KEY_35 = 35
+@@ -181,3 +181,3 @@
+ # setting 36
+-OLD_KEY_36 = 36
++NEW_KEY_36 = 36
+@@ -186,3 +186,3 @@
+ # setting 37
+-OLD_KEY_37 = 37
++NEW_KEY_37 = 37
+@@ -191,3 +191,3 @@
+ # setting 38
+-OLD_KEY_38 = 38
++NEW_KEY_38 = 38
+@@ -196,3 +196,3 @@
+ # setting 39
+-OLD_KEY_39 = 39
++NEW_KEY_39 = 39
+@@ -201,3 +201,3 @@
+ # setting 40
+-OLD_KEY_40 = 40
++NEW_KEY_40 = 40
+@@ -206,3 +206,3 @@
+ # setting 41
+-OLD_KEY_41 = 41
++NEW_KEY_41 = 41
+@@ -211,3 +211,3 @@
+ # setting 42
+-OLD_KEY_42 = 42
++NEW_KEY_42 = 42
+@@ -216,3 +216,3 @@
+ # setting 43
+-OLD_KEY_43 = 43
++NEW_KEY_43 = 43
+@@ -221,3 +221,3 @@
+ # setting 44
+-OLD_KEY_44 = 44
++NEW_KEY_44 = 44
+@@ -226,3 +226,3 @@
+ # setting 45
+-OLD_KEY_45 = 45
++NEW_KEY_45 = 45
+@@ -231,3 +231,3 @@
+ # setting 46
+-OLD_KEY_46 = 46
++NEW_KEY_46 = 46
+@@ -236,3 +236,3 @@
+ # setting 47
+-OLD_KEY_47 = 47
++NEW_KEY_47 = 47
+@@ -241,3 +241,3 @@
+ # setting 48
+-OLD_KEY_48 = 48
++NEW_KEY_48 = 48
+@@ -246,3 +246,3 @@
+ # setting 49
+-OLD_KEY_49 = 49
++NEW_KEY_49 = 49
+@@ -251,3 +251,3 @@
+ # setting 50
+-OLD_KEY_50 = 50
++NEW_KEY_50 = 50
+@@ -256,3 +256,3 @@
+ # setting 51
+-OLD_KEY_51 = 51
++NEW_KEY_51 = 51
+@@ -261,3 +261,3 @@
+ # setting 52
+-OLD_KEY_52 = 52
++NEW_KEY_52 = 52
+@@ -266,3 +266,3 @@
+ # setting 53
+-OLD_KEY_53 = 53
++NEW_KEY_53 = 53
+@@ -271,3 +271,3 @@
+ # setting 54
+-OLD_KEY_54 = 54
++NEW_KEY_54 = 54
+@@ -276,3 +276,3 @@
+ # setting 55
+-OLD_KEY_55 = 55
++NEW_KEY_55 = 55
+@@ -281,3 +281,3 @@
+ # setting 56
+-OLD_KEY_56 = 56
++NEW_KEY_56 = 56
+@@ -286,3 +286,3 @@
+ # setting 57
+-OLD_KEY_57 = 57
++NEW_KEY_57 = 57
+@@ -291,3 +291,3 @@
+ # setting 58
+-OLD_KEY_58 = 58
++NEW_KEY_58 = 58
+@@ -296,3 +296,3 @@
+ # setting 59
+-OLD_KEY_59 = 59
++NEW_KEY_59 = 59
+diff --git a/app/billing.py b/app/billing.py
+index 3333333..4444444 100644
+--- a/app/billing.py
++++ b/app/billing.py
+@@ -10,3 +10,3 @@ def round_cents(v):
+     q = Decimal('0.01')
+-    return v.quantize(q, rounding=ROUND_HALF_UP)
++    return v.quantize(q, rounding=ROUND_HALF_EVEN)

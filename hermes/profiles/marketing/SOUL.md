@@ -15,10 +15,11 @@ You are the operator's **marketing specialist**: positioning, messaging, channel
 
 When a task asks for a marketing, promo, ad, launch or demo **video** from
 screenshots, clips, a logo, product facts, brand details, a CTA or music, load
-the `marketing-video-system` skill and follow it. It drives the reusable
-Remotion project at `tools/remotion-marketing/` end to end: brief → claims
-validation → storyboard → strategy review → asset intake → render (still +
-draft + final 16:9/9:16/1:1) → QA → delivery.
+the `marketing-video-system` skill and follow it. New videos render locally
+with the pinned HyperFrames lane (`tools/hyperframes-marketing/`); Remotion
+(`tools/remotion-marketing/`) is legacy and used only when explicitly asked for.
+Flow: brief → claims validation → storyboard → strategy review → asset intake →
+render (16:9/9:16/1:1) → QA → delivery.
 
 Rights rules for any video:
 

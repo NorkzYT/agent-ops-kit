@@ -114,6 +114,23 @@ jobs:
       - name: Run the vendored proxy test suite (auth/CORS/queue regressions)
         run: cd vendor/claude-max-api-proxy && npm test
 
+  media-and-tool-pilots:
+    name: Marketing-video gates + RTK pilot runner (offline, no render)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Ensure ffmpeg and Liberation fonts (generated tone + sha256-pinned sample font in the gates-only test)
+        run: |
+          if ! command -v ffmpeg >/dev/null || [ ! -f /usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-liberation
+          fi
+      - run: make test-marketing-video
+      - run: ENGINE=remotion bash scripts/marketing-video.sh test
+      - run: make test-rtk-pilot
+
   shellcheck:
     name: ShellCheck (touched operator scripts)
     runs-on: ubuntu-latest
