@@ -14,6 +14,7 @@
   <a href="#what-it-can-do">What it can do</a> ·
   <a href="#capability-skills-gstack-and-pm-methods">gstack + PM skills</a> ·
   <a href="#engineering-workflow">Engineering workflow</a> ·
+  <a href="#marketing-video-and-ui-audits">Video + UI audits</a> ·
   <a href="docs/README.md">Docs</a>
 </p>
 
@@ -55,6 +56,9 @@ flowchart LR
 | **Knowledge pipeline** | EPUB/PDF → Markdown, AI-proposed profile placement, reviewed apply, and `/learn` into a per-profile skill. |
 | **Memory** | Self-hosted Honcho keeps what it learns about you across sessions. |
 | **Desktop + devices** | A Windows worker with computer use, a Mac worker for Xcode and simulators. |
+| **Marketing video** | Videos from screenshots, facts and brand assets, rendered locally with pinned HyperFrames by default; claims and asset-rights gates check the recorded facts and provenance before every render, then ffprobe QA. A pass is not proof of rights beyond those records. Remotion stays as an explicit legacy lane. |
+| **UI audits** | Opt-in, project-local axe-core, Lighthouse CI and Impeccable (advisory) runs on your own built static pages, with reports kept on disk. |
+| **Browser pilot** | BrowserOS neo in Docker with a noVNC viewer and Hermes MCP; opt-in (`up`, then a separate `hermes-enable`), ports published on loopback only but not isolated from other host processes; real-account login is NO-GO. |
 | **Claude Code kit** | `.claude/` hooks, agents and skills that make Claude Code a careful worker in any repo. |
 
 ## Quick start
@@ -75,6 +79,10 @@ make doctor
 ```
 
 Then @mention the bot in Discord. Full walkthrough: [docs/install.md](docs/install.md).
+These steps assume a Linux host with Docker, systemd user services, and your
+own ChatGPT, Claude Max and Discord accounts. Other setups may need changes;
+`make doctor` and [docs/troubleshooting.md](docs/troubleshooting.md) show what
+is missing. The quick start does not install the optional pilots below.
 `make help` lists every target, grouped by area (colored on a terminal;
 `COLOR=0`/`NO_COLOR=1` turn it off, `COLOR=1` forces it, `HELP_WIDTH=<n>` sets the wrap width).
 
@@ -91,6 +99,20 @@ make doctor
 `hermes-config-apply` copies the repo's `model-router` plugin over the
 installed one, and `hermes-restart` interrupts running turns. Run both from
 your own terminal at a quiet moment.
+
+### Optional: video and UI-audit tools
+
+The HyperFrames video lane and the UI-audit pilot install separately, into
+`tools/<tool>/node_modules` from tracked lockfiles (`npm ci --ignore-scripts`,
+nothing global, no hooks, no Hermes config changes, no restart):
+
+```bash
+make tool-pilots-check                              # Node 22+, npm, Chrome, FFmpeg, installed pins; downloads nothing
+TOOL_PILOTS_ALLOW_DOWNLOADS=1 make tool-pilots-install  # opt-in download from the npm registry
+```
+
+`TOOLS=ui-audit` or `TOOLS=hyperframes` limits either command to one pilot.
+See [docs/tool-pilots.md](docs/tool-pilots.md).
 
 ## Change a setting
 
@@ -119,17 +141,24 @@ All of this lives in the `model-router` plugin and `.env`; see
 
 - **Orchestrator** (CLIProxyAPI, ChatGPT): starts on `HERMES_MODEL`
   (default `gpt-6.1-terra`, `model.default`); the router then rewrites
-  per task: status→`gpt-5.6-luna`
-  low effort, ordinary work and planning→`gpt-6.1-terra`, hard or a leading
-  `#sol` line→`gpt-6.1-sol` (`gpt-5.6-sol` only when 6.1 is not advertised);
-  `gpt-6-astra` only with a leading `#max`/`#astra` line.
-- **Coding subagents** (claude-max-proxy, Claude Max): `opus`, `fable` for hard
-  engineering; a leading `#opus`/`#fable` line forces one.
-- **Specialists**: the router names up to six book-backed profiles per task
-  (`MODEL_ROUTER_SPECIALIST_MAX=6`, the hard cap). Keywords and verified
-  attachment text (PDF/DOCX extracted locally) add deterministic signals; for
-  weak matches or attachments the classifier on CLIProxyAPI `gpt-6.1-terra`
-  (medium effort) may add up to two more, within the same cap.
+  per task: status/lookup→`gpt-5.6-luna` (low effort), ordinary work and
+  planning→`gpt-6.1-terra` (medium), genuinely hard work or a leading `#sol`
+  line→the newest Sol CLIProxyAPI advertises (static `gpt-6.1-sol` when the
+  live catalog is unavailable); Astra (newest live, static `gpt-6-astra`)
+  only with a leading `#max`/`#astra` line. Automatic routing never goes
+  above Sol.
+- **Coding subagents** (claude-max-proxy, Claude Max): `opus` by default,
+  `fable` for hard engineering; a leading `#opus`/`#fable` line forces one.
+- **Specialists**: `.env.example` turns specialist routing on in `ai` mode
+  (`MODEL_ROUTER_SPECIALISTS=true`, `MODEL_ROUTER_SPECIALIST_MODE=ai`). The
+  classifier on CLIProxyAPI `gpt-6.1-terra` (medium effort) picks from the
+  eligible installed profiles, reading the typed task plus locally extracted
+  PDF/DOCX text, up to `MODEL_ROUTER_SPECIALIST_MAX=6` (the setting allows
+  0-15). There is no keyword scoring and no fallback: a classifier failure or
+  timeout selects none. Deterministic code still enforces privacy, the
+  allowlist, readiness and the cap. Keyword (`keywords`) and keywords-first
+  (`hybrid`) modes are opt-in; see
+  [docs/specialist-routing.md](docs/specialist-routing.md).
 - **Compression**: CLIProxyAPI `gpt-6.1-terra`, falling back to `gpt-5.6-luna`.
 - **Session titles**: the main route (CLIProxyAPI, `HERMES_MODEL`); no title variables
   are set in `.env.example`.
@@ -144,8 +173,9 @@ All of this lives in the `model-router` plugin and `.env`; see
 ## Capability skills (gstack and PM methods)
 
 Twelve Hermes skills bring product, design and engineering methods into the
-same chat. Hermes picks one from a plain request ("help me figure out why
-bookings dropped"); you do not need to name it.
+same chat. Once they are activated (see the end of this section), Hermes
+picks one from a plain request ("help me figure out why bookings dropped");
+you do not need to name it.
 
 | Skill | Use it when |
 |-------|-------------|
@@ -182,7 +212,8 @@ make capability-compat            # read-only: skills vs the installed Hermes
 make test-capabilities
 ```
 
-`make hermes-install` does not copy these skills; their activation is gated.
+`make hermes-install` does not copy these skills; their activation is gated,
+and until it runs Hermes cannot use them.
 See [docs/capability-registry.md](docs/capability-registry.md) and
 [docs/capability-activation.md](docs/capability-activation.md).
 
@@ -211,6 +242,74 @@ Details: [docs/discord-kanban-workflow.md](docs/discord-kanban-workflow.md),
 [docs/mobile-validation.md](docs/mobile-validation.md),
 [docs/engineering-completion.md](docs/engineering-completion.md).
 
+## Marketing video and UI audits
+
+**Marketing video.** With the quick start's skills installed and the
+HyperFrames lane installed (see "Optional: video and UI-audit tools"), ask
+Hermes for a marketing, promo or demo video and the `marketing-video-system`
+skill drives it; the `marketing` profile follows the
+same skill and [marketing-video-team](hermes/teams/marketing-video-team.md) is
+the full pipeline. New videos render with HyperFrames (`hyperframes@0.9.80`, pinned
+and run locally); `ENGINE=remotion` selects the legacy Remotion lane, which
+installs separately with `ENGINE=remotion make marketing-video-install`. There
+is no fallback between engines: if the chosen one fails, the command fails.
+
+```bash
+make marketing-video-gates PROPS=... PROVENANCE=... OUT=...   # claims, rights and project-asset gates; builds the project, renders nothing
+make marketing-video-render                                   # gates, then render + QA (tracked synthetic sample by default)
+make test-marketing-video                                     # offline gate/builder tests, no render
+```
+
+Before anything renders, every numeric or superlative on-screen claim needs
+an evidenced fact, every used asset (fonts included) needs a provenance record
+cleared for commercial use, and the built project is scanned for remote URLs,
+CDN scripts and uncleared files. The gates check what the records say; they do
+not prove the rights themselves. The video is an artifact only; publishing
+waits for your approval. Limits: Chrome sends non-loopback requests to a dead
+proxy, but this is not network isolation, and no test proves a render makes no
+outbound connection; renders use software GL and take minutes; the sample font
+needs the host's `fonts-liberation` file. Details:
+[docs/marketing-video.md](docs/marketing-video.md).
+
+**UI audits.** Point the pilot at your own built static pages:
+
+```bash
+make ui-audit-project PROJECT=/abs/path/to/dist PAGES=index.html,pricing/index.html
+make ui-audit                  # owned fixtures; seeded defects make it exit 2 by design
+make test-ui-audit-pilot       # real tools on 127.0.0.1 fixtures; needs the install and Chrome
+```
+
+The pilot serves only `PROJECT` on `127.0.0.1`, writes a new report directory
+per run, never writes into `PROJECT`, and uploads nothing (Lighthouse CI uses
+the filesystem target). axe and Lighthouse failures fail the run; Impeccable
+findings are advisory design heuristics and never fail it. Limits: a clean
+scan is not accessibility sign-off (keyboard, focus and screen-reader checks
+stay manual; axe `incomplete` results need review), Lighthouse asserts only
+accessibility and SEO, not performance, there is no network isolation, and
+dev servers and client-routed SPAs are out of scope (audit the built output).
+Details: [docs/tool-pilots.md](docs/tool-pilots.md),
+[tools/ui-audit-pilot/README.md](tools/ui-audit-pilot/README.md).
+
+## What ships vs what is running
+
+Everything here is source in this repo. What is active on a given host depends
+on what the operator ran:
+
+| State | What | How it becomes active |
+|-------|------|-----------------------|
+| Installed by the quick start | Docker stack, both proxies, Hermes config, the model-router plugin, non-capability skills (`kanban-workflow`, `marketing-video-system`, `document-converter`, ...) | `make up`, `make claude-proxy-install`, `make hermes-install` |
+| Configured by the quick start | specialist routing (`ai` mode, `.env.example` ships `MODEL_ROUTER_SPECIALISTS=true`); profiles route only once installed | `make init` copies the setting, `make hermes-install` renders it; `make specialist-install` / `specialist-enable` change it later |
+| Applied on update | changed config, skills and plugins | `make hermes-config-apply`, then `make hermes-restart` |
+| Gated | the twelve gstack/PM capability skills | [docs/capability-activation.md](docs/capability-activation.md) |
+| Opt-in pilots | HyperFrames video lane, UI-audit pilot, Remotion legacy lane, BrowserOS neo | `make tool-pilots-install` (with `TOOL_PILOTS_ALLOW_DOWNLOADS=1`); `ENGINE=remotion make marketing-video-install`; `make browseros-neo-up`, then separately `make browseros-neo-hermes-enable APPROVE_ACTIVATION=yes` ([docs/browseros-neo.md](docs/browseros-neo.md)) |
+| Your machines | Mac and Windows workers | [docs/windows-vm-worker.md](docs/windows-vm-worker.md), [docs/mobile-validation.md](docs/mobile-validation.md) |
+
+`make doctor`, `make specialist-status`, `make capability-compat` and
+`make tool-pilots-check` report what is actually installed; a skill or tool in
+the repo is not proof that it is live. The quick start copies the
+`browseros-neo-browser` skill, but that is not the activated pilot: Hermes
+leaves it out of the skills index until Neo's MCP tools are registered.
+
 ## What is in the box
 
 | Piece | Where it runs | What it does |
@@ -224,6 +323,9 @@ Details: [docs/discord-kanban-workflow.md](docs/discord-kanban-workflow.md),
 | Browser Use | host (or Cloud) | the browser backend Hermes drives |
 | Mac / Windows workers | your machines | their own Hermes; build, test and computer use for GUI-only tasks |
 | `.claude/` kit | any repo | hooks, agents and skills that make Claude Code a careful coding worker |
+| HyperFrames video lane | host, `tools/hyperframes-marketing` (opt-in) | local marketing-video renders behind claims, rights and asset gates; Remotion legacy lane in `tools/remotion-marketing` |
+| UI-audit pilot | host, `tools/ui-audit-pilot` (opt-in) | axe-core, Lighthouse CI and Impeccable on static pages served on 127.0.0.1 |
+| BrowserOS neo | Docker, ports published on 127.0.0.1 only (opt-in pilot; not isolated from host processes) | one persistent browser profile, noVNC viewer, Hermes MCP after a separate `hermes-enable` |
 
 ## How a task flows
 
@@ -290,7 +392,8 @@ vendor/claude-max-api-proxy  vendored proxy sources (UPSTREAM pins the commit; m
 hermes/                   config templates, SOUL.md, plugins/model-router, profiles/, teams/, skills/
 hermes/capabilities/      capability registry, upstream lock, schemas, routing recipes, activation manifest
 hermes/companies, projects  company/project manifest contracts with synthetic examples
-docker/                   cliproxyapi config template, honcho init, ollama entrypoint
+docker/                   cliproxyapi config template, honcho init, ollama entrypoint, BrowserOS neo pilot
+tools/                    project-local pilots: hyperframes-marketing, remotion-marketing (legacy), ui-audit-pilot
 docs/                     guides for every part of the stack
 .claude/                  the Claude Code kit (installable into other repos with install.sh)
 ```
@@ -302,8 +405,9 @@ docs/                     guides for every part of the stack
 - Routing: [docs/model-routing.md](docs/model-routing.md), [docs/specialist-routing.md](docs/specialist-routing.md), [docs/routing-eval.md](docs/routing-eval.md)
 - Capabilities: [docs/capability-registry.md](docs/capability-registry.md), [docs/capability-activation.md](docs/capability-activation.md)
 - Engineering: [docs/discord-kanban-workflow.md](docs/discord-kanban-workflow.md), [docs/mobile-validation.md](docs/mobile-validation.md), [docs/hermes-autonomous-development.md](docs/hermes-autonomous-development.md)
+- Media and pilots: [docs/marketing-video.md](docs/marketing-video.md), [docs/tool-pilots.md](docs/tool-pilots.md), [tools/ui-audit-pilot/README.md](tools/ui-audit-pilot/README.md), [docs/browseros-neo.md](docs/browseros-neo.md)
 - Agents: [docs/profiles-and-teams.md](docs/profiles-and-teams.md), [docs/windows-vm-worker.md](docs/windows-vm-worker.md), [docs/windows-operator-workflows.md](docs/windows-operator-workflows.md)
-- Upstream: [Hermes](https://hermes-agent.nousresearch.com/docs), [Honcho](https://honcho.dev/docs), [Browser Use](https://docs.browser-use.com), [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [claude-max-api-proxy](https://github.com/mattschwen/claude-max-api-proxy), [gstack](https://github.com/garrytan/gstack), [PM Skills](https://github.com/phuryn/pm-skills)
+- Upstream: [Hermes](https://hermes-agent.nousresearch.com/docs), [Honcho](https://honcho.dev/docs), [Browser Use](https://docs.browser-use.com), [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [claude-max-api-proxy](https://github.com/mattschwen/claude-max-api-proxy), [gstack](https://github.com/garrytan/gstack), [PM Skills](https://github.com/phuryn/pm-skills), [HyperFrames](https://github.com/heygen-com/hyperframes), [axe-core](https://github.com/dequelabs/axe-core), [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci), [Impeccable](https://github.com/pbakaus/impeccable)
 
 ## The Claude Code kit
 
