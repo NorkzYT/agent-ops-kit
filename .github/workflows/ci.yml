@@ -115,7 +115,7 @@ jobs:
         run: cd vendor/claude-max-api-proxy && npm test
 
   media-and-tool-pilots:
-    name: Marketing-video gates + RTK pilot runner (offline, no render)
+    name: Marketing-video gates + tool-pilot setup tests (offline, no render)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,7 +129,6 @@ jobs:
           fi
       - run: make test-marketing-video
       - run: ENGINE=remotion bash scripts/marketing-video.sh test
-      - run: make test-rtk-pilot
       - run: make test-tool-pilots
 
   shellcheck:

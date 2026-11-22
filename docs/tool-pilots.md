@@ -17,7 +17,6 @@ make tool-pilots-check                    # or TOOLS=ui-audit / TOOLS=hyperframe
 | Node 22+ and npm on `PATH` | both | |
 | Google Chrome | both | `UI_AUDIT_CHROME`, `MARKETING_CHROME` (default `/usr/bin/google-chrome`) |
 | FFmpeg on `PATH` | HyperFrames renders | |
-| python3 | `make test-rtk-pilot` | |
 
 Exit 0 when prerequisites are present and any installed deps match the pins;
 1 when something is missing or a pin does not match (stale pins are fixed by
@@ -81,11 +80,6 @@ before every render).
 
 ## Not covered by this setup
 
-- **RTK: no-go.** The pinned v1.2.1 OSS binary (`tools/rtk-pilot/rtk.lock.json`)
-  SIGILLs on the dev VM. A local build of the same tag runs, but the replay
-  exits 1: `rtk summary cat` drops the skip reason from an all-skipped pytest
-  log. Producer-exit and guard parity were not tested; no install or hook is
-  approved. See `tools/rtk-pilot/README.md`.
 - **Runtime activation.** Nothing here installs a Hermes skill, hook or
   profile, or changes the running gateway.
 - **Network isolation.** There is none: Chrome, LHCI and the Impeccable

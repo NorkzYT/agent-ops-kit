@@ -40,7 +40,7 @@ run() {
 : >"$tmp/log"; run bash "$here/tool-pilots.sh" check >"$tmp/out" 2>&1 && rc=0 || rc=$?
 check "check passes with node 24, npm, chrome" '[[ $rc == 0 ]] && grep -q "ui-audit" "$tmp/out" && grep -q "hyperframes" "$tmp/out"'
 check "check reports deps not installed and the opt-in command" 'grep -q "not installed" "$tmp/out" && grep -q "TOOL_PILOTS_ALLOW_DOWNLOADS=1" "$tmp/out"'
-check "check reports RTK as not provided by setup" 'grep -qi "rtk.*not installed by this setup" "$tmp/out"'
+check "check no longer mentions the removed RTK pilot" '! grep -qiE "^ +rtk |rtk-pilot|RTK replay|test-rtk-pilot" "$tmp/out"'
 check "check runs no npm" '! grep -q "^npm" "$tmp/log"'
 
 : >"$tmp/log"; run env STUB_NODE_VERSION=v20.11.0 bash "$here/tool-pilots.sh" check >"$tmp/out" 2>&1 && rc=0 || rc=$?
@@ -71,7 +71,7 @@ check "install never uses global installs, npx or plain npm install" '! grep -Eq
 : >"$tmp/log"; run env TOOL_PILOTS_ALLOW_DOWNLOADS=1 TOOLS=ui-audit STUB_PINS=ok bash "$here/tool-pilots.sh" install >/dev/null 2>&1 && rc=0 || rc=$?
 check "TOOLS=ui-audit installs only that tool" '[[ $rc == 0 && $(grep -c "^npm" "$tmp/log") == 1 ]] && grep -q "ui-audit-pilot" "$tmp/log"'
 
-: >"$tmp/log"; run env TOOL_PILOTS_ALLOW_DOWNLOADS=1 TOOLS=rtk bash "$here/tool-pilots.sh" install >"$tmp/out" 2>&1 && rc=0 || rc=$?
+: >"$tmp/log"; run env TOOL_PILOTS_ALLOW_DOWNLOADS=1 TOOLS=bogus bash "$here/tool-pilots.sh" install >"$tmp/out" 2>&1 && rc=0 || rc=$?
 check "unknown/unsupported tool refused with exit 2" '[[ $rc == 2 && ! -s "$tmp/log" ]]'
 
 : >"$tmp/log"; run env TOOL_PILOTS_ALLOW_DOWNLOADS=1 STUB_NODE_VERSION=v18.0.0 bash "$here/tool-pilots.sh" install >/dev/null 2>&1 && rc=0 || rc=$?

@@ -1,8 +1,0 @@
-2026-11-22T00:00:00Z INFO runner start suite=integration
-2026-11-22T00:00:01Z INFO test_sync_orders started
-2026-11-22T00:00:01Z INFO waiting for upstream
-2026-11-22T00:00:31Z INFO waiting for upstream
-2026-11-22T00:01:01Z INFO waiting for upstream
-2026-11-22T00:01:31Z INFO waiting for upstream
-2026-11-22T00:02:01Z ERROR TIMEOUT test_sync_orders exceeded 120s
-2026-11-22T00:02:01Z ERROR runner exit=124

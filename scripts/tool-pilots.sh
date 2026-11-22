@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tool-pilots.sh — fresh-machine setup for the project-local tool pilots.
-#   check    prerequisites (Node 22+, npm, Chrome, FFmpeg, python3) and whether
+#   check    prerequisites (Node 22+, npm, Chrome, FFmpeg) and whether
 #            each tool's pinned deps are installed; downloads nothing.
 #   install  project-local `npm ci --ignore-scripts` per tool, from the tracked
 #            lockfiles. Only the prerequisites gate the install: missing or stale
@@ -8,8 +8,7 @@
 #            check (prerequisites + pins) runs afterwards. Downloads from the npm registry, so it needs the explicit
 #            opt-in TOOL_PILOTS_ALLOW_DOWNLOADS=1. Nothing global, no npx, no
 #            postinstall scripts, no hooks, no Hermes/Claude config, no restarts.
-# TOOLS=ui-audit,hyperframes (default: both). RTK is not installed here: its
-# pinned binary (tools/rtk-pilot/rtk.lock.json) is a separate, manual step.
+# TOOLS=ui-audit,hyperframes (default: both).
 # Exit: 0 ok, 1 a prerequisite/pin/install failed, 2 usage or missing opt-in.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -77,8 +76,6 @@ prereqs() {
       || check_chrome MARKETING_CHROME "${MARKETING_CHROME:-/usr/bin/google-chrome}"
     if have ffmpeg; then need ffmpeg "$(command -v ffmpeg)"; else missing ffmpeg "FFmpeg on PATH (HyperFrames renders)"; fi
   fi
-  if have python3; then need python3 "$(python3 --version 2>&1) (RTK replay tests)"; else warn "python3 not found: make test-rtk-pilot will not run"; fi
-  need rtk "not installed by this setup (manual pinned binary, tools/rtk-pilot/README.md)"
 }
 
 # Pin diagnostics only; never a reason to refuse an install.
