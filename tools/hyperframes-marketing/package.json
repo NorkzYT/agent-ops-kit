@@ -1,0 +1,20 @@
+{
+  "name": "hyperframes-marketing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Default marketing-video lane: HTML compositions rendered locally by the pinned HyperFrames CLI, behind the shared claims, rights and QA gates.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:composition": "node scripts/build-composition.mjs",
+    "check:assets": "node scripts/check-html-assets.mjs",
+    "render:campaign": "node scripts/render-campaign.mjs",
+    "test": "node --test \"tests/*.test.mjs\""
+  },
+  "dependencies": {
+    "hyperframes": "0.9.80"
+  }
+}

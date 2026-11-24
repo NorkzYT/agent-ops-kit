@@ -1,9 +1,12 @@
 # Marketing video team: research → marketing → coder → QA → strategy
 
 Builds a rights-clean marketing video from a user brief with the
-`marketing-video-system` skill and the reusable Remotion project at
-`tools/remotion-marketing/`. The pipeline gates claims and asset rights before
-anything renders, and keeps a human approval step before publication.
+`marketing-video-system` skill. New videos render with the pinned local
+HyperFrames lane (`tools/hyperframes-marketing/`, `make marketing-video-render`);
+the Remotion project at `tools/remotion-marketing/` is legacy and runs only with
+an explicit `ENGINE=remotion`. The pipeline gates claims and asset rights before
+anything renders, never falls back between engines, and keeps a human approval
+step before publication (`docs/marketing-video.md`).
 
 ## Roles
 
@@ -11,12 +14,13 @@ anything renders, and keeps a human approval step before publication.
   Confirm every on-screen claim has evidence (supplied facts, repo files,
   analytics, citations). Block or soften unsupported numeric/superlative claims.
 - **marketing** — Storyboard + Copy. Write the scene-by-scene `props.json`
-  against `tools/remotion-marketing/src/schema.ts`. Verifiable claims go in
+  against the shared props shape (`tools/remotion-marketing/src/schema.ts`). Verifiable claims go in
   `factIds`; headlines stay non-factual. Record asset intake in
   `provenance.json`.
 - **strategy** — Reviewer. Sign off pricing and positioning claims before render.
-- **coder** — Remotion Builder. Reuse the `MarketingVideo` composition, add
-  components only when a scene needs them, then run the render pipeline.
+- **coder** — Video Builder. Run `make marketing-video-render` (HyperFrames);
+  edit the generated `project.<ratio>/index.html` only when a scene needs it,
+  keep every asset local and cleared, and re-run the project asset gate.
 - **QA** (a `coder` clone or the same coder) — run `scripts/qa-video.mjs` and
   confirm duration, audio, resolution, fps, captions, safe margins and loudness.
 

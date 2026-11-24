@@ -1,0 +1,4 @@
+node_modules/
+out/
+# Generated rights-clean media (recreated by render-campaign)
+props/assets/

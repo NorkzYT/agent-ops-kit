@@ -1,0 +1,28 @@
+{
+  "ci": {
+    "collect": {
+      "numberOfRuns": 1,
+      "chromePath": "/usr/bin/google-chrome",
+      "settings": {
+        "onlyCategories": ["accessibility", "seo", "best-practices"],
+        "enableErrorReporting": false,
+        "chromeFlags": "--disable-background-networking --disable-component-update --disable-default-apps --disable-sync --disable-extensions --disable-domain-reliability --disable-client-side-phishing-detection --metrics-recording-only --no-first-run --no-default-browser-check --no-pings --password-store=basic --use-mock-keychain --proxy-server=http://127.0.0.1:9"
+      }
+    },
+    "assert": {
+      "assertions": {
+        "categories:accessibility": ["error", { "minScore": 0.9 }],
+        "categories:seo": ["warn", { "minScore": 0.9 }],
+        "meta-description": "error",
+        "document-title": "error",
+        "html-has-lang": "error",
+        "label": "error",
+        "color-contrast": "error"
+      }
+    },
+    "upload": {
+      "target": "filesystem",
+      "outputDir": "./upload"
+    }
+  }
+}

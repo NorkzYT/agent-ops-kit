@@ -1,4 +1,9 @@
-# Remotion Marketing Video System
+# Remotion Marketing Video System (legacy lane)
+
+> New videos default to HyperFrames (`tools/hyperframes-marketing/`,
+> `docs/marketing-video.md`). Use this lane only on explicit request:
+> `ENGINE=remotion make marketing-video-render ...`. Its gate and QA scripts in
+> `scripts/` are shared by both lanes.
 
 A reusable, rights-aware pipeline that turns a marketing brief and assets into a
 QA'd MP4 with a poster. Built on [Remotion](https://www.remotion.dev). Driven by

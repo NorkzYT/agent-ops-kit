@@ -1,5 +1,5 @@
 {
-  "bundle_digest": "29fb5ba7c3ffb3d25b8bbeda56dea0bf347c6946741ad862c39691059fb7bd3f",
+  "bundle_digest": "588e2c364321a6c6253dcb30bbb9949b125df55cba1baa63aba9c0fd82dc485b",
   "capability_ids": [
     "gstack.design-consultation",
     "gstack.design-review",
@@ -38,7 +38,7 @@
       "destination": "agent-ops-kit/capability-root/hermes/capabilities/registry.json",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "da630267779203859115150b5c4d888edba8df726115e957354eb8dc7db76b06",
+      "sha256": "7116b1c1f1ae4f9ce6ecac5bfc38c795a8d254b9842ee3e43b28a7e4c4e10f0f",
       "size": 82863,
       "source": "hermes/capabilities/registry.json"
     },
@@ -47,7 +47,7 @@
       "destination": "agent-ops-kit/capability-root/hermes/capabilities/routing-catalog.json",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "117a133018b9cd3ed4d20cbc83f7cfe1db7e265c93a4993d03e4a73d5db8abe1",
+      "sha256": "fec854f669439d3a9dd9d3ae8d3866e2fefb16735cf830cc770dc1a31b8afab4",
       "size": 6502,
       "source": "hermes/capabilities/routing-catalog.json"
     },
@@ -237,8 +237,8 @@
       "destination": "agent-ops-kit/capability-root/hermes/profiles/marketing/SOUL.md",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "9358f4e1bc4abf79c1b80995be6ac9e1ec943778d06465e19e69879c27377b41",
-      "size": 3409,
+      "sha256": "318145daf1f381f41c9d01d2956a5f8a35df381ed3d2d6268e24fbb82ebb0482",
+      "size": 3493,
       "source": "hermes/profiles/marketing/SOUL.md"
     },
     {

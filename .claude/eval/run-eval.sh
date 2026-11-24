@@ -61,14 +61,14 @@ if [ -z "$OUT" ]; then
   mkdir -p "$EVAL_DIR/results"
   OUT="$EVAL_DIR/results/run-$(date +%Y%m%d-%H%M%S).tsv"
 fi
-printf 'mode\ttask\trunner\tpass\tseconds\ttokens\n' >"$OUT"
+printf 'mode\ttask\trunner\tpass\tseconds\ttokens\trunner_status\n' >"$OUT"
 
 mode_overlay() { awk -F'\t' -v m="$1" '$1==m{print $2; exit}' "$MODES_TSV"; }
 
 run_cell() {
   local mode="$1" task="$2" task_dir="$TASKS_DIR/$2"
   [ -d "$task_dir/seed" ] || { echo "run-eval: task '$task' has no seed/ — skipping" >&2; return; }
-  local workdir metrics overlay start end secs tokens pass
+  local workdir metrics overlay start end secs tokens rstatus pass
   workdir="$(mktemp -d)"; metrics="$(mktemp)"
   cp -R "$task_dir/seed/." "$workdir/"
   overlay="$(mode_overlay "$mode")"
@@ -82,11 +82,17 @@ run_cell() {
   start="$(date +%s)"
   bash "$RUNNER_SH" "$workdir" "$task_dir" "$metrics" >/dev/null 2>&1 || true
   end="$(date +%s)"; secs=$((end - start))
+  # Runner exit status is recorded via metrics (runner_status), never allowed to
+  # skip the independent verify.sh verdict below. Missing values mean "NA".
   tokens="$(awk -F= '/^tokens=/{print $2; exit}' "$metrics" 2>/dev/null || true)"; [ -n "$tokens" ] || tokens=NA
+  rstatus="$(awk -F= '/^runner_status=/{print $2; exit}' "$metrics" 2>/dev/null || true)"; [ -n "$rstatus" ] || rstatus=NA
+  if [ -s "$metrics.stderr" ]; then
+    { printf '=== %s %s (runner_status=%s)\n' "$mode" "$task" "$rstatus"; cat "$metrics.stderr"; } >>"$OUT.stderr.log"
+  fi
 
   if ( cd "$workdir" && bash "$task_dir/verify.sh" ) >/dev/null 2>&1; then pass=1; else pass=0; fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$task" "$RUNNER" "$pass" "$secs" "$tokens" >>"$OUT"
-  rm -rf "$workdir" "$metrics"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$mode" "$task" "$RUNNER" "$pass" "$secs" "$tokens" "$rstatus" >>"$OUT"
+  rm -rf "$workdir" "$metrics" "$metrics.stderr"
 }
 
 for mode in $MODES; do

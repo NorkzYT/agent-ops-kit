@@ -36,6 +36,10 @@ export function usedAssetIds(props) {
   if (props.music && props.music.mode !== 'none' && props.music.assetId) {
     ids.add(props.music.assetId);
   }
+  // Font files (HyperFrames lane embeds them via local @font-face).
+  for (const face of props.typography?.faces ?? []) {
+    if (face.assetId) ids.add(face.assetId);
+  }
   return ids;
 }
 

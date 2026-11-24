@@ -114,6 +114,33 @@ jobs:
       - name: Run the vendored proxy test suite (auth/CORS/queue regressions)
         run: cd vendor/claude-max-api-proxy && npm test
 
+  media-and-tool-pilots:
+    name: Marketing-video gates + tool-pilot setup + Anatomy skill tests (offline, no render)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Ensure ffmpeg (generated tone; the sample font is vendored in the repo, not taken from the runner)
+        run: |
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          fi
+      - run: make test-marketing-video
+      - run: ENGINE=remotion bash scripts/marketing-video.sh test
+      - run: make test-tool-pilots
+      - name: Anatomy skill (Node 24 from setup-node; example builds, TS kit, fake-Chrome argv and a real print can't skip)
+        env:
+          ANATOMY_REQUIRE_NODE: "1"
+          ANATOMY_REQUIRE_CHROME: "1"
+        run: |
+          set -o pipefail
+          node --version
+          command -v google-chrome || command -v chromium || command -v chromium-browser
+          make test-anatomy 2>&1 | tee "$RUNNER_TEMP/anatomy.log"
+          if grep -Eq 'skipped|skip(s|ped)?=' "$RUNNER_TEMP/anatomy.log"; then echo "Anatomy tests skipped on CI" >&2; exit 1; fi
+
   shellcheck:
     name: ShellCheck (touched operator scripts)
     runs-on: ubuntu-latest
@@ -131,6 +158,7 @@ jobs:
             scripts/test_stack_render.sh scripts/test_knowledge_sync.sh scripts/test_knowledge_stage.sh scripts/test_knowledge_refresh.sh scripts/test_hermes_profile.sh \
             scripts/test_windows_worker_install.sh \
             scripts/test_windows_chrome_devtools_mcp.sh \
+            scripts/tool-pilots.sh scripts/test_tool_pilots.sh scripts/ui-audit-project.sh \
             scripts/browseros-neo.sh scripts/test_browseros_neo.sh scripts/test_browseros_neo_hermes_registration.sh scripts/test_browseros_neo_hermes_enable.sh scripts/test_browseros_neo_hermes_txn.sh \
             install.sh .claude/scripts/test_install.sh \
             .claude/bootstrap/linux_devtools.sh

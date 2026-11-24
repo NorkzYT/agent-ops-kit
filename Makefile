@@ -33,6 +33,7 @@ endef
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    browseros-neo-check browseros-neo-up browseros-neo-down browseros-neo-status browseros-neo-pause browseros-neo-resume browseros-neo-access browseros-neo-hermes-enable browseros-neo-hermes-disable test-browseros-neo \
+	    marketing-video-install marketing-video-render marketing-video-gates test-marketing-video test-anatomy ui-audit-install ui-audit ui-audit-project test-ui-audit-pilot tool-pilots-check tool-pilots-install test-tool-pilots \
 	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
@@ -514,7 +515,56 @@ browseros-neo-hermes-enable: ## Opt-in: register Neo in the current HERMES_HOME 
 browseros-neo-hermes-disable: ## Set mcp_servers.browseros_neo.enabled false in the current HERMES_HOME (entry kept)
 	@bash scripts/browseros-neo.sh hermes-disable
 
+##@ Marketing video
+
+##> New videos render with HyperFrames (pinned, local; Chrome behind a dead proxy, no network-isolation proof); ENGINE=remotion selects the legacy Remotion lane explicitly. No fallback between engines. Claims and asset-rights gates run before any render (docs/marketing-video.md).
+marketing-video-install: ## Install the pinned engine deps project-locally with npm ci --ignore-scripts [ENGINE=hyperframes|remotion]
+	@bash scripts/marketing-video.sh install
+
+##| Without PROPS/PROVENANCE/OUT it renders the tracked synthetic sample into tools/<engine>/out.
+marketing-video-render: ## Gates, then render + QA [PROPS= PROVENANCE= OUT= ASSETS= RATIOS=16:9,9:16 QUALITY=draft|looks|delivery ENGINE=hyperframes|remotion]
+	@bash scripts/marketing-video.sh render $(if $(PROPS),--props "$(PROPS)",) $(if $(PROVENANCE),--provenance "$(PROVENANCE)",) $(if $(OUT),--out "$(OUT)",) $(if $(ASSETS),--assets "$(ASSETS)",) $(if $(RATIOS),--ratios "$(RATIOS)",) $(if $(QUALITY),--quality "$(QUALITY)",)
+
+marketing-video-gates: ## HyperFrames: claims, rights and project-asset gates only; builds the project, renders nothing [PROPS= PROVENANCE= OUT= ASSETS=]
+	@bash scripts/marketing-video.sh gates $(if $(PROPS),--props "$(PROPS)",) $(if $(PROVENANCE),--provenance "$(PROVENANCE)",) $(if $(OUT),--out "$(OUT)",) $(if $(ASSETS),--assets "$(ASSETS)",)
+
+##@ Tool pilots (local, advisory)
+
+##> Project-local pilots: axe-core, Lighthouse CI (filesystem upload) and the Impeccable detector (advisory) against owned fixtures or your own static pages served on 127.0.0.1 (tools/ui-audit-pilot). No hooks, no global installs, no uploads. Fresh machine: make tool-pilots-check, then TOOL_PILOTS_ALLOW_DOWNLOADS=1 make tool-pilots-install (docs/tool-pilots.md).
+# TOOLS, PROJECT, PAGES and OUT reach the scripts through the environment (make
+# exports command-line variables), never pasted into recipe text, so values with
+# spaces or quotes pass through unchanged.
+tool-pilots-check: ## Check Node 22+, npm, Chrome, FFmpeg and the installed pins; downloads nothing [TOOLS=ui-audit,hyperframes]
+	@bash scripts/tool-pilots.sh check
+
+##| Downloads the pinned packages from the npm registry into tools/<tool>/node_modules only; refuses without TOOL_PILOTS_ALLOW_DOWNLOADS=1.
+tool-pilots-install: ## Project-local npm ci --ignore-scripts for each pilot (explicit opt-in) [TOOLS=ui-audit,hyperframes]
+	@bash scripts/tool-pilots.sh install
+
+ui-audit-install: ## Install the pinned UI-audit pilot deps project-locally (npm ci --ignore-scripts)
+	@cd tools/ui-audit-pilot && npm ci --ignore-scripts --no-audit --no-fund
+
+ui-audit: ## Run axe, Lighthouse CI and Impeccable on the owned fixtures; reports stay in tools/ui-audit-pilot/reports (exit 2 = seeded findings)
+	@cd tools/ui-audit-pilot && rc=0; for s in axe lhci impeccable; do npm run --silent audit:$$s || rc=$$?; done; exit $$rc
+
+##| PROJECT is an absolute directory of built static pages (not your home, /, a hidden or system dir); the pilot serves only that directory on 127.0.0.1 and only navigates to the listed pages (other localhost URLs are refused as targets; pages can still load subresources from other 127.0.0.1 ports; no network isolation). Each run writes a new OUT/<run-id>/ (default OUT tools/ui-audit-pilot/reports/project-<name>-<hash>), never into PROJECT, and never deletes or overwrites existing reports. make exits 2 on any failure; the script's own code (shown as Error 1 = tool error/refused, Error 2 = findings) is in docs/tool-pilots.md.
+ui-audit-project: ## Run axe, Lighthouse CI and Impeccable on your own static pages [PROJECT=/abs/dir PAGES=index.html,docs/a.html OUT=]
+	@bash scripts/ui-audit-project.sh
+
 ##@ Tests (offline)
+
+test-ui-audit-pilot: ## Run the UI-audit pilot tests (real axe/LHCI/Impeccable on 127.0.0.1 fixtures; needs ui-audit-install and Chrome)
+	@cd tools/ui-audit-pilot && npm test
+
+test-tool-pilots: ## Run the tool-pilots setup/check script tests with stub node/npm/chrome (offline; downloads nothing)
+	@bash scripts/test_tool_pilots.sh
+
+test-marketing-video: ## Run the marketing-video gate/builder tests and the engine dispatcher tests (offline, no render) [ENGINE=hyperframes|remotion]
+	@bash scripts/marketing-video.sh test
+	@bash scripts/test_marketing_video.sh
+
+test-anatomy: ## Run the Anatomy skill tests: closure, workspace no-clobber, full MIT license in built pages/sheets, Chrome flag argv, trusted targets (node 20.10+; 22.18+ for the TS kit checks; Chrome for the print check)
+	@python3 -m unittest discover -s scripts/tests -p 'test_anatomy_skill.py' -v
 
 test-browseros-neo: ## Run the BrowserOS neo pilot config/wrapper/gate tests (offline, starts no containers)
 	@bash scripts/test_browseros_neo.sh
