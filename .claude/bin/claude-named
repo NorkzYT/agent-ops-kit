@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Word lists (same as terminal_identity.py)
-ADJECTIVES=(cosmic thunder velvet neon shadow crystal phantom golden iron arctic
+ADJECTIVES=(cosmic thunder violet neon shadow crystal phantom golden iron arctic
   blazing crimson mystic quantum swift silent brave clever fierce noble lunar
   solar frosty ember coral azure scarlet jade obsidian silver copper ruby amber
   ivory onyx turbo rapid primal vivid bold keen wild stormy dusty pixel cyber

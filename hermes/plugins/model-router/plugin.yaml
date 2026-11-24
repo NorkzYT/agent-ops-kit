@@ -1,7 +1,7 @@
 name: model-router
 version: 0.5.0
 description: >-
-  Complexity-based model routing (luna/terra/sol/astra for the orchestrator,
+  Complexity-based model routing (terra/sol/astra for the orchestrator, GPT 6.1+ Terra floor,
   opus/fable for delegated coding) and fail-closed privacy routing that keeps
   #privacy-marked requests off cloud providers. Optional deterministic specialist-router
   pilot (off by default) that suggests book-backed profiles per task.

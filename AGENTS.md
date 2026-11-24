@@ -86,11 +86,15 @@ the job id. If scheduling fails, say so and ask to be pinged.
   `gpt-6.1-terra` default: the configured starting model in
   `model.default`, used as-is when the router leaves a request alone).
   Task-scoped routing rewrites each request per task (current user task only, never
-  history/tool output): status→luna low effort, ordinary work→terra medium,
+  history/tool output): status→terra low effort, ordinary work→terra medium,
   ambiguous/planning→terra, genuinely hard or a leading standalone `#sol`
-  line→`gpt-6.1-sol` (`gpt-5.6-sol` only as fallback when 6.1 is not
-  advertised); `gpt-6-astra` only with a
-  leading standalone `#max`/`#astra` line in the current task. Reasoning
+  line→the newest eligible Sol (static `gpt-6.2-sol`); the newest eligible
+  Astra (static `gpt-6.2-astra`) only with a leading standalone
+  `#max`/`#astra` line in the current task. GPT model floor: every
+  kit-managed GPT call is 6.1+ and Terra or higher; no below-floor fallback,
+  stale overrides are refused (`scripts/model-floor-migrate.py` updates
+  existing installs; `--check` gates `make hermes-restart` because auxiliary
+  calls bypass the router seams; docs/model-routing.md, GPT model floor). Reasoning
   effort is rewritten per task up to the `agent.reasoning_effort` ceiling
   (`high`); auxiliary entries keep their own `reasoning_effort`.
 - Coding subagents: Claude Max through claude-max-proxy (`HERMES_CODING_MODEL`,
@@ -120,10 +124,10 @@ the job id. If scheduling fails, say so and ask to be pinged.
 - Native fallback chains (non-private only): orchestrator CLIProxyAPI →
   claude-max-proxy → Ollama agent → Ollama fallback; delegation
   claude-max-proxy → Ollama agent → Ollama fallback.
-- Compression: CLIProxyAPI `gpt-6.1-terra`, fallback `gpt-5.6-luna`
+- Compression: CLIProxyAPI `gpt-6.1-terra`, no fallback
   (`AUX_COMPRESSION_*`; `AUX_COMPRESSION_ROUTE=aux` pins it to the title route).
   The plugin's aux guard refuses `#privacy`/`#private` payloads to it.
-- Session titles: the main route (CLIProxyAPI, luna); no `AUX_*` title vars.
+- Session titles: the main route (CLIProxyAPI, `HERMES_MODEL`); no `AUX_*` title vars.
 - Honcho reasoning: CLIProxyAPI. Embeddings: local Ollama.
 - No vendor API keys anywhere in the stack.
 - Full reference: `docs/model-routing.md`. Verify: `make route-smoke`,

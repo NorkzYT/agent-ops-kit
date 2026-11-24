@@ -39,35 +39,35 @@ def report_and_plan():
          "stage_problems": [], "privacy": [], "library_exemption": False, "imported_as": []},
         {"source": "edu/Advanced SQL", "status": "proposed", "profile": "software-engineering", "confidence": 0.98,
          "rationale": "A SQL reference.", "topics": ["sql"], "needs_review": False, "review_reasons": [],
-         "classifier": "cliproxy:gpt-5.6-luna", "evidence": "excerpt", "owners": [], "new_profile": {},
-         "action": "would-assign", "action_note": "", "model_requested": "gpt-5.6-luna", "effort_requested": "medium",
-         "model_served": "gpt-5.6-luna", "usage": {"completion_tokens": 10}, "latency_s": 1.5, "error": False,
+         "classifier": "cliproxy:gpt-6.1-terra", "evidence": "excerpt", "owners": [], "new_profile": {},
+         "action": "would-assign", "action_note": "", "model_requested": "gpt-6.1-terra", "effort_requested": "medium",
+         "model_served": "gpt-6.1-terra", "usage": {"completion_tokens": 10}, "latency_s": 1.5, "error": False,
          "staged_files": ["/tmp/x.md"], "stage_problems": [], "privacy": [], "library_exemption": False,
          "imported_as": []},
         {"source": EVIL_TITLE, "status": "needs-review", "profile": "software-engineering", "confidence": 0.98,
          "rationale": EVIL_RATIONALE, "topics": [], "needs_review": True, "review_reasons": ["suspicious-text"],
-         "classifier": "cliproxy:gpt-5.6-luna", "evidence": "excerpt", "owners": [], "new_profile": {},
-         "action": "none", "action_note": "", "model_requested": "gpt-5.6-luna", "effort_requested": "medium",
-         "model_served": "gpt-5.6-luna", "usage": {}, "latency_s": 2.0, "error": False, "staged_files": [],
+         "classifier": "cliproxy:gpt-6.1-terra", "evidence": "excerpt", "owners": [], "new_profile": {},
+         "action": "none", "action_note": "", "model_requested": "gpt-6.1-terra", "effort_requested": "medium",
+         "model_served": "gpt-6.1-terra", "usage": {}, "latency_s": 2.0, "error": False, "staged_files": [],
          "stage_problems": [], "privacy": [], "library_exemption": False, "imported_as": []},
         {"source": "edu/Man and His Symbols", "status": "needs-review", "profile": "", "confidence": 0.97,
          "rationale": "Jungian psychology.", "topics": [], "needs_review": True,
-         "review_reasons": ["no-profile", "new-profile-proposal:psychology"], "classifier": "cliproxy:gpt-5.6-luna",
+         "review_reasons": ["no-profile", "new-profile-proposal:psychology"], "classifier": "cliproxy:gpt-6.1-terra",
          "evidence": "excerpt", "owners": [], "new_profile": {"name": "psychology", "purpose": "Psychology."},
-         "action": "none", "action_note": "", "model_requested": "gpt-5.6-luna", "effort_requested": "medium",
-         "model_served": "gpt-5.6-luna", "usage": {}, "latency_s": 3.0, "error": False, "staged_files": [],
+         "action": "none", "action_note": "", "model_requested": "gpt-6.1-terra", "effort_requested": "medium",
+         "model_served": "gpt-6.1-terra", "usage": {}, "latency_s": 3.0, "error": False, "staged_files": [],
          "stage_problems": [], "privacy": [], "library_exemption": False, "imported_as": []},
         {"source": "edu/Vague Book", "status": "needs-review", "profile": "strategy", "confidence": 0.4,
          "rationale": "Thin evidence.", "topics": [], "needs_review": True, "review_reasons": ["low-confidence"],
-         "classifier": "cliproxy:gpt-5.6-luna", "evidence": "metadata-only", "owners": [], "new_profile": {},
-         "action": "none", "action_note": "", "model_requested": "gpt-5.6-luna", "effort_requested": "medium",
-         "model_served": "gpt-5.6-luna", "usage": {}, "latency_s": 1.0, "error": False, "staged_files": [],
+         "classifier": "cliproxy:gpt-6.1-terra", "evidence": "metadata-only", "owners": [], "new_profile": {},
+         "action": "none", "action_note": "", "model_requested": "gpt-6.1-terra", "effort_requested": "medium",
+         "model_served": "gpt-6.1-terra", "usage": {}, "latency_s": 1.0, "error": False, "staged_files": [],
          "stage_problems": [], "privacy": [], "library_exemption": False, "imported_as": []},
     ]
     report = {"run": {"generated": "2026-10-23T09:03:24", "applied": False, "library": "/lib", "staging": "/stg",
-                      "classifier": "cliproxy", "model": "gpt-5.6-luna", "effort": "medium", "threshold": 0.75,
+                      "classifier": "cliproxy", "model": "gpt-6.1-terra", "effort": "medium", "threshold": 0.75,
                       "excerpt_chars": 3000, "library_exemption": True, "library_exemption_note": "n",
-                      "models_served": ["gpt-5.6-luna"]},
+                      "models_served": ["gpt-6.1-terra"]},
               "items": items}
     plan_items = []
     for n, i in enumerate(items):
@@ -79,7 +79,7 @@ def report_and_plan():
                            "profile": i["profile"] or (i["new_profile"].get("name", "") if i["new_profile"] else ""),
                            "purpose": "", "chapters": [], "tags": [], "secondary_reason": "", "note": "n"})
     plan = {"plan_version": 1, "generated": "2026-10-23T09:03:38", "library": "/lib", "report": "/stg/r.json",
-            "classifier": "cliproxy", "model": "gpt-5.6-luna", "effort": "medium", "applied": False,
+            "classifier": "cliproxy", "model": "gpt-6.1-terra", "effort": "medium", "applied": False,
             "profiles": ["marketing", "offers-sales", "software-engineering", "strategy"],
             "decisions": {"terminal": ["assign", "skip", "existing"], "default_for_review": "review", "help": "h"},
             "items": plan_items,
@@ -109,7 +109,7 @@ class Markdown(unittest.TestCase):
         self.assertIn("suspicious-text", md)                                  # an older plan's reason, still listed
         self.assertNotIn("risk", md.lower().replace("asterisk", ""))
         self.assertIn("0000000000000003", md)                                 # source id
-        self.assertIn("gpt-5.6-luna", md)
+        self.assertIn("gpt-6.1-terra", md)
         self.assertIn("medium", md)
         self.assertIn("make knowledge-apply PLAN=", md)
         self.assertIn("review.html", md)

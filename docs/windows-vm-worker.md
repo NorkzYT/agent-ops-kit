@@ -368,7 +368,7 @@ problem. What is safe to ignore and what must be fixed:
 ## Use it
 
 - Mention the worker bot in Discord: "Open BrowserStack App Live, launch the
-  Velvet iPad build, capture the floor overview and the checkout screen."
+  example iPad build, capture the home screen and the checkout screen."
 - The host's Kanban board does not reach the VM: it is single-host, and a card
   assigned to `windows-operator` there runs the host's profile of that name.
   Builds and tests on Windows go through the `windows-worker` lane, which

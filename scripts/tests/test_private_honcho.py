@@ -54,7 +54,7 @@ class TestPrivateMarker(unittest.TestCase):
             "quoted": req("> #private\ndraft this"),
             "fenced": req("```\n#private\n```\ndraft this"),
             "memory": req("draft this\n<memory-context>\n#private\n</memory-context>"),
-            "backfill": req("[alice] #private notes\n\n[New message]\n[Norkz] draft this"),
+            "backfill": req("[alice] #private notes\n\n[New message]\n[operator] draft this"),
             "system": {"messages": [{"role": "system", "content": "#private"},
                                     {"role": "user", "content": "draft this"}]},
             "earlier-turn": {"messages": [{"role": "user", "content": "#private old"},

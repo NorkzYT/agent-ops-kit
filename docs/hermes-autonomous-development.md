@@ -1,4 +1,4 @@
-# Hermes autonomous development on the Ubuntu dev VM: audit and repair
+# Hermes autonomous development on an Ubuntu dev VM: audit and repair (case study)
 
 > **Superseded (2026-11-04).** This is the historical record of the repair on the old local
 > runtime (`9ebe5777`, a local customized commit, not upstream). The installed runtime is now the
@@ -7,26 +7,31 @@
 > Tirith was removed upstream, so the Tirith settings below are not active. The workflow now uses
 > the native board transport (`docs/discord-kanban-workflow.md`, "Board transport"); statements
 > below about `$HERMES_KANBAN_TASK` in worker shells and CLI board writes describe the old runtime.
+>
+> **Read this as an example, not as a record of your host.** Card ids, run numbers, PIDs,
+> branches, checkout paths and counts below are illustrative placeholders (`<code-card>`,
+> `/opt/repos/example-app`, …). Nothing here asserts the state of any live board, scanner or
+> config; to check your own host, run the commands given in each section.
 
-Scope: why Kanban code cards kept blocking (regression case `t_12595b96`,
-checkout `/opt/repos/validate`, branch `feat/integration-recording-qa`, Mac child
-`t_8e1c1f11`), what in the installed Hermes runtime and in this kit caused it,
+Scope: why Kanban code cards kept blocking (regression case: a code card `<code-card>`,
+checkout `/opt/repos/example-app`, branch `<feature-branch>`, with a Mac child card
+`<mac-child-card>`), what in the installed Hermes runtime and in this kit caused it,
 what changed, how it was tested, and what remains gated on the operator.
 Development environment only; nothing here touches production, secrets or the
 live board.
 
 ## Authoritative files and versions
 
-| Component | Path | Version / state at audit |
+| Component | Path | Example state at audit (record your own with the commands in the text) |
 |-----------|------|--------------------------|
-| Hermes runtime | `~/.hermes/hermes-agent` | v0.21.2 (2026.9.11), branch `feat/discord-channel-org`, base `9ebe5777`; first repair on branch `feat/kanban-supervised-terminal` (`e3e1cd8c`, `2092fedd`, `b6f839c7`, messages carry a `Co-Authored-By` trailer); the reviewed repair is the clean branch `feat/kanban-supervised-terminal-clean` (three commits from `9ebe5777`, same changes plus the review fixes, no trailers), the source of the kit's patches. The live checkout still sits on the first branch until the operator activates the clean one. |
-| Live config | `~/.hermes/config.yaml` | `approvals:` absent (defaults deny), `command_allowlist: [script execution via -e/-c flag]`, `kanban.dispatch_in_gateway: true`, `max_in_progress: 2`, `terminal.cwd: /opt/repos` |
-| Kit | `/opt/repos/claude-code-autopilot` (`NorkzYT/agent-ops-kit`) | branch `feat/default-terra-gpt-6.1` from `7edc0818` |
+| Hermes runtime | `~/.hermes/hermes-agent` | v0.21.2 (2026.9.11), branch `feat/discord-channel-org`, base `9ebe5777`; first repair on branch `feat/kanban-supervised-terminal` (`e3e1cd8c`, `2092fedd`, `b6f839c7`, messages carry a `Co-Authored-By` trailer); the reviewed repair is the clean branch `feat/kanban-supervised-terminal-clean` (three commits from `9ebe5777`, same changes plus the review fixes, no trailers), the source of the kit's patches. At audit time the checkout still sat on the first branch until the operator activated the clean one. |
+| Config | `~/.hermes/config.yaml` (inspect with `hermes config get <key>`) | example: `approvals:` absent (defaults deny), `command_allowlist: [script execution via -e/-c flag]`, `kanban.dispatch_in_gateway: true`, `max_in_progress: 2`, `terminal.cwd: /opt/repos` |
+| Kit | your kit checkout (`NorkzYT/agent-ops-kit`) | a feature branch (`git -C <kit> rev-parse --abbrev-ref HEAD`) |
 | Workflow skill | `hermes/skills/kanban-workflow/scripts/workflow.py`, new `repo_lease.py`, `SKILL.md` 2.2.1 | installed copy under `~/.hermes/skills/agent-ops-kit/kanban-workflow/` (refreshed by `make hermes-dev-workflow-apply`) |
-| Config template | `hermes/config.yaml.tmpl`, rendered by `scripts/hermes-install.sh` | now renders `approvals` (deny), `security.tirith_enabled: true` + `tirith_fail_open: false` (the installed tirith 0.4.2 at `~/.hermes/bin/tirith` answers `check`; the live config leaves Hermes' fail-open default, so an absent scanner would let commands run unscanned), and preserves `command_allowlist` on `--force` |
+| Config template | `hermes/config.yaml.tmpl`, rendered by `scripts/hermes-install.sh` | now renders `approvals` (deny), `security.tirith_enabled: true` + `tirith_fail_open: false` (the installed tirith 0.4.2 at `~/.hermes/bin/tirith` answers `check`; a config without the key leaves Hermes' fail-open default, so an absent scanner would let commands run unscanned), and preserves `command_allowlist` on `--force` |
 | Runtime patches | `hermes/runtime-patches/*.patch`, `scripts/hermes-runtime-patch.sh` | three patches, see README there |
-| Approved CWD scanner | `/usr/local/libexec/hermes-validate-cwd-scan` (root, 0755), sudoers `NOPASSWD` exact, no arguments | fixed to `/opt/repos/validate`; exit 0 none / 1 matches / 2 incomplete; not modified |
-| Approved test DB form | `PGPASSFILE=~/.config/hermes-test-db/pgpass MATCHING_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55443/matching_test?sslmode=disable` | passes the approval scanner as is (`hermes approvals test` verdict: allow) |
+| Approved CWD scanner | example: `/usr/local/libexec/hermes-example-cwd-scan` (root, 0755), sudoers `NOPASSWD` exact, no arguments | bound to one checkout (`/opt/repos/example-app`); exit 0 none / 1 matches / 2 incomplete |
+| Approved test DB form | `PGPASSFILE=~/.config/hermes-test-db/pgpass EXAMPLE_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/example_test?sslmode=disable` | example form; check yours with `hermes approvals test '<command>'` |
 
 ## Incident: what actually happened
 
@@ -44,7 +49,7 @@ The card's log and comments (read only) show four causes, in order of weight.
    `kanban_db.write_txn` (`_assert_not_delegated_child_mutation`) and opened the
    board read-only (`kanban_db_connect.connect`); the model, seeing the board's
    `worker_pid` (its own process) and no identity in its shell, concluded "a
-   separate claimed coordinator run 369 is active (PID 3702260); this session has
+   separate claimed coordinator run <N> is active (PID <pid>); this session has
    no task worker environment" and blocked. The upstream intent (a shell is not a
    board-write grant; test `tests/tools/test_kanban_descendant_scope.py`) is right
    and is preserved.
@@ -282,7 +287,7 @@ invocation (allowed by the scanner without any config change), the in-process
   users' processes, or dirty paths without provenance all stop the card with the
   exact detail.
 
-## Tests (real runs)
+## Tests (results recorded at the time of the repair; re-run them on your checkout)
 
 Hermes (`~/.hermes/hermes-agent`, `venv/bin/python -m pytest -p no:cacheprovider`):
 
@@ -293,7 +298,7 @@ Hermes (`~/.hermes/hermes-agent`, `venv/bin/python -m pytest -p no:cacheprovider
 | `tests/tools/test_single_query_approval_mode.py` (+7), `tests/agent/test_kanban_stop.py` (+5), `tests/tools/test_snapshot_*` | 48 passed |
 | Broad regression (kanban tools/CLI/db, delegation, approvals, environments, terminal, cron isolation) | 876 passed, 20 skipped, 1 failed: `test_terminal_yield_to_background::test_redirect_mid_command…` — flaky; passes alone twice on the patched tree and on a clean baseline worktree |
 
-Kit (`/opt/repos/claude-code-autopilot`):
+Kit (repository root):
 
 | Suite | Result |
 |-------|--------|
@@ -303,7 +308,7 @@ Kit (`/opt/repos/claude-code-autopilot`):
 | `scripts/test_hermes_runtime_patch.sh` | 24 passed |
 | `scripts/test_hermes_install.sh` (+7: approvals deny, empty allowlist, `--force` keeps live entries) | 47 passed |
 | `scripts/tests/test_makefile.py` | 22 OK |
-| Live, read-only: real scanner via `repo_lease.run_scan` + `classify_scan` on `/opt/repos/validate` | complete, 510 process dirs, 0 matches, ok |
+| Read-only scanner check, to verify on your host: from `hermes/skills/kanban-workflow/scripts`, `python3 -c 'import repo_lease as r, json; print(json.dumps(r.classify_scan(r.run_scan("<checkout>")), default=str))'` | expect `status: complete` and no blocking match; `incomplete` means unreadable `/proc` entries (register the privileged scanner) |
 
 ## Review fixes (second pass)
 
@@ -363,15 +368,15 @@ Blockers found in review of the first pass and how they were closed:
    review in an isolated checkout (`make hermes-runtime-patch-apply SRC=<isolated>`),
    then deploy only with authorization (docs/hermes-source-management.md).
 3. Register the scanner once:
-   `python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py register-scanner /opt/repos/validate -- sudo -n /usr/local/libexec/hermes-validate-cwd-scan`.
-4. For `t_12595b96`: bootstrap provenance of the preserved work from the
-   authorized manifest, in the card's own worker terminal:
-   `workflow.py adopt <code card> --repo-dir /opt/repos/validate --manifest /tmp/validate-t_12595b96-preserved-sha256.json`
+   `python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py register-scanner /opt/repos/example-app -- sudo -n /usr/local/libexec/hermes-example-cwd-scan`.
+4. For a card with preserved uncommitted work (`<code-card>`): bootstrap provenance of that
+   work from the authorized manifest, in the card's own worker terminal:
+   `workflow.py adopt <code-card> --repo-dir /opt/repos/example-app --manifest <preserved-sha256.json>`
    (refuses if any listed file changed since; unlisted dirty paths are reported and
    stay a conflict until recorded or decided). That card is not a kit workflow card
-   (no `Workflow: code` header); either re-intake with `--checkout /opt/repos/validate
-   --branch feat/integration-recording-qa --base 3752788a…` or run `repo_lease.py`
-   directly with `--task t_12595b96`.
+   (no `Workflow: code` header); either re-intake with `--checkout /opt/repos/example-app
+   --branch <feature-branch> --base <base-sha>` or run `repo_lease.py`
+   directly with `--task <code-card>`.
 5. `make hermes-restart` from the operator's own terminal (not from inside Hermes).
 
 Rollback: `git -C ~/.hermes/hermes-agent switch feat/discord-channel-org` (or
@@ -382,8 +387,8 @@ metadata and can be deleted; nothing in any repository was changed by this work.
 
 ## Remaining gates and gaps
 
-- Live activation (skill copy refresh, scanner registration, patch status,
-  gateway restart) is the operator's/parent's step; nothing live was changed.
+- Activation (skill copy refresh, scanner registration, patch status,
+  gateway restart) is the operator's step; the repair itself changed nothing live.
 - The supervised-terminal grant is Linux-only (`/proc` ancestry); on the Mac
   worker it is simply never granted (unchanged behaviour there).
 - `adopt` keys on worktree content hashes (the operator's manifest form); the
@@ -393,7 +398,7 @@ metadata and can be deleted; nothing in any repository was changed by this work.
   process that launches a real VS Code server detached from any agent is indistinguishable;
   a process writing into a checkout without its CWD there is not scanned; commands in a
   trusted terminal are only as safe as the ungranted rules that classify them (no endless
-  denylist). The root scanner is the one installed helper bound to `/opt/repos/validate`;
+  denylist). In the example the root scanner is one installed helper bound to `/opt/repos/example-app`;
   other checkouts use the unprivileged `/proc` fallback (other users' processes unknown), so
   the policy is not all-repository privileged visibility.
 - Passive classification outside verified VS Code chains (with or without the policy): the pre-PR28 names with the image,
@@ -406,8 +411,8 @@ metadata and can be deleted; nothing in any repository was changed by this work.
   `air` and `turbo dev` run project commands by design; idle shells pass. Other users'
   processes block (their `/proc/<pid>/exe` is unreadable).
 - Scanner root binding: the approved helper prints no root, so a PASS is accepted only when
-  the helper's root-owned source declares `REPOSITORY = "<this checkout>"`. The live helper
-  is bound to `/opt/repos/validate`; any other checkout needs a root-installed helper
+  the helper's root-owned source declares `REPOSITORY = "<this checkout>"`. A helper
+  is bound to one checkout (`/opt/repos/example-app` in the example); any other checkout needs a root-installed helper
   bound to it (not provided here).
 - Own git reads: `status` runs as git does on every checkout, with or without the policy
   (repository filters normalize as before PR28; `OWN_GIT_NEUTRALIZE_FILTERS` is off, its
@@ -424,18 +429,18 @@ metadata and can be deleted; nothing in any repository was changed by this work.
   three test files in the patches are the contract to rebase against.
 - `test_terminal_yield_to_background` flakiness is pre-existing and unrelated.
 
-## Follow-up: scanner rejection of the approved PostgreSQL tests (run 370)
+## Follow-up: scanner rejection of the approved PostgreSQL tests
 
-Run 370 adopted its work and then blocked on a Tirith `warn` (`raw_ip_url` +
+The next run adopted its work and then blocked on a Tirith `warn` (`raw_ip_url` +
 `schemeless_to_sink`, MEDIUM) that the single-query deny mode turns into a block, for
-the operator-approved `PGPASSFILE=… MATCHING_TEST_DATABASE_URL=postgresql://…@127.0.0.1:55443/…
+the operator-approved `PGPASSFILE=… EXAMPLE_TEST_DATABASE_URL=postgresql://…@127.0.0.1:55432/…
 go test` command. Repair: runtime patch 0004 (`dev_test_run`, recovery directive,
 `kanban_block` recovery refusal, credential and production-database guards) and the
 root-owned, digest-pinned runner with its Landlock/seccomp sandbox. Root cause, design,
 threat limits, install and smoke: [dev-test-runner.md](dev-test-runner.md). **An independent
 review rejected that candidate's same-uid isolation for install**; it now fails closed
-(runner, installer, runtime tool; all carried in the combined patch 0004 = `git diff
-4f845b43ec..61cbead82d`, there is no patch 0005) and `t_12595b96` stays blocked until a revision
+(runner, installer, runtime tool; all carried in the combined patch 0004, a neutralized
+derivative of `git diff 4f845b43ec..61cbead82d`; there is no patch 0005) and such a card stays blocked until a revision
 of the *proposed* (not approved, not implemented) credential-broker/network-namespace design in
 that page is approved by the operator, implemented, provisioned and attested. A registry that
 merely declares the proposed mode is not readiness.

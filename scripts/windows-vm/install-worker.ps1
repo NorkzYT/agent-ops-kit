@@ -19,12 +19,12 @@
   Run from an elevated PowerShell in the VM's console/RDP session (not SSH):
     Set-ExecutionPolicy -Scope Process Bypass -Force
     .\install-worker.ps1 -HostAddress 100.64.0.1 -CliProxyApiKey <key> `
-        -DiscordBotToken <token> -AllowedUsers 282100214024896522
+        -DiscordBotToken <token> -AllowedUsers 123456789012345678
 
   To share the host's Honcho, add -UseHostHoncho on a continued line. End each
   preceding line with a backtick so PowerShell joins the continuation:
     .\install-worker.ps1 -HostAddress 100.64.0.1 -CliProxyApiKey <key> `
-        -DiscordBotToken <token> -AllowedUsers 282100214024896522 `
+        -DiscordBotToken <token> -AllowedUsers 123456789012345678 `
         -UseHostHoncho
 
   Host prerequisites (do these on the Linux host, NOT here — this script never
@@ -46,7 +46,7 @@ param(
   [Parameter(Mandatory = $true)] [string] $CliProxyApiKey,
   [Parameter(Mandatory = $true)] [string] $DiscordBotToken,
   [Parameter(Mandatory = $true)] [string] $AllowedUsers,
-  [string] $Model = "gpt-5.6-sol",
+  [string] $Model = "gpt-6.1-terra",
   [int]    $CliProxyPort = 8317,
   [int]    $HonchoPort = 8000,
   [string] $PeerName = "me",
@@ -63,6 +63,22 @@ param(
   [string] $ChromeExePath = ""
 )
 $ErrorActionPreference = "Stop"
+
+# GPT model floor: every kit-managed GPT call is version 6.1 or newer, family Terra or
+# higher (scripts/lib/model_floor.py). A below-floor -Model (gpt-5.6-*, gpt-6-astra, a
+# luna id or a non-canonical spelling such as gpt-6-1-terra) is refused before anything
+# is written; it is never replaced by another model.
+$floorMatch = [regex]::Match($Model, '^gpt-(0|[1-9][0-9]{0,2})(?:\.(0|[1-9][0-9]{0,2}))?-(terra|sol|astra)$')
+$floorOk = $false
+if ($floorMatch.Success) {
+  $floorMajor = [int]$floorMatch.Groups[1].Value
+  $floorMinor = 0
+  if ($floorMatch.Groups[2].Success) { $floorMinor = [int]$floorMatch.Groups[2].Value }
+  $floorOk = ($floorMajor -gt 6) -or ($floorMajor -eq 6 -and $floorMinor -ge 1)
+}
+if (-not $floorOk) {
+  throw "-Model '$Model' is below the GPT model floor (6.1 or newer, Terra or higher; default gpt-6.1-terra)."
+}
 
 # Chrome DevTools MCP is an explicit, security-sensitive opt-in. Validate the grant and
 # warn about what CDP exposes BEFORE any config is written, so the operator confirms the

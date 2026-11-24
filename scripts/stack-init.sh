@@ -26,6 +26,17 @@ ensure_secret HONCHO_DB_PASSWORD .env
 # Bearer secret for the host claude-max-proxy (auth on /v1/* and admin/ops).
 ensure_secret CLAUDE_MAX_PROXY_API_KEY .env
 
+# GPT model floor (6.1+, Terra or higher) for Honcho's reasoning models: a stale
+# HONCHO_MODEL is refused before `make up` starts Honcho on it, never swapped.
+# docker compose interpolates ${HONCHO_MODEL} from the shell before .env, so an
+# exported shell value is checked too (it would win over a migrated .env).
+python3 "$ROOT/scripts/lib/model_floor.py" check "HONCHO_MODEL=$(env_file_get HONCHO_MODEL .env 2>/dev/null || true)" \
+  || die ".env HONCHO_MODEL is below the GPT model floor. Plan the update: python3 scripts/model-floor-migrate.py --env-file .env"
+if [[ -n "${HONCHO_MODEL+x}" ]]; then
+  python3 "$ROOT/scripts/lib/model_floor.py" check "shell HONCHO_MODEL=$HONCHO_MODEL" \
+    || die "HONCHO_MODEL exported in this shell is below the GPT model floor and would override .env for docker compose: unset HONCHO_MODEL"
+fi
+
 mkdir -p data/cliproxyapi/auths data/cliproxyapi/logs
 # render_template (lib.sh) escapes | \ & in the substituted values, so a key
 # that happens to contain sed metacharacters cannot break out of the s/// or

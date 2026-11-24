@@ -107,13 +107,14 @@ reinstall the previous plugin files from the `specialist-install` backup.
 
 ### Prerequisite
 
-`jsonschema>=4.10.3,<5` (`scripts/requirements-capabilities.txt`). Observed
-read-only on host `polymath-dev` only (2026-11-05 UTC), per interpreter:
+`jsonschema>=4.10.3,<5` (`scripts/requirements-capabilities.txt`). Example
+values from one reference Ubuntu 24.04 host, per interpreter:
 `/usr/bin/python3` 3.12.3 with jsonschema 4.10.3 (apt `python3-jsonschema`
 4.10.3-2ubuntu1); the Hermes venv Python 3.12.3 with 4.26.0. These are not
-claims about another host or interpreter (a different environment reported a
-different system version); the manifest records them as observations, not
-requirements. Nothing is installed: `preflight` and `apply` check the actual
+claims about your host or interpreter (other environments ship other system
+versions); the manifest records them as examples, not requirements. To verify
+on your host run, per interpreter,
+`<python> -I -c 'import sys, jsonschema; print(sys.version.split()[0], jsonschema.__version__)'`. Nothing is installed: `preflight` and `apply` check the actual
 interpreter the skills will use (`--python`) on the actual host and refuse when
 jsonschema is missing or outside the range, or when that interpreter's version
 does not satisfy the manifest's `python` prerequisite (`>=3.10`). Both versions
@@ -258,7 +259,7 @@ disposable home.
 1. Independent review of the source change (the restricted-review boundary is
    not accepted; no unrestricted host reviewer has been used).
 2. The existing secure-execution repair gates that apply to this checkout
-   (canonical checkout reserved by t_9428ae5f).
+   (for example, a canonical checkout reserved by another card).
 3. Commit and push to the feature branch only after that review passes.
 4. An explicit operator approval bound to the manifest SHA-256 and the target
    home, plus the interpreter that will run `$KIT/scripts`.

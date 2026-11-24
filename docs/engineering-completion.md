@@ -164,7 +164,7 @@ unknown.
    runtime does not provide an unambiguous one (a shared owner process, a
    sibling bound to the same chain) they stop with exit 3 `capability:` while
    the board transport keeps working.
-4. Database tests for Validate: `dev_test_run` was rejected in review and fails
+4. Database tests for example-app: `dev_test_run` was rejected in review and fails
    closed; the approved broker/netns design needs operator root provisioning.
    Until then a card that needs them stops with `capability:` (genuine).
 
@@ -183,16 +183,16 @@ unknown.
 ### D. Remaining source, installation and validation steps
 
 1. Bounded independent review of this diff (criteria below), fixes for
-   blocking findings only, commit and push on `feat/default-terra-gpt-6.1`.
+   blocking findings only, commit and push on the feature branch.
 2. Operator: `make hermes-dev-workflow-plan`, then `make hermes-dev-workflow-apply`.
 3. Patch manager: record the pinned base from an isolated upstream clone, real
    review entries, `make hermes-runtime-patch-apply SRC=<isolated>`, then an
    authorized install (docs/hermes-source-management.md).
-4. Execution environment for Validate's Go/PostgreSQL tests (B.4).
+4. Execution environment for example-app's Go/PostgreSQL tests (B.4).
 
 ### E. Earliest safe end-to-end task
 
-`t_12595b96` (Validate, preserved Mac child `t_8e1c1f11`) once its execution
+A blocked code card with preserved work (example-app, with a Mac child card) once its execution
 environment is approved (B.3, B.4) and its checkout's ownership is established
 by `preflight`. The coordinator then runs `completion status`, records the
 recovered criteria, finishes tests and fixes, reviews the full diff, commits,
@@ -246,8 +246,7 @@ installed runtime (71736c9f) is handled by the native board transport (above);
 live readiness is not asserted (no live card has run it).
 
 Broader Hermes regression suite: five failures on the candidate runtime source,
-classified in the preserved report
-`~/.hermes/kanban/workspaces/t_9428ae5f/timeout-recovery-1567165356152332298/five-failure-classification-20261104.md`:
+classified in an operator-side report (not shipped with the kit):
 four introduced by the candidate ownership slice (`prior_owner_gone` strands
 crashed cards; needs an attested drain path), one preexisting test-isolation
 leak (provenance ContextVar). The installed 71736c9f has no such slice. The

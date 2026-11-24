@@ -949,7 +949,7 @@ def _root_owned_executable(path: str, what: str) -> str:
 def declared_repository(text: str) -> Optional[str]:
     """The checkout a helper's source binds it to: exactly one assignment to REPOSITORY in the
     whole file, at module level, of a normalized absolute string literal (the approved helper's
-    `REPOSITORY = "/opt/repos/validate"`). Anything else (no declaration, two, a computed value,
+    `REPOSITORY = "/opt/repos/example-app"`). Anything else (no declaration, two, a computed value,
     a nested or augmented assignment, not Python) is None: no binding."""
     try:
         tree = ast.parse(text)

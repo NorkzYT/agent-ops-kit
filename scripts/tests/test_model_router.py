@@ -128,7 +128,7 @@ class TestPrivacyMarker(unittest.TestCase):
 
     def test_marker_in_current_turn(self):
         for text in ("#privacy draft this", "draft this #privacy", "#PRIVACY\ndraft this",
-                     "[Norkz] draft this (#privacy)", "#privacy, draft this"):
+                     "[operator] draft this (#privacy)", "#privacy, draft this"):
             with self.subTest(text=text):
                 self.assertTrue(self._private(req(text)))
         self.assertEqual(marker.decide(req("#privacy x")).reasons, ("marker",))
@@ -149,7 +149,7 @@ class TestPrivacyMarker(unittest.TestCase):
             "earlier-user-turn": req("#privacy old secret task", "now implement the parser"),
             "memory": req("draft this\n<memory-context>\n#privacy\n</memory-context>"),
             "attached-context": req("draft this\n--- Attached Context ---\n#privacy"),
-            "backfill": req("[alice] #privacy notes\n\n[New message]\n[Norkz] draft this"),
+            "backfill": req("[alice] #privacy notes\n\n[New message]\n[operator] draft this"),
             "reply-quote": req('[Replying to: "#privacy notes"]\ndraft this'),
             "quoted": req("> #privacy\ndraft this"),
             "fenced": req("```\n#privacy\n```\ndraft this"),
@@ -336,111 +336,100 @@ class TestComplexity(unittest.TestCase):
         self.assertEqual(complexity.score_request(req("#quick big architecture migration rewrite")).tier, "routine")
 
     def test_gpt_tier_models(self):
-        # Balanced policy: luna covers routine only, terra covers ordinary
-        # execution and ambiguous/planning, sol the hard tier, astra explicit-only.
-        self.assertEqual(complexity.resolve_model("routine", family="gpt"), "gpt-5.6-luna")
+        # Floor policy: Terra covers routine, ordinary execution and
+        # ambiguous/planning; Sol (newest eligible) the hard tier; Astra
+        # (newest eligible) explicit-only. Nothing below 6.1 or below Terra.
+        self.assertEqual(complexity.resolve_model("routine", family="gpt"), "gpt-6.1-terra")
         self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-6.1-terra")
         self.assertEqual(complexity.resolve_model("elevated", family="gpt"), "gpt-6.1-terra")
-        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.1-sol")
+        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.2-sol")
         # Without explicit authorization the max tier clamps to the Sol ceiling.
-        self.assertEqual(complexity.resolve_model("max", family="gpt"), "gpt-6.1-sol")
-        self.assertEqual(complexity.resolve_model("max", family="gpt", allow_max=True), "gpt-6-astra")
+        self.assertEqual(complexity.resolve_model("max", family="gpt"), "gpt-6.2-sol")
+        self.assertEqual(complexity.resolve_model("max", family="gpt", allow_max=True), "gpt-6.2-astra")
+        for model in complexity.GPT_TIER_MODELS.values():
+            self.assertTrue(complexity.gpt_model_eligible(model), model)
 
     def test_coding_tier_models(self):
         self.assertEqual(complexity.resolve_model("routine", family="coding"), "opus")
         self.assertEqual(complexity.resolve_model("medium", family="coding"), "opus")
         self.assertEqual(complexity.resolve_model("high", family="coding"), "fable")
 
-    def test_degrade_when_unavailable(self):
-        # astra gone -> step down to sol (authorized max degrades too)
-        self.assertEqual(
-            complexity.resolve_model("max", family="gpt", allow_max=True,
-                                     available=["gpt-6.1-terra", "gpt-5.6-luna", "gpt-6.1-sol"]),
-            "gpt-6.1-sol",
-        )
+    def test_degraded_catalog_refuses_instead_of_degrading(self):
+        # Authorized Astra with no eligible Astra advertised: None (refuse),
+        # never a Sol or Terra stand-in.
+        self.assertIsNone(complexity.resolve_model(
+            "max", family="gpt", allow_max=True, available=["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]))
 
-    def test_sol_prefers_6_1_over_5_6_when_both_live(self):
-        live = ["gpt-5.6-luna", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-6.1-sol", "gpt-6-astra"]
-        self.assertEqual(complexity.resolve_model("high", family="gpt", available=live), "gpt-6.1-sol")
-        self.assertEqual(complexity.resolve_model("max", family="gpt", available=live), "gpt-6.1-sol")
+    def test_sol_prefers_newest_eligible(self):
+        live = ["gpt-5.6-luna", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6-astra"]
+        self.assertEqual(complexity.resolve_model("high", family="gpt", available=live), "gpt-6.2-sol")
+        self.assertEqual(complexity.resolve_model("max", family="gpt", available=live), "gpt-6.2-sol")
+        self.assertEqual(complexity.resolve_model("high", family="gpt",
+                                                  available=["gpt-6.1-terra", "gpt-6.1-sol"]), "gpt-6.1-sol")
 
-    def test_sol_falls_back_to_5_6_only_when_6_1_absent(self):
-        # gpt-6.1-sol not advertised: same-tier fallback before leaving the tier.
-        live = ["gpt-5.6-luna", "gpt-6.1-terra", "gpt-5.6-sol", "gpt-6-astra"]
-        self.assertEqual(complexity.resolve_model("high", family="gpt", available=live), "gpt-5.6-sol")
-        # Unauthorized max still clamps to Sol (the fallback), never Astra.
-        self.assertEqual(complexity.resolve_model("max", family="gpt", available=live), "gpt-5.6-sol")
-        # Authorized max degrades astra -> 6.1-sol -> 5.6-sol.
-        self.assertEqual(
-            complexity.resolve_model("max", family="gpt", allow_max=True,
-                                     available=["gpt-6.1-terra", "gpt-5.6-sol"]),
-            "gpt-5.6-sol",
-        )
-        # Neither Sol: the walk steps down to terra, as before.
-        self.assertEqual(
-            complexity.resolve_model("high", family="gpt", available=["gpt-6.1-terra", "gpt-5.6-luna"]),
-            "gpt-6.1-terra",
-        )
-        # Upward walk also honours the fallback (only Sol 5.6 live).
-        self.assertEqual(
-            complexity.resolve_model("routine", family="gpt", available=["gpt-5.6-sol"]),
-            "gpt-5.6-sol",
-        )
-        # Fallback is GPT-only and unused when the live set is unknown.
-        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.1-sol")
+    def test_no_below_floor_fallback_for_any_tier(self):
+        old = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.0-sol", "gpt-6.1-luna"]
+        for tier in complexity.TIERS:
+            for allow in (False, True):
+                with self.subTest(tier=tier, allow_max=allow):
+                    self.assertIsNone(complexity.resolve_model(tier, family="gpt", available=old,
+                                                               allow_max=allow))
+        # Terra absent: ordinary work is refused, not moved up to Sol or Astra.
+        for tier in ("routine", "medium", "elevated"):
+            self.assertIsNone(complexity.resolve_model(tier, family="gpt",
+                                                       available=["gpt-6.2-sol", "gpt-6.2-astra"],
+                                                       allow_max=True))
+        # Sol absent: hard work is refused, not moved down to Terra.
+        self.assertIsNone(complexity.resolve_model("high", family="gpt", available=["gpt-6.1-terra"]))
+        # Coding family is unchanged and ignores GPT ids.
         self.assertIsNone(complexity.resolve_model("high", family="coding", available=["gpt-5.6-sol"]))
 
-    def test_terra_prefers_6_1_over_5_6_when_both_live(self):
-        live = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"]
-        for tier in ("medium", "elevated"):
+    def test_terra_is_pinned_not_upgraded(self):
+        live = ["gpt-6.1-terra", "gpt-6.2-terra", "gpt-6.2-sol"]
+        for tier in ("routine", "medium", "elevated"):
             with self.subTest(tier=tier):
                 self.assertEqual(complexity.resolve_model(tier, family="gpt", available=live), "gpt-6.1-terra")
 
-    def test_terra_falls_back_to_5_6_same_tier_without_escalation(self):
-        # Only Terra 5.6 at the Terra tier: same-tier fallback, never Sol or Luna.
-        live = ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-6.1-sol", "gpt-5.6-sol", "gpt-6-astra"]
-        for tier in ("medium", "elevated"):
-            with self.subTest(tier=tier):
-                self.assertEqual(complexity.resolve_model(tier, family="gpt", available=live), "gpt-5.6-terra")
-        # Only gpt-5.6-terra live at all: medium/elevated pick it, no escalation path needed.
-        for tier in ("medium", "elevated"):
-            with self.subTest(tier=tier, only="5.6-terra"):
-                self.assertEqual(complexity.resolve_model(tier, family="gpt", available=["gpt-5.6-terra"]),
-                                 "gpt-5.6-terra")
-        # Unknown live set: primary trusted, fallback unused; coding family never uses it.
-        self.assertEqual(complexity.resolve_model("medium", family="gpt"), "gpt-6.1-terra")
-        self.assertIsNone(complexity.resolve_model("medium", family="coding", available=["gpt-5.6-terra"]))
-
-    def test_degrade_never_upgrades(self):
-        # only terra available; requesting high degrades DOWN to terra
-        self.assertEqual(
-            complexity.resolve_model("high", family="gpt", available=["gpt-6.1-terra"]),
-            "gpt-6.1-terra",
-        )
-
     def test_missing_lower_models_never_upshift_to_astra(self):
-        # Only astra advertised: the upward walk must NOT silently pick it.
-        self.assertIsNone(
-            complexity.resolve_model("routine", family="gpt", available=["gpt-6-astra"])
-        )
-        # With explicit authorization the upward walk may reach it.
-        self.assertEqual(
-            complexity.resolve_model("routine", family="gpt", available=["gpt-6-astra"],
-                                     allow_max=True),
-            "gpt-6-astra",
-        )
+        self.assertIsNone(complexity.resolve_model("routine", family="gpt", available=["gpt-6.2-astra"]))
+        self.assertIsNone(complexity.resolve_model("high", family="gpt", available=["gpt-6.2-astra"]))
+        # Even authorized, a routine task never upshifts to Astra by availability.
+        self.assertIsNone(complexity.resolve_model("routine", family="gpt", available=["gpt-6.2-astra"],
+                                                   allow_max=True))
+
+    def test_eligibility_floor(self):
+        for ok in ("gpt-6.1-terra", "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra", "gpt-7-terra",
+                   "gpt-6.10-sol"):
+            self.assertTrue(complexity.gpt_model_eligible(ok), ok)
+            self.assertFalse(complexity.gpt_below_floor(ok), ok)
+        for bad in ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra", "gpt-6.0-sol",
+                    "gpt-6.1-luna", "gpt-6-1-terra", "GPT-6.1-TERRA", "gpt-6.1-terra-preview",
+                    "openai/gpt-5.6-sol", "openai/GPT-6.1-terra", "gpt-4o", "luna"):
+            self.assertFalse(complexity.gpt_model_eligible(bad), bad)
+            self.assertTrue(complexity.gpt_below_floor(bad), bad)
+        # Unrelated local ids that merely start with "gpt" are not OpenAI GPT ids.
+        for other in ("opus", "fable", "qwen3.5:27b", "terra", "sol", "astra", "", "gpt4all",
+                      "gpt4all-13b-snoozy", "ollama/gpt4all", "gpt-oss:20b", "gptq-llama"):
+            self.assertFalse(complexity.gpt_below_floor(other), other)
+        # A provider-prefixed id at or above the floor is kept literally: not
+        # refused, not normalized, and not treated as a routable family id.
+        for kept in ("openai/gpt-6.1-terra", "openrouter/gpt-6.2-sol"):
+            self.assertFalse(complexity.gpt_below_floor(kept), kept)
+            self.assertFalse(complexity.gpt_model_eligible(kept), kept)
+            self.assertIsNone(complexity.alias_to_tier(kept), kept)
 
     def test_alias_to_tier(self):
-        self.assertEqual(complexity.alias_to_tier("gpt-5.6-luna"), "routine")
-        self.assertEqual(complexity.alias_to_tier("luna"), "routine")
         self.assertEqual(complexity.alias_to_tier("gpt-6.1-terra"), "elevated")
-        self.assertEqual(complexity.alias_to_tier("gpt-5.6-terra"), "elevated")
         self.assertEqual(complexity.alias_to_tier("terra"), "elevated")
         self.assertEqual(complexity.alias_to_tier("gpt-6.1-sol"), "high")
-        self.assertEqual(complexity.alias_to_tier("gpt-5.6-sol"), "high")
+        self.assertEqual(complexity.alias_to_tier("gpt-6.2-sol"), "high")
         self.assertEqual(complexity.alias_to_tier("sol"), "high")
-        self.assertEqual(complexity.alias_to_tier("gpt-6-astra"), "max")
+        self.assertEqual(complexity.alias_to_tier("gpt-6.2-astra"), "max")
         self.assertEqual(complexity.alias_to_tier("fable"), "high")
+        # Below-floor ids are not managed (refused at the execution seam).
+        for legacy in ("gpt-5.6-luna", "luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra",
+                       "gpt-6-1-terra"):
+            self.assertIsNone(complexity.alias_to_tier(legacy), legacy)
         self.assertIsNone(complexity.alias_to_tier("some-unknown-model"))
 
 
@@ -638,7 +627,7 @@ class TestPrivateRefusalIsTerminal(unittest.TestCase):
         spy = _Spy()
         with self.assertLogs("hermes.plugin.model_router", level="WARNING") as logs:
             resp = r.on_llm_execution(request=req(f"#privacy card {PAN}"), next_call=spy, session_id="inc",
-                                      base_url="http://127.0.0.1:8317/v1", model="gpt-5.6-luna")
+                                      base_url="http://127.0.0.1:8317/v1", model="gpt-6.1-terra")
         self.assertIn("private->refuse (local unavailable: timeout)", "\n".join(logs.output))
         self.assertEqual((spy.calls, spy.bytes), (0, 0), "private payload reached a cloud provider")
         self.assertEqual(local_calls, ["qwen3.5:27b", "qwen3.6:27b"])  # role model + one local fallback
@@ -666,7 +655,9 @@ class TestPrivateRefusalIsTerminal(unittest.TestCase):
             "local-endpoint-not-local": (self._router(factory, ollama_base_url="https://api.example.com/v1"),
                                          req(f"#privacy ssn {SSN}")),
             "astra-unauthorized": (self._router(factory, astra_policy="never"),
-                                   {"model": "gpt-6-astra", "messages": [{"role": "user", "content": "hi"}]}),
+                                   {"model": "gpt-6.2-astra", "messages": [{"role": "user", "content": "hi"}]}),
+            "model-below-floor": (self._router(factory),
+                                  {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "hi"}]}),
         }
         guard = self._router(factory)
         guard.is_private = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
@@ -680,6 +671,51 @@ class TestPrivateRefusalIsTerminal(unittest.TestCase):
                 self.assertEqual(resp._model_router_refusal_reason, reason)
                 self.assertNotEqual(resp.choices[0].finish_reason, "content_filter")
                 self.assertTrue(resp.choices[0].message.content.strip())
+
+    def test_model_floor_gate_at_execution_seam(self):
+        # Main-loop provider fallback swaps agent.model in place and re-enters
+        # llm_execution: a below-floor or unknown GPT fallback is refused unsent,
+        # with routing on or off, whatever the request shape.
+        factory, _ = _local_down("timeout")
+        msgs = [{"role": "user", "content": "hi"}]
+        refused = {
+            "gpt-5.6-sol": {"model": "gpt-5.6-sol", "messages": msgs},
+            "openai/gpt-5.6-luna": {"model": "openai/gpt-5.6-luna", "messages": msgs},
+            "gpt-6-1-terra": {"model": "gpt-6-1-terra", "messages": msgs},
+            "GPT-6.1-TERRA": {"model": "GPT-6.1-TERRA", "messages": msgs},
+            "openrouter/openai/gpt-5.6-sol": {"model": "openrouter/openai/gpt-5.6-sol", "messages": msgs},
+            "openrouter/openai/gpt-5.4-mini": {"model": "openrouter/openai/gpt-5.4-mini", "messages": msgs},
+            "openai:gpt-5.6-luna": {"model": "openai:gpt-5.6-luna", "messages": msgs},
+            "azure-gpt-4o": {"model": "azure-gpt-4o", "messages": msgs},
+            "gpt-latest": {"model": "gpt-latest", "messages": msgs},
+        }
+        for routing in (True, False):
+            for name, request in refused.items():
+                with self.subTest(model=name, routing=routing):
+                    spy = _Spy()
+                    resp = self._router(factory, complexity_routing=routing).on_llm_execution(
+                        request=dict(request), next_call=spy, session_id="fb",
+                        base_url="http://127.0.0.1:8317/v1", model=name)
+                    self.assertEqual(spy.calls, 0)
+                    self.assertEqual(resp._model_router_refusal_reason, "model-below-floor")
+            # A non-dict request (other API shapes) is judged by the agent model.
+            spy = _Spy()
+            resp = self._router(factory, complexity_routing=routing).on_llm_execution(
+                request=SimpleNamespace(messages=msgs), next_call=spy, session_id="nd",
+                base_url="http://127.0.0.1:8317/v1", model="gpt-5.6-luna")
+            self.assertEqual(spy.calls, 0)
+            self.assertEqual(resp._model_router_refusal_reason, "model-below-floor")
+        # Eligible, wrapped eligible, Claude and local ids pass through unchanged
+        # (as written: no prefix stripped, no proxy capability assumed).
+        for model in ("gpt-6.1-terra", "openai/gpt-6.1-terra", "openrouter/openai/gpt-6.2-sol",
+                      "azure:gpt-6.1-terra", "opus", "gpt4all", "gpt-oss:20b", "ollama/gpt-oss:20b"):
+            with self.subTest(model=model):
+                seen = []
+                out = self._router(factory, complexity_routing=False).on_llm_execution(
+                    request={"model": model, "messages": msgs}, next_call=lambda p: seen.append(p) or "OK",
+                    session_id="ok", base_url="http://127.0.0.1:8317/v1", model=model)
+                self.assertEqual(out, "OK")
+                self.assertEqual(seen[0]["model"], model)
 
     def test_empty_local_content_is_a_local_failure_not_an_answer(self):
         body = b'{"model": "qwen3.5:27b", "choices": [{"message": {"content": "  "}}]}'
@@ -757,7 +793,7 @@ def run(privacy, request, terminal):
                                         base_url="http://127.0.0.1:8317/v1", api_mode="chat_completions")
 
 cloud = []
-private = {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "#privacy card 4242 4242 4242 4242"}]}
+private = {"model": "gpt-6.1-terra", "messages": [{"role": "user", "content": "#privacy card 4242 4242 4242 4242"}]}
 resp = run(True, private, lambda p: cloud.append(p))
 agent = SimpleNamespace(api_mode="chat_completions", _get_transport=lambda: get_transport("chat_completions"),
                         _should_treat_stop_as_truncated=lambda *a, **k: False)
@@ -769,7 +805,7 @@ legacy = lb.make_response("x", model="m", finish_reason="content_filter")
 out["legacy_finish_reason"] = _derive_finish_reason(agent, legacy, private["messages"])
 
 sent = []
-later = {"model": "gpt-5.6-luna", "messages": private["messages"] + [
+later = {"model": "gpt-6.1-terra", "messages": private["messages"] + [
     {"role": "assistant", "content": "local answer"}, {"role": "user", "content": "now write the notes"}]}
 run(True, later, lambda p: sent.append(p) or lb.make_response("cloud", model="c"))
 out["public_after_private_calls"] = len(sent)
@@ -780,7 +816,7 @@ for privacy in (False, True):
     def boom(p):
         raise err
     try:
-        run(privacy, {"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "hello"}]}, boom)
+        run(privacy, {"model": "gpt-6.1-terra", "messages": [{"role": "user", "content": "hello"}]}, boom)
         out[f"exc_privacy_{privacy}"] = "none"
     except TimeoutError as caught:
         out[f"exc_privacy_{privacy}"] = "same" if caught is err else "different"
@@ -819,7 +855,7 @@ class TestComplexityRewrite(unittest.TestCase):
             base_url="http://127.0.0.1:8317/v1",
         )
         self.assertIsNotNone(out)
-        self.assertIn(out["request"]["model"], ("gpt-6.1-sol", "gpt-6-astra"))
+        self.assertEqual(out["request"]["model"], "gpt-6.2-sol")
 
     def test_coding_family_high_picks_fable(self):
         r = _router()

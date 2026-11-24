@@ -42,6 +42,10 @@ pass=0; fail=0
 ck() { if eval "$2"; then printf '  ok   %s\n' "$1"; pass=$((pass+1)); else printf '  FAIL %s\n' "$1"; fail=$((fail+1)); fi; }
 
 ck "installer script exists" "[[ -f '$ps1' ]]"
+ck "default -Model is the Terra floor (gpt-6.1-terra)" \
+  "grep -qF '[string] \$Model = \"gpt-6.1-terra\",' '$ps1'"
+ck "below-floor -Model is refused before config is written" \
+  "grep -qF 'is below the GPT model floor' '$ps1' && (( \$(grep -n 'is below the GPT model floor' '$ps1' | head -1 | cut -d: -f1) < \$(grep -n 'default: \$Model' '$ps1' | cut -d: -f1) ))"
 
 # Executable lines only (drop PowerShell line comments) so guards match real
 # code, not the comment that documents the fix.

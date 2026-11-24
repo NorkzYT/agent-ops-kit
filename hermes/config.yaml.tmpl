@@ -218,8 +218,8 @@ auxiliary:
     reasoning_effort: low
     fallback_chain: __AUX_FALLBACK_CHAIN__
   # Compression (AUX_COMPRESSION_ROUTE). Default cliproxy: CLIProxyAPI
-  # gpt-6.1-terra, then gpt-5.6-luna on the same proxy, effort low, Hermes'
-  # default 120 s timeout. The model-router plugin extends the guard above:
+  # gpt-6.1-terra with no fallback (the GPT floor is 6.1+, Terra or higher),
+  # effort low, Hermes' default 120 s timeout. The model-router plugin extends the guard above:
   # CLIProxyAPI counts as cloud even on loopback, and a #privacy/#private
   # payload is refused rather than sent. AUX_COMPRESSION_ROUTE=aux follows the
   # title-generation route; on a local one (AUX_BASE_URL set) thinking is off
@@ -248,11 +248,13 @@ compression:
   context_total_ceiling_seconds: __COMPRESSION_CEILING_SECONDS__
 
 # --------------------------------------------------------------- Plugins ---
-# model-router: task-scoped model + effort routing (luna/terra/sol for the
-# orchestrator, sol = newest live Sol (static gpt-6.1-sol, gpt-5.6-sol fallback),
-# a leading #sol line forces it; opus/fable for coding; newest live Astra
-# (static gpt-6-astra) ONLY with explicit
-# per-task authorization) + fail-closed privacy routing.
+# model-router: task-scoped model + effort routing (terra/sol for the
+# orchestrator: every GPT call is 6.1+ and Terra or higher; routine and
+# ordinary work on gpt-6.1-terra, sol = newest eligible live Sol (static
+# gpt-6.2-sol), a leading #sol line forces it; opus/fable for coding; newest
+# eligible live Astra (static gpt-6.2-astra) ONLY with explicit per-task
+# authorization; no older or lower fallback: a missing eligible model is
+# refused) + fail-closed privacy routing.
 # Knobs are rendered from MODEL_ROUTER_* in .env; explicit false/never values
 # are preserved. Privacy routing is ENABLED by default: a request whose current
 # user turn carries #privacy never reaches a cloud provider (local Ollama, or
@@ -267,7 +269,7 @@ compression:
 # managed coding requests per task: medium routine code, high complex code,
 # xhigh only for unusually hard debugging/architecture, max only with a leading
 # #max/#astra line; capped by coding_effort_ceiling. astra_policy: task = a leading standalone
-# #max/#astra line in the current user task authorizes gpt-6-astra; always =
+# #max/#astra line in the current user task authorizes the newest eligible Astra; always =
 # legacy allow; never = hard off. A leading standalone #opus/#fable line forces
 # that coding model for the request (coding-family seam only; refused on the
 # orchestrator seam, never faked with a GPT alias; privacy stays higher

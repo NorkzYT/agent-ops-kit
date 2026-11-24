@@ -1,6 +1,6 @@
 ---
 name: marketing-video-system
-description: Turn user screenshots, clips, logos, product facts and brand details into a rights-clean marketing video, rendered locally with HyperFrames by default (Remotion only when explicitly requested). Trigger when someone asks to make/produce/render a marketing, promo, ad, launch or demo video from assets and facts (e.g. "use these Kairo screenshots and facts to make a marketing video").
+description: Turn user screenshots, clips, logos, product facts and brand details into a rights-clean marketing video, rendered locally with HyperFrames by default (Remotion only when explicitly requested). Trigger when someone asks to make/produce/render a marketing, promo, ad, launch or demo video from assets and facts (e.g. "use these ExampleCo screenshots and facts to make a marketing video").
 version: 2.0.0
 metadata:
   hermes:
@@ -21,7 +21,7 @@ engines silently when one fails; report the failure. Reference:
 
 Trigger this skill whenever the user wants a marketing, promo, ad, launch or
 demo **video** built from screenshots, clips, a logo, product facts, brand
-colours, a CTA, an aspect ratio or music. Example: "Use these Kairo screenshots
+colours, a CTA, an aspect ratio or music. Example: "Use these ExampleCo screenshots
 and facts to make a marketing video."
 
 This skill **creates artifacts only**. Never publish or post the video to any

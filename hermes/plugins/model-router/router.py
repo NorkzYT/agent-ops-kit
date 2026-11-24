@@ -362,6 +362,45 @@ class Router:
             logger.warning("model_router: forced-coding gate errored; refusing")
             return refusal_response(reason="forced-coding-gate-error")
 
+        # Model floor: every GPT call leaving through this seam is version 6.1+
+        # and Terra or higher. A below-floor id (a stale explicit override such
+        # as gpt-5.6-luna, gpt-6-astra, or a non-canonical spelling) and a
+        # managed request whose tier has no eligible model in the live catalog
+        # are refused with a typed response — never sent, never downgraded.
+        # Independent of complexity_routing so switching routing off cannot
+        # reopen the floor. Coding (Claude) and local models are not GPT ids.
+        # The model judged is the one sent: the request's own ``model`` when the
+        # request is a dict that carries one, else the agent model Hermes passes
+        # (a fallback activation swaps it in place and re-enters this seam).
+        try:
+            sent = request.get("model") if isinstance(request, dict) else None
+            model = str(sent or kwargs.get("model") or "")
+            reason = ""
+            if cx.gpt_below_floor(model):
+                reason = "model-below-floor"
+            elif rid and self._decisions.get(rid, {}).get("floor_refuse"):
+                reason = "no-eligible-model"
+            if reason:
+                logger.warning(
+                    "model_router: refuse rid=%s sid=%s reason=%s",
+                    rid or "-", _hash8(session_id), reason,
+                )
+                return refusal_response(
+                    model="model-router/model-floor",
+                    reason=reason,
+                    text=(
+                        "This request was not sent: the kit only sends GPT requests "
+                        "to models at version 6.1 or newer, family Terra or higher, "
+                        "and the requested or available model does not meet that "
+                        "floor (no older or lower model is substituted). Update the "
+                        "configured model (scripts/model-floor-migrate.py) or check "
+                        "the CLIProxyAPI catalog with `make models`."
+                    ),
+                )
+        except Exception:  # the floor gate must not fall open
+            logger.warning("model_router: model floor gate errored; refusing")
+            return refusal_response(reason="model-floor-gate-error")
+
         # Budget seam: an unauthorized max-tier (Astra) request is refused with
         # a typed response rather than sent (or silently left) on the wire.
         # Raising here would trip Hermes' fail-open middleware handling and let
@@ -628,8 +667,16 @@ class Router:
             if not chosen:
                 # No allowed model available. An unauthorized max-tier request
                 # must not go out unchanged — the execution seam will refuse it.
-                outcome = "refuse-scheduled" if current_tier == "max" and not authorized else "no-candidate"
-                self._record_decision(rid, {"authorized": authorized, "task8": task8})
+                # GPT family: the floor has no fallback, so a degraded catalog
+                # (the tier's eligible model is not advertised) is refused too
+                # rather than sent on the configured or any lower model.
+                entry = {"authorized": authorized, "task8": task8}
+                if family == "gpt":
+                    entry["floor_refuse"] = "no-eligible-model"
+                    outcome = "refuse-scheduled"
+                else:
+                    outcome = "refuse-scheduled" if current_tier == "max" and not authorized else "no-candidate"
+                self._record_decision(rid, entry)
                 logger.info(
                     "model_router: route rid=%s sid=%s task=%s family=%s tier=%s auth=%d "
                     "model=%s->%s effort=- reasons=%s outcome=%s catalog=%s",

@@ -43,6 +43,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from . import complexity as cx
 from . import privacy_marker as pm
 from . import specialists as sp
 from .local_backend import (
@@ -448,6 +449,12 @@ def cliproxy_classifier(settings: RouterSettings, *, opener: Any = None) -> Opti
     if not os.environ.get(key_env, "").strip():
         logger.warning("model_router: specialist classifier cliproxy disabled (%s not set)", key_env)
         return None
+    below_floor = not cx.gpt_model_eligible(model)
+    if below_floor:
+        # Model floor: never call a GPT model older than 6.1 or below Terra
+        # (a stale MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL or config value).
+        # Each classification is refused unsent and selects nothing.
+        logger.warning("model_router: specialist classifier model below the GPT floor; refusing calls")
     url = f"{base_url}/chat/completions"
     budget = settings.specialist_classifier_timeout
     http = opener or _CLOUD_OPENER
@@ -456,6 +463,8 @@ def cliproxy_classifier(settings: RouterSettings, *, opener: Any = None) -> Opti
         meta = {"model": model, "effort": effort, "attempt": 0}
         if not pool:
             return Picks([], dict(meta, outcome="empty-pool"))
+        if below_floor:
+            return Picks([], dict(meta, outcome="refused:model-below-floor"))
         if pm.has_marker(text):  # route_text never sends a private turn; belt and braces
             return Picks([], dict(meta, outcome="refused:private-marker"))
         timeout = budget

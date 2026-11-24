@@ -1,5 +1,5 @@
 {
-  "bundle_digest": "588e2c364321a6c6253dcb30bbb9949b125df55cba1baa63aba9c0fd82dc485b",
+  "bundle_digest": "cce9c7c02eb32b493859267b304eaf64c5fe5d6bfd7b32dde1634de492e01948",
   "capability_ids": [
     "gstack.design-consultation",
     "gstack.design-review",
@@ -38,7 +38,7 @@
       "destination": "agent-ops-kit/capability-root/hermes/capabilities/registry.json",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "7116b1c1f1ae4f9ce6ecac5bfc38c795a8d254b9842ee3e43b28a7e4c4e10f0f",
+      "sha256": "c594b2f4fe808b2e1dae875ba06196615631c3fbeabe230ccff52009f3185dcb",
       "size": 82863,
       "source": "hermes/capabilities/registry.json"
     },
@@ -47,7 +47,7 @@
       "destination": "agent-ops-kit/capability-root/hermes/capabilities/routing-catalog.json",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "fec854f669439d3a9dd9d3ae8d3866e2fefb16735cf830cc770dc1a31b8afab4",
+      "sha256": "1aab7a673b6137ef5cea311bb8370762b20493cadbaa5e394ae71cb97bd719b9",
       "size": 6502,
       "source": "hermes/capabilities/routing-catalog.json"
     },
@@ -550,8 +550,8 @@
       "destination": "agent-ops-kit/capability-root/hermes/skills/kanban-workflow/SKILL.md",
       "mode": "0644",
       "role": "capability-root",
-      "sha256": "e6e3cf19f10094d6e6ce74bfe79aadd4b60bcc61d2e37913823ad8915768c9c0",
-      "size": 19272,
+      "sha256": "05d0e5cca2765f133ed628b20b6b7aea27e20bd5897223d3dbf27ddbf0e8bf6e",
+      "size": 19341,
       "source": "hermes/skills/kanban-workflow/SKILL.md"
     },
     {
@@ -1246,13 +1246,13 @@
           "interpreter": "/usr/bin/python3",
           "jsonschema": "4.10.3",
           "python": "3.12.3",
-          "source": "host polymath-dev only: apt python3-jsonschema 4.10.3-2ubuntu1 (observed 2026-11-05 UTC, read-only)"
+          "source": "example (one reference Ubuntu 24.04 host, read-only): apt python3-jsonschema 4.10.3-2ubuntu1; verify yours with: /usr/bin/python3 -I -c 'import jsonschema; print(jsonschema.__version__)'"
         },
         {
           "interpreter": "$HERMES_HOME/hermes-agent/venv/bin/python",
           "jsonschema": "4.26.0",
           "python": "3.12.3",
-          "source": "host polymath-dev only: Hermes agent venv (observed 2026-11-05 UTC, read-only)"
+          "source": "example (one reference Ubuntu 24.04 host, read-only): Hermes agent venv; verify yours with: $HERMES_HOME/hermes-agent/venv/bin/python -I -c 'import jsonschema; print(jsonschema.__version__)'"
         }
       ]
     },

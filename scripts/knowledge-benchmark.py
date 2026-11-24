@@ -49,10 +49,12 @@ from typing import Dict, List, Optional, Sequence, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import knowledge_plan as kp  # noqa: E402  (content-hash source identity)
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import model_floor as mf  # noqa: E402  (GPT model floor: 6.1+, Terra or higher)
 
 RUBRIC_VERSION = 1
 CATALOG_VERSION = 1
-DEFAULT_MODELS = ("gpt-5.6-luna", "gpt-6.1-terra", "gpt-6.1-sol")
+DEFAULT_MODELS = ("gpt-6.1-terra", "gpt-6.1-sol", "gpt-6.2-sol")  # new runs: eligible models only
 DEFAULT_EFFORTS = ("medium", "high")
 BENCH_EFFORTS = ("medium", "high")            # no low effort in a benchmark
 BASELINE_CELL = "gpt-6.1-terra/medium"      # the classifier default (DEFAULT_MODEL/DEFAULT_EFFORT)
@@ -223,6 +225,10 @@ def parse_cells(models: str, efforts: str) -> List[Tuple[str, str]]:
     es = [e.strip().lower() for e in efforts.split(",") if e.strip()]
     if not ms or not es:
         raise BenchmarkError("--models and --efforts must not be empty")
+    below = [m for m in ms if not mf.eligible(m)]
+    if below:
+        raise BenchmarkError(f"--models: {', '.join(below)} below the GPT model floor (6.1+, Terra or higher); "
+                             "historical results stay readable, new runs never call these")
     bad = [e for e in es if e not in BENCH_EFFORTS]
     if bad:
         raise BenchmarkError(f"--efforts: {', '.join(bad)} not allowed; the benchmark runs {', '.join(BENCH_EFFORTS)} only")

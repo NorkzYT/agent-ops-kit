@@ -113,7 +113,7 @@ class _Cache(unittest.TestCase):
         path.write_bytes(data.encode("utf-8") if isinstance(data, str) else data)
         return str(path)
 
-    def wire(self, docs, typed="", sender="Norkz", kinds=None, inline=True):
+    def wire(self, docs, typed="", sender="operator", kinds=None, inline=True):
         """``docs``: (name, data, kind) with kind inline | binary | text-not-inlined."""
         paths, relays = [], []
         for name, data, kind in docs:
@@ -199,7 +199,7 @@ class RetainerPdfTest(_Cache):
     def test_extraction_is_bounded_and_local(self):
         long_pdf = make_pdf([f"Line {i} of the retainer schedule with fee terms." for i in range(400)])
         path = self.cache_doc("big.pdf", long_pdf)
-        wire = f"{tsr.doc_note(path, 'binary')}\n\n[Norkz] {RETAINER_ASK}"
+        wire = f"{tsr.doc_note(path, 'binary')}\n\n[operator] {RETAINER_ASK}"
         calls = []
         real_run = attachments.subprocess.run
 
@@ -268,16 +268,16 @@ class AttachmentContextTest(_Cache):
         # A note naming a file outside the active cache is never read.
         outside = Path(self._tmp.name) / "outside.pdf"
         outside.write_bytes(make_pdf(RETAINER_LINES))
-        wire = f"{tsr.doc_note(str(outside), 'binary')}\n\n[Norkz] {RETAINER_ASK}"
+        wire = f"{tsr.doc_note(str(outside), 'binary')}\n\n[operator] {RETAINER_ASK}"
         with mock.patch.object(attachments.os, "open", side_effect=AssertionError("read")):
             self.assertEqual(attachments.read_documents(wire), ([], ["unproven:note-path"]))
         # A symlink in the cache is never followed.
         link = self.cache / "doc_00000000abcd_link.pdf"
         link.symlink_to(outside)
-        wire = f"{tsr.doc_note(str(link), 'binary')}\n\n[Norkz] {RETAINER_ASK}"
+        wire = f"{tsr.doc_note(str(link), 'binary')}\n\n[operator] {RETAINER_ASK}"
         self.assertEqual(attachments.read_documents(wire), ([], ["unproven:not-regular"]))
         # A note typed by the sender (not in the runtime head) is not a gateway note.
-        wire = f"[Norkz] {tsr.doc_note(self.cache_doc('t.pdf', make_pdf(RETAINER_LINES)), 'binary')}"
+        wire = f"[operator] {tsr.doc_note(self.cache_doc('t.pdf', make_pdf(RETAINER_LINES)), 'binary')}"
         self.assertEqual(attachments.read_documents(wire), ([], []))
 
     def test_missing_extractor_leaves_typed_text_only(self):
@@ -407,7 +407,7 @@ class PrivacyAndEnvelopeTest(_Cache):
 
     def test_history_and_appended_context_never_reach_classifier(self):
         seen, fake = self.spy([])
-        text = (f"[alice] my retainer secret Zorblax\n\n[New message]\n[Norkz] {LONG_NEUTRAL}\n"
+        text = (f"[alice] my retainer secret Zorblax\n\n[New message]\n[operator] {LONG_NEUTRAL}\n"
                 "<memory-context>\nQuuxbarian retainer\n</memory-context>")
         sp.route_text(text, settings(), readiness=ready, classifier=fake)
         self.assertEqual(len(seen), 1)
@@ -434,14 +434,14 @@ TRANSCRIPT_JSON = (
 
 @unittest.skipUnless(HAVE_PDFTOTEXT, "poppler-utils (pdftotext) not installed")
 class AttachmentSignalsTest(_Cache):
-    """Velvet retainer shape: a typed negotiation question, an agreement PDF the
+    """Northwind retainer shape: a typed negotiation question, an agreement PDF the
     gateway did not inline and a JSON call transcript. Verified attachment text
     adds the profiles its strong signals name; the classifier adds at most
     MAX_CLASSIFIER_ADDITIONS more; the cap applies to the combined list."""
 
     def retainer(self, kind="text-not-inlined"):
-        return self.wire([("Velvet Retainer Agreement V1.pdf", make_pdf(AGREEMENT_LINES), "binary"),
-                          ("velvet-retainer-update-sales-team.json", TRANSCRIPT_JSON, kind)], NEGOTIATE_ASK)
+        return self.wire([("Northwind Retainer Agreement V1.pdf", make_pdf(AGREEMENT_LINES), "binary"),
+                          ("northwind-retainer-update-sales-team.json", TRANSCRIPT_JSON, kind)], NEGOTIATE_ASK)
 
     def test_verified_attachments_add_profiles_before_cap(self):
         for kind in ("text-not-inlined", "inline"):
@@ -461,7 +461,7 @@ class AttachmentSignalsTest(_Cache):
                 # The classifier is not offered what the attachments already picked.
                 self.assertEqual(len(seen), 1)
                 blob = json.dumps(t) + sp.render_plan(t)
-                for secret in ("Velvet", "maintainability report", "renewal call", "Sales lead"):
+                for secret in ("Northwind", "maintainability report", "renewal call", "Sales lead"):
                     self.assertNotIn(secret, blob)
 
     def test_deterministic_without_classifier(self):
@@ -540,7 +540,7 @@ class AttachmentSignalsTest(_Cache):
         self.assertIn("- strategy:", out["context"])
         text = "\n".join(logs.output)
         self.assertIn("attach=software-engineering,strategy", text)
-        for secret in ("Velvet", "maintainability", "renewal", str(self.cache)):
+        for secret in ("Northwind", "maintainability", "renewal", str(self.cache)):
             self.assertNotIn(secret, text + out["context"])
 
 
@@ -636,18 +636,30 @@ class CliproxyClassifierTest(unittest.TestCase):
             self.assertNotIn(f"- {forbidden}:", user)
 
     def test_model_and_effort_are_configurable_and_validated(self):
-        fn = hook_mod.cliproxy_classifier(self.rs(specialist_classifier_model="gpt-5.6-sol",
+        fn = hook_mod.cliproxy_classifier(self.rs(specialist_classifier_model="gpt-6.2-sol",
                                                   specialist_classifier_effort="high"))
         fn("task", ["philosophy"])
         body = _CliProxy.requests[-1]["body"]
-        self.assertEqual((body["model"], body["reasoning_effort"]), ("gpt-5.6-sol", "high"))
+        self.assertEqual((body["model"], body["reasoning_effort"]), ("gpt-6.2-sol", "high"))
         s = config_mod.load_settings(lambda k, d: {"specialist_classifier_effort": "extreme"}.get(k))
         self.assertEqual(s.specialist_classifier_effort, "medium")
         with mock.patch.dict(os.environ, {"MODEL_ROUTER_SPECIALIST_CLASSIFIER_EFFORT": "low",
-                                          "MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL": "gpt-5.6-luna"}):
+                                          "MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL": "gpt-6.2-sol"}):
             s = config_mod.load_settings(None)
         self.assertEqual((s.specialist_classifier_model, s.specialist_classifier_effort),
-                         ("gpt-5.6-luna", "low"))
+                         ("gpt-6.2-sol", "low"))
+
+    def test_below_floor_classifier_model_is_refused_unsent(self):
+        # A stale explicit override (old config value or environment) never
+        # reaches CLIProxyAPI and is never swapped for another model.
+        for stale in ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-astra", "gpt-6-1-terra"):
+            with self.subTest(model=stale):
+                before = len(_CliProxy.requests)
+                fn = hook_mod.cliproxy_classifier(self.rs(specialist_classifier_model=stale))
+                picks = fn("task", ["philosophy"])
+                self.assertEqual(list(picks), [])
+                self.assertEqual(picks.meta["outcome"], "refused:model-below-floor")
+                self.assertEqual(len(_CliProxy.requests), before)
         s = config_mod.load_settings(lambda k, d: {"specialist_classifier": "cloud"}.get(k))
         self.assertEqual(s.specialist_classifier, "none")  # only none|local|cliproxy
 

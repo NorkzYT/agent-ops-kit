@@ -4,8 +4,10 @@
 # Proves, without touching the live gateway and without sending any private
 # data anywhere:
 #   1. both proxies are reachable and expose the expected model tiers;
-#   2. every complexity alias (luna/terra/sol/astra, opus/fable) resolves to a
-#      model id that is LIVE-available, degrading when a tier is missing;
+#   2. every complexity tier resolves to a LIVE-available model: GPT tiers to an
+#      eligible id (6.1+, Terra or higher) with no fallback (a missing eligible
+#      model fails the smoke instead of degrading); coding tiers (opus/fable)
+#      degrade as before;
 #   3. the plugin unit + zero-egress canary suite passes.
 #
 # Usage: bash scripts/route-smoke.sh   (needs .env for the CLIProxy key)
@@ -36,7 +38,7 @@ CODE_IDS="$(ids "http://127.0.0.1:${cm_port}/v1/models" "$cm_key")"
 printf '%s\n' "$GPT_IDS"  | sed 's/^/  gpt:  /'
 printf '%s\n' "$CODE_IDS" | sed 's/^/  code: /'
 
-log "resolving every complexity tier against the LIVE model set (degrade-aware)"
+log "resolving every complexity tier against the LIVE model set (GPT floor: 6.1+, Terra or higher)"
 GPT_IDS="$GPT_IDS" CODE_IDS="$CODE_IDS" python3 - <<'PY'
 import os, sys
 sys.path.insert(0, os.path.join(os.getcwd(), "scripts", "tests"))
@@ -54,6 +56,8 @@ def check(family, avail):
         # is ceilinged at the high tier (Sol) and never selects Astra itself.
         chosen = cx.resolve_model(tier, family=family, available=avail, allow_max=True)
         live = chosen in avail if chosen else False
+        if family == "gpt" and chosen and not cx.gpt_model_eligible(chosen):
+            live = False
         flag = "ok" if live else "MISSING"
         if not live:
             ok = False
@@ -61,14 +65,13 @@ def check(family, avail):
     return ok
 
 ok = check("gpt", gpt) & check("coding", code)
-# degrade demonstration: pretend the top tier vanished (authorized max steps down)
+# Degraded catalog: with no eligible Astra the authorized max tier resolves to
+# nothing (the router refuses it), never to Sol or a below-floor Astra.
 degraded = cx.resolve_model("max", family="gpt", allow_max=True,
-                            available=[m for m in gpt if m != "gpt-6-astra"])
-print(f"    degrade  gpt max (astra removed) -> {degraded}")
-assert degraded and degraded in gpt, "degrade did not fall back to a live tier"
-# Sol fallback: without gpt-6.1-sol the hard tier stays on Sol via gpt-5.6-sol.
-sol_fb = cx.resolve_model("high", family="gpt", available=[m for m in gpt if m != "gpt-6.1-sol"])
-print(f"    fallback gpt high (gpt-6.1-sol removed) -> {sol_fb}")
+                            available=[m for m in gpt if cx.parse_family_model(m) is None
+                                       or cx.parse_family_model(m)[0] != "astra"])
+print(f"    degraded gpt max (astra removed) -> {degraded or '(refused)'}")
+assert degraded is None, "a missing Astra must refuse, not fall back"
 sys.exit(0 if ok else 1)
 PY
 

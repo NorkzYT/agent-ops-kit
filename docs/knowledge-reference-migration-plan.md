@@ -6,7 +6,7 @@ Scope: safe preparation only. No profile, raw source, learned skill, runtime con
 
 ## Finding and authority
 
-The November 4 research status snapshot reports 12 partial profiles and five ready profiles. These are historical observations, not a new live readiness attestation. Its old canonical-root references point to `/opt/repos/claude-code-autopilot/data/knowledge-canonical`; the configured store is `/opt/repos/agent-ops-kit/data/knowledge-canonical`.
+The November 4 research status snapshot reports 12 partial profiles and five ready profiles. These are historical observations, not a new live readiness attestation. Its old canonical-root references point to `/opt/agent-ops-kit/data/knowledge-canonical`; the configured store is `/opt/repos/agent-ops-kit/data/knowledge-canonical`.
 
 `scripts/knowledge_plan.py:canonical_root` chooses the configured store (`KNOWLEDGE_CANONICAL`, else `<repo>/data/knowledge-canonical`). `resolve_ref` deliberately rejects a reference that names a different root (review correction: the plan draft called it `read_canonical_ref`). Keep this fail-closed behavior. The specialist router's skill-existence check is weaker than learned/current status; neither establishes tools, authorization or runtime acceptance.
 

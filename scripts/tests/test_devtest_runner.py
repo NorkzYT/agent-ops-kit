@@ -88,10 +88,10 @@ func TestCleanEnvironment(t *testing.T) {
 			t.Fatalf("%%s inherited", k)
 		}
 	}
-	if os.Getenv("PGPASSFILE") == "" || !strings.HasPrefix(os.Getenv("MATCHING_TEST_DATABASE_URL"), "postgresql://postgres@127.0.0.1:") {
+	if os.Getenv("PGPASSFILE") == "" || !strings.HasPrefix(os.Getenv("EXAMPLE_TEST_DATABASE_URL"), "postgresql://postgres@127.0.0.1:") {
 		t.Fatalf("approved database variables missing")
 	}
-	if strings.Contains(os.Getenv("MATCHING_TEST_DATABASE_URL"), ":"+%(canary)s) {
+	if strings.Contains(os.Getenv("EXAMPLE_TEST_DATABASE_URL"), ":"+%(canary)s) {
 		t.Fatalf("password in URL")
 	}
 }
@@ -225,7 +225,7 @@ class DevtestRunnerTests(unittest.TestCase):
 
     def setUp(self):
         # Two entries: the registered one and another database's; only the first may reach the tests.
-        self.pgpass.write_text(f"127.0.0.1:{self.db_port}:matching_test:postgres:{CANARY}\n"
+        self.pgpass.write_text(f"127.0.0.1:{self.db_port}:example_test:postgres:{CANARY}\n"
                                f"127.0.0.1:5432:other_prod:postgres:{OTHER_CANARY}\n")
         os.chmod(self.pgpass, 0o600)
         self._board(status="running", worker_pid=os.getpid(), run_status="running")
@@ -258,8 +258,8 @@ class DevtestRunnerTests(unittest.TestCase):
         conn.close()
 
     def _config(self, **db_overrides) -> dict:
-        db = {"host": "127.0.0.1", "port": self.db_port, "dbname": "matching_test", "user": "postgres",
-              "sslmode": "disable", "url_env": "MATCHING_TEST_DATABASE_URL", "pgpassfile": str(self.pgpass)}
+        db = {"host": "127.0.0.1", "port": self.db_port, "dbname": "example_test", "user": "postgres",
+              "sslmode": "disable", "url_env": "EXAMPLE_TEST_DATABASE_URL", "pgpassfile": str(self.pgpass)}
         db.update(db_overrides)
         return {"version": 1, "helper": "/usr/local/libexec/hermes-devtest-runner", "helper_sha256": "0" * 64,
                 "python": "/usr/bin/python3", "run_as_uid": os.getuid(), "kanban_db": str(self.board),
@@ -308,7 +308,7 @@ class DevtestRunnerTests(unittest.TestCase):
         self.assertEqual(result["argv"][:5], ["go", "test", "-json", "-count=1", "-p=1"])
         self.assertIn("-race", result["argv"])
         self.assertEqual(result["database"]["url"],
-                         f"postgresql://postgres@127.0.0.1:{self.db_port}/matching_test?sslmode=disable")
+                         f"postgresql://postgres@127.0.0.1:{self.db_port}/example_test?sslmode=disable")
         self.assertNotIn(CANARY, text)
         self.assertFalse(list(self.devstate.glob("run-*")), "per-run temp dir must be removed")
 
@@ -508,12 +508,12 @@ class DevtestRunnerTests(unittest.TestCase):
 
     def test_example_profile_is_valid(self):
         cfg = json.loads(EXAMPLE.read_text())
-        prof = cfg["profiles"]["validate-matching"]
+        prof = cfg["profiles"]["example-service"]
         self.assertEqual(prof["isolation"], {"mode": "same-uid-landlock"})
         self.assertFalse(dt.isolation_approved(prof))
         self.assertEqual(dt.database_url(prof["database"]),
-                         "postgresql://postgres@127.0.0.1:55443/matching_test?sslmode=disable")
-        self.assertEqual(prof["database"]["pgpassfile"], "/home/polymath-dev/.config/hermes-test-db/pgpass")
+                         "postgresql://postgres@127.0.0.1:55432/example_test?sslmode=disable")
+        self.assertEqual(prof["database"]["pgpassfile"], "/home/hermes-dev/.config/hermes-test-db/pgpass")
         self.assertEqual(prof["packages"], ["./..."])
         dt.validate_database(prof["database"], "example")
 
@@ -753,7 +753,7 @@ class InstallerTests(unittest.TestCase):
 
     def _profiles_with_mode(self, mode: str) -> str:
         cfg = json.loads(EXAMPLE.read_text())
-        cfg["profiles"]["validate-matching"]["isolation"] = {"mode": mode}
+        cfg["profiles"]["example-service"]["isolation"] = {"mode": mode}
         tmp = Path(tempfile.mkdtemp(prefix="installer-profiles-"))
         self.addCleanup(shutil.rmtree, tmp, True)
         path = tmp / "profiles.json"
@@ -787,7 +787,7 @@ class InstallerTests(unittest.TestCase):
         cfg = json.loads(EXAMPLE.read_text())
         cfg["helper"] = str(dest_runner)
         cfg["helper_sha256"] = __import__("hashlib").sha256(dest_runner.read_bytes()).hexdigest()
-        cfg["profiles"]["validate-matching"]["isolation"] = {"mode": "credential-broker-netns"}
+        cfg["profiles"]["example-service"]["isolation"] = {"mode": "credential-broker-netns"}
         (etc / "profiles.json").write_text(json.dumps(cfg))
         env = dict(os.environ, HERMES_DEVTEST_DEST_RUNNER=str(dest_runner), HERMES_DEVTEST_DEST_DIR=str(etc))
         proc = subprocess.run(["bash", str(self.SCRIPT), "status"], capture_output=True, text=True, env=env, timeout=120)

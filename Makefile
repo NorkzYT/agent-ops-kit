@@ -136,7 +136,9 @@ hermes-dev-workflow-plan: ## Show what the narrow dev-workflow rollout would cop
 hermes-dev-workflow-apply: ## Copy the kanban-workflow skill + coder SOUL.md into ~/.hermes (backups, atomic, no config, no restart) [CODER_HOME=<dir>]
 	@python3 scripts/apply-dev-workflow.py --apply $(if $(CODER_HOME),--coder-home "$(CODER_HOME)",)
 
-hermes-restart: ## Restart the Hermes gateway (Discord bot)
+hermes-restart: ## Restart the Hermes gateway (Discord bot); refuses while saved model settings are below the GPT floor (model-floor-migrate.py --check)
+	@python3 scripts/model-floor-migrate.py --check $(if $(wildcard .env),--env-file .env) \
+	  || { echo "hermes-restart: refused — migrate the settings above first (python3 scripts/model-floor-migrate.py $(if $(wildcard .env),--env-file .env), then --apply --approve <digest>)"; exit 1; }
 	@hermes gateway restart
 
 hermes-runtime-patch-status: ## Per kit runtime patch (hermes/runtime-patches): applied | applicable | conflict | ambiguous | blocked | dirty | unsafe in ~/.hermes/hermes-agent [SRC=<dir>]

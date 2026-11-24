@@ -9,12 +9,13 @@ payload is never sent to them by compression or title generation; see
 - **Task-scoped routing** (`llm_request`) — deterministically classifies the
   CURRENT user task (never history, system prompts, or tool output) and
   rewrites model **and** reasoning effort *within the request's family*:
-  - orchestrator (CLIProxyAPI): status/lookup→`gpt-5.6-luna` (low effort),
+  - orchestrator (CLIProxyAPI): status/lookup→`gpt-6.1-terra` (low effort),
     ordinary work→`gpt-6.1-terra` (medium), ambiguous/planning→`gpt-6.1-terra`,
-    genuinely hard (or a leading standalone `#sol` line)→the newest Sol the
-    live CLIProxyAPI catalog advertises (static `gpt-6.1-sol`, with
-    `gpt-5.6-terra`/`gpt-5.6-sol` only as same-tier fallbacks);
-    the newest live Astra (static `gpt-6-astra`) ONLY when the current task
+    genuinely hard (or a leading standalone `#sol` line)→the newest eligible
+    Sol the live CLIProxyAPI catalog advertises (static `gpt-6.2-sol`); no
+    fallback below the GPT floor (6.1+, Terra or higher) — a tier with no
+    eligible model, or a below-floor request model, is refused;
+    the newest eligible Astra (static `gpt-6.2-astra`) ONLY when the current task
     starts with a standalone `#max`/`#astra` control line (per-task, TTL-bound,
     never bleeding to the next task or session). The automatic ceiling is Sol.
   - delegated coding (claude-max-proxy): `opus` by default, `fable` only for

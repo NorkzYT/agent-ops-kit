@@ -111,6 +111,24 @@ fi
 KNOWLEDGE_ROOT="${KNOWLEDGE_ROOT:-$ROOT/data/knowledge}" \
   bash "$ROOT/scripts/knowledge-sync.sh" "$name" "$pdir/knowledge"
 
+# GPT model floor (6.1+, Terra or higher): a clone of a pre-floor default config
+# can carry below-floor models. Read-only plan; applying needs the operator's
+# own invocation with the plan digest (docs/model-routing.md, GPT model floor).
+floor_rc=0
+floor_plan="$(python3 "$ROOT/scripts/model-floor-migrate.py" --hermes-home "$HERMES_HOME" \
+      --profile "$name" --profiles-only 2>&1)" || floor_rc=$?
+if [[ $floor_rc -eq 5 ]]; then
+  printf '%s\n' "$floor_plan" >&2
+  warn "profile '$name' has model settings the migration cannot fix safely (above); edit them by hand," \
+       "then re-run: python3 scripts/model-floor-migrate.py --hermes-home $HERMES_HOME --profile $name --profiles-only"
+elif [[ $floor_rc -ne 0 ]]; then
+  warn "model floor check for '$name' failed; run: python3 scripts/model-floor-migrate.py --hermes-home $HERMES_HOME --profile $name"
+elif ! grep -q 'model floor: nothing to change' <<<"$floor_plan"; then
+  printf '%s\n' "$floor_plan" >&2
+  warn "profile '$name' has GPT models below the floor (above); review, then apply with the printed digest:" \
+       "python3 scripts/model-floor-migrate.py --hermes-home $HERMES_HOME --profile $name --profiles-only --apply --approve <digest>"
+fi
+
 cat <<MSG
 
 Profile '$name' is ready.

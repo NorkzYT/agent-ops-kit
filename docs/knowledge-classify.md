@@ -400,7 +400,7 @@ where needed.
 | `SECONDARY_REASON=` / `--secondary-reason` | — | — | Required with `SECONDARY`: the substantial, recurring, independent purpose |
 | `SOURCE=` / positional | — | all uncategorized | Limit the run to one source |
 | `CLASSIFIER=` / `--classifier` | `KNOWLEDGE_CLASSIFIER` | `cliproxy` | `cliproxy`, `local` (Ollama only) or `none` (stage and report, no model) |
-| `MODEL=` / `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-6.1-terra` | CLIProxyAPI model (v1 benchmark chose `gpt-5.6-terra`: see "Choosing the model and effort") |
+| `MODEL=` / `--model` | `KNOWLEDGE_CLASSIFY_MODEL` | `gpt-6.1-terra` | CLIProxyAPI model, 6.1+ Terra or higher (older ids are refused before any call; the historical v1 benchmark chose `gpt-5.6-terra`: see "Choosing the model and effort") |
 | `EFFORT=` / `--effort` | `KNOWLEDGE_CLASSIFY_EFFORT` | `medium` | CLIProxyAPI reasoning effort, sent as top-level `reasoning_effort` on every classification and spec-completion request (`medium` or `high`; `minimal`/`low` accepted for compatibility). Not sent to the local model, whose options are its own; the report says so (`effort_note`) |
 | `METADATA_ONLY=1` / `--metadata-only` | — | off | Never send an excerpt |
 | `--excerpt-chars` | `KNOWLEDGE_EXCERPT_CHARS` | 3000 | Excerpt size, 0–12000 |

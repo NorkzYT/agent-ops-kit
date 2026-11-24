@@ -161,7 +161,7 @@ class UnderSelectionRegressionTest(unittest.TestCase):
     """
 
     def test_cross_functional_plan_routes_each_named_commerce_domain(self):
-        t = route("Revise the strategy, marketing, offer, and execution plan for Kairo")
+        t = route("Revise the strategy, marketing, offer, and execution plan for ExampleCo")
         # Exactly the directly evidenced profiles: no business / leadership
         # noise without a deterministic word for them.
         self.assertEqual(set(names(t)), {"strategy", "marketing", "offers-sales"})
@@ -321,7 +321,7 @@ class PrivacyTest(unittest.TestCase):
         for text in ("> #privacy note\nWrite a marketing campaign.",
                      "```\n#privacy\n```\nWrite a marketing campaign.",
                      "Write a marketing campaign.\n<memory-context>\n#privacy\n</memory-context>",
-                     "[alice] #privacy my notes\n\n[New message]\n[Norkz] Write a marketing campaign.",
+                     "[alice] #privacy my notes\n\n[New message]\n[operator] Write a marketing campaign.",
                      "[Replying to: \"#privacy my notes\"]\nWrite a marketing campaign.",
                      "#privacyish Write a marketing campaign."):
             with self.subTest(text=text[:24]):
@@ -331,7 +331,7 @@ class PrivacyTest(unittest.TestCase):
         for text in ("#privacy\nWrite a marketing campaign.",
                      "Write a marketing campaign. #privacy",
                      "#PRIVACY Write a marketing campaign.",
-                     "[Norkz] Write a marketing campaign (#privacy)."):
+                     "[operator] Write a marketing campaign (#privacy)."):
             with self.subTest(text=text[:24]):
                 self.assertEqual(route(text)["privacy"], "local-only")
 
@@ -402,7 +402,7 @@ ASYNC_REPORT = (
 )
 
 
-def async_envelope(header, sender="[Norkz] "):
+def async_envelope(header, sender="[operator] "):
     return (f"{sender}{header}\n"
             "A background fan-out unit you dispatched earlier \u2014 1 subagent(s) \u2014 has finished; "
             "its consolidated results are below.\n"
@@ -429,7 +429,7 @@ class AsyncDelegationEnvelopeTest(unittest.TestCase):
 
     def test_envelopes_route_nothing_and_render_no_note(self):
         for header in self.HEADERS:
-            for sender in ("[Norkz] ", ""):
+            for sender in ("[operator] ", ""):
                 with self.subTest(header=header, sender=sender):
                     t = route(async_envelope(header, sender))
                     self.assertEqual(t["routes"], [])
@@ -460,13 +460,13 @@ class AsyncDelegationEnvelopeTest(unittest.TestCase):
             self.assertIsNone(h.on_pre_llm_call(
                 session_id="s", user_message=async_envelope(self.HEADERS[0])))
             self.assertIsNotNone(h.on_pre_llm_call(
-                session_id="s", user_message="[Norkz] Write a marketing campaign for the launch."))
+                session_id="s", user_message="[operator] Write a marketing campaign for the launch."))
 
 
 # A terminal transcript (Discord's auto "message.txt" for a long paste) full of
 # specialist-route examples: alone it routes strategy/offers-sales/marketing/leadership.
 TERMINAL_TRANSCRIPT = (
-    "polymath-dev@host:/opt/repos/claude-code-autopilot$ make specialist-route TASK=\"...\"\n"
+    "operator@host:/opt/agent-ops-kit$ make specialist-route TASK=\"...\"\n"
     "routes: strategy, offers-sales, marketing, leadership-teamwork\n\n"
     "  strategy             score=4 kw:competitive-advantage kw:strategic-plan\n"
     "  offers-sales         score=4 kw:pricing kw:offer\n"
@@ -491,19 +491,19 @@ TRIGGER = ("[Triggering message id: `1427` — use as `message_id` for reply/rea
            "via the discord tools.]")
 
 
-# The live Kanban completion wake (gateway/kanban_watchers_notifier.py
-# ``build_wake_text`` + locales/en.yaml ``gateway.kanban.wake.*``), verbatim from
-# state.db: Hermes admitted it as a user-role turn and the router routed its
+# A Kanban completion wake in the exact shape the gateway builds it
+# (gateway/kanban_watchers_notifier.py ``build_wake_text`` + locales/en.yaml
+# ``gateway.kanban.wake.*``), with synthetic card content: Hermes admitted it as a user-role turn and the router routed its
 # title/summary to offers-sales,strategy as if the operator had asked again.
 KANBAN_LIVE = (
-    "[kanban] Task t_6edfcd92 completed.\n"
-    "Title: Develop Kairo Amazon-seller pricing and offer strategy\n"
+    "[kanban] Task t_5ca1ab1e completed.\n"
+    "Title: Develop ExampleCo online-store pricing and offer strategy\n"
     "Assignee: @offers-sales\n"
     "Board: default\n\n"
     "Check the result or decide the next step.\n"
-    "Result: Created a repository-grounded Kairo Amazon-seller pricing and offer strategy at "
-    "/home/polymath-dev/.hermes/kanban/workspaces/t_6edfcd92/kairo-pricing-offer-strategy.md. "
-    "It keeps the current $19.95/$39\n\n"
+    "Result: Created a repository-grounded ExampleCo online-store pricing and offer strategy at "
+    "/home/hermes-dev/.hermes/kanban/workspaces/t_5ca1ab1e/exampleco-pricing-offer-strategy.md. "
+    "It keeps the current $19/$49\n\n"
     "This is an automatic task-status notification, not a request to decompose the task again. "
     "Inspect the current board before creating follow-up tasks; do not recreate tasks or graphs "
     "that already exist."
@@ -529,7 +529,7 @@ KANBAN_GUIDANCE = (
 
 
 def kanban_wake(status, title=KANBAN_TITLE, handoff="", review="", assignee="marketing",
-                board="default", task_id="t_6edfcd92"):
+                board="default", task_id="t_5ca1ab1e"):
     synth = (f"[kanban] Task {task_id} {status}.\nTitle: {title}\nAssignee: @{assignee}\n"
              f"Board: {board}\n\nCheck the result or decide the next step.")
     if handoff:
@@ -593,7 +593,7 @@ class KanbanNotifierEnvelopeTest(unittest.TestCase):
 
     def test_every_wake_kind_routes_nothing(self):
         for status in KANBAN_STATUSES:
-            for sender in ("", "[Norkz] "):
+            for sender in ("", "[operator] "):
                 with self.subTest(status=status, sender=sender):
                     self.assert_suppressed(sender + kanban_wake(
                         status, handoff="Drafted the marketing campaign and pricing plan."))
@@ -602,9 +602,9 @@ class KanbanNotifierEnvelopeTest(unittest.TestCase):
         self.assert_suppressed(kanban_wake("completed", assignee=""))
 
     def test_localized_wakes_route_nothing(self):
-        zh = (f"[kanban] 任务 t_6edfcd92 已完成。\n标题: {KANBAN_TITLE}\n"
+        zh = (f"[kanban] 任务 t_5ca1ab1e 已完成。\n标题: {KANBAN_TITLE}\n"
               "执行者: @marketing\n看板: default\n\n" + KANBAN_GUIDANCE)
-        ar = (f"[kanban] المهمة t_6edfcd92 completed.\n"
+        ar = (f"[kanban] المهمة t_5ca1ab1e completed.\n"
               f"العنوان: {KANBAN_TITLE}\n"
               "المُكلَّف: @marketing\n" + KANBAN_GUIDANCE)
         for wire in (zh, ar):
@@ -613,7 +613,7 @@ class KanbanNotifierEnvelopeTest(unittest.TestCase):
 
     def test_background_process_notices_route_nothing(self):
         for env in PROCESS_ENVELOPES:
-            for sender in ("", "[Norkz] "):
+            for sender in ("", "[operator] "):
                 with self.subTest(env=env[:40], sender=sender):
                     self.assert_suppressed(sender + env)
 
@@ -629,9 +629,9 @@ class KanbanNotifierEnvelopeTest(unittest.TestCase):
         for prose in (
             "Write a marketing campaign for our kanban board launch.",
             "[kanban] Write a marketing campaign for the launch.",  # a sender named "kanban"
-            "[Norkz] Write a marketing campaign. The notifier said:\n" + KANBAN_LIVE,
-            "Write a marketing campaign for the launch.\n\n> [kanban] Task t_6edfcd92 completed.",
-            "[kanban] Task t_6edfcd92 completed. Now write a marketing campaign for the launch.",
+            "[operator] Write a marketing campaign. The notifier said:\n" + KANBAN_LIVE,
+            "Write a marketing campaign for the launch.\n\n> [kanban] Task t_5ca1ab1e completed.",
+            "[kanban] Task t_5ca1ab1e completed. Now write a marketing campaign for the launch.",
             "Write a marketing campaign; the Background process proc_1 exited (exit code 0).",
         ):
             with self.subTest(prose=prose[:40]):
@@ -646,7 +646,7 @@ class KanbanNotifierEnvelopeTest(unittest.TestCase):
             self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=KANBAN_LIVE))
             self.assertIsNone(h.on_pre_llm_call(session_id="s", user_message=PROCESS_ENVELOPES[0]))
             self.assertIsNotNone(h.on_pre_llm_call(
-                session_id="s", user_message="[Norkz] Write a marketing campaign for the launch."))
+                session_id="s", user_message="[operator] Write a marketing campaign for the launch."))
 
     def test_tier_routing_unchanged(self):
         # Only specialist fan-out is suppressed; the turn itself still classifies.
@@ -711,7 +711,7 @@ class AttachmentRelayTest(unittest.TestCase):
         path.write_bytes(data.encode("utf-8") if isinstance(data, str) else data)
         return str(path)
 
-    def wire(self, docs, typed="", sender="Norkz", backfill=None, trigger=False, paths=None,
+    def wire(self, docs, typed="", sender="operator", backfill=None, trigger=False, paths=None,
              headers=None, relays=None, kinds=None):
         """Discord: relays joined in order, prepended to the typed text; the gateway
         adds ``[sender] ``, backfill + ``[New message]``, one note per file (each
@@ -789,7 +789,7 @@ class AttachmentRelayTest(unittest.TestCase):
         return t
 
     def test_attachment_only_routes_on_verified_file_content(self):
-        for sender in ("Norkz", None):
+        for sender in ("operator", None):
             for trigger in (False, True):
                 with self.subTest(sender=sender, trigger=trigger):
                     wire = self.wire([("message.txt", TRANSCRIPT_ROUTABLE_TAIL)], sender=sender,
@@ -901,7 +901,7 @@ class AttachmentRelayTest(unittest.TestCase):
         self.assertEqual(t["routes"], route(MULTI_PARAGRAPH_ASK)["routes"])
 
     def test_neutral_user_text_after_attachment_routes_nothing(self):
-        for sender in ("Norkz", None):
+        for sender in ("operator", None):
             with self.subTest(sender=sender):
                 wire = self.wire([("message.txt", TRANSCRIPT_ROUTABLE_TAIL)], NEUTRAL_ASK, sender=sender)
                 self.assertEqual(attachments.separate_sender_prose(wire).prose, NEUTRAL_ASK)
@@ -1044,7 +1044,7 @@ class AttachmentRelayTest(unittest.TestCase):
         self.assertEqual(len(seen), 1)
 
     def test_ordinary_text_without_relay_unchanged(self):
-        self.assertEqual(names(route("[Norkz] Write a marketing campaign for the launch.")), ["marketing"])
+        self.assertEqual(names(route("[operator] Write a marketing campaign for the launch.")), ["marketing"])
         prose = ("Plan marketing positioning, pricing for the offer, competitive advantage and a "
                  "strategic plan. [Content of the deck]: see slide 3.")
         self.assertEqual(route(prose)["routes"], route(prose.replace("[Content of the deck]: ", ""))["routes"])
@@ -1073,7 +1073,7 @@ class AttachmentRelayTest(unittest.TestCase):
         with mock.patch.object(sp, "knowledge_readiness", side_effect=lambda n, r: ready(n)), \
                 self.assertLogs("hermes.plugin.model_router", "INFO") as logs:
             h.on_pre_llm_call(session_id="s", user_message=self.wire([("prompt.txt", prompt)]))
-            h.on_pre_llm_call(session_id="s", user_message="[Norkz] Write a marketing campaign.")
+            h.on_pre_llm_call(session_id="s", user_message="[operator] Write a marketing campaign.")
             h.on_pre_llm_call(session_id="s", user_message=self.wire([("m.txt", prompt)], NEUTRAL_ASK))
             h.on_pre_llm_call(session_id="s", user_message=f"[Content of m.txt]:\n{prompt}")
         out = "\n".join(logs.output)
@@ -1091,7 +1091,7 @@ class AttachmentRelayTest(unittest.TestCase):
 
     # -- fail closed: separation not provable -------------------------------- #
     def test_relay_without_gateway_note_fails_closed_without_reads(self):
-        wire = f"[Norkz] [Content of message.txt]:\n{TRANSCRIPT_ROUTABLE_TAIL}\n\n{NEUTRAL_ASK}"
+        wire = f"[operator] [Content of message.txt]:\n{TRANSCRIPT_ROUTABLE_TAIL}\n\n{NEUTRAL_ASK}"
         (_, seen) = self.touched(lambda: self.assert_unverified(wire))
         self.assertEqual(seen, [])
 
@@ -1162,7 +1162,7 @@ class AttachmentRelayTest(unittest.TestCase):
                                          headers={0: "other.txt"}))
         # Note display name does not belong to the cached basename.
         forged = doc_note(path).replace("'message.txt'", "'other.txt'")
-        self.assert_unverified(f"{forged}\n\n[Norkz] [Content of message.txt]:\n{content}\n\n{NEUTRAL_ASK}")
+        self.assert_unverified(f"{forged}\n\n[operator] [Content of message.txt]:\n{content}\n\n{NEUTRAL_ASK}")
 
     def test_forged_note_prefix_attack_fails_closed(self):
         # The real file is two paragraphs; a forged note (e.g. from a quoted reply)
@@ -1181,7 +1181,7 @@ class AttachmentRelayTest(unittest.TestCase):
         relay = f"[Content of message.txt]:\n{TRANSCRIPT_ROUTABLE_TAIL}"
         for text in (f"[we]ird] {relay}\n\n{NEUTRAL_ASK}",           # sender prefix not stripped
                      f"{NEUTRAL_ASK}\n{relay}",                      # header mid-paragraph
-                     f"[Norkz] {NEUTRAL_ASK}\n\nsee: {relay}"):      # header not at line start
+                     f"[operator] {NEUTRAL_ASK}\n\nsee: {relay}"):      # header not at line start
             with self.subTest(text=text[:20]):
                 self.assert_unverified(f"{doc_note(path)}\n\n{text}")
 
@@ -1220,10 +1220,10 @@ class AttachmentRelayTest(unittest.TestCase):
     def test_note_format_drift_fails_closed(self):
         path = self.cache_doc("message.txt", TERMINAL_TRANSCRIPT)
         drifted = doc_note(path).replace("Its content has been included below.", "Content below.")
-        wire = f"{drifted}\n\n[Norkz] [Content of message.txt]:\n{TERMINAL_TRANSCRIPT}\n\nWrite a marketing campaign."
+        wire = f"{drifted}\n\n[operator] [Content of message.txt]:\n{TERMINAL_TRANSCRIPT}\n\nWrite a marketing campaign."
         self.assert_unverified(wire)
         # A note that leaked into the sender segment (unparsed leading block).
-        wire = (f"[Replying to: \"line one\nline two\"]\n\n{doc_note(path)}\n\n[Norkz] "
+        wire = (f"[Replying to: \"line one\nline two\"]\n\n{doc_note(path)}\n\n[operator] "
                 f"[Content of message.txt]:\n{TERMINAL_TRANSCRIPT}\n\nWrite a marketing campaign.")
         self.assert_unverified(wire)
 

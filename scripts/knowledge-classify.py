@@ -109,6 +109,8 @@ import knowledge_match as km  # noqa: E402  (shared content matcher)
 import knowledge_plan as kp  # noqa: E402  (reviewed plan artifact)
 import knowledge_taxonomy as kt  # noqa: E402  (broad-family consolidation of proposals)
 import knowledge_review as kr  # noqa: E402  (Markdown review + offline HTML workspace)
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import model_floor as mf  # noqa: E402  (GPT model floor: 6.1+, Terra or higher)
 
 DEFAULT_MODEL = "gpt-6.1-terra"         # Terra default; v1 benchmark (docs/benchmarks/knowledge-classify/) chose gpt-5.6-terra; no Opus needed
 # CLIProxyAPI reasoning efforts the classifier may request (top-level reasoning_effort).
@@ -1374,6 +1376,9 @@ def settings_from(args: argparse.Namespace) -> Settings:
         raise SafetyError("--limit must be at least 1")
     if args.effort not in EFFORTS:
         raise SafetyError(f"--effort must be one of {', '.join(EFFORTS)} (got {args.effort!r})")
+    if args.classifier == "cliproxy" and not mf.eligible(args.model):
+        raise SafetyError(f"--model {args.model!r} is below the GPT model floor (6.1+, Terra or higher; "
+                          f"default {DEFAULT_MODEL}); nothing is sent and no other model is substituted")
     port = env_value("CLIPROXY_PORT", "8317")
     return Settings(
         books=Path(env("BOOKS_ROOT", "/mnt/books")),

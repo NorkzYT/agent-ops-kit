@@ -6,7 +6,7 @@
 #   scripts/install-hermes-devtest.sh install  [--profiles FILE]   # sudo install (asks for the sudo password)
 #   scripts/install-hermes-devtest.sh status                       # installed vs kit digest, trust checks
 #
-# FILE defaults to hermes/devtest/profiles.example.json (this host's Validate profile). Its
+# FILE defaults to hermes/devtest/profiles.example.json (a synthetic example-app profile). Its
 # helper_sha256 is replaced by the digest of hermes/libexec/hermes-devtest-runner. Nothing
 # reads the credential file; only its path is registered. Nothing is restarted: Hermes picks
 # the dev_test_run tool up from the runtime patch (0004) on its next start, and the tool

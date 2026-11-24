@@ -124,7 +124,7 @@ class TempRepo(TempState):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.remote = self.tmp / "remote.git"
         self.url = f"file://{self.remote}"
-        self.co = str(self.tmp / "validate")
+        self.co = str(self.tmp / "example-app")
         self.g("init", "--bare", "-b", "main", str(self.remote), cwd=str(self.tmp))
         self.g("clone", self.url, self.co, cwd=str(self.tmp))
         for k, v in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
@@ -135,8 +135,8 @@ class TempRepo(TempState):
         self.g("push", "origin", "main")
         self.g("switch", "-c", "feat/x")
         self.g("push", "-u", "origin", "feat/x")
-        # `/bin/true` stands in for the root helper: bind it to this checkout the way the approved
-        # helper's own REPOSITORY declaration binds it to Validate (helper_repository).
+        # `/bin/true` stands in for the root helper: bind it to this checkout the way a root-installed
+        # helper's own REPOSITORY declaration binds it to one repository (helper_repository).
         real = rl.helper_repository
         binding = mock.patch.object(rl, "helper_repository", lambda h: self.co if h == "/bin/true" else real(h))
         binding.start()
@@ -452,8 +452,8 @@ class ScannerTest(TempRepo):
     def test_exit_code_contract(self):
         ok = rl.parse_scan_output(0, "PASS: Inspected 500 process directories.\nPASS: No repository CWD matches found.\n")
         self.assertEqual((ok["status"], ok["matches"]), ("complete", []))
-        hit = rl.parse_scan_output(1, "MATCH: PID=4321 CWD=/opt/repos/validate/apps\nBLOCKED: 1 matching processes.\n")
-        self.assertEqual((hit["status"], hit["matches"]), ("complete", [{"pid": 4321, "cwd": "/opt/repos/validate/apps"}]))
+        hit = rl.parse_scan_output(1, "MATCH: PID=4321 CWD=/opt/repos/example-app/apps\nBLOCKED: 1 matching processes.\n")
+        self.assertEqual((hit["status"], hit["matches"]), ("complete", [{"pid": 4321, "cwd": "/opt/repos/example-app/apps"}]))
         bad = rl.parse_scan_output(2, "ERROR: PID=7 [Errno 13]\nFAIL: 1 inspection errors.\n")
         self.assertEqual(bad["status"], "incomplete")
         self.assertIn("FAIL: 1 inspection errors", bad["tail"])
@@ -660,7 +660,7 @@ class ManifestTest(TempRepo):
                 "index_sha256": rl.hashlib.sha256(Path(ident["gitdir"], "index").read_bytes()).hexdigest(),
                 "files": files}
         data.update(over)
-        src = self.tmp / "validate-baseline.json"
+        src = self.tmp / "example-baseline.json"
         src.write_text(json.dumps(data))
         return src, data
 
@@ -1508,7 +1508,7 @@ class SuccessorInventoryTest(ManifestTest):
         _, data = self.inventory()
         legacy = {k: data[k] for k in ("task", "role", "head", "branch", "status_sha256", "index_sha256")}
         legacy["files"] = [{k: row[k] for k in ("path", "status", "sha256", "mode", "type")} for row in data["files"]]
-        src = self.tmp / "validate-baseline.json"
+        src = self.tmp / "example-baseline.json"
         src.write_text(json.dumps(legacy))
         src.chmod(0o600)
         return src, rl.hashlib.sha256(src.read_bytes()).hexdigest()
@@ -2377,8 +2377,8 @@ class IndependentAuditR3Test(TempRepo):
         self.assertIn("terminal", row["detail"])
 
     def test_declared_repository_is_parsed_strictly(self):
-        ok = 'import os\nREPOSITORY = "/opt/repos/validate"\n\ndef main():\n    return REPOSITORY\n'
-        self.assertEqual(rl.declared_repository(ok), "/opt/repos/validate")
+        ok = 'import os\nREPOSITORY = "/opt/repos/example-app"\n\ndef main():\n    return REPOSITORY\n'
+        self.assertEqual(rl.declared_repository(ok), "/opt/repos/example-app")
         for text in ('REPOSITORY = "/a"\nREPOSITORY = "/b"\n', 'REPOSITORY = os.environ["R"]\n',
                      'REPOSITORY = "relative"\n', 'REPOSITORY = "/a/../b"\n', 'X = "/a"\n', "not python (",
                      'def f():\n    REPOSITORY = "/a"\n', 'REPOSITORY = "/a"\ndef f():\n    global REPOSITORY\n    REPOSITORY = "/b"\n',
@@ -2386,19 +2386,27 @@ class IndependentAuditR3Test(TempRepo):
             self.assertIsNone(rl.declared_repository(text), text)
         self.assertIsNone(rl.helper_repository("/bin/ls"), "a binary declares no repository")
 
-    def test_live_validate_helper_declares_validate(self):
-        helper = "/usr/local/libexec/hermes-validate-cwd-scan"
-        if not os.path.exists(helper):
-            self.skipTest("approved helper not installed on this host")
-        self.assertEqual(rl.helper_repository(helper), "/opt/repos/validate")
+    def test_synthetic_helper_declares_its_repository(self):
+        # Hermetic: a helper source written here, read (never executed) by helper_repository.
+        # Only the root-ownership check is stood in for, and only for this one path.
+        helper = Path(self.co).parent / "example-cwd-scan"
+        helper.write_text(f'import os\nREPOSITORY = "{self.co}"\n\ndef main():\n    return REPOSITORY\n')
+        helper.chmod(0o755)
+        self.assertIsNone(rl.helper_repository(str(helper)), "a user-owned helper declares nothing")
+        real = rl._root_owned_executable
+        stand_in = lambda path, what: path if path == str(helper) else real(path, what)
+        with mock.patch.object(rl, "_root_owned_executable", stand_in):
+            self.assertEqual(rl.helper_repository(str(helper)), self.co)
+            helper.write_text('REPOSITORY = "/a"\nREPOSITORY = "/b"\n')
+            self.assertIsNone(rl.helper_repository(str(helper)), "an ambiguous declaration binds nothing")
 
     def test_helper_bound_to_another_root_never_passes_for_this_checkout(self):
         reg = {self.co: ["sudo", "-n", "/bin/true"]}
         runner = scan_runner(0, PASS_LINES)
-        with mock.patch.object(rl, "helper_repository", lambda h: "/opt/repos/validate"):
+        with mock.patch.object(rl, "helper_repository", lambda h: "/opt/repos/example-app"):
             scan = rl.run_scan(self.co, runner, reg)
             self.assertEqual(scan["status"], "incomplete")
-            self.assertIn("/opt/repos/validate", scan["tail"])
+            self.assertIn("/opt/repos/example-app", scan["tail"])
             self.assertEqual(runner.calls, [], "a helper for another root is never run")
             self.assertFalse(rl.classify_scan(scan)["ok"])
             with self.assertRaises(rl.LeaseError):
