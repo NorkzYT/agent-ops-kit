@@ -5,8 +5,13 @@ Subject: [PATCH 4/4] feat(kanban): typed dev_test_run tool that fails closed
  without an attested isolation backend, scanner recovery and test-credential
  guards
 
-Exact `git diff 4f845b43ec..61cbead82d` of the runtime branch
-feat/kanban-autonomous-reviewed: commits d15a70ddc8 (typed dev_test_run tool,
+Neutralized derivative of `git diff 4f845b43ec..61cbead82d` of the runtime
+branch feat/kanban-autonomous-reviewed: the added test fixtures use synthetic
+names (profile example-service, module apps/example-service, database
+example_test on 127.0.0.1:55432, EXAMPLE_TEST_DATABASE_URL, APP_DATABASE_URL)
+instead of the original project's, and the diff was regenerated from a commit
+of that neutralized tree, so index lines and hunks are genuine. Code paths
+are unchanged. Upstream commits d15a70ddc8 (typed dev_test_run tool,
 scanner recovery and test-credential guards), f04d4adc80 (fails closed on
 rejected isolation, scoped recovery state, stricter target guard) and
 61cbead82d (readiness needs an attested backend, not a mode string). The base
@@ -76,7 +81,7 @@ index 1ee92367ad..018f81568c 100644
  
 diff --git a/tests/tools/test_dev_test_tool.py b/tests/tools/test_dev_test_tool.py
 new file mode 100644
-index 0000000000..c68885317b
+index 0000000000..9612299ead
 --- /dev/null
 +++ b/tests/tools/test_dev_test_tool.py
 @@ -0,0 +1,655 @@
@@ -115,9 +120,9 @@ index 0000000000..c68885317b
 +REAL_CONFIG = os.path.join(REAL_HOME, ".hermes", "config.yaml")
 +CANARY = "CANARY-pw-0d9e-not-a-real-secret"
 +PGPASS = os.path.join(REAL_HOME, ".config", "hermes-test-db", "pgpass")
-+RUN370 = ("PGPASSFILE=/home/polymath-dev/.config/hermes-test-db/pgpass "
-+          "MATCHING_TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55443/matching_test?sslmode=disable' "
-+          "go test -race -p 1 -count=1 ./... && go vet ./...")
++SCANNER_BLOCKED_CMD = ("PGPASSFILE=/home/hermes-dev/.config/hermes-test-db/pgpass "
++                       "EXAMPLE_TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55432/example_test?sslmode=disable' "
++                       "go test -race -p 1 -count=1 ./... && go vet ./...")
 +
 +
 +def _real_policy() -> dict:
@@ -144,12 +149,12 @@ index 0000000000..c68885317b
 +    os.chmod(helper, 0o755)
 +    cfg = {"version": 1, "helper": str(helper), "python": "/usr/bin/python3",
 +           "helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
-+           "profiles": {"validate-matching": {
-+               "checkout": "/opt/repos/validate", "module": "apps/matching-service-go",
-+               "read_roots": ["apps/matching-service-go"], "packages": ["./..."], "container": "validate-pgtest-door",
++           "profiles": {"example-service": {
++               "checkout": "/opt/repos/example-app", "module": "apps/example-service",
++               "read_roots": ["apps/example-service"], "packages": ["./..."], "container": "example-pgtest",
 +               "isolation": {"mode": mode},
-+               "database": {"host": "127.0.0.1", "port": 55443, "dbname": "matching_test", "user": "postgres",
-+                            "sslmode": "disable", "url_env": "MATCHING_TEST_DATABASE_URL", "pgpassfile": PGPASS}}}}
++               "database": {"host": "127.0.0.1", "port": 55432, "dbname": "example_test", "user": "postgres",
++                            "sslmode": "disable", "url_env": "EXAMPLE_TEST_DATABASE_URL", "pgpassfile": PGPASS}}}}
 +    path = root / "profiles.json"
 +    _write_registry(path, cfg)
 +    monkeypatch.setattr(dtt, "CONFIG_PATH", str(path))
@@ -222,22 +227,22 @@ index 0000000000..c68885317b
 +# ------------------------------------------------------------ arguments ---
 +
 +def _cfg():
-+    return {"profiles": {"validate-matching": {}}}
++    return {"profiles": {"example-service": {}}}
 +
 +
 +@pytest.mark.parametrize("args", [
-+    {"profile": "validate-matching", "database_url": "postgresql://postgres@10.0.0.5/prod"},
-+    {"profile": "validate-matching", "env": {"PGHOST": "prod"}},
-+    {"profile": "validate-matching", "flags": ["-toolexec=/bin/sh"]},
++    {"profile": "example-service", "database_url": "postgresql://postgres@10.0.0.5/prod"},
++    {"profile": "example-service", "env": {"PGHOST": "prod"}},
++    {"profile": "example-service", "flags": ["-toolexec=/bin/sh"]},
 +    {"profile": "prod"},
-+    {"profile": "validate-matching", "packages": ["../other"]},
-+    {"profile": "validate-matching", "packages": ["-exec=/bin/sh"]},
-+    {"profile": "validate-matching", "packages": ["./a;id"]},
-+    {"profile": "validate-matching", "run": "Test Foo"},
-+    {"profile": "validate-matching", "run": "`id`"},
-+    {"profile": "validate-matching", "race": "yes"},
-+    {"profile": "validate-matching", "timeout_seconds": 5},
-+    {"profile": "validate-matching", "timeout_seconds": True},
++    {"profile": "example-service", "packages": ["../other"]},
++    {"profile": "example-service", "packages": ["-exec=/bin/sh"]},
++    {"profile": "example-service", "packages": ["./a;id"]},
++    {"profile": "example-service", "run": "Test Foo"},
++    {"profile": "example-service", "run": "`id`"},
++    {"profile": "example-service", "race": "yes"},
++    {"profile": "example-service", "timeout_seconds": 5},
++    {"profile": "example-service", "timeout_seconds": True},
 +])
 +def test_invalid_arguments_are_refused(args):
 +    with pytest.raises(dtt.DevTestRefused):
@@ -245,13 +250,13 @@ index 0000000000..c68885317b
 +
 +
 +def test_valid_arguments_build_the_fixed_invocation():
-+    req = dtt.validate_args({"profile": "validate-matching", "packages": ["./...", "./internal/db"],
-+                             "run": "^TestDoor$", "vet": True}, _cfg())
++    req = dtt.validate_args({"profile": "example-service", "packages": ["./...", "./internal/db"],
++                             "run": "^TestExample$", "vet": True}, _cfg())
 +    argv = dtt.runner_argv({"helper": "/usr/local/libexec/hermes-devtest-runner"}, "/usr/bin/python3",
 +                           "t_12345678", "77", req)
 +    assert argv == ["/usr/bin/python3", "-I", "-S", "/usr/local/libexec/hermes-devtest-runner", "run",
-+                    "--task", "t_12345678", "--run-id", "77", "--profile", "validate-matching",
-+                    "--package", "./...", "--package", "./internal/db", "--race", "--run", "^TestDoor$", "--vet",
++                    "--task", "t_12345678", "--run-id", "77", "--profile", "example-service",
++                    "--package", "./...", "--package", "./internal/db", "--race", "--run", "^TestExample$", "--vet",
 +                    "--timeout", "1200"]
 +
 +
@@ -296,14 +301,14 @@ index 0000000000..c68885317b
 +# ------------------------------------------------- headless real gate ---
 +
 +def test_run370_command_is_rejected_with_a_recovery_directive(attested_backend, headless, registry_file, worker_env):
-+    verdict = check_all_command_guards(RUN370, "local")
++    verdict = check_all_command_guards(SCANNER_BLOCKED_CMD, "local")
 +    assert verdict["approved"] is False
 +    # The exact run-370 finding: Tirith raw_ip_url + schemeless_to_sink (MEDIUM), single-query deny.
 +    assert "[MEDIUM] URL uses raw IP address" in verdict["message"]
 +    assert "Schemeless URL in sink context" in verdict["message"]
 +    assert "single-query mode (-q)" in verdict["message"]
-+    assert "RECOVERY" in verdict["message"] and 'dev_test_run(profile="validate-matching"' in verdict["message"]
-+    assert dtt.pending_recovery()["profile"] == "validate-matching"
++    assert "RECOVERY" in verdict["message"] and 'dev_test_run(profile="example-service"' in verdict["message"]
++    assert dtt.pending_recovery()["profile"] == "example-service"
 +    refusal = dtt.block_refusal()
 +    assert refusal and "dev_test_run" in refusal
 +    dtt.mark_recovery_attempted()
@@ -312,14 +317,14 @@ index 0000000000..c68885317b
 +
 +def test_rejection_without_registered_equivalent_has_no_directive(headless, worker_env, monkeypatch):
 +    monkeypatch.setattr(dtt, "CONFIG_PATH", "/nonexistent/profiles.json")
-+    verdict = check_all_command_guards(RUN370, "local")
++    verdict = check_all_command_guards(SCANNER_BLOCKED_CMD, "local")
 +    assert verdict["approved"] is False
 +    assert "RECOVERY" not in verdict["message"]
 +    assert dtt.block_refusal() is None
 +
 +
 +def test_fixed_runner_invocation_passes_the_real_scanner(headless, registry_file, worker_env):
-+    req = dtt.validate_args({"profile": "validate-matching", "vet": True}, _cfg())
++    req = dtt.validate_args({"profile": "example-service", "vet": True}, _cfg())
 +    argv = dtt.runner_argv({"helper": "/usr/local/libexec/hermes-devtest-runner"}, "/usr/bin/python3",
 +                           "t_12345678", "77", req)
 +    import shlex
@@ -340,9 +345,9 @@ index 0000000000..c68885317b
 +    "base64 $HOME/.config/hermes-test-db/pgpass",
 +    "ls -la ~/.config/hermes-test-db",
 +    f"PGPASSFILE={PGPASS} sh -c 'cat $PGPASSFILE'",
-+    "docker exec validate-pgtest-door env",
-+    "docker inspect validate-pgtest-door",
-+    "docker container exec -it validate-pgtest-door printenv POSTGRES_PASSWORD",
++    "docker exec example-pgtest env",
++    "docker inspect example-pgtest",
++    "docker container exec -it example-pgtest printenv POSTGRES_PASSWORD",
 +])
 +def test_credential_extraction_stays_blocked_even_under_yolo(headless, registry_file, worker_env, command, monkeypatch):
 +    verdict = check_all_command_guards(command, "local")
@@ -353,12 +358,12 @@ index 0000000000..c68885317b
 +
 +
 +@pytest.mark.parametrize("command", [
-+    "psql 'postgresql://postgres@db.validate-prod.internal:5432/matching' -c 'select 1'",
-+    "MATCHING_TEST_DATABASE_URL='postgresql://postgres@db.example.com:5432/matching?sslmode=require' go test ./...",
-+    f"VD_POSTGRES_DATABASE_URL=postgres://app:{CANARY}@localhost:5432/validate go test ./...",
-+    "psql -h prod-db.example.com -U postgres matching",
-+    "PGHOST=prod-db.example.com psql matching",
-+    "psql 'postgresql://postgres@10.0.0.5:5432/matching'",
++    "psql 'postgresql://postgres@db.example-prod.internal:5432/example' -c 'select 1'",
++    "EXAMPLE_TEST_DATABASE_URL='postgresql://postgres@db.example.com:5432/example?sslmode=require' go test ./...",
++    f"APP_DATABASE_URL=postgres://app:{CANARY}@localhost:5432/example go test ./...",
++    "psql -h prod-db.example.com -U postgres example",
++    "PGHOST=prod-db.example.com psql example",
++    "psql 'postgresql://postgres@10.0.0.5:5432/example'",
 +])
 +def test_production_database_connections_stay_blocked(headless, registry_file, worker_env, command):
 +    verdict = check_all_command_guards(command, "local")
@@ -395,11 +400,11 @@ index 0000000000..c68885317b
 +        calls.append((argv, kw))
 +        out = {"ok": True, "exit_code": 0, "tests": {"passed": 3, "failed": 0, "skipped": 1},
 +               "skipped_tests": [{"test": "TestX", "reason": "fixture"}],
-+               "build_output": f"postgres://postgres:{CANARY}@127.0.0.1:55443/matching_test"}
++               "build_output": f"postgres://postgres:{CANARY}@127.0.0.1:55432/example_test"}
 +        return subprocess.CompletedProcess(argv, 0, json.dumps(out), "")
 +
-+    dtt.recovery_hint(RUN370)
-+    result = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=fake_runner))
++    dtt.recovery_hint(SCANNER_BLOCKED_CMD)
++    result = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=fake_runner))
 +    assert dtt.block_refusal() is None, "an attempt clears the pending recovery"
 +    argv, kw = calls[0]
 +    assert argv[:5] == ["/usr/bin/python3", "-I", "-S", str(registry_file["helper"]), "run"]
@@ -413,19 +418,19 @@ index 0000000000..c68885317b
 +    def runner(*a, **k):
 +        raise AssertionError("must not run")
 +
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching", "database_url": "x"}, runner=runner))
++    out = json.loads(dtt.dev_test_run({"profile": "example-service", "database_url": "x"}, runner=runner))
 +    assert "refused" in out["error"]
 +    registry_file["helper"].write_text("tampered\n")
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=runner))
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=runner))
 +    assert "pinned SHA-256" in out["error"]
 +    monkeypatch.delenv("HERMES_KANBAN_TASK")
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=runner))
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=runner))
 +    assert "dispatcher-owned" in out["error"]
 +
 +
 +def test_kanban_block_refuses_once_until_the_equivalent_was_tried(attested_backend, headless, registry_file, worker_env):
 +    from tools import kanban_tools
-+    dtt.recovery_hint(RUN370)
++    dtt.recovery_hint(SCANNER_BLOCKED_CMD)
 +    with pytest.raises(kanban_tools._Reject) as exc:
 +        kanban_tools._check_scanner_recovery()
 +    assert "dev_test_run" in str(exc.value)
@@ -454,9 +459,9 @@ index 0000000000..c68885317b
 +def test_load_registry_requires_an_isolation_mode(registry_file, isolation):
 +    cfg = json.loads(json.dumps(registry_file["cfg"]))
 +    if isolation is None:
-+        del cfg["profiles"]["validate-matching"]["isolation"]
++        del cfg["profiles"]["example-service"]["isolation"]
 +    else:
-+        cfg["profiles"]["validate-matching"]["isolation"] = isolation
++        cfg["profiles"]["example-service"]["isolation"] = isolation
 +    _write_registry(registry_file["path"], cfg)
 +    with pytest.raises(dtt.DevTestRefused, match="isolation"):
 +        dtt.load_registry()
@@ -469,10 +474,10 @@ index 0000000000..c68885317b
 +
 +
 +def test_rejected_isolation_emits_no_recovery_directive(headless, rejected_registry, worker_env):
-+    verdict = check_all_command_guards(RUN370, "local")
++    verdict = check_all_command_guards(SCANNER_BLOCKED_CMD, "local")
 +    assert verdict["approved"] is False
 +    assert "RECOVERY" not in verdict["message"]
-+    assert dtt.recovery_hint(RUN370) == ""
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD) == ""
 +    assert dtt.pending_recovery() is None
 +    assert dtt.block_refusal() is None
 +
@@ -481,8 +486,8 @@ index 0000000000..c68885317b
 +    def runner(*a, **k):
 +        raise AssertionError("must not run")
 +
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=runner))
-+    assert "validate-matching" in out["error"] and REJECTED_MODE in out["error"]
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=runner))
++    assert "example-service" in out["error"] and REJECTED_MODE in out["error"]
 +    assert ISOLATION_REFUSAL in out["error"]
 +
 +
@@ -492,7 +497,7 @@ index 0000000000..c68885317b
 +
 +def test_rejected_isolation_keeps_the_credential_guards(rejected_registry):
 +    assert dtt.credential_block(f"cat {PGPASS}")
-+    assert dtt.credential_block("docker exec validate-pgtest-door env")
++    assert dtt.credential_block("docker exec example-pgtest env")
 +    from agent.file_safety import get_read_block_error
 +    assert "credential" in (get_read_block_error(PGPASS) or "")
 +
@@ -508,15 +513,15 @@ index 0000000000..c68885317b
 +
 +
 +@pytest.mark.parametrize("args", [
-+    {"profile": "validate-matching", "database_url": "x"},
++    {"profile": "example-service", "database_url": "x"},
 +    {"profile": "nope"},
-+    {"profile": "validate-matching", "packages": ["../x"]},
-+    {"profile": "validate-matching", "run": "a b"},
-+    {"profile": "validate-matching", "timeout_seconds": 1},
++    {"profile": "example-service", "packages": ["../x"]},
++    {"profile": "example-service", "run": "a b"},
++    {"profile": "example-service", "timeout_seconds": 1},
 +])
 +def test_malformed_call_keeps_the_pending_recovery(attested_backend, registry_file, worker_env, args):
 +    dtt._reset_recovery_state()
-+    assert dtt.recovery_hint(RUN370)
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD)
 +    out = json.loads(dtt.dev_test_run(args, runner=_never_runner))
 +    assert "refused" in out["error"]
 +    assert dtt.block_refusal() is not None
@@ -525,9 +530,9 @@ index 0000000000..c68885317b
 +
 +def test_precondition_refusal_clears_with_a_recorded_refusal(attested_backend, registry_file, worker_env):
 +    dtt._reset_recovery_state()
-+    assert dtt.recovery_hint(RUN370)
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD)
 +    registry_file["helper"].write_text("tampered\n")
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=_never_runner))
 +    assert "pinned SHA-256" in out["error"]
 +    assert dtt.block_refusal() is None
 +    assert "pinned SHA-256" in dtt.pending_recovery()["refused"]
@@ -536,11 +541,11 @@ index 0000000000..c68885317b
 +
 +def test_rejected_isolation_refusal_of_the_named_profile_is_a_precondition(attested_backend, registry_file, worker_env):
 +    dtt._reset_recovery_state()
-+    assert dtt.recovery_hint(RUN370)
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD)
 +    cfg = json.loads(json.dumps(registry_file["cfg"]))
-+    cfg["profiles"]["validate-matching"]["isolation"]["mode"] = REJECTED_MODE
++    cfg["profiles"]["example-service"]["isolation"]["mode"] = REJECTED_MODE
 +    _write_registry(registry_file["path"], cfg)
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=_never_runner))
 +    assert ISOLATION_REFUSAL in out["error"]
 +    assert dtt.block_refusal() is None
 +    assert REJECTED_MODE in dtt.pending_recovery()["refused"]
@@ -550,10 +555,10 @@ index 0000000000..c68885317b
 +def test_refusal_for_another_profile_keeps_the_pending_recovery(attested_backend, registry_file, worker_env):
 +    dtt._reset_recovery_state()
 +    cfg = json.loads(json.dumps(registry_file["cfg"]))
-+    cfg["profiles"]["other-legacy"] = {**cfg["profiles"]["validate-matching"], "isolation": {"mode": REJECTED_MODE},
++    cfg["profiles"]["other-legacy"] = {**cfg["profiles"]["example-service"], "isolation": {"mode": REJECTED_MODE},
 +                                       "database": {"host": "127.0.0.1", "port": 1, "dbname": "zz_unrelated"}}
 +    _write_registry(registry_file["path"], cfg)
-+    assert 'profile="validate-matching"' in dtt.recovery_hint(RUN370)
++    assert 'profile="example-service"' in dtt.recovery_hint(SCANNER_BLOCKED_CMD)
 +    out = json.loads(dtt.dev_test_run({"profile": "other-legacy"}, runner=_never_runner))
 +    assert ISOLATION_REFUSAL in out["error"]
 +    assert dtt.block_refusal() is not None
@@ -562,22 +567,22 @@ index 0000000000..c68885317b
 +
 +def test_runner_start_clears_the_pending_recovery_for_any_exit(attested_backend, registry_file, worker_env):
 +    dtt._reset_recovery_state()
-+    assert dtt.recovery_hint(RUN370)
-+    dtt.dev_test_run({"profile": "validate-matching"},
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD)
++    dtt.dev_test_run({"profile": "example-service"},
 +                     runner=lambda argv, **kw: subprocess.CompletedProcess(argv, 1, "garbage", ""))
 +    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
 +
 +
 +def test_pending_recovery_is_scoped_to_the_worker_identity(attested_backend, registry_file, worker_env, monkeypatch):
 +    dtt._reset_recovery_state()
-+    assert dtt.recovery_hint(RUN370)
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD)
 +    assert dtt.block_refusal() is not None
 +    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "78")
 +    assert dtt.pending_recovery() is None and dtt.block_refusal() is None
 +    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_87654321")
 +    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "77")
 +    assert dtt.block_refusal() is None
-+    dtt.dev_test_run({"profile": "validate-matching"}, runner=_ok_runner)
++    dtt.dev_test_run({"profile": "example-service"}, runner=_ok_runner)
 +    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_12345678")
 +    assert dtt.block_refusal() is not None, "another identity's attempt does not clear this one"
 +    monkeypatch.delenv("HERMES_KANBAN_TASK")
@@ -592,15 +597,15 @@ index 0000000000..c68885317b
 +
 +def test_recognised_mode_string_alone_exposes_nothing(headless, registry_file, worker_env):
 +    cfg = dtt.load_registry()
-+    assert list(dtt.approved_profiles(cfg)) == ["validate-matching"], "syntactically valid"
++    assert list(dtt.approved_profiles(cfg)) == ["example-service"], "syntactically valid"
 +    assert dtt.runnable_profiles(cfg) == {}, "but nothing is runnable without an attested backend"
 +    assert dtt._check_fn() is False, "tool hidden"
-+    verdict = check_all_command_guards(RUN370, "local")
++    verdict = check_all_command_guards(SCANNER_BLOCKED_CMD, "local")
 +    assert verdict["approved"] is False
 +    assert "RECOVERY" not in verdict["message"], "no directive points at a tool that cannot run"
-+    assert dtt.recovery_hint(RUN370) == ""
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD) == ""
 +    assert dtt.pending_recovery() is None and dtt.block_refusal() is None, "kanban_block stays allowed"
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=_never_runner))
 +    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"] and APPROVED_MODE in out["error"]
 +    assert "operator approval and privileged provisioning required" in out["error"]
 +
@@ -609,16 +614,16 @@ index 0000000000..c68885317b
 +    for var in ("HERMES_DEVTEST_BROKER_READY", "HERMES_DEVTEST_ATTESTED", "HERMES_DEVTEST_ISOLATION"):
 +        monkeypatch.setenv(var, "1")
 +    cfg = json.loads(json.dumps(registry_file["cfg"]))
-+    cfg["profiles"]["validate-matching"]["isolation"].update({"attested": True, "ready": True, "approved": True,
++    cfg["profiles"]["example-service"]["isolation"].update({"attested": True, "ready": True, "approved": True,
 +                                                              "broker_socket": "/run/hermes-devtest/broker.sock"})
 +    cfg["isolation_ready"] = True
 +    _write_registry(registry_file["path"], cfg)
 +    loaded = dtt.load_registry()
-+    assert dtt.backend_attested(loaded, "validate-matching", loaded["profiles"]["validate-matching"]) == dtt.NOT_IMPLEMENTED_REFUSAL
++    assert dtt.backend_attested(loaded, "example-service", loaded["profiles"]["example-service"]) == dtt.NOT_IMPLEMENTED_REFUSAL
 +    assert dtt.runnable_profiles(loaded) == {}
 +    assert dtt._check_fn() is False
-+    assert dtt.recovery_hint(RUN370) == ""
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD) == ""
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=_never_runner))
 +    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"]
 +
 +
@@ -628,8 +633,8 @@ index 0000000000..c68885317b
 +    dtt._reset_recovery_state()
 +    identity = dtt.worker_identity()
 +    with dtt._RECOVERY_LOCK:
-+        dtt._PENDING_RECOVERY[identity] = {"profile": "validate-matching", "at": 0.0}
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++        dtt._PENDING_RECOVERY[identity] = {"profile": "example-service", "at": 0.0}
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=_never_runner))
 +    assert dtt.NOT_IMPLEMENTED_REFUSAL in out["error"]
 +    assert dtt.block_refusal() is None
 +    assert dtt.NOT_IMPLEMENTED_REFUSAL in dtt.pending_recovery()["refused"]
@@ -641,7 +646,7 @@ index 0000000000..c68885317b
 +    reads (additive guards never depend on runnable readiness) while every readiness surface
 +    stays closed."""
 +    cfg = json.loads(json.dumps(registry_file["cfg"]))
-+    del cfg["profiles"]["validate-matching"]["isolation"]
++    del cfg["profiles"]["example-service"]["isolation"]
 +    _write_registry(registry_file["path"], cfg)
 +    with pytest.raises(dtt.DevTestRefused, match="isolation"):
 +        dtt.load_registry()
@@ -649,12 +654,12 @@ index 0000000000..c68885317b
 +    assert dtt.registered_or_none() is not None, "the guards still see the trusted registry"
 +    assert dtt.credential_block(f"cat {PGPASS}")
 +    assert dtt.credential_block("base64 ~/.config/hermes-test-db/pgpass")
-+    assert dtt.credential_block("docker exec validate-pgtest-door env")
++    assert dtt.credential_block("docker exec example-pgtest env")
 +    from agent.file_safety import get_read_block_error
 +    assert "credential" in (get_read_block_error(PGPASS) or "")
 +    assert dtt._check_fn() is False
-+    assert dtt.recovery_hint(RUN370) == ""
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching"}, runner=_never_runner))
++    assert dtt.recovery_hint(SCANNER_BLOCKED_CMD) == ""
++    out = json.loads(dtt.dev_test_run({"profile": "example-service"}, runner=_never_runner))
 +    assert "isolation.mode" in out["error"]
 +
 +
@@ -692,13 +697,13 @@ index 0000000000..c68885317b
 +
 +
 +@pytest.mark.parametrize("command", [
-+    "psql postgresql://u@127.0.0.1:55443/x_test",
++    "psql postgresql://u@127.0.0.1:55432/x_test",
 +    "PGHOST=localhost psql x",
 +    "psql 'postgresql://u@127.0.0.1:5432,localhost:5433/x?sslmode=disable'",
 +    "psql 'postgresql:///x?host=/var/run/postgresql'",
 +    "psql 'host=127.0.0.1 hostaddr=127.0.0.1 dbname=x'",
 +    "PGHOSTADDR=127.0.0.1 psql x",
-+    RUN370,
++    SCANNER_BLOCKED_CMD,
 +])
 +def test_database_target_block_allows_loopback(command):
 +    assert dtt.database_target_block(command) is None
@@ -707,7 +712,7 @@ index 0000000000..c68885317b
 +# ------------------------------------------------------------ redaction ---
 +
 +def test_redact_covers_dict_keys():
-+    key = f"TestX postgres://postgres:{CANARY}@127.0.0.1:55443/matching_test"
++    key = f"TestX postgres://postgres:{CANARY}@127.0.0.1:55432/example_test"
 +    out = dtt._redact({key: {key: [key]}})
 +    assert CANARY not in json.dumps(out)
 +
@@ -716,7 +721,7 @@ index 0000000000..c68885317b
 +
 +@pytest.mark.parametrize("vet,expected", [(False, 600 + 300), (True, 600 + 300 + 600)])
 +def test_runner_budget_covers_vet(attested_backend, registry_file, worker_env, vet, expected):
-+    req = dtt.validate_args({"profile": "validate-matching", "vet": vet, "timeout_seconds": 600}, _cfg())
++    req = dtt.validate_args({"profile": "example-service", "vet": vet, "timeout_seconds": 600}, _cfg())
 +    assert dtt.runner_budget(req) == expected
 +    calls = []
 +
@@ -724,7 +729,7 @@ index 0000000000..c68885317b
 +        calls.append(kw)
 +        return _ok_runner(argv, **kw)
 +
-+    dtt.dev_test_run({"profile": "validate-matching", "vet": vet, "timeout_seconds": 600}, runner=fake_runner)
++    dtt.dev_test_run({"profile": "example-service", "vet": vet, "timeout_seconds": 600}, runner=fake_runner)
 +    assert calls[0]["timeout"] == expected
 +
 +
@@ -732,7 +737,7 @@ index 0000000000..c68885317b
 +    def slow_runner(argv, **kw):
 +        raise subprocess.TimeoutExpired(argv, kw["timeout"])
 +
-+    out = json.loads(dtt.dev_test_run({"profile": "validate-matching", "vet": True}, runner=slow_runner))
++    out = json.loads(dtt.dev_test_run({"profile": "example-service", "vet": True}, runner=slow_runner))
 +    assert "killed" in out["error"] and "process-group cleanup" in out["error"]
 +    assert "2100s" in out["error"]
 diff --git a/tools/approval.py b/tools/approval.py
@@ -807,7 +812,7 @@ index d8f01e1440..06bdf99d29 100644
          return _approved()
 diff --git a/tools/dev_test_tool.py b/tools/dev_test_tool.py
 new file mode 100644
-index 0000000000..8765262794
+index 0000000000..7be0fef07f
 --- /dev/null
 +++ b/tools/dev_test_tool.py
 @@ -0,0 +1,667 @@
@@ -1454,7 +1459,7 @@ index 0000000000..8765262794
 +    "parameters": {
 +        "type": "object",
 +        "properties": {
-+            "profile": {"type": "string", "description": "Registered profile name, e.g. validate-matching."},
++            "profile": {"type": "string", "description": "Registered profile name, e.g. example-service."},
 +            "packages": {"type": "array", "items": {"type": "string"},
 +                         "description": "Package patterns inside the profile's approved set: ./... (default) or "
 +                                        "./internal/db, ./internal/..."},

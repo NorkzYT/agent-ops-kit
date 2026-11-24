@@ -39,6 +39,7 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "hermes" / "skills" / "kanban-workflow" / "scripts" / "workflow.py"
 
 sys.dont_write_bytecode = True  # keep __pycache__ out of the installed skill dir
+os.environ.pop("HERMES_MAC_REPO_ROOT", None)  # the tests pin the synthetic default root
 spec = importlib.util.spec_from_file_location("kanban_workflow", SCRIPT)
 wf = importlib.util.module_from_spec(spec)
 sys.modules["kanban_workflow"] = wf
@@ -329,7 +330,7 @@ def evidence(status="pass", task="t_2", sha=SHA, fenced=False, **extra):
               "failures": [] if status == "pass" else ["LoginTests.testRotation: expected 1, got 2"],
               "artifacts": ["~/hermes-work/t_2/build/App.app"], "device": "iPhone 17 simulator",
               "dirty_tree": False, "blocker": "", "summary": "built and tested",
-              "repo_dir": f"/Users/norkz/Documents/.hermes-validate/{task}", **extra}
+              "repo_dir": f"/Users/mac-operator/Documents/.hermes-validate/{task}", **extra}
     if fenced:
         return f"Done.\n\n```json\n{json.dumps(fields)}\n```\nAnything else?\n"
     return f"Validation done.\nBEGIN-EVIDENCE\n{json.dumps(fields)}\nEND-EVIDENCE\n"
@@ -474,7 +475,7 @@ class IntakeTest(StateDirMixin, unittest.TestCase):
     def test_body_file_carries_a_long_task_set(self):
         fake = FakeHermes()
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as fh:
-            fh.write("Submission 5 tasks from the Notion CSV:\n1. Video loads slowly\n2. Photo cropping\n")
+            fh.write("Milestone 5 tasks from the Notion CSV:\n1. Video loads slowly\n2. Photo cropping\n")
         self.addCleanup(os.unlink, fh.name)
         nw.intake(intake_args("--lane", "mac", "--key", "k", "--body-file", fh.name), fake)
         self.assertIn("2. Photo cropping", wf.request_of(fake.shows["t_1"]))
@@ -506,7 +507,7 @@ class IntakeTest(StateDirMixin, unittest.TestCase):
         self.assertEqual(plan["code"]["assignee"], "default")
 
     def test_repo_must_be_a_clone_url(self):
-        for repo, expected in (("", "--repo is required"), ("/opt/repos/validate", "not a clone URL")):
+        for repo, expected in (("", "--repo is required"), ("/opt/repos/example-app", "not a clone URL")):
             fake = FakeHermes()
             with self.assertRaisesRegex(wf.WorkflowError, expected):
                 nw.intake(intake_args("--lane", "mac", "--key", "k", repo=repo), fake)
@@ -662,7 +663,7 @@ class CheckoutRepo(StateDirMixin):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.remote = os.path.join(self.tmp, "remote.git")
         self.url = f"file://{self.remote}"
-        self.co = os.path.join(self.tmp, "validate")
+        self.co = os.path.join(self.tmp, "example-app")
         git = lambda *a, cwd=self.tmp: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)  # noqa: E731
         self.git = git
         git("init", "--bare", "-b", "main", self.remote)
@@ -775,7 +776,7 @@ class CheckoutTest(CheckoutRepo, unittest.TestCase):
         os.makedirs(os.path.join(home, "hermes-work", "t_9"))
         cases = {
             "relative/path": "plain absolute path", f"{self.tmp}/with space": "plain absolute path",
-            f"{self.co}/../validate": "plain absolute path", f"{self.co}/": "plain absolute path",
+            f"{self.co}/../example-app": "plain absolute path", f"{self.co}/": "plain absolute path",
             f"{self.co}\nWorkflow: report": "plain absolute path",
             os.path.join(self.tmp, "missing"): "not an existing directory",
             link: f"not canonical; pass the resolved path '{self.co}'",
@@ -849,9 +850,9 @@ class DispatchTest(StateDirMixin, unittest.TestCase):
         message = run[5]
         self.assertTrue(message.startswith("You are the Mac worker's own Hermes agent. Kanban card t_2"), message[:80])
         for text in (f"Commit: {SHA}", f"Repository: {REPO_URL}",
-                     f"git -C <clone> worktree add --detach /Users/norkz/Documents/.hermes-validate/t_2 {SHA}",
+                     f"git -C <clone> worktree add --detach /Users/mac-operator/Documents/.hermes-validate/t_2 {SHA}",
                      f"under {wf.MAC_REPO_ROOT}", "Never change that clone's own checkout",
-                     '"repo_dir": "/Users/norkz/Documents/.hermes-validate/t_2"',
+                     '"repo_dir": "/Users/mac-operator/Documents/.hermes-validate/t_2"',
                      "you never change source code", "Forbidden: editing or adding tracked files, committing, pushing",
                      "BEGIN-EVIDENCE", "END-EVIDENCE", "~/hermes-work/t_2", "changed the login screen",
                      "are on the coordinator, not on this machine; never use them",
@@ -974,7 +975,7 @@ class WaitTest(StateDirMixin, unittest.TestCase):
 
     def test_tolerant_parsing(self):
         bare = json.dumps({"task": "t_2", "status": "passed", "sha_tested": SHA[:10],
-                           "repo_dir": "/Users/norkz/Documents/app"})
+                           "repo_dir": "/Users/mac-operator/Documents/app"})
         for output in (evidence(fenced=True), f"Summary first.\n{bare}\nThanks.",
                        evidence().replace("BEGIN-EVIDENCE\n", "BEGIN-EVIDENCE\n```json\n").replace("\nEND", "\n```\nEND"),
                        evidence() + "\nSome trailing prose { not json"):
@@ -993,10 +994,10 @@ class WaitTest(StateDirMixin, unittest.TestCase):
     def test_the_mac_lane_validates_in_its_own_clone(self):
         raw = json.loads(evidence().split("\n")[2])
         for repo_dir in (None, "~/hermes-work/t_2", "/opt/repos/app"):
-            with self.assertRaisesRegex(wf.EvidenceError, "not a clone under /Users/norkz/Documents"):
+            with self.assertRaisesRegex(wf.EvidenceError, "not a clone under /Users/mac-operator/Documents"):
                 wf.normalize_evidence({**raw, "repo_dir": repo_dir}, "t_2", SHA, "mac-worker")
         self.assertEqual(wf.normalize_evidence(raw, "t_2", SHA, "mac-worker")["repo_dir"],
-                         "/Users/norkz/Documents/.hermes-validate/t_2")
+                         "/Users/mac-operator/Documents/.hermes-validate/t_2")
         self.assertEqual(wf.normalize_evidence({**raw, "repo_dir": None}, "t_2", SHA, "windows-worker")["status"],
                          "pass")  # Windows keeps its fresh clone
 
@@ -1286,7 +1287,7 @@ def mobile_output(status="pass", task="t_2", sha=SHA, sims=("iphone", "ipad"), s
                  "screenshots": [f"~/hermes-work/{task}/{kind}.png"], "log_excerpt": "App launched"}
         entry.update((sim_over or {}).get(kind, {}))
         entries.append(entry)
-    fields = {"task": task, "status": status, "sha_tested": sha, "repo_dir": "/Users/norkz/Documents/app",
+    fields = {"task": task, "status": status, "sha_tested": sha, "repo_dir": "/Users/mac-operator/Documents/app",
               "platform": "iOS simulator", "os": "macOS 16.1", "tools": "Xcode 27.0",
               "commands": [{"cmd": "xcodebuild test-without-building -scheme App", "exit_code": 0}],
               "tests": {"passed": 40, "failed": 0, "skipped": 0}, "failures": [], "artifacts": [],
@@ -1308,6 +1309,15 @@ class MobileTest(StateDirMixin, unittest.TestCase):
         # t_1 code, t_2 mac, t_3 round, t_4 report
         nw.intake(intake_args("--lane", "mac", "--mobile", "ios", "--key", "m", "--body", "iPad checkout"), self.fake)
         os.environ.pop(wf.BROWSERSTACK_FLAG, None)
+
+    def test_mac_repo_root_is_configurable_and_fails_closed(self):
+        self.assertEqual(wf.MAC_REPO_ROOT, wf.DEFAULT_MAC_REPO_ROOT)
+        self.assertEqual(wf.mac_repo_root({"HERMES_MAC_REPO_ROOT": "/Users/someone/Code/"}), "/Users/someone/Code")
+        self.assertEqual(wf.mac_repo_root({"HERMES_MAC_REPO_ROOT": " /Users/a.b/My_Code-2 "}), "/Users/a.b/My_Code-2")
+        for bad in ("", "relative/dir", "/", "/Users", "/Users/x/../y", "/Users//x", "//Users/x", "/Users/x/./y",
+                    "/Users/x\nz", "/Users/my code", "/Users/x;id", "/Users/$(id)/x", "/Users/`id`", "/Users/x'y",
+                    "/Users/.hidden/x"):
+            self.assertEqual(wf.mac_repo_root({"HERMES_MAC_REPO_ROOT": bad}), wf.DEFAULT_MAC_REPO_ROOT, bad)
 
     def test_windows_is_deferred_and_the_mac_lane_is_required(self):
         for lanes, text in ((["--lane", "mac", "--lane", "windows"], "Windows lane is deferred"),
@@ -1344,9 +1354,9 @@ class MobileTest(StateDirMixin, unittest.TestCase):
         msg = self.fake.runs[-1]["message"]
         for text in (f"under {wf.MAC_REPO_ROOT}", "/opt/repos/...", "never use them",
                      "Never change that clone's own checkout",
-                     f"git -C <clone> worktree add --detach /Users/norkz/Documents/.hermes-validate/t_2 {SHA}",
+                     f"git -C <clone> worktree add --detach /Users/mac-operator/Documents/.hermes-validate/t_2 {SHA}",
                      "git status --porcelain --untracked-files=no", f"checkout --detach {SHA}",
-                     '"repo_dir": "/Users/norkz/Documents/.hermes-validate/t_2"',
+                     '"repo_dir": "/Users/mac-operator/Documents/.hermes-validate/t_2"',
                      f"git rev-parse HEAD       (must print {SHA} exactly", '"workspace: <dir> has uncommitted',
                      "xcrun simctl list devices available --json", "xcrun simctl boot <udid>",
                      "xcodebuild build-for-testing -scheme <scheme> -destination 'platform=iOS Simulator,id=<iphone-udid>' "
@@ -1361,8 +1371,8 @@ class MobileTest(StateDirMixin, unittest.TestCase):
     def test_a_pass_fails_closed_without_both_simulators_the_full_sha_or_the_mac_clone(self):
         bad = (({"sims": ("iphone",)}, "no ipad simulator evidence"),
                ({"sha": SHA[:12]}, "full SHA"),
-               ({"repo_dir": "/opt/repos/app"}, "not a clone under /Users/norkz/Documents"),
-               ({"repo_dir": "/Users/norkz/Documents/../tmp/app"}, "not a clone under"),
+               ({"repo_dir": "/opt/repos/app"}, "not a clone under /Users/mac-operator/Documents"),
+               ({"repo_dir": "/Users/mac-operator/Documents/../tmp/app"}, "not a clone under"),
                ({"repo_dir": "~/hermes-work/t_2"}, "not a clone under"),
                ({"sim_over": {"ipad": {"screenshots": []}}}, "ipad simulator evidence lacks screenshot"),
                ({"sim_over": {"iphone": {"launch_exit": None, "udid": ""}}}, "lacks launch exit code, udid"))
@@ -1371,7 +1381,7 @@ class MobileTest(StateDirMixin, unittest.TestCase):
                 wf.normalize_evidence(mobile_raw(**kw), "t_2", SHA, "mac-worker", "ios")
         ev = wf.normalize_evidence(mobile_raw(), "t_2", SHA, "mac-worker", "ios")
         self.assertEqual((ev["status"], ev["repo_dir"], [s["kind"] for s in ev["simulators"]]),
-                         ("pass", "/Users/norkz/Documents/app", ["iphone", "ipad"]))
+                         ("pass", "/Users/mac-operator/Documents/app", ["iphone", "ipad"]))
         self.assertEqual(ev["device"], "iPhone 17 (iOS 26.0, IPHONE-UDID-1); "
                                        "iPad Pro 13-inch (M5) (iPadOS 26.0, IPAD-UDID-1)")
         self.assertEqual(ev["simulators"][1]["result_bundle"], "~/hermes-work/t_2/ipad.xcresult")
@@ -1384,7 +1394,7 @@ class MobileTest(StateDirMixin, unittest.TestCase):
                                               sim_over={"iphone": {"build_exit": 65}}), "t_2", SHA, "mac-worker", "ios")
         self.assertEqual(ev["status"], "fail")  # a failed build may stop before the iPad
         blocked = {"task": "t_2", "status": "blocked",
-                   "blocker": "workspace: /Users/norkz/Documents/app has uncommitted tracked changes"}
+                   "blocker": "workspace: /Users/mac-operator/Documents/app has uncommitted tracked changes"}
         ev = wf.normalize_evidence(blocked, "t_2", SHA, "mac-worker", "ios")
         self.assertEqual((ev["status"], ev["blocker"][:10]), ("blocked", "workspace:"))
 
@@ -1487,7 +1497,7 @@ class FakeBrowserStack:
 
 
 def device_output(status="pass", task="t_5", sha=SHA, build_id=BUILD_ID, **extra):
-    fields = {"task": task, "status": status, "sha_tested": sha, "repo_dir": f"/Users/norkz/Documents/.hermes-validate/{task}",
+    fields = {"task": task, "status": status, "sha_tested": sha, "repo_dir": f"/Users/mac-operator/Documents/.hermes-validate/{task}",
               "build_id": build_id, "app_url": "bs://app1", "test_suite_url": "bs://suite1",
               "devices": DEVICES.split("|"), "commands": [{"cmd": "curl ... /build", "exit_code": 0}],
               "failures": [], "dirty_tree": False, "blocker": "", "summary": "real devices", **extra}
@@ -1617,7 +1627,7 @@ class BrowserStackStageTest(StateDirMixin, unittest.TestCase):
         self.assertEqual(self.fake.by_title("Review: "), [])
         nw.dispatch(dev, self.fake)
         msg = self.fake.runs[-1]["message"]
-        for text in (f'"buildTag": "{SHA}"', f"worktree add --detach /Users/norkz/Documents/.hermes-validate/{dev} {SHA}",
+        for text in (f'"buildTag": "{SHA}"', f"worktree add --detach /Users/mac-operator/Documents/.hermes-validate/{dev} {SHA}",
                      '. ~/.hermes/browserstack.env', 'curl -sS -u "$BROWSERSTACK_USERNAME:$BROWSERSTACK_ACCESS_KEY"',
                      f"{wf.bs.API}/build", "never `set -x`", "human-approval: signing",
                      "browserstack: credentials not provisioned on the Mac", '"build_id"',
@@ -2545,7 +2555,7 @@ class WorkerPolicyTextTest(unittest.TestCase):
         skill = (REPO / "hermes" / "skills" / "kanban-workflow" / "SKILL.md").read_text()
         self.assertIn("call the `dev_test_run` tool", skill)
         self.assertIn("`kanban_block` refuses until you tried it", skill)
-        self.assertNotIn("PGPASSFILE=<path> MATCHING_TEST_DATABASE_URL", skill)
+        self.assertNotIn("PGPASSFILE=<path> EXAMPLE_TEST_DATABASE_URL", skill)
         for soul in ("hermes/SOUL.md", "hermes/profiles/coder/SOUL.md"):
             self.assertIn("dev_test_run", (REPO / soul).read_text(), soul)
 

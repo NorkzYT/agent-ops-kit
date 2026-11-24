@@ -287,8 +287,8 @@ must be root-owned and take no arguments; the sudoers entry is exact):
 
 ```bash
 python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py register-scanner \
-  /opt/repos/validate -- sudo -n /usr/local/libexec/hermes-validate-cwd-scan
-python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py status --checkout /opt/repos/validate
+  /opt/repos/example-app -- sudo -n /usr/local/libexec/hermes-example-cwd-scan
+python3 ~/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/repo_lease.py status --checkout /opt/repos/example-app
 ```
 
 Check without creating anything:
@@ -324,7 +324,7 @@ make hermes-restart
 In Discord:
 
 ```
-!work both Continue Submission 5 from the existing Notion CSV task set in validate
+!work both Continue milestone 5 from the existing Notion CSV task set in example-app
 ```
 
 or plain words ("build it on the Mac and Windows workers"). The orchestrator
@@ -380,7 +380,7 @@ These hold on every card, in the remote task and in the profile prompts:
 |---------|-------|-----|
 | `--repo … is not a clone URL` | a local path was passed | pass `git -C <path> remote get-url origin` |
 | `--mobile ios: the Windows lane is deferred …` | Windows is not part of the mobile activation | `--lane mac --mobile ios` ([mobile-validation.md](mobile-validation.md)) |
-| mac card `blocked: workspace: …` | no clone under `/Users/norkz/Documents`, a dirty reused worktree or wrong HEAD on the Mac | fix the clone on the Mac, then `hermes kanban unblock <id>` |
+| mac card `blocked: workspace: …` | no clone under `/Users/mac-operator/Documents`, a dirty reused worktree or wrong HEAD on the Mac | fix the clone on the Mac, then `hermes kanban unblock <id>` |
 | `lane(s) … have no peer` | a host profile was passed as a lane | lanes are `mac`, `windows` or `--peer <lane>=<peer>`; host checks run on the code card |
 | `profile 'mac-worker' does not exist` | lane profile missing | step 2 above |
 | `no Hermes peer 'mac' is configured` / `has no API key` | peer not registered on the lane profile | step 2 with `PROFILE_PEER_URL` and `PROFILE_PEER_KEY` |

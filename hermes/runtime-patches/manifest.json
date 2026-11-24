@@ -2,8 +2,8 @@
   "schema": "hermes-runtime-patches/v1",
   "status": "archived-legacy",
   "base": "9ebe577798eaab1b3e95b5c44c588c9bb5e43799",
-  "base_note": "Provenance only. 9ebe5777 = 9ebe577798eaab1b3e95b5c44c588c9bb5e43799 is a LOCAL, unpushed, customized commit (9th of 9 local commits on feat/discord-channel-org over upstream 205645ee424163c7b6cfc032c331c3557797497b), not an upstream commit; resolved from the live reflog and reproduced in scratch (base + 0001..0004 = tree of 61cbead82d). None of 0001-0004 applies to the official runtime 71736c9f32597bbca9d89cede5aa136e55946b2f, and none is an install prerequisite: the kit uses native kanban_* tools (workflow.py board transport native-v1). Every patch stays unreviewed; a pinned base is not a review and approves nothing.",
-  "ancestry_note": "0001-0003 = 9ebe5777..4f845b43ec, 0004 = git diff 4f845b43ec..61cbead82d. Ancestry is provenance, not review.",
+  "base_note": "Provenance only. 9ebe5777 = 9ebe577798eaab1b3e95b5c44c588c9bb5e43799 is a LOCAL, unpushed, customized commit (on upstream 205645ee424163c7b6cfc032c331c3557797497b) of the operator checkout the patches were cut from, not an upstream commit, so it is not fetchable from any public remote and other hosts cannot reproduce the apply check. None of 0001-0004 applies to the official runtime 71736c9f32597bbca9d89cede5aa136e55946b2f, and none is an install prerequisite: the kit uses native kanban_* tools (workflow.py board transport native-v1). Every patch stays unreviewed; a pinned base is not a review and approves nothing.",
+  "ancestry_note": "0001-0003 = the three commits 9ebe5777..4f845b43ec (base + 0001..0003 yields the tree of 4f845b43ec). 0004 = neutralized derivative of git diff 4f845b43ec..61cbead82d: the added test fixtures use synthetic names (example-service, example_test, 127.0.0.1:55432, EXAMPLE_TEST_DATABASE_URL, APP_DATABASE_URL) instead of the original project's, and one model-visible string also changed: the dev_test_run tool schema's profile description example in tools/dev_test_tool.py now reads 'e.g. example-service.' (prompt-visible text, not code behaviour); code paths are unchanged. It was regenerated as git diff --stat=100 -p from a commit of that neutralized tree, so its index lines and hunks are genuine. base + 0001..0004 (git apply --check then git apply, in order, no --3way) applies cleanly and yields tree 1fa31cb68233041a80be5538bcebc863c96c2f71 (not the tree of 61cbead82d, which differs only in those fixtures and that schema description example), verified 2026-11-24 in an isolated scratch checkout whose object store borrowed the base objects read-only. Ancestry is provenance, not review.",
   "patches": [
     {
       "file": "0001-feat-kanban-hand-the-worker-s-own-terminal-its-task-.patch",
@@ -28,7 +28,7 @@
     },
     {
       "file": "0004-feat-kanban-typed-dev_test_run-tool-scanner-recovery.patch",
-      "sha256": "42740016897c32fdb0482e2998190308df95440584bfad488cdeedeb3683cb77",
+      "sha256": "d4e4504a5b343571245986f11058506302c2f2254461b0a19274127906df6a7d",
       "review": {
         "status": "unreviewed"
       }

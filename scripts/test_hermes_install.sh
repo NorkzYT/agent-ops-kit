@@ -71,7 +71,7 @@ CLIPROXY_PORT=8317
 CLIPROXY_API_KEY=cptest
 CLAUDE_MAX_PROXY_PORT=3456
 CLAUDE_MAX_PROXY_API_KEY=secrettoken123
-HERMES_MODEL=gpt-5.6-sol
+HERMES_MODEL=gpt-6.2-sol
 HERMES_CODING_MODEL=opus
 HONCHO_PORT=8000
 HONCHO_PEER_NAME=me
@@ -97,7 +97,10 @@ ck "config.yaml has no unrendered tokens" "! grep -q '__[A-Z0-9_]*__' '$cfg'"
 ck "tirith scanner enabled"               "grep -qE '^  tirith_enabled: true\$' '$cfg'"
 ck "tirith scanner fails closed"          "grep -qE '^  tirith_fail_open: false\$' '$cfg'"
 ck "tirith never fail-open in template"   "! grep -qE 'tirith_fail_open: true' '$cfg'"
-ck "orchestrator model = gpt-5.6-sol"     "grep -q 'default: gpt-5.6-sol' '$cfg'"
+ck "orchestrator model = gpt-6.2-sol"     "grep -q 'default: gpt-6.2-sol' '$cfg'"
+ck "compression model = gpt-6.1-terra"    "grep -A3 '^  compression:' '$cfg' | grep -qE '^    model: gpt-6.1-terra\$'"
+ck "compression has no default fallback"  "grep -A10 '^  compression:' '$cfg' | grep -qE '^    fallback_chain: \[\]\$'"
+ck "no below-floor GPT id rendered"       "! grep -qE 'gpt-5\.|gpt-6-astra|luna' '$cfg'"
 ck "orchestrator reasoning effort = high" "grep -qE '^  reasoning_effort: high\$' '$cfg'"
 ck "title reasoning effort = low"         "grep -A4 '^  title_generation:' '$cfg' | grep -qE '^    reasoning_effort: low\$'"
 ck "config schema version = 44"           "grep -qE '^_config_version: 44\$' '$cfg'"
@@ -220,9 +223,8 @@ ln -s "$tmp/no-such-capabilities" "$kit/hermes/capabilities"
 cap_root_case dangling dangling
 
 # --- default-model scenario: with HERMES_MODEL unset the installer must fall
-# back to the Terra starting model (gpt-6.1-terra), not luna or sol. Luna stays
-# the per-task routine floor the router rewrites to; that is not the configured
-# default. The fixture above keeps proving an explicit HERMES_MODEL renders
+# back to the Terra starting model (gpt-6.1-terra), not sol. Terra is also the
+# routine floor; nothing below GPT 6.1 Terra is rendered. The fixture above keeps proving an explicit HERMES_MODEL renders
 # through; this proves the install DEFAULT.
 hh2="$tmp/hermes-default"
 envf2="$tmp/fixture-default.env"
@@ -235,6 +237,31 @@ cfg2="$hh2/config.yaml"
 ck "default installer exits 0 (rc=$rc2)"  "[[ $rc2 -eq 0 ]]"
 ck "default orchestrator model = terra"   "grep -qE '^  default: gpt-6.1-terra\$' '$cfg2'"
 ck "default model is not luna"            "! grep -qE '^  default: gpt-5.6-luna' '$cfg2'"
+
+# --- model-floor scenario: a stale explicit GPT override below 6.1/Terra in
+# .env (each key the installer renders or forwards) is refused before anything
+# is written; the error names the key and the migration planner, never a secret.
+floor_case() {  # label, KEY=VALUE line
+  local hhf="$tmp/hermes-floor-$1" envff="$tmp/fixture-floor-$1.env" key="${2%%=*}"
+  grep -v "^$key=" "$envf" | sed "s#^HERMES_HOME=.*#HERMES_HOME=$hhf#" > "$envff"
+  printf '%s\n' "$2" >> "$envff"
+  HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envff" \
+    HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+    bash scripts/hermes-install.sh >"$tmp/out-floor-$1.log" 2>&1
+  local rcf=$?
+  ck "floor $1: refused (rc=$rcf)"          "[[ $rcf -ne 0 ]]"
+  ck "floor $1: no config written"          "[[ ! -e '$hhf/config.yaml' ]]"
+  ck "floor $1: names key + migration"      "grep -q '$key=' '$tmp/out-floor-$1.log' && grep -q 'model-floor-migrate.py' '$tmp/out-floor-$1.log'"
+  ck "floor $1: no secret in output"        "! grep -qE 'cptest|secrettoken123' '$tmp/out-floor-$1.log'"
+}
+floor_case hermes-luna    "HERMES_MODEL=gpt-5.6-luna"
+floor_case hermes-typo    "HERMES_MODEL=gpt-6-1-terra"
+floor_case aux-comp       "AUX_COMPRESSION_MODEL=gpt-5.6-terra"
+floor_case aux-comp-fb    "AUX_COMPRESSION_FALLBACK_MODEL=gpt-5.6-luna"
+floor_case honcho         "HONCHO_MODEL=gpt-5.6-terra"
+floor_case classifier     "MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL=gpt-5.6-sol"
+floor_case gpt-list       "MODEL_ROUTER_GPT_MODELS=gpt-6.1-terra,gpt-6-astra"
+floor_case aux-title      "AUX_MODEL=gpt-5.6-luna"
 # Router knobs unset in .env must default to ON (privacy is fail-closed by
 # default; complexity rewrite on by default). Both fixtures above omit them.
 ck "default complexity_routing = true"    "grep -qE '^        complexity_routing: true\$' '$cfg2'"
@@ -308,6 +335,17 @@ rc4=$?
 ck "--force installer exits 0 (rc=$rc4)"  "[[ $rc4 -eq 0 ]]"
 ck "--force keeps live allowlist entries" "grep -qF 'command_allowlist: [\"script execution via -e/-c flag\", \"git push *\"]' '$cfg'"
 ck "--force logged the kept entries"      "grep -q 'command_allowlist: keeping' '$tmp/out-force.log'"
+
+# --- Mac clone root: a value set directly in $HERMES_HOME/.env survives a re-install
+# whose kit .env leaves HERMES_MAC_REPO_ROOT unset; a kit value is forwarded.
+printf 'HERMES_MAC_REPO_ROOT=/Users/mac-operator/src\n' >> "$henv"
+HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf" HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+  bash scripts/hermes-install.sh >"$tmp/out-macroot.log" 2>&1
+ck "mac root: existing value kept"        "grep -qx 'HERMES_MAC_REPO_ROOT=/Users/mac-operator/src' '$henv'"
+printf 'HERMES_MAC_REPO_ROOT=/Users/mac-operator/Documents\n' >> "$envf"
+HOME="$tmp" PATH="/usr/bin:/bin" ENV_FILE="$envf" HERMES_SKIP_INSTALL=1 HERMES_SKIP_GATEWAY=1 \
+  bash scripts/hermes-install.sh >"$tmp/out-macroot2.log" 2>&1
+ck "mac root: kit value forwarded"        "grep -qx 'HERMES_MAC_REPO_ROOT=/Users/mac-operator/Documents' '$henv'"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]] || { echo '--- installer output ---'; cat "$tmp/out.log"; }

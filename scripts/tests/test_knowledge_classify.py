@@ -710,26 +710,26 @@ class ClassifyE2E(unittest.TestCase):
     # Reasoning effort and readable review artifacts
     # ------------------------------------------------------------------ #
     def test_effort_is_sent_on_every_cloud_request_and_recorded(self):
-        p, items = self.run_kc("edu/Strategy Book", "edu/Cloud Book", "--effort", "high", "--model", "gpt-5.6-sol")
+        p, items = self.run_kc("edu/Strategy Book", "edu/Cloud Book", "--effort", "high", "--model", "gpt-6.2-sol")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         bodies = [json.loads(r["body"]) for r in self.cloud.requests]
         self.assertGreaterEqual(len(bodies), 3, "classification x2 + one spec completion expected")
         self.assertTrue(all(b.get("reasoning_effort") == "high" for b in bodies), bodies)
-        self.assertTrue(all(b.get("model") == "gpt-5.6-sol" for b in bodies))
+        self.assertTrue(all(b.get("model") == "gpt-6.2-sol" for b in bodies))
         it = items["edu/Strategy Book"]
-        self.assertEqual(it["classifier"], "cliproxy:gpt-5.6-sol")
-        self.assertEqual(it["model_requested"], "gpt-5.6-sol")
+        self.assertEqual(it["classifier"], "cliproxy:gpt-6.2-sol")
+        self.assertEqual(it["model_requested"], "gpt-6.2-sol")
         self.assertEqual(it["effort_requested"], "high")
         self.assertEqual(it["model_served"], "cloud-stub-served")
         self.assertEqual(it["usage"], {"prompt_tokens": 100, "completion_tokens": 12, "reasoning_tokens": 5})
         self.assertGreaterEqual(it["latency_s"], 0.0)
         data = json.loads((self.tmp / "report-0.json").read_text())
-        self.assertEqual((data["run"]["model"], data["run"]["effort"]), ("gpt-5.6-sol", "high"))
+        self.assertEqual((data["run"]["model"], data["run"]["effort"]), ("gpt-6.2-sol", "high"))
         self.assertEqual(data["run"]["models_served"], ["cloud-stub-served"])
-        self.assertIn("cliproxy:gpt-5.6-sol/high", p.stdout)
+        self.assertIn("cliproxy:gpt-6.2-sol/high", p.stdout)
         self.assertNotIn("test-key", (self.tmp / "report-0.json").read_text() + p.stdout)
         plan = json.loads((self.tmp / "plan-report-0.json").read_text())
-        self.assertEqual((plan["model"], plan["effort"]), ("gpt-5.6-sol", "high"))
+        self.assertEqual((plan["model"], plan["effort"]), ("gpt-6.2-sol", "high"))
         # The env default and the default effort.
         self.cloud.requests.clear()
         p, items = self.run_kc("edu/Strategy Book", KNOWLEDGE_CLASSIFY_EFFORT="medium")
@@ -738,6 +738,19 @@ class ClassifyE2E(unittest.TestCase):
         p, items = self.run_kc("edu/Strategy Book")
         self.assertEqual(json.loads(self.cloud.requests[0]["body"])["reasoning_effort"], kc.DEFAULT_EFFORT)
         self.assertIn(kc.DEFAULT_EFFORT, kc.EFFORTS)
+
+    def test_below_floor_model_is_refused_before_any_call(self):
+        for stale in ("gpt-5.6-sol", "gpt-5.6-luna", "gpt-6-1-terra"):
+            with self.subTest(model=stale):
+                self.cloud.requests.clear()
+                p, _items = self.run_kc("edu/Strategy Book", "--model", stale)
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("below the GPT model floor", p.stdout + p.stderr)
+                self.assertEqual(self.cloud.requests, [])
+        self.cloud.requests.clear()
+        p, _items = self.run_kc("edu/Strategy Book", KNOWLEDGE_CLASSIFY_MODEL="gpt-5.6-terra")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(self.cloud.requests, [])
         # Unsupported efforts are refused before anything is sent.
         self.cloud.requests.clear()
         p, _ = self.run_kc("edu/Strategy Book", "--effort", "xhigh")

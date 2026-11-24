@@ -107,7 +107,25 @@ PEER_LANES = {"mac-worker": "mac", "windows-worker": "windows"}
 # iOS/iPad-first mobile validation (`--mobile ios`, docs/mobile-validation.md).
 MOBILE_TARGETS = ("ios",)
 MOBILE_LANE = "mac-worker"
-MAC_REPO_ROOT = "/Users/norkz/Documents"  # the Mac worker's clones live under here
+DEFAULT_MAC_REPO_ROOT = "/Users/mac-operator/Documents"  # synthetic placeholder
+
+
+_MAC_ROOT_RE = re.compile(r"(?:/[A-Za-z0-9_@+-][A-Za-z0-9._@+-]*){2,}")
+
+
+def mac_repo_root(env=os.environ) -> str:
+    """Where the Mac worker's clones live: HERMES_MAC_REPO_ROOT (an absolute, normalized
+    path at least two levels below /, without '.'/'..' components, made only of shell-safe
+    characters because the Mac card quotes it into git/cd commands), else the synthetic
+    placeholder. An unusable value falls back to the placeholder, so Mac evidence is
+    refused rather than accepted anywhere."""
+    raw = (env.get("HERMES_MAC_REPO_ROOT") or "").strip().rstrip("/")
+    if _MAC_ROOT_RE.fullmatch(raw) and os.path.normpath(raw) == raw:
+        return raw
+    return DEFAULT_MAC_REPO_ROOT
+
+
+MAC_REPO_ROOT = mac_repo_root()  # the Mac worker's clones live under here
 MAC_WORKTREES = ".hermes-validate"  # detached per-card worktrees: MAC_REPO_ROOT/MAC_WORKTREES/<card>
 SIMULATORS = ("iphone", "ipad")  # both must pass the same SHA
 SIM_STEPS = ("build", "test", "install", "launch")

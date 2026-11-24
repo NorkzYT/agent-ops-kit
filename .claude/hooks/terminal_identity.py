@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 ADJECTIVES = [
-    "cosmic", "thunder", "velvet", "neon", "shadow", "crystal", "phantom",
+    "cosmic", "thunder", "violet", "neon", "shadow", "crystal", "phantom",
     "golden", "iron", "arctic", "blazing", "crimson", "mystic", "quantum",
     "swift", "silent", "brave", "clever", "fierce", "noble", "lunar",
     "solar", "frosty", "ember", "coral", "azure", "scarlet", "jade",

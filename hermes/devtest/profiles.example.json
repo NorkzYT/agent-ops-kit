@@ -4,27 +4,27 @@
   "helper_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
   "python": "/usr/bin/python3",
   "run_as_uid": 1000,
-  "kanban_db": "/home/polymath-dev/.hermes/kanban.db",
-  "lease_dir": "/home/polymath-dev/.hermes/kanban/workflow-runs/leases",
-  "state_dir": "/home/polymath-dev/.cache/hermes-devtest",
+  "kanban_db": "/home/hermes-dev/.hermes/kanban.db",
+  "lease_dir": "/home/hermes-dev/.hermes/kanban/workflow-runs/leases",
+  "state_dir": "/home/hermes-dev/.cache/hermes-devtest",
   "go": "/usr/local/go/bin/go",
-  "gomodcache": "/home/polymath-dev/go/pkg/mod",
+  "gomodcache": "/home/hermes-dev/go/pkg/mod",
   "profiles": {
-    "validate-matching": {
-      "checkout": "/opt/repos/validate",
-      "module": "apps/matching-service-go",
-      "read_roots": ["apps/matching-service-go", "packages/observability-go"],
+    "example-service": {
+      "checkout": "/opt/repos/example-app",
+      "module": "apps/example-service",
+      "read_roots": ["apps/example-service", "packages/shared-go"],
       "packages": ["./..."],
-      "container": "validate-pgtest-door",
+      "container": "example-pgtest",
       "isolation": {"mode": "same-uid-landlock"},
       "database": {
         "host": "127.0.0.1",
-        "port": 55443,
-        "dbname": "matching_test",
+        "port": 55432,
+        "dbname": "example_test",
         "user": "postgres",
         "sslmode": "disable",
-        "url_env": "MATCHING_TEST_DATABASE_URL",
-        "pgpassfile": "/home/polymath-dev/.config/hermes-test-db/pgpass"
+        "url_env": "EXAMPLE_TEST_DATABASE_URL",
+        "pgpassfile": "/home/hermes-dev/.config/hermes-test-db/pgpass"
       }
     }
   }

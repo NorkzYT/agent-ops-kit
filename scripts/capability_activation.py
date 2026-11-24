@@ -59,13 +59,15 @@ ROOT_DATA = ("hermes/capabilities/registry.json", "hermes/capabilities/upstreams
              "LICENSE")
 ROOT_GLOBS = ("hermes/capabilities/schemas/*.json", "hermes/companies/examples/*.json", "hermes/projects/examples/*.json")
 JSONSCHEMA_RANGE = (">=4.10.3", "<5")
-# Per-interpreter observations on ONE host; not a claim about any other host or interpreter.
-# preflight/apply check the actual --python on the actual host every time.
+# Example per-interpreter observations from one reference Ubuntu 24.04 host; not a claim about
+# your host or interpreter. preflight/apply check the actual --python on the actual host every time.
 JSONSCHEMA_RESOLVED = [
     {"interpreter": "/usr/bin/python3", "python": "3.12.3", "jsonschema": "4.10.3",
-     "source": "host polymath-dev only: apt python3-jsonschema 4.10.3-2ubuntu1 (observed 2026-11-05 UTC, read-only)"},
+     "source": "example (one reference Ubuntu 24.04 host, read-only): apt python3-jsonschema 4.10.3-2ubuntu1; "
+               "verify yours with: /usr/bin/python3 -I -c 'import jsonschema; print(jsonschema.__version__)'"},
     {"interpreter": "$HERMES_HOME/hermes-agent/venv/bin/python", "python": "3.12.3", "jsonschema": "4.26.0",
-     "source": "host polymath-dev only: Hermes agent venv (observed 2026-11-05 UTC, read-only)"},
+     "source": "example (one reference Ubuntu 24.04 host, read-only): Hermes agent venv; verify yours with: "
+               "$HERMES_HOME/hermes-agent/venv/bin/python -I -c 'import jsonschema; print(jsonschema.__version__)'"},
 ]
 
 

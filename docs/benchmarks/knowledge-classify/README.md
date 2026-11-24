@@ -61,7 +61,7 @@ Subjective choices (also listed in the rubric):
 ## Running it
 
 ```bash
-make knowledge-benchmark                                  # all 58 sources, luna/terra/sol × medium/high, 2 repeats
+make knowledge-benchmark                                  # all 58 sources, gpt-6.1-terra/gpt-6.1-sol/gpt-6.2-sol × medium/high, 2 repeats
 make knowledge-benchmark SOURCES=stratified REPEATS=1     # the 36-source subset, one pass
 make knowledge-benchmark MODELS=gpt-6.1-terra EFFORTS=medium OUT=data/knowledge-staging/benchmarks/smoke
 python3 scripts/knowledge-benchmark.py score --rubric docs/benchmarks/knowledge-classify/rubric-v1.json \

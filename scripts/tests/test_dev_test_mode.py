@@ -42,7 +42,7 @@ COMPOSE_ENV = {tm.ENV_REQUIRE: "false", tm.ENV_BACKEND: "compose"}
 DTR_ENV = {tm.ENV_REQUIRE: "true"}
 
 # sha256 of the default renders at cb6f377 (main, the commit this release starts from, and the
-# generator that rendered existing default cards such as Validate's), with the rendering
+# generator that rendered existing default cards such as example-app's), with the rendering
 # workflow.py path replaced by <SCRIPT>. The default mode must keep them. When the default card
 # text itself is changed on purpose, re-pin these from that commit.
 CB6F377_DEFAULT = {
@@ -357,7 +357,7 @@ class ModeCoordinator(tc.Coordinator):
                       passed=passed, log=self.log if log else "", backend=backend)
 
 
-COMPOSE_CMD = "docker compose -p validate-dev exec -T vd-dev-db go test ./internal/db/..."
+COMPOSE_CMD = "docker compose -p example-dev exec -T example-dev-db go test ./internal/db/..."
 
 
 class ComposeCompletionTest(ModeCoordinator, unittest.TestCase):
@@ -374,7 +374,7 @@ class ComposeCompletionTest(ModeCoordinator, unittest.TestCase):
         self.assertFalse(test["met"])
         self.assertEqual(nw.completion_handoff("t_1", self.co, self.fake)[0], 4)
         # Evidence that contradicts the mode or is not a test run is refused (exit 2), never recorded.
-        for kw in ({"backend": "dev_test_run", "command": "dev_test_run(profile=validate-matching)"},
+        for kw in ({"backend": "dev_test_run", "command": "dev_test_run(profile=example-service)"},
                    {"backend": "", "command": COMPOSE_CMD},
                    {"backend": "compose", "command": COMPOSE_CMD, "passed": 0},
                    {"backend": "compose", "command": COMPOSE_CMD, "log": False}):
@@ -461,7 +461,7 @@ class ComposeCompletionTest(ModeCoordinator, unittest.TestCase):
         self.assertEqual(out["record"]["event"], "block-refused")
         self.assertIn("not this card's test path", out["record"]["detail"])
         # A Compose-path capability stop stays a genuine stop.
-        code, _ = self.w("block-check", reason="capability: docker compose exec -T vd-dev-db; service config-hash "
+        code, _ = self.w("block-check", reason="capability: docker compose exec -T example-dev-db; service config-hash "
                                                "drifted; missing an approved up")
         self.assertEqual(code, 0)
 
@@ -529,7 +529,7 @@ class DevTestRunCompletionTest(ModeCoordinator, unittest.TestCase):
         with self.assertRaises(wf.WorkflowError):
             self.db_ev("compose", COMPOSE_CMD)
         self.assertEqual(nw.completion_handoff("t_1", self.co, self.fake)[0], 4)
-        code, out = self.db_ev("dev_test_run", 'dev_test_run(profile="validate-matching", packages=["./..."])')
+        code, out = self.db_ev("dev_test_run", 'dev_test_run(profile="example-service", packages=["./..."])')
         self.assertEqual(code, 0, out)
         self.assertEqual(nw.completion_handoff("t_1", self.co, self.fake)[0], 0)
 
@@ -1059,7 +1059,7 @@ class BodyPlanTest(tk.StateDirMixin, unittest.TestCase):
         self.assertEqual(self.fake.cli_writes, [])
 
 
-CANONICAL = "/home/polymath-dev/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/workflow.py"
+CANONICAL = "/home/hermes-dev/.hermes/skills/agent-ops-kit/kanban-workflow/scripts/workflow.py"
 
 
 class BodyPlanScriptPathTest(tk.StateDirMixin, unittest.TestCase):

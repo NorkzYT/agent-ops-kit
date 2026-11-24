@@ -53,6 +53,20 @@ grep -q 'strategy' "$pdir/SOUL.md" 2>/dev/null  && ok "SOUL.md is the strategy p
 HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" \
   bash "$ROOT/scripts/hermes-profile.sh" strategy >/dev/null 2>&1 && ok "rerun succeeds" || bad "rerun failed"
 
+# Model floor on refresh: a stale (pre-floor) cloned config is reported with the
+# migration command, nothing is rewritten, and the run still succeeds.
+printf 'model:\n  default: gpt-5.6-luna\n' > "$pdir/config.yaml"
+before="$(sha256sum "$pdir/config.yaml")"
+outf="$(HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" \
+  bash "$ROOT/scripts/hermes-profile.sh" strategy 2>&1)" && ok "stale-model refresh succeeds" || bad "stale-model refresh failed"
+grep -q 'model.default: gpt-5.6-luna -> gpt-6.1-terra' <<<"$outf" && grep -q 'model-floor-migrate.py' <<<"$outf" \
+  && ok "below-floor profile model reported with migration" || bad "below-floor profile model not reported"
+[[ "$(sha256sum "$pdir/config.yaml")" == "$before" ]] && ok "profile config not auto-migrated" || bad "profile config rewritten without approval"
+! grep -q 'test-key' <<<"$outf" && ok "floor report carries no key" || bad "floor report leaked the key"
+printf 'model:\n  default: gpt-6.1-terra\n' > "$pdir/config.yaml"
+outc="$(HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$kroot" bash "$ROOT/scripts/hermes-profile.sh" strategy 2>&1)"
+! grep -q 'below the floor' <<<"$outc" && ok "eligible profile model is quiet" || bad "eligible profile model warned"
+
 # Missing knowledge source must warn, not fail profile creation.
 out2="$(HOME="$home" ENV_FILE="$envf" KNOWLEDGE_ROOT="$tmp/empty" \
   bash "$ROOT/scripts/hermes-profile.sh" strategy 2>&1)" && ok "missing corpus is non-fatal" || bad "missing corpus failed the run"

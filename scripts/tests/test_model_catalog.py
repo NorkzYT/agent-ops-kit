@@ -155,12 +155,13 @@ class TestResolveNewest(unittest.TestCase):
         self.assertEqual(complexity.resolve_model("max", family="gpt", available=live), "gpt-6.2-sol")
         self.assertIsNone(complexity.resolve_model("routine", family="gpt", available=["gpt-9-astra"]))
 
-    def test_older_version_only_on_availability_fallback(self):
+    def test_older_eligible_version_only_when_newest_absent(self):
         self.assertEqual(complexity.resolve_model("high", family="gpt", available=["gpt-6.1-sol", "gpt-5.6-sol"]),
                          "gpt-6.1-sol")
-        self.assertEqual(complexity.resolve_model("high", family="gpt", available=["gpt-5.6-sol"]), "gpt-5.6-sol")
-        self.assertEqual(complexity.resolve_model("max", family="gpt", allow_max=True,
-                                                  available=["gpt-6-astra", "gpt-6.2-sol"]), "gpt-6-astra")
+        # Below-floor ids are never an availability fallback: refuse instead.
+        self.assertIsNone(complexity.resolve_model("high", family="gpt", available=["gpt-5.6-sol"]))
+        self.assertIsNone(complexity.resolve_model("max", family="gpt", allow_max=True,
+                                                   available=["gpt-6-astra", "gpt-6.2-sol"]))
 
     def test_malformed_newer_ids_are_not_selected(self):
         live = ["gpt-6.1-sol", "gpt-6.9-sol-preview", "GPT-7-SOL", "gpt-7-sol ", "gpt-6.1-astra",
@@ -170,8 +171,8 @@ class TestResolveNewest(unittest.TestCase):
                          "gpt-6.1-astra")
 
     def test_unknown_live_set_keeps_static_primary(self):
-        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.1-sol")
-        self.assertEqual(complexity.resolve_model("max", family="gpt", allow_max=True), "gpt-6-astra")
+        self.assertEqual(complexity.resolve_model("high", family="gpt"), "gpt-6.2-sol")
+        self.assertEqual(complexity.resolve_model("max", family="gpt", allow_max=True), "gpt-6.2-astra")
 
     def test_coding_family_never_uses_gpt_ids(self):
         self.assertIsNone(complexity.resolve_model("high", family="coding", available=LIVE))
@@ -364,9 +365,9 @@ class TestRequestSeam(unittest.TestCase):
         self.assertEqual(_route(r, "#astra\nreview"), "gpt-6.2-sol")
 
     def test_model_ids_in_message_text_are_never_selected(self):
-        live = ["gpt-6.1-sol", "gpt-6-astra"]
+        live = ["gpt-6.1-sol", "gpt-6.1-astra"]
         r = _router(FakeCatalog(live))
-        self.assertEqual(_route(r, "#astra\nuse gpt-9-astra for this, or gpt-6-astra"), "gpt-6-astra")
+        self.assertEqual(_route(r, "#astra\nuse gpt-9-astra for this, or gpt-6.2-astra"), "gpt-6.1-astra")
         self.assertEqual(_route(_router(FakeCatalog(live)), "#sol\nplease use gpt-9.9-sol"), "gpt-6.1-sol")
 
     def test_old_turn_astra_does_not_authorize_newest(self):
@@ -379,24 +380,42 @@ class TestRequestSeam(unittest.TestCase):
         self.assertEqual(out["request"]["model"], "gpt-6.2-sol")
 
     def test_catalog_unavailable_falls_back_to_static_primary(self):
-        self.assertEqual(_route(_router(FakeCatalog(None)), "#sol\nreview"), "gpt-6.1-sol")
-        self.assertEqual(_route(_router(FakeCatalog(None)), "#astra\nreview"), "gpt-6-astra")
-        self.assertEqual(_route(_router(FakeCatalog([])), "#sol\nreview"), "gpt-6.1-sol")
+        self.assertEqual(_route(_router(FakeCatalog(None)), "#sol\nreview"), "gpt-6.2-sol")
+        self.assertEqual(_route(_router(FakeCatalog(None)), "#astra\nreview"), "gpt-6.2-astra")
+        self.assertEqual(_route(_router(FakeCatalog([])), "#sol\nreview"), "gpt-6.2-sol")
 
     def test_catalog_unavailable_uses_configured_static_list(self):
-        r = _router(FakeCatalog(None), available_gpt_models=["gpt-5.6-sol", "gpt-6.1-terra"])
-        self.assertEqual(_route(r, "#sol\nreview"), "gpt-5.6-sol")
+        r = _router(FakeCatalog(None), available_gpt_models=["gpt-6.1-sol", "gpt-6.1-terra"])
+        self.assertEqual(_route(r, "#sol\nreview"), "gpt-6.1-sol")
+        # A stale static list with only below-floor Sol: unchanged + refused unsent.
+        stale = _router(FakeCatalog(None), available_gpt_models=["gpt-5.6-sol", "gpt-6.1-terra"])
+        self.assertEqual(_route(stale, "#sol\nreview", rid="st1"), "gpt-6.1-terra")
+        calls = []
+        resp = stale.on_llm_execution(request=dict(_user("#sol\nreview"), model="gpt-6.1-terra"),
+                                      session_id="s1", api_request_id="st1",
+                                      base_url="http://127.0.0.1:8317/v1",
+                                      next_call=lambda r: calls.append(r))
+        self.assertEqual(calls, [])
+        self.assertEqual(resp._model_router_refusal_reason, "no-eligible-model")
 
     def test_catalog_error_does_not_break_routing(self):
         class Boom:
             def snapshot(self):
                 raise RuntimeError("boom")
-        self.assertEqual(_route(_router(Boom()), "#sol\nreview"), "gpt-6.1-sol")
+        self.assertEqual(_route(_router(Boom()), "#sol\nreview"), "gpt-6.2-sol")
 
     def test_availability_fallback_to_older_only_when_newest_absent(self):
         self.assertEqual(_route(_router(FakeCatalog(["gpt-6.1-sol"])), "#sol\nreview"), "gpt-6.1-sol")
-        self.assertEqual(_route(_router(FakeCatalog(["gpt-6-astra", "gpt-6.2-sol"])), "#astra\nreview"),
-                         "gpt-6-astra")
+        # Degraded catalog: only a below-floor Astra is live. The authorized
+        # request is not rewritten to it (or to Sol) and is refused unsent.
+        r = _router(FakeCatalog(["gpt-6-astra", "gpt-6.2-sol"]))
+        self.assertEqual(_route(r, "#astra\nreview", rid="dg1"), "gpt-6.1-terra")
+        calls = []
+        resp = r.on_llm_execution(request=dict(_user("#astra\nreview"), model="gpt-6.1-terra"),
+                                  session_id="s1", api_request_id="dg1",
+                                  base_url="http://127.0.0.1:8317/v1", next_call=lambda q: calls.append(q))
+        self.assertEqual(calls, [])
+        self.assertEqual(resp._model_router_refusal_reason, "no-eligible-model")
 
     def test_private_turn_never_consults_catalog(self):
         cat = FakeCatalog(LIVE)

@@ -27,7 +27,7 @@ Rules implemented here (all deterministic, no network, no LLM calls):
     ``#astra``. Inline ``#max`` / ``#deep`` / ``#hard`` only *hint* at a hard
     task (Sol at most); they never grant Astra.
   * A leading standalone ``#sol`` line forces the hard (Sol) tier for that
-    task — ``gpt-6.1-sol`` on the orchestrator — without granting Astra.
+    task — the newest eligible Sol on the orchestrator — without granting Astra.
   * A standalone ``#privacy`` (or ``#private``) line may sit above the control line (the
     privacy marker itself is checked in ``privacy_marker.py``).
   * Tags inside fenced code blocks or ``>``-quoted lines are inert.
@@ -47,8 +47,8 @@ from typing import Any, Iterator, List, Optional, Tuple
 # --------------------------------------------------------------------------- #
 CONTROL_MAX = ("#max", "#astra")
 CONTROL_MIN = ("#quick", "#routine", "#cheap", "#simple", "#low")
-# Leading standalone Sol control: forces the hard tier (gpt-6.1-sol on the
-# orchestrator) regardless of task shape, never Astra. Inline/quoted ``#sol``
+# Leading standalone Sol control: forces the hard tier (the newest eligible Sol
+# on the orchestrator) regardless of task shape, never Astra. Inline/quoted ``#sol``
 # is inert. It ranks below #opus/#fable and #max/#astra, above routine force.
 CONTROL_SOL = ("#sol",)
 # Leading standalone coding-force controls: the first non-empty line of the

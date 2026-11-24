@@ -82,7 +82,7 @@ class Spy:
         return SimpleNamespace(model="CLOUD", choices=[], usage=None)
 
 
-def req(text, model="gpt-5.6-luna"):
+def req(text, model="gpt-6.1-terra"):
     return {"model": model, "messages": [{"role": "user", "content": text}]}
 
 
@@ -126,7 +126,7 @@ class LocalRoleSettingsTest(unittest.TestCase):
 
 class LocalEndpointTest(unittest.TestCase):
     def test_local_and_remote(self):
-        for url in ("http://127.0.0.1:11434/v1", "http://localhost:11434", "http://100.65.5.47:11434/v1",
+        for url in ("http://127.0.0.1:11434/v1", "http://localhost:11434", "http://100.64.0.10:11434/v1",
                     "http://192.168.1.9:11434", "http://10.0.0.2", "http://[::1]:11434",
                     "http://ollama:11434/v1", "http://gpu-box.tail1234.ts.net:11434", "http://gpu.local"):
             self.assertTrue(lb.is_local_endpoint(url), url)
@@ -435,7 +435,7 @@ class PrivatePolicyTest(unittest.TestCase):
         r = router_mod.Router(s, backend_factory=FakeBackend({"qwen3.5:27b": "timeout",
                                                               "qwen3.6:27b": "LOCAL"}, calls))
         spy = Spy()
-        request = {"model": "gpt-5.6-luna", "messages": history(30_000) + [
+        request = {"model": "gpt-6.1-terra", "messages": history(30_000) + [
             {"role": "user", "content": f"#privacy ssn {SSN}"}]}
         resp = r.on_llm_execution(request=request, next_call=spy, session_id="pp", base_url="")
         self.assertEqual((spy.calls, resp.choices[0].message.content), (0, "LOCAL"))
@@ -578,7 +578,7 @@ HERMES_CODING_MODEL=opus
 REPOS_DIR={tmp}/repos
 HERMES_HOME={home}
 DISCORD_BOT_TOKEN={token}
-OLLAMA_BASE_URL=http://100.65.5.47:11434/v1
+OLLAMA_BASE_URL=http://100.64.0.10:11434/v1
 """
 LIVE_CONFIG = """plugins:
   enabled:
@@ -622,7 +622,7 @@ CLIPROXY = "http://127.0.0.1:8317/v1"
 
 def _nat(title, main=None):
     """Minimal hermes-native-check output: main route + one auxiliary task."""
-    return {"main": main if main is not None else {"provider": "custom", "model": "gpt-5.6-luna",
+    return {"main": main if main is not None else {"provider": "custom", "model": "gpt-6.1-terra",
                                                    "base_url": CLIPROXY},
             "fallback_providers": [], "delegation_fallback_providers": [],
             "auxiliary": {"title_generation": dict(title, fallback_chain=[])},
@@ -642,7 +642,7 @@ class ReadbackInvariantTest(unittest.TestCase):
         # Hermes resolves an empty YAML model to the string "None".
         for model in (None, "", "None"):
             self.assertEqual(self.bad(_nat({"provider": "auto", "model": model, "base_url": ""})), [], model)
-        main = {"provider": "custom", "model": "gpt-5.6-luna", "base_url": CLIPROXY + "/"}
+        main = {"provider": "custom", "model": "gpt-6.1-terra", "base_url": CLIPROXY + "/"}
         self.assertEqual(self.bad(_nat({"provider": "auto", "model": "None", "base_url": ""}, main)), [])
 
     def test_auto_title_fails_when_main_is_not_the_configured_cliproxy(self):
@@ -747,7 +747,7 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(cfg, "agent.reasoning_effort"), "high")
 
     def test_local_roles_fallback_chains_and_aux_provider(self):
-        r = self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\nAUX_PROVIDER=auto\n"
+        r = self.install("AUX_BASE_URL=http://100.64.0.10:11434/v1\nAUX_PROVIDER=auto\n"
                          "AUX_COMPRESSION_ROUTE=aux\n", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         text = (self.home / "config.yaml").read_text()
@@ -758,7 +758,7 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertEqual(self.get(self.home / "config.yaml", "auxiliary.compression.provider"), "custom")
         self.assertEqual(self.get(self.home / "config.yaml", "auxiliary.compression.model"), "qwen3.5:27b")
         self.assertIn('fallback_chain: [{provider: custom, model: "qwen3.6:27b", '
-                      'base_url: "http://100.65.5.47:11434/v1"}]', text)
+                      'base_url: "http://100.64.0.10:11434/v1"}]', text)
         top = text.split("# Subagents spawned")[0]
         self.assertLess(top.index("model: qwen3.8:27b"), top.index("model: qwen3.6:27b"))
         # Local compression: thinking off (extra_body only), prefill-sized budgets.
@@ -782,13 +782,13 @@ class InstallerRenderTest(_InstallerFixture):
 
     def test_compression_defaults_to_cliproxy_not_ollama(self):
         """Even with title generation pinned to Ollama, compression renders
-        CLIProxyAPI gpt-6.1-terra with a gpt-5.6-luna fallback on the same proxy."""
-        r = self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--force")
+        CLIProxyAPI gpt-6.1-terra with no fallback (the GPT floor has none below it)."""
+        r = self.install("AUX_BASE_URL=http://100.64.0.10:11434/v1\n", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = self.home / "config.yaml"
         text = cfg.read_text()
         self.assertNotRegex(text, r"__[A-Z0-9_]+__")
-        self.assertEqual(self.get(cfg, "auxiliary.title_generation.base_url"), "http://100.65.5.47:11434/v1")
+        self.assertEqual(self.get(cfg, "auxiliary.title_generation.base_url"), "http://100.64.0.10:11434/v1")
         get = lambda k: self.get(cfg, f"auxiliary.compression.{k}")
         self.assertEqual((get("provider"), get("model"), get("base_url"), get("api_key")),
                          ("custom", "gpt-6.1-terra", "http://127.0.0.1:8317/v1", "${CLIPROXY_API_KEY}"))
@@ -797,8 +797,8 @@ class InstallerRenderTest(_InstallerFixture):
         self.assertNotIn("11434", comp)
         self.assertNotIn("qwen", comp)
         self.assertIn("extra_body: {}", comp)
-        self.assertIn('fallback_chain: [{provider: custom, model: "gpt-5.6-luna", '
-                      'base_url: "http://127.0.0.1:8317/v1", key_env: CLIPROXY_API_KEY}]', comp)
+        self.assertIn("fallback_chain: []", comp)
+        self.assertNotRegex(text, r"gpt-5\.|luna")
         self.assertNotIn("cptest", text)  # the key stays in .env
         self.assertEqual(self.get(cfg, "compression.context_timeout_seconds"), "120")
         self.assertEqual(self.get(cfg, "compression.context_total_ceiling_seconds"), "600")
@@ -809,14 +809,26 @@ class InstallerRenderTest(_InstallerFixture):
 
     def test_compression_model_overrides_and_invalid_route(self):
         cfg = self.home / "config.yaml"
-        r = self.install("AUX_COMPRESSION_MODEL=gpt-5.6-luna\n", "--force")
+        r = self.install("AUX_COMPRESSION_MODEL=gpt-6.2-sol\nAUX_COMPRESSION_FALLBACK_MODEL=gpt-6.2-sol\n", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-5.6-luna")
+        self.assertEqual(self.get(cfg, "auxiliary.compression.model"), "gpt-6.2-sol")
         comp = cfg.read_text().split("  compression:\n", 1)[1].split("\n\n", 1)[0]
         self.assertIn("fallback_chain: []", comp)  # no duplicate of the primary
+        r = self.install("AUX_COMPRESSION_FALLBACK_MODEL=gpt-6.1-sol\n", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        comp = cfg.read_text().split("  compression:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn('fallback_chain: [{provider: custom, model: "gpt-6.1-sol", '
+                      'base_url: "http://127.0.0.1:8317/v1", key_env: CLIPROXY_API_KEY}]', comp)
         self.install("AUX_COMPRESSION_FALLBACK_MODEL=none\n", "--force")
         comp = cfg.read_text().split("  compression:\n", 1)[1].split("\n\n", 1)[0]
         self.assertIn("fallback_chain: []", comp)
+        # Below-floor compression models are refused; the rendered config is kept.
+        before = cfg.read_bytes()
+        for stale in ("AUX_COMPRESSION_MODEL=gpt-5.6-luna", "AUX_COMPRESSION_FALLBACK_MODEL=gpt-5.6-luna"):
+            r = self.install(stale + "\n", "--force")
+            self.assertNotEqual(r.returncode, 0, stale)
+            self.assertIn("model-floor-migrate.py", r.stderr)
+            self.assertEqual(cfg.read_bytes(), before)
         r = self.install("AUX_COMPRESSION_ROUTE=ollama\n", "--force")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("AUX_COMPRESSION_ROUTE=ollama", r.stderr)
@@ -985,25 +997,24 @@ class HermesNativeTest(_InstallerFixture):
 
     def test_hermes_walks_three_tier_chain_and_custom_aux(self):
         out = self.tmp / "render.yaml"
-        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--render-only", str(out))
+        self.install("AUX_BASE_URL=http://100.64.0.10:11434/v1\n", "--render-only", str(out))
         nat = self.native(out)
         self.assertEqual([e["model"] for e in nat["fallback_providers"]], ["opus", "qwen3.8:27b", "qwen3.6:27b"])
         self.assertEqual([e["model"] for e in nat["delegation_fallback_providers"]], ["qwen3.8:27b", "qwen3.6:27b"])
         aux = nat["auxiliary"]["title_generation"]
         self.assertEqual((aux["provider"], aux["model"], aux["base_url"]),
-                         ("custom", "qwen3.5:27b", "http://100.65.5.47:11434/v1"))
+                         ("custom", "qwen3.5:27b", "http://100.64.0.10:11434/v1"))
         self.assertEqual([e["model"] for e in aux["fallback_chain"]], ["qwen3.6:27b"])
         aux = nat["auxiliary"]["compression"]
         self.assertEqual((aux["provider"], aux["model"], aux["base_url"]),
                          ("custom", "gpt-6.1-terra", "http://127.0.0.1:8317/v1"))
-        self.assertEqual([(e["model"], e["base_url"]) for e in aux["fallback_chain"]],
-                         [("gpt-5.6-luna", "http://127.0.0.1:8317/v1")])
+        self.assertEqual(aux["fallback_chain"], [])
 
     def test_local_compression_wire_disables_thinking(self):
         """Ollama's /v1 honors only a top-level reasoning_effort; a `reasoning`
         object (what Hermes emits for the reasoning_effort key) overrides it."""
         out = self.tmp / "render.yaml"
-        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\nAUX_COMPRESSION_ROUTE=aux\n",
+        self.install("AUX_BASE_URL=http://100.64.0.10:11434/v1\nAUX_COMPRESSION_ROUTE=aux\n",
                      "--render-only", str(out))
         r = subprocess.run([str(VENV_PY), "-c", _COMPRESSION_WIRE, str(out)], capture_output=True, text=True,
                            timeout=120, env=dict(os.environ, HERMES_AGENT_DIR=str(AGENT_DIR)))
@@ -1015,9 +1026,9 @@ class HermesNativeTest(_InstallerFixture):
         self.assertEqual(res["aux_timeout"], 600.0)
         self.assertEqual(res["budgets"], [420.0, 900.0])
 
-    def cliproxy_wire(self, mode, missing=()):
+    def cliproxy_wire(self, mode, missing=(), extra=""):
         out = self.tmp / "render.yaml"
-        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--render-only", str(out))
+        self.install("AUX_BASE_URL=http://100.64.0.10:11434/v1\n" + extra, "--render-only", str(out))
         r = subprocess.run([str(VENV_PY), "-c", _CLIPROXY_COMPRESSION_WIRE, str(out), mode, json.dumps(missing)],
                            capture_output=True, text=True, timeout=180,
                            env=dict(os.environ, HERMES_AGENT_DIR=str(AGENT_DIR),
@@ -1036,12 +1047,18 @@ class HermesNativeTest(_InstallerFixture):
             self.assertEqual(res[name], "refused", res)
             self.assertEqual(res[name + "_requests"], [], res)
 
-    def test_cliproxy_compression_falls_back_to_luna(self):
+    def test_cliproxy_compression_explicit_fallback(self):
+        # Default: no fallback at all — a failing Terra is not retried on any other model.
         res = self.cliproxy_wire("guard", missing=["gpt-6.1-terra"])
+        chat = [q for q in res["public_requests"] if q["path"].endswith("/chat/completions")]
+        self.assertEqual({q["model"] for q in chat}, {"gpt-6.1-terra"}, res)
+        # An explicit eligible fallback is the only second hop.
+        res = self.cliproxy_wire("guard", missing=["gpt-6.1-terra"],
+                                 extra="AUX_COMPRESSION_FALLBACK_MODEL=gpt-6.1-sol\n")
         self.assertEqual(res["public"], "sent", res)
         chat = [q for q in res["public_requests"] if q["path"].endswith("/chat/completions")]
         self.assertEqual([(q["model"], q["auth"]) for q in chat],
-                         [("gpt-6.1-terra", "Bearer cptest"), ("gpt-5.6-luna", "Bearer cptest")])
+                         [("gpt-6.1-terra", "Bearer cptest"), ("gpt-6.1-sol", "Bearer cptest")])
         self.assertEqual((res["privacy"], res["privacy_requests"]), ("refused", []), res)
 
     def test_core_guard_alone_leaks_loopback_cloud_proxy(self):
@@ -1055,7 +1072,7 @@ class HermesNativeTest(_InstallerFixture):
         """Why the installer never renders `auto` next to a local base_url."""
         out = self.tmp / "auto.yaml"
         out.write_text("auxiliary:\n  compression:\n    provider: auto\n    model: qwen3.8:27b\n"
-                       "    base_url: http://100.65.5.47:11434/v1\n")
+                       "    base_url: http://100.64.0.10:11434/v1\n")
         aux = self.native(out)["auxiliary"]["compression"]
         self.assertEqual((aux["provider"], aux["base_url"]), ("auto", ""))
 
@@ -1076,7 +1093,7 @@ class HermesNativeTest(_InstallerFixture):
 
     def test_readback_matches_render_and_flags_drift(self):
         cfg = self.home / "config.yaml"
-        self.install("AUX_BASE_URL=http://100.65.5.47:11434/v1\n", "--render-only", str(cfg))
+        self.install("AUX_BASE_URL=http://100.64.0.10:11434/v1\n", "--render-only", str(cfg))
         env = dict(os.environ, HERMES_HOME=str(self.home), HERMES_AGENT_DIR=str(AGENT_DIR),
                    ENV_FILE=str(self.tmp / "fixture.env"))
         ok = subprocess.run([sys.executable, "scripts/local-route.py", "readback"], cwd=REPO, env=env,

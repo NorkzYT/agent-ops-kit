@@ -65,7 +65,7 @@ attached; the worker calls `kanban_complete`, `kanban_request_review` or
 `kanban_complete`. The orchestrator posts the synthesis to Discord.
 
 ```bash
-hermes kanban create "ICP and segments for Kairo"          --assignee research
+hermes kanban create "ICP and segments for ExampleCo"          --assignee research
 hermes kanban create "Positioning and messaging matrix"    --assignee marketing --parent t_xxx
 hermes kanban create "Review pricing and positioning"      --assignee strategy  --parent t_yyy
 hermes kanban watch

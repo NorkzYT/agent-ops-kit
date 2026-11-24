@@ -142,12 +142,16 @@ All of this lives in the `model-router` plugin and `.env`; see
 
 - **Orchestrator** (CLIProxyAPI, ChatGPT): starts on `HERMES_MODEL`
   (default `gpt-6.1-terra`, `model.default`); the router then rewrites
-  per task: status/lookup→`gpt-5.6-luna` (low effort), ordinary work and
+  per task: status/lookup→`gpt-6.1-terra` (low effort), ordinary work and
   planning→`gpt-6.1-terra` (medium), genuinely hard work or a leading `#sol`
-  line→the newest Sol CLIProxyAPI advertises (static `gpt-6.1-sol` when the
-  live catalog is unavailable); Astra (newest live, static `gpt-6-astra`)
-  only with a leading `#max`/`#astra` line. Automatic routing never goes
-  above Sol.
+  line→the newest eligible Sol CLIProxyAPI advertises (static `gpt-6.2-sol`
+  when the live catalog is unavailable); Astra (newest eligible, static
+  `gpt-6.2-astra`) only with a leading `#max`/`#astra` line. Automatic routing
+  never goes above Sol, and nothing goes below the GPT floor (6.1+, Terra or
+  higher): a missing eligible model is refused, not swapped. Existing installs:
+  `python3 scripts/model-floor-migrate.py --env-file .env` (dry-run plan);
+  `make hermes-restart` refuses while saved model settings are below the floor
+  (auxiliary paths are checked there, not enforced at runtime).
 - **Coding subagents** (claude-max-proxy, Claude Max): `opus` by default,
   `fable` for hard engineering; a leading `#opus`/`#fable` line forces one.
 - **Specialists**: `.env.example` turns specialist routing on in `ai` mode
@@ -160,7 +164,7 @@ All of this lives in the `model-router` plugin and `.env`; see
   allowlist, readiness and the cap. Keyword (`keywords`) and keywords-first
   (`hybrid`) modes are opt-in; see
   [docs/specialist-routing.md](docs/specialist-routing.md).
-- **Compression**: CLIProxyAPI `gpt-6.1-terra`, falling back to `gpt-5.6-luna`.
+- **Compression**: CLIProxyAPI `gpt-6.1-terra`, no fallback.
 - **Session titles**: the main route (CLIProxyAPI, `HERMES_MODEL`); no title variables
   are set in `.env.example`.
 - **Privacy**: `#privacy` or `#private` typed in the current turn keeps that

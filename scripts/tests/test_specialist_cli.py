@@ -30,7 +30,7 @@ LOG_LINES = [
     f"2026-10-07 08:20:54,986 {PREFIX} specialists task=95c684dd privacy=public tier=elevated "
     "routes=- dropped=- classifier=off",
     f"2026-10-07 08:21:00,001 {PREFIX} tier decision tier=medium reasons=default",
-    "2026-10-07 08:21:01,002 INFO gateway.run: inbound [Norkz] model_router: specialists task=SECRET "
+    "2026-10-07 08:21:01,002 INFO gateway.run: inbound [operator] model_router: specialists task=SECRET "
     "Write the Zorblax plan",
     f"2026-10-07 08:22:10,111 {PREFIX} specialists task=1a2b3c4d privacy=public tier=medium "
     "source=attachment routes=marketing:short:ready dropped=- classifier=off reason=-",
@@ -116,7 +116,7 @@ class SpecialistRouteCliTest(unittest.TestCase):
         path = cache / "doc_000000000001_prompt.txt"
         path.write_text(body)
         wire = (f"[The user sent a text document: 'prompt.txt'. Its content has been included below. "
-                f"The file is also saved at: {path}]\n\n[Norkz] [Content of prompt.txt]:\n{body}")
+                f"The file is also saved at: {path}]\n\n[operator] [Content of prompt.txt]:\n{body}")
         (Path(self.root) / "marketing").mkdir()
         proc = self.run_cli("-", "--plan", stdin=wire, HERMES_HOME=str(home))
         self.assertEqual(proc.returncode, 0, proc.stderr)

@@ -13,7 +13,7 @@
 > is approved by the operator, implemented, provisioned and attested. A registry that merely
 > declares `isolation.mode: credential-broker-netns` is config validity, not readiness: the
 > tool stays hidden, no `RECOVERY:` directive is emitted, `check-config` exits 1 and the
-> installer refuses (`NOT IMPLEMENTED`). Validate card `t_12595b96` stays blocked on this.
+> installer refuses (`NOT IMPLEMENTED`). A card that needs these tests stays blocked on this.
 
 ## Review findings and what was done (kit 3e84caa → this change)
 
@@ -49,8 +49,8 @@ proposal that the operator approves is the precondition for any implementation w
 Disproven assumptions removed from the earlier draft:
 
 - **"The worker uid cannot reach the credential once a broker owns it."** False as stated:
-  `polymath-dev` is in `docker`, which is root-equivalent on this host, and in other
-  privileged groups. Any broker, test identity or namespace set up next to that uid is
+  a typical worker uid (`hermes-dev` in the examples) is in `docker`, which is
+  root-equivalent, and often in other privileged groups (check with `id <worker-user>`). Any broker, test identity or namespace set up next to that uid is
   bypassable by it. Strong separation therefore requires **either** workers running under a
   dedicated restricted execution identity with no docker socket access and no privileged
   groups, **or** an isolated VM boundary for workers. This proposal does **not** remove the
@@ -68,18 +68,20 @@ Disproven assumptions removed from the earlier draft:
   itself (see step 10).
 - **"Approved" anywhere in the earlier text.** Nothing here has operator approval.
 
-Provisioning needs root and cannot run unattended: `sudo -n -l` on this host grants only
-`NOPASSWD: /usr/local/libexec/hermes-validate-cwd-scan ""`; unprivileged user namespaces are
-blocked by AppArmor (not to be relaxed). None of the steps below is executed by Hermes.
+Provisioning needs root and cannot run unattended. On the host this was designed for, the
+worker's `sudo -n -l` granted only the approved CWD scanner (e.g.
+`NOPASSWD: /usr/local/libexec/hermes-example-cwd-scan ""`) and unprivileged user namespaces
+were blocked by AppArmor (not to be relaxed); check yours with `sudo -n -l` and
+`sysctl kernel.apparmor_restrict_unprivileged_userns`. None of the steps below is executed by Hermes.
 
 1. **Worker execution identity (operator decision, prerequisite for everything else).**
    Option A: a dedicated restricted user (proposed name `hermes-devtest-worker`, proposed uid
    allocated by the operator, groups: its own primary group only; not `docker`, `sudo`, `adm`,
    `lxd`, `kvm` or any other privileged group) runs the Kanban workers that may call
    `dev_test_run`. Option B: workers run inside an isolated VM whose only ingress is the task
-   queue and whose only egress to this host is the broker endpoint in step 2. Until A or B is
+   queue and whose only egress to the host is the broker endpoint in step 2. Until A or B is
    chosen and provisioned, the proposal cannot provide the separation it claims, and the
-   current worker (`polymath-dev`) is left exactly as it is.
+   current worker (`hermes-dev`) is left exactly as it is.
 2. **Credential broker with a broker-side PostgreSQL auth proxy.** A dedicated system user
    (proposed `hermes-devtest-broker`) owns the upstream credential exclusively; no other uid
    has read access. A small root-installed service (proposed `hermes-devtest-broker.service`
@@ -89,7 +91,7 @@ blocked by AppArmor (not to be relaxed). None of the steps below is executed by 
    process. For the database it exposes a **password-free ephemeral endpoint** inside the
    test's network namespace (a per-run PostgreSQL protocol proxy, proposed
    `hermes-devtest-pgproxy`); the proxy authenticates upstream with the broker's credential.
-   The tests see only `postgresql://<role>@<netns-endpoint>/matching_test`; no `PGPASSFILE`,
+   The tests see only `postgresql://<role>@<netns-endpoint>/example_test`; no `PGPASSFILE`,
    no memfd, no environment variable, no fd carries a secret into the test.
 3. **Proxy protocol gates.** The proxy accepts only the registered database name and the
    registered non-superuser role; it refuses startup packets naming any other database, user
@@ -99,14 +101,14 @@ blocked by AppArmor (not to be relaxed). None of the steps below is executed by 
    other database, and it never forwards to a host other than the pinned test container
    endpoint. The role itself (step 4) is the second gate; the proxy is defence in depth, not
    the boundary.
-4. **Database role.** A `matching_test`-only role (proposed `matching_test_runner`:
+4. **Database role.** A `example_test`-only role (proposed `example_test_runner`:
    `NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS NOINHERIT`, no membership
-   in any `pg_*` role, grants limited to the test schema, `CONNECT` only on `matching_test`).
+   in any `pg_*` role, grants limited to the test schema, `CONNECT` only on `example_test`).
    The broker refuses to start a run unless `pg_roles`/`pg_auth_members` show exactly that.
    **Role capabilities must be validated through a root, credential-safe admin path once the
    operator approves**; no database change, role creation or grant is made now, and the
    existing container and its `postgres` superuser are untouched until then.
-5. **Endpoint identity.** The broker verifies that `127.0.0.1:55443` is published by the
+5. **Endpoint identity.** The broker verifies that `127.0.0.1:55432` is published by the
    registered container (`docker inspect` run by root, never by a worker-reachable uid) and
    pins the container id for the run.
 6. **Network namespace.** Tests run in their own network namespace (root `ip netns`, proposed
@@ -137,9 +139,9 @@ blocked by AppArmor (not to be relaxed). None of the steps below is executed by 
 10. **Verification before any resume.** Kit tests with synthetic credentials under the real
     broker; the runner's `check-config` reporting `runnable`; installer `status` exiting 0;
     an independent review of the implementation; then a real Kanban smoke from a claimed
-    worker of a throwaway card (`dev_test_run(profile="validate-matching", run="^TestNoSuch$")`
+    worker of a throwaway card (`dev_test_run(profile="example-service", run="^TestNoSuch$")`
     must return `ok: false` with `matched no tests`, then a real run with counts). Only after
-    that smoke does the operator decide whether `t_12595b96` is resumed. No step here is
+    that smoke does the operator decide whether the blocked card is resumed. No step here is
     complete, and none of the earlier verification runs (29 kit runner tests, 96 runtime
     tests at the previous revision) involved a successful worker execution.
 
@@ -147,16 +149,16 @@ blocked by AppArmor (not to be relaxed). None of the steps below is executed by 
 
 | Proposed resource | Impact | Rollback |
 |---|---|---|
-| User `hermes-devtest-worker` **or** a worker VM (step 1) | New execution identity for Kanban workers that use `dev_test_run`; current `polymath-dev` worker untouched | Delete the user / VM; workers keep running as today |
+| User `hermes-devtest-worker` **or** a worker VM (step 1) | New execution identity for Kanban workers that use `dev_test_run`; current `hermes-dev` worker untouched | Delete the user / VM; workers keep running as today |
 | User `hermes-devtest-broker`, `hermes-devtest-broker.service`/`.socket`, `/run/hermes-devtest/broker.sock` | New root-installed service holding the test credential | `systemctl disable --now`, remove unit files and user |
 | `hermes-devtest-pgproxy` (per run, inside the netns) | New process per run; no listener on the host | Dies with the run's cgroup |
-| Role `matching_test_runner` in the existing `validate-pgtest-door` container | New non-superuser role; **no change** to the `postgres` superuser, the container, its port or the existing `pgpass` file | `DROP ROLE`; nothing else changed |
+| Role `example_test_runner` in the existing `example-pgtest` container | New non-superuser role; **no change** to the `postgres` superuser, the container, its port or the existing `pgpass` file | `DROP ROLE`; nothing else changed |
 | `ip netns hermes-devtest-<run>`, `hermes-devtest-<run>.scope` | Transient per run | Removed when the run ends |
 | `/var/lib/hermes-devtest/stage/<run>` | Transient immutable staging | Removed when the run ends |
 | `/usr/local/libexec/hermes-devtest-runner`, `/usr/local/etc/hermes-devtest/profiles.json` | Root-owned install of the implemented runner and registry | Remove both files; `status` returns to "missing" |
 
 Preserved until the operator approves a different lifecycle: the existing `pgpass` file, the
-existing `validate-pgtest-door` container and its `postgres` user, every Validate repository
+existing `example-pgtest` container and its `postgres` user, every example-app repository
 change on the worker's checkout, the current worker uid and its groups, Tirith, approval
 modes, hardline/deny rules, AppArmor and sysctls. No real secret and no root operation is part
 of this proposal's current state.
@@ -167,11 +169,11 @@ stays as is. This page describes the narrow, typed path that lets a worker run t
 operator-registered Go/PostgreSQL tests anyway, without a broad allowlist, credential exposure
 or a weaker scanner.
 
-## Incident (t_12595b96, run 370)
+## Example incident: scanner rejection of the approved test command
 
 - Rejected command (no secret in it; the password lives in the file):
-  `PGPASSFILE=/home/polymath-dev/.config/hermes-test-db/pgpass MATCHING_TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55443/matching_test?sslmode=disable' go test -race -p 1 -count=1 ./... && go vet ./...`
-  in `/opt/repos/validate/apps/matching-service-go`.
+  `PGPASSFILE=/home/hermes-dev/.config/hermes-test-db/pgpass EXAMPLE_TEST_DATABASE_URL='postgresql://postgres@127.0.0.1:55432/example_test?sslmode=disable' go test -race -p 1 -count=1 ./... && go vet ./...`
+  in `/opt/repos/example-app/apps/example-service`.
 - Layer: Tirith (`tirith check --json --non-interactive --shell posix`), action `warn`,
   findings `raw_ip_url` and `schemeless_to_sink`, both MEDIUM (raw IP evidence `0.0.0.1`).
   The warn reached `_unattended_deny` for the single-query context
@@ -188,7 +190,7 @@ or a weaker scanner.
 |---|---|---|
 | `dev_test_run` tool | runtime `tools/dev_test_tool.py` (patch 0004) | Typed arguments only: `profile`, `packages` (inside the profile's approved patterns), `run` (test regex, no spaces or quotes), `race` (default true), `short`, `vet`, `timeout_seconds` (60–3600). No URL, environment or go flag can be passed. Visible only to the dispatcher-owned worker of a card (not delegate children, cron or other sessions) and only once the registry is installed. |
 | Trusted runner | kit `hermes/libexec/hermes-devtest-runner` → `/usr/local/libexec/hermes-devtest-runner` (root:root 0755) | Re-validates everything, binds the run to the live claim and lease, builds the clean environment and the sandbox, runs `go test -json -count=1 -p=1 [-race] [-short] [-run=…] -timeout=…s <packages>` (and `go vet <packages>` on request), counts and scrubs. |
-| Profile registry | kit `hermes/devtest/profiles.example.json` → `/usr/local/etc/hermes-devtest/profiles.json` (root:root 0644) | The approved target: checkout, module, source roots, package patterns, test container, and the database (`127.0.0.1:55443/matching_test`, user `postgres`, `sslmode=disable`, `MATCHING_TEST_DATABASE_URL`, credential file path). Pins the runner's SHA-256. |
+| Profile registry | kit `hermes/devtest/profiles.example.json` → `/usr/local/etc/hermes-devtest/profiles.json` (root:root 0644) | The approved target: checkout, module, source roots, package patterns, test container, and the database (`127.0.0.1:55432/example_test`, user `postgres`, `sslmode=disable`, `EXAMPLE_TEST_DATABASE_URL`, credential file path). Pins the runner's SHA-256. |
 | Guards | runtime `tools/approval.py`, `agent/file_safety.py` (patch 0004) | Additive only, see below. |
 | Recovery policy | runtime (rejection text + `kanban_block` refusal), `workflow.py` code card step 7, `kanban-workflow` skill, `SOUL.md`, coder `SOUL.md` | A rejected command with a registered equivalent is retried once through `dev_test_run`, then work continues. |
 
@@ -231,11 +233,11 @@ Exit codes: 0 passed, 1 tests/vet failed or timed out, 2 refused, 3 sandbox unav
 
 ### Sandbox (Landlock ABI ≥ 6 + seccomp; no root, no user namespace)
 
-Unprivileged user namespaces are restricted by AppArmor on this host
-(`kernel.apparmor_restrict_unprivileged_userns=1`): `bwrap` fails (`setting up uid map:
+Where unprivileged user namespaces are restricted by AppArmor
+(`sysctl kernel.apparmor_restrict_unprivileged_userns` prints 1, the Ubuntu 24.04 default), `bwrap` fails (`setting up uid map:
 Permission denied`; with `--unshare-net`, `loopback: Failed RTM_NEWADDR`), so mount and
 network namespaces are not available without relaxing a host security setting. Landlock
-(ABI 8 here) needs neither, so the runner uses it:
+(ABI ≥ 6 required; the runner refuses below that) needs neither, so the runner uses it:
 
 - Files: read+exec `/usr`, `/lib*`, `/bin`, `/sbin`, the Go root; read `/etc`, `/proc`, `/sys`,
   the module cache; read each source file of the profile's source roots individually (every
@@ -276,7 +278,7 @@ test run; there is no unsandboxed fallback.
 Only once an implemented backend is attested (never today): an unattended rejection of a
 `go test`/`go vet` command that matches a *runnable* registered profile (its URL variable,
 credential path, `host:port` or `/dbname`) ends with
-`RECOVERY: an approved equivalent exists … Call dev_test_run(profile="validate-matching", …)`.
+`RECOVERY: an approved equivalent exists … Call dev_test_run(profile="example-service", …)`.
 Until the worker calls `dev_test_run` (any outcome counts as tried), `kanban_block` refuses with
 the same pointer. With no runnable profile (the current state, whatever the registry declares)
 no directive is emitted and `kanban_block` is not refused; the worker blocks naming the command,
@@ -315,7 +317,7 @@ same-uid-landlock`) and with `NOT IMPLEMENTED` for a profile declaring the propo
 The commands stay documented for a future implemented design.
 
 ```bash
-cd /opt/repos/claude-code-autopilot
+cd /opt/agent-ops-kit
 bash scripts/install-hermes-devtest.sh plan       # validates the profile, prints the digest it pins
 bash scripts/install-hermes-devtest.sh install    # sudo install root-owned runner + profile file
 bash scripts/install-hermes-devtest.sh status     # trust + pinned digest == installed runner
@@ -329,7 +331,7 @@ no gateway restart is needed for them. After any runner change: review, then `in
 ## Smoke (from the claimed worker of a card, after `preflight`) — not available until an implemented design is approved
 
 ```
-dev_test_run(profile="validate-matching", packages=["./..."], race=true, vet=true)
+dev_test_run(profile="example-service", packages=["./..."], race=true, vet=true)
 ```
 
 Expected: `runner_exit` 0 or 1 with real counts; refusal text naming the failed check
@@ -346,7 +348,7 @@ worker).
   metadata, claim/lease binding, missing sandbox; invocation exactly as the runtime does it,
   and the same invocation through a shell refused.
 - Runtime: `tests/tools/test_dev_test_tool.py` — the real single-query gate with the operator's
-  `security`/`approvals` config and the real Tirith binary: the run-370 command is rejected
+  `security`/`approvals` config and the real Tirith binary: the incident's command is rejected
   with the exact findings plus the recovery directive; the fixed runner invocation and ordinary
   Go/dev commands pass; credential extraction (also under yolo), container env reads,
   production connections and genuinely unsafe commands stay blocked; the real terminal tool

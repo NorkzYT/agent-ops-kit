@@ -163,8 +163,9 @@ aux_fallback_chain() {
 }
 AUX_FALLBACK_CHAIN="$(aux_fallback_chain)"; export AUX_FALLBACK_CHAIN
 # Compression route. AUX_COMPRESSION_ROUTE=cliproxy (default): CLIProxyAPI,
-# AUX_COMPRESSION_MODEL (gpt-6.1-terra) then AUX_COMPRESSION_FALLBACK_MODEL
-# (gpt-5.6-luna, `none` = no fallback) on the same proxy. The key stays in .env
+# AUX_COMPRESSION_MODEL (gpt-6.1-terra), no fallback by default
+# (AUX_COMPRESSION_FALLBACK_MODEL: `none`, or an eligible GPT id on the same
+# proxy; never a model below the GPT floor). The key stays in .env
 # (${CLIPROXY_API_KEY} / key_env). The model-router plugin's aux guard refuses
 # #privacy/#private payloads on this route. AUX_COMPRESSION_ROUTE=aux: the
 # title-generation route above (AUX_BASE_URL or the main provider).
@@ -178,7 +179,7 @@ if [[ "$AUX_COMPRESSION_ROUTE" == "cliproxy" ]]; then
   AUX_COMPRESSION_PROVIDER=custom; AUX_COMPRESSION_BASE_URL="$CLIPROXY_BASE_URL"
   AUX_COMPRESSION_API_KEY='${CLIPROXY_API_KEY}'
   AUX_COMPRESSION_MODEL="$(getenv AUX_COMPRESSION_MODEL gpt-6.1-terra)"
-  aux_comp_fb="$(getenv AUX_COMPRESSION_FALLBACK_MODEL gpt-5.6-luna)"
+  aux_comp_fb="$(getenv AUX_COMPRESSION_FALLBACK_MODEL none)"
   if [[ "$aux_comp_fb" != "none" && "$aux_comp_fb" != "$AUX_COMPRESSION_MODEL" ]]; then
     AUX_COMPRESSION_FALLBACK_CHAIN="$(printf '[{provider: custom, model: "%s", base_url: "%s", key_env: CLIPROXY_API_KEY}]' \
       "$aux_comp_fb" "$CLIPROXY_BASE_URL")"
@@ -192,6 +193,20 @@ else
 fi
 export AUX_COMPRESSION_ROUTE AUX_COMPRESSION_PROVIDER AUX_COMPRESSION_MODEL AUX_COMPRESSION_BASE_URL \
   AUX_COMPRESSION_API_KEY AUX_COMPRESSION_FALLBACK_CHAIN
+# GPT model floor: every kit-managed GPT call is version 6.1+, family Terra or
+# higher (scripts/lib/model_floor.py). A stale explicit value is refused, never
+# rewritten or swapped for a fallback; scripts/model-floor-migrate.py plans the
+# update (dry-run by default) for .env and existing Hermes homes/profiles.
+floor_pairs=(
+  "HERMES_MODEL=$HERMES_MODEL" "AUX_MODEL=$AUX_MODEL" "AUX_FALLBACK_MODEL=$AUX_FALLBACK_MODEL"
+  "AUX_COMPRESSION_MODEL=${AUX_COMPRESSION_MODEL:-}" "AUX_COMPRESSION_FALLBACK_MODEL=${aux_comp_fb:-}"
+)
+for key in HONCHO_MODEL MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL MODEL_ROUTER_GPT_MODELS KNOWLEDGE_CLASSIFY_MODEL; do
+  floor_pairs+=("$key=$(getenv "$key")")
+done
+python3 "$ROOT/scripts/lib/model_floor.py" check "${floor_pairs[@]}" \
+  || die "$ENV_FILE sets a GPT model below the floor (see above). Plan the update: python3 scripts/model-floor-migrate.py --env-file $ENV_FILE"
+unset floor_pairs
 # Compression: never high effort. A local route turns thinking off with a
 # top-level reasoning_effort none in extra_body (Ollama ignores the `reasoning`
 # object the reasoning_effort key renders, and that object would override it)
@@ -222,7 +237,7 @@ MODEL_ROUTER_PRIVACY="$(getenv MODEL_ROUTER_PRIVACY true)"; export MODEL_ROUTER_
 #     requests (medium/high/xhigh; max only with #max/#astra).
 #   - MODEL_ROUTER_CODING_EFFORT_CEILING: low|medium|high|xhigh|max (default max).
 #   - MODEL_ROUTER_ASTRA: task (default; leading standalone #max/#astra line in
-#     the current user task authorizes gpt-6-astra) | always (legacy) | never.
+#     the current user task authorizes the newest eligible Astra) | always (legacy) | never.
 #   - MODEL_ROUTER_TASK_TTL: seconds a session's current-task state (and its
 #     Astra authorization) stays live without a substantive follow-up.
 MODEL_ROUTER_EFFORT="$(getenv MODEL_ROUTER_EFFORT true)"; export MODEL_ROUTER_EFFORT
@@ -341,6 +356,14 @@ for key in DISCORD_BOT_TOKEN DISCORD_ALLOWED_USERS DISCORD_HOME_CHANNEL DISCORD_
            CLIPROXY_API_KEY BROWSER_USE_API_KEY; do
   env_file_set "$key" "$(getenv "$key")" "$henv"
 done
+# Mac clone root (workflow.py): forwarded only when the kit .env sets it, so a
+# value set directly in $HERMES_HOME/.env is never blanked by a re-install.
+if mac_root="$(getenv HERMES_MAC_REPO_ROOT)" && [[ -n "$mac_root" ]]; then
+  env_file_set HERMES_MAC_REPO_ROOT "$mac_root" "$henv"
+elif env_file_get HERMES_MAC_REPO_ROOT "$henv" >/dev/null 2>&1; then
+  log "keeping HERMES_MAC_REPO_ROOT from $henv"
+fi
+unset mac_root
 env_file_set DISCORD_REQUIRE_MENTION true "$henv"
 # Delegation sends this as the bearer to claude-max-proxy; it must match the
 # key rendered into proxy.env. Falls back to "local" only for a legacy .env with
@@ -430,6 +453,13 @@ done
 if [[ -n "$in_hermes" && "${HERMES_SKIP_GATEWAY:-0}" != "1" ]]; then
   warn "$in_hermes is set (running inside Hermes): not restarting the gateway. Run in your own terminal: make hermes-restart"
 elif [[ "${HERMES_SKIP_GATEWAY:-0}" != "1" ]]; then
+  # GPT model floor preflight on the SAVED config the gateway will load (home +
+  # every profile + this .env). Auxiliary calls (compression, titles, vision),
+  # the iteration-limit summary and aux fallbacks bypass the model-router seams
+  # and Hermes offers no hook that can block them, so a below-floor or unclear
+  # setting there is refused here, before any (re)start — not at runtime.
+  python3 "$ROOT/scripts/model-floor-migrate.py" --check --env-file "$ENV_FILE" --hermes-home "$HERMES_HOME" \
+    || die "gateway not (re)started: saved model settings are below the GPT floor or unclear (above). Plan: python3 scripts/model-floor-migrate.py --env-file $ENV_FILE --hermes-home $HERMES_HOME, apply with the printed digest, then re-run"
   if [[ -n "$(getenv DISCORD_BOT_TOKEN)" ]]; then
     if have systemctl && systemctl --user show-environment >/dev/null 2>&1; then
       log "installing the gateway as a user service"

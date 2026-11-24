@@ -61,7 +61,7 @@ class CloudProxyTest(unittest.TestCase):
         self.assertFalse(ag.is_cloud_proxy("http://127.0.0.1:9999/v1", PROXIES))
 
     def test_ollama_is_not_a_cloud_proxy(self):
-        for url in ("http://127.0.0.1:11434/v1", "http://100.65.5.47:11434/v1", "", None):
+        for url in ("http://127.0.0.1:11434/v1", "http://100.64.0.10:11434/v1", "", None):
             self.assertFalse(ag.is_cloud_proxy(url, PROXIES), url)
 
     def test_proxy_urls_from_settings_and_env(self):

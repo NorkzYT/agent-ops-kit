@@ -3,8 +3,9 @@
 Registers two middleware callbacks with Hermes:
 
   * ``llm_request``   — deterministic rewrite of model and reasoning effort
-    from the CURRENT user task only (luna/terra/sol for the orchestrator,
-    gpt-6-astra only with explicit per-task authorization; opus/fable for
+    from the CURRENT user task only (terra/sol for the orchestrator, never
+    below GPT 6.1 Terra, the newest eligible Astra only with explicit per-task
+    authorization; opus/fable for
     delegated coding with task-based Claude effort medium/high/xhigh, max
     only when authorized).
   * ``llm_execution`` — fail-closed privacy guard plus the Astra budget seam.

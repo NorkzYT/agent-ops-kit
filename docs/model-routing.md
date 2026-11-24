@@ -12,7 +12,7 @@ Secrets stay in `.env`; only routing knobs live in `config.yaml`.
 
 | Role | Provider | Endpoint | Models |
 |------|----------|----------|--------|
-| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-5.6-luna`, `gpt-6.1-terra`, newest live Sol (static `gpt-6.1-sol`, fallback `gpt-5.6-sol`), newest live Astra (static `gpt-6-astra`) — see [Newest Sol/Astra](#newest-solastra-live-catalog) |
+| Orchestrator | CLIProxyAPI (ChatGPT) | `:8317/v1` | `gpt-6.1-terra`, newest eligible live Sol (static `gpt-6.2-sol`), newest eligible live Astra (static `gpt-6.2-astra`); never below the [GPT model floor](#gpt-model-floor) — see [Newest Sol/Astra](#newest-solastra-live-catalog) |
 | Coding (delegation) | claude-max-proxy (Claude Max) | `:3456/v1` | `opus`, `sonnet`, `haiku`, `fable`, `default` |
 | Local / private / aux | Ollama (OpenAI-compatible) | `:11434/v1` (or a Tailscale host) | routine `qwen3.5:27b`, fallback `qwen3.6:27b`, agent `qwen3.8:27b` ([Local model roles](#local-model-roles)) |
 
@@ -24,14 +24,16 @@ Responses `input`). System prompts, assistant output, tool results, pasted
 transcripts, fenced code and `>`-quoted lines are never signals, so a short
 status question stays cheap no matter how much history the session carries,
 and control tags inside quoted logs are inert. The model is rewritten **within
-its own family**. *Managed* models are the short aliases (`luna`, `terra`,
-`sol`, `astra`, `opus`, `fable`) and every strict GPT family id
-`gpt-<major>[.<minor>]-<luna|terra|sol|astra>` (e.g. `gpt-6.2-sol`,
-`gpt-7-astra`); a managed model is re-routed per task, so configuring or
-`/model`-selecting `gpt-6.1-sol` does **not** pin it. Any other id (e.g.
-`gpt-6.2-sol-preview`, a custom name) is unmanaged and sent exactly as
-configured — that, or `complexity_routing: false`, is the only way to pin an
-exact model. There is **no exact-model control in message text**: writing
+its own family**. *Managed* models are the short aliases (`terra`, `sol`,
+`astra`, `opus`, `fable`) and every eligible strict GPT family id
+`gpt-<major>[.<minor>]-<terra|sol|astra>` at version 6.1 or newer (e.g.
+`gpt-6.2-sol`, `gpt-7-astra`); a managed model is re-routed per task, so
+configuring or `/model`-selecting `gpt-6.1-sol` does **not** pin it. A
+non-GPT id (a custom name) is unmanaged and sent exactly as configured — that,
+or `complexity_routing: false`, is the only way to pin an exact model. A GPT id
+below the floor (`gpt-5.6-*`, `gpt-6-astra`, any Luna, a non-canonical spelling
+such as `gpt-6-1-terra` or `gpt-6.2-sol-preview`) is never sent: see
+[GPT model floor](#gpt-model-floor). There is **no exact-model control in message text**: writing
 "use gpt-6.2-sol" (or any model id) in a message selects nothing; only the
 leading control lines below change routing, and they pick a *tier*, never a
 specific id.
@@ -59,11 +61,11 @@ templates so a Hermes upgrade that changes them fails loudly.
 
 | Task shape | Tier | Orchestrator (GPT) | Effort | Coding |
 |------------|------|--------------------|--------|--------|
-| status / lookup / report question | routine | `gpt-5.6-luna` | low | `opus` |
+| status / lookup / report question | routine | `gpt-6.1-terra` | low | `opus` |
 | ordinary execution / delegation | medium | `gpt-6.1-terra` | medium | `opus` |
 | ambiguous / multi-constraint planning | elevated | `gpt-6.1-terra` | medium | `opus` |
-| genuinely hard (debug/architecture/security), or leading `#sol` | high | newest live Sol (static `gpt-6.1-sol`) | medium–high | `fable` |
-| explicitly authorized max | max | newest live Astra (static `gpt-6-astra`) | high | `fable` |
+| genuinely hard (debug/architecture/security), or leading `#sol` | high | newest eligible live Sol (static `gpt-6.2-sol`) | medium–high | `fable` |
+| explicitly authorized max | max | newest eligible live Astra (static `gpt-6.2-astra`) | high | `fable` |
 
 Sol requires **substantive** complexity (two distinct hard categories, or one
 plus another strong signal — length, dense constraints, pasted code); a single
@@ -79,10 +81,10 @@ Precedence when that line is exactly one tag: coding force (`#opus`/`#fable`)
 - A **leading standalone** `#opus` or `#fable` line **forces the Claude coding
   model** for that request, overriding complexity (see *Forced coding* below).
 - A **leading standalone** `#max` or `#astra` line (the first non-empty line of
-  the task, containing only the tag) authorizes the max tier (the newest live
-  Astra, static `gpt-6-astra`) for that task.
+  the task, containing only the tag) authorizes the max tier (the newest
+  eligible live Astra, static `gpt-6.2-astra`) for that task.
 - A **leading standalone** `#sol` line forces the hard tier for that task:
-  the newest live Sol on the orchestrator (static `gpt-6.1-sol`; `fable` on
+  the newest eligible live Sol on the orchestrator (static `gpt-6.2-sol`; `fable` on
   the coding seam). It never
   grants Astra; effort still follows the task body (at least `medium`, never
   above the request ceiling); a `continue` turn keeps Sol like any hard task.
@@ -155,20 +157,22 @@ With `gpt_catalog: live` (default) the router reads CLIProxyAPI's
 orchestrator requests. The **high** tier then picks the newest advertised
 strict Sol id and an **authorized max** tier the newest strict Astra id,
 ordered numerically by `(major, minor)` — `gpt-6.2-sol` beats `gpt-6.1-sol`,
-`gpt-6.10-sol` beats `gpt-6.9-sol`, `gpt-7-sol` beats both; `gpt-6-astra` is
-version 6.0. Matching is exact: case variants, whitespace, prefixes
+`gpt-6.10-sol` beats `gpt-6.9-sol`, `gpt-7-sol` beats both. Only eligible ids
+count (version 6.1 or newer: `gpt-6-astra` is version 6.0 and is ignored, as is
+`gpt-5.6-sol`). Matching is exact: case variants, whitespace, prefixes
 (`openai/…`), suffixes (`-preview`, `-mini`), leading zeros and three-part
-versions are ignored. An older version is used only when the newer one is not
-advertised (availability fallback), after which the usual downward walk
-applies.
+versions are ignored. An older eligible version is used only when it is the
+newest eligible one advertised; there is no walk to another tier and no
+below-floor fallback — a tier with no eligible model is refused.
 
 What it does **not** change: the tier is still decided from the current task
 first; the catalog only picks the version inside that tier. Astra stays
 gated by the per-task `#max`/`#astra` authorization and `astra_policy` — a
 newer Astra in the catalog is never selected without it, and the execution
 seam refuses any unauthorized strict Astra id (`gpt-7-astra` included). Model
-ids are never taken from message text, old turns or tool output. Luna/Terra
-keep their static ids (with the live set used only for availability). The
+ids are never taken from message text, old turns or tool output. Terra keeps
+its static id `gpt-6.1-terra` (pinned, never upgraded; the live set is used
+only for availability). The
 coding seam (claude-max-proxy) never consults this catalog.
 
 Fetching: content-free bodiless GET, 3 s socket timeout (applied per blocking
@@ -180,12 +184,115 @@ max(15 min, `gpt_catalog_ttl_seconds`). The fetch runs synchronously on the
 first orchestrator request after the cache expires, so that request waits for
 it; a slow but steadily responding endpoint can exceed 3 s in total. A `#privacy` turn never triggers a fetch. When the catalog is
 unavailable (no key, HTTP error, timeout, malformed body) routing falls back to
-`available_gpt_models` if set, else the static table (`gpt-6.1-sol`,
-`gpt-6-astra`) — the pre-catalog behaviour. Logs carry only
+`available_gpt_models` if set (below-floor entries ignored), else the static
+table (`gpt-6.1-terra`, `gpt-6.2-sol`, `gpt-6.2-astra`) — the pre-catalog
+behaviour. Logs carry only
 `catalog=live|static|off|unavailable|private|error` and
 `gpt catalog ok ids=<n>` / `unavailable:<kind>`, never the key, body or ids.
 Limitation: an advertised id is assumed usable; if CLIProxyAPI lists a model
 the account cannot run, the call fails through normal provider error handling.
+
+### GPT model floor
+
+Every kit-managed GPT call uses **version 6.1 or newer, family Terra or
+higher**: routine, ordinary and default/named-profile work on `gpt-6.1-terra`,
+hard work on the newest eligible Sol, explicit `#max`/`#astra` work on the
+newest eligible Astra. Effort levels and the Astra gate are unchanged, and the
+router never upgrades a task to Astra on its own.
+
+- **No downgrade, no fallback.** When the live catalog (or a static
+  `available_gpt_models`) has no eligible model for the decided tier, the
+  request is not rewritten and the execution seam refuses it
+  (`reason=no-eligible-model`) — never an older version, Luna, another tier or
+  the configured model.
+- **Stale explicit overrides are refused, not rewritten.** A request whose model
+  is a below-floor GPT id (an old `HERMES_MODEL`, a `/model` choice,
+  `gpt-6-astra`) or an id that names a GPT model but is not a strict family id
+  (`gpt-6-1-terra`, `GPT-6.1-Terra`, `gpt-4o`) is refused at the execution seam
+  (`reason=model-below-floor`), independent of `complexity_routing`. That seam
+  also sees Hermes' main-loop provider fallback (it swaps the agent model and
+  re-enters `llm_execution`), so a below-floor `fallback_providers` entry is
+  refused unsent. IDs are never case-folded or rewritten: an eligible
+  provider-prefixed id (`openai/gpt-6.1-terra`) passes literally, and local
+  names that merely start with "gpt" (`gpt4all`, `gpt-oss:20b`) are not GPT
+  family ids. The
+  specialist classifier refuses a below-floor `specialist_classifier_model`
+  unsent (`refused:model-below-floor`, selects nothing); `knowledge-classify`
+  and `knowledge-benchmark run` refuse below-floor `--model`/`--models`
+  (historical benchmark results still re-score).
+- **Install time.** `make hermes-install` refuses a below-floor
+  `HERMES_MODEL`, `AUX_MODEL`, `AUX_FALLBACK_MODEL`, `AUX_COMPRESSION_MODEL`,
+  `AUX_COMPRESSION_FALLBACK_MODEL`, `HONCHO_MODEL`,
+  `MODEL_ROUTER_SPECIALIST_CLASSIFIER_MODEL`, `MODEL_ROUTER_GPT_MODELS` or
+  `KNOWLEDGE_CLASSIFY_MODEL` before writing anything; `make init` refuses a
+  below-floor `HONCHO_MODEL`; the Windows worker installer refuses a
+  below-floor `-Model`.
+- **Restart preflight (auxiliary paths).** Auxiliary calls (compression,
+  title generation, vision, side questions), their `fallback_chain`, and the
+  iteration-limit summary do not pass through the router's
+  `llm_request`/`llm_execution` seams, and the installed Hermes offers no hook
+  that sees their model *and* can block them (`pre_auxiliary_call` is an
+  observer). The floor is therefore **not enforced at runtime on those
+  paths**; instead `make hermes-restart` and the installer's gateway step run
+  `model-floor-migrate.py --check` against the saved config (home, every
+  profile, kit `.env`) and refuse to (re)start while anything is below the
+  floor or unclear. Settings changed by hand after a restart are not seen until
+  the next one. A reviewed native fix that enforces the floor on these paths
+  at dispatch exists only as a disabled, source-only kit candidate
+  (`hermes/native-patches/aux-model-floor/README.md`): it is not in the
+  installed runtime, the kit does not render its `auxiliary.gpt_model_floor`
+  key, and even when built in, the Claude proxy and standalone clients bypass it.
+- Claude coding routes and private Ollama routes are unaffected.
+
+**Existing installs.** Profiles cloned before the floor keep their old
+`config.yaml`/`.env` values until migrated. Plan (read-only), then apply with
+the digest the plan prints, from your own terminal:
+
+```bash
+python3 scripts/model-floor-migrate.py --env-file .env                 # plan: kit .env, ~/.hermes, every profile
+python3 scripts/model-floor-migrate.py --env-file .env --apply --approve <digest>
+python3 scripts/model-floor-migrate.py --env-file .env --check         # preflight: exit 0 only when clean
+```
+
+It reads `config.yaml` structurally (PyYAML node graph; PyYAML is required) and
+`.env` with a strict dotenv reader, and touches known settings only:
+`model.default`/`model.model`, `auxiliary.<task>.model`, `delegation.model`,
+the legacy `compression.summary_model` and `smart_model_routing.cheap_model.model`
+and the router's `specialist_classifier_model` become `gpt-6.1-terra` (never Sol
+or Astra); below-floor entries are removed from `fallback_providers`, legacy
+`fallback_model` (becomes `{}`), `auxiliary.<task>.fallback_chain` and
+`delegation.fallback_providers` (an emptied list becomes `[]`), and from
+`available_gpt_models`/`MODEL_ROUTER_GPT_MODELS`; in `.env`
+`AUX_COMPRESSION_FALLBACK_MODEL` becomes `none`. Quotes and inline `# comments`
+are kept. Each edit must read back as exactly the intended data, else the file
+is left alone.
+
+**Unresolved** settings are reported and never rewritten; plan and `--check`
+exit 5 and `--apply` writes nothing while any remain: unrecognised GPT ids
+(`gpt-6-1-terra`, case variants, `gpt-4o`), a provider-prefixed below-floor
+single value (`openai/gpt-5.6-sol` — the replacement depends on that provider),
+a below-floor id at any other setting (for example `custom_providers`), YAML
+anchors/aliases, block scalars or unparseable files, `.env` values with
+expansion or unbalanced quotes, and — with `--env-file` — a below-floor
+`HONCHO_MODEL` exported in the shell (docker compose prefers it over `.env`;
+`make init` refuses it too). Fix those by hand, then re-plan.
+
+The Hermes home is the installer's: `--hermes-home`, else the last
+`HERMES_HOME=` in the kit `.env`, else `~/.hermes` (without `--env-file`,
+`$HERMES_HOME`); a differing exported `HERMES_HOME` is reported as a note, never
+silently preferred. Each changed file is re-read without following symlinks
+and must still match the plan, gets a same-mode backup beside it
+(`<file>.bak.model-floor.<UTC>`, exclusive create), an atomic replace through a
+fresh exclusive temp file, and a readback. Hidden, deleted-looking or
+symlinked profile directories, symlinked files and missing `--profile` names
+are skipped and reported (`--check` treats an unread file as not clean).
+Output carries paths, key names and model ids only. Then
+`make hermes-config-apply` and the usual operator-run `make hermes-restart`.
+
+**Rollback.** For each `wrote` line: `mv <file>.bak.model-floor.<UTC> <file>`,
+then `make hermes-restart` — which refuses again while the restored values are
+below the floor, so a rollback of the floor itself also needs the previous kit
+version.
 
 ## Reasoning effort
 
@@ -283,7 +390,7 @@ installer warns. That way an upgraded single-model install keeps using the
 model it has pulled. Set the three `OLLAMA_*_MODEL` roles to get the hierarchy.
 
 Cloud stays primary for normal work: the orchestrator on CLIProxyAPI
-(luna/terra/sol), coding on claude-max-proxy (opus/fable). The local roles
+(terra/sol), coding on claude-max-proxy (opus/fable). The local roles
 answer only `#privacy` turns, auxiliary calls pinned to Ollama, the specialist
 classifier, and the native fallback tail after both cloud providers failed.
 
@@ -471,7 +578,7 @@ Cheap, high-volume helper calls (`auxiliary.title_generation` /
   variables, so the installer renders `provider: auto` with
   `reasoning_effort: low`. `make local-route-readback` accepts this route only
   while the main model points at the configured CLIProxyAPI.
-- **Compression** uses CLIProxyAPI `gpt-6.1-terra`, then `gpt-5.6-luna`
+- **Compression** uses CLIProxyAPI `gpt-6.1-terra` with no fallback
   ([below](#compression-on-cliproxyapi-default)).
 
 The installer still reads `AUX_BASE_URL` / `AUX_MODEL` / `AUX_FALLBACK_MODEL` /
@@ -511,28 +618,29 @@ compression:
   reasoning_effort: low
   extra_body: {}
   timeout: 120
-  fallback_chain: [{provider: custom, model: "gpt-5.6-luna", base_url: "http://127.0.0.1:8317/v1", key_env: CLIPROXY_API_KEY}]
+  fallback_chain: []
 ```
 
 Terra is the routing policy's model for work that needs judgment (a summary
-must keep decisions, errors and file paths); luna, the everyday model, is the
-fallback. Hermes moves to luna when terra hits a usage/rate limit (429,
-verified) or returns an invalid response, and the compression stall retry
-pins it too. A 404 is not a fallback reason, and Hermes scopes a payment error
-to the whole proxy endpoint, so neither reaches luna. Wait budgets are the
-cloud ones (120 s / 600 s). `AUX_COMPRESSION_FALLBACK_MODEL=none` drops the
-fallback.
+must keep decisions, errors and file paths) and the GPT floor, so there is no
+cheaper fallback (`AUX_COMPRESSION_FALLBACK_MODEL=none`, the default). An
+explicit fallback must itself be an eligible id (6.1+, Terra or higher); the
+installer refuses anything older. With one set, Hermes moves to it when Terra
+hits a usage/rate limit (429, verified) or returns an invalid response, and the
+compression stall retry pins it too. A 404 is not a fallback reason, and Hermes
+scopes a payment error to the whole proxy endpoint. Wait budgets are the cloud
+ones (120 s / 600 s).
 
 | `.env` | Default | Effect |
 |--------|---------|--------|
 | `AUX_COMPRESSION_ROUTE` | `cliproxy` | `aux` follows the title-generation route (`AUX_BASE_URL` local Ollama, else the main provider) |
 | `AUX_COMPRESSION_MODEL` | `gpt-6.1-terra` | primary model on CLIProxyAPI |
-| `AUX_COMPRESSION_FALLBACK_MODEL` | `gpt-5.6-luna` | same-proxy fallback; `none` = no fallback |
+| `AUX_COMPRESSION_FALLBACK_MODEL` | `none` | optional same-proxy fallback; must be 6.1+ Terra or higher |
 
 Private payloads never take this route: the model-router plugin's guard
 extension (below) refuses a payload carrying `#privacy`/`#private` before
 anything is sent. Verified by `test_cliproxy_compression_wire_and_private_refusal`
-and `test_cliproxy_compression_falls_back_to_luna` (Hermes' own `call_llm`
+and `test_cliproxy_compression_explicit_fallback` (Hermes' own `call_llm`
 against a stub proxy).
 
 **Compression on a local route** (`AUX_COMPRESSION_ROUTE=aux` with
@@ -701,7 +809,7 @@ Discord turn. Nothing below restarts the gateway except step 6.
 1. Offline checks, then what the endpoint has:
 
    ```bash
-   cd /opt/repos/claude-code-autopilot
+   cd /opt/agent-ops-kit
    make test-local-route && make test-router
    make local-models            # qwen3.5:27b, qwen3.6:27b, qwen3.8:27b present with "tools"
    ```
@@ -711,11 +819,11 @@ Discord turn. Nothing below restarts the gateway except step 6.
    in ordinary turns can reach the cloud.
 
    ```
-   OLLAMA_BASE_URL=http://100.65.5.47:11434/v1
+   OLLAMA_BASE_URL=http://100.64.0.10:11434/v1
    OLLAMA_ROUTINE_MODEL=qwen3.5:27b
    OLLAMA_FALLBACK_MODEL=qwen3.6:27b
    OLLAMA_AGENT_MODEL=qwen3.8:27b
-   AUX_BASE_URL=http://100.65.5.47:11434/v1
+   AUX_BASE_URL=http://100.64.0.10:11434/v1
    AUX_MODEL=qwen3.5:27b
    # compression stays on CLIProxyAPI gpt-6.1-terra unless AUX_COMPRESSION_ROUTE=aux
    MODEL_ROUTER_PRIVACY=true

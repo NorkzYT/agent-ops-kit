@@ -60,13 +60,13 @@ on, the card is the authority:
 - A round or review card whose `Dev-test-mode` differs from its code card's (a header line
   dropped or changed on either) is refused by `advance` and `verdict` (exit 3).
 - Only the header counts. A comment, a record or a free-text "authorization" on the card
-  never sets or changes a mode, whoever wrote it (on Validate the coder and the
+  never sets or changes a mode, whoever wrote it (on the example-app project the coder and the
   orchestrator are the same `default` profile).
 
 ## Moving an existing request to a mode (operator body edit)
 
-A native-v1 request created before the setting (for example Validate's blocked
-`t_623f313c` and its four sibling cards) moves to an explicit mode only by the operator's
+A native-v1 request created before the setting (for example a blocked code card
+`<code-card>` and its four sibling cards) moves to an explicit mode only by the operator's
 own, supported `hermes kanban edit <id> --body`. Agents never apply it: they have no
 body-edit tool and shell board writes are fenced. No comment, record or dashboard write is
 involved. The approval is the operator's own, outside the board.
@@ -123,7 +123,7 @@ same five cards, emits no board op and creates nothing. Without the mode it is a
 (exit 4), not a silent default. A later edit of any body is also a mismatch; a dropped or
 changed header line on the round card is refused as above.
 
-For the copied `t_623f313c` graph (compose): two edits, the code card (11 removed lines: the
+For an example five-card graph (compose): two edits, the code card (11 removed lines: the
 old dev_test_run-only database paragraph and scanner rule, and the pre-adopt checkout line)
 and the round card (header line only); both validation cards and the report card are
 unchanged. The held code card stays `blocked`; unblocking it is a separate operator
@@ -144,8 +144,8 @@ decision.
   setting it reads overridden explicitly for the test database (`-e`; never its env-file
   values), and the password only as a read-only mounted `PGPASSFILE` (`-v <0600
   file>:<path>:ro -e PGPASSFILE=<path>`). When the service cannot read that file, block;
-  never put the password in the command. `make dev-deps` (and Validate's `db-setup`,
-  `db-migrate`, `db-seed`) migrate and seed the main development database (on Validate
+  never put the password in the command. `make dev-deps` (and a project's `db-setup`,
+  `db-migrate`, `db-seed`) migrate and seed the main development database (on example-app
   `dev-deps` also force-recreates the services): never for this.
 - Tests that skip because no test database reached them did not run. Count executed tests
   (`go test -v` or `-json`); a run whose database tests all skipped is not a pass.
@@ -195,10 +195,9 @@ Hermes CLI in that throwaway home. The inheritance case runs a launcher → work
 → `workflow.py` chain that stands in for the Hermes dispatcher; it is not the dispatcher.
 
 `BodyPlanTest` covers the plan, its read-only behaviour, rediscovery after the edits,
-ignored self-authorization comments and drift refusals on a synthetic board. The copied live
-five-card graph was planned, edited and rediscovered on a disposable real Hermes board (an
-isolated `HOME`/`HERMES_HOME`, no dispatcher, the real `hermes kanban create|edit|show` CLI);
-see the commit message for the run.
+ignored self-authorization comments and drift refusals on a synthetic board. To rehearse on your
+host, copy a five-card graph to a disposable Hermes board (an isolated `HOME`/`HERMES_HOME`, no
+dispatcher, the real `hermes kanban create|edit|show` CLI) and plan, edit and rediscover it there.
 
-Not proven: behaviour on the live gateway, a live worker's tool exposure, and the edit of the
-live `t_623f313c` request. It has not been applied; that is the operator's decision.
+Not proven: behaviour on a live gateway, a live worker's tool exposure, and the edit of a live
+request. Applying it is the operator's decision.

@@ -163,7 +163,7 @@ run status "$present_json" ENV_FILE="$ENVF" STUB_CURL_RC=7
 ck "status fails when a loopback endpoint does not answer" "[[ $RC -ne 0 ]]"
 
 # non-loopback Docker bind is rejected up front
-ENVBAD="$(mkenv 100.73.77.34 127.0.0.1)"
+ENVBAD="$(mkenv 100.64.0.20 127.0.0.1)"
 run apply "$absent_json" ENV_FILE="$ENVBAD"
 ck "apply fails clearly when CLIPROXY_BIND_ADDR is non-loopback" "[[ $RC -ne 0 ]]"
 ck "the non-loopback failure names 127.0.0.1" "grep -qi '127.0.0.1' '$WORK/out.txt'"

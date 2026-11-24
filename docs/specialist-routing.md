@@ -509,8 +509,11 @@ make specialist-logs                                      # mode=ai classifier=u
 ```
 
 The cliproxy model and effort default to `gpt-6.1-terra` and `medium` in the
-plugin. To change them, set the plugin keys (the installer does not render
-them, so they survive `--force` only if you set them again):
+plugin. The model must meet the GPT model floor (6.1+, Terra or higher): a
+below-floor value is refused unsent (`classifier_outcome=refused:model-below-floor`,
+no profiles selected, no substitute model). To change them, set the plugin keys
+(the installer does not render them, so they survive `--force` only if you set
+them again):
 
 ```bash
 hermes config set plugins.entries.model-router.settings.specialist_classifier_model gpt-6.1-terra

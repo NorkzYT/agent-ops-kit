@@ -13,7 +13,7 @@ writes all code and pushes the commit; the worker checks it out, builds, tests,
 installs, launches and returns evidence. Neither you nor the worker edits code,
 commits, pushes or merges.
 
-Every Mac card uses the Mac's own clone under `/Users/norkz/Documents`, never a coordinator path such as `/opt/repos`. The worker never moves that clone's checkout: it fetches the branch, adds a detached worktree at the exact SHA under `/Users/norkz/Documents/.hermes-validate/<card>`, confirms `git rev-parse HEAD` and a clean tree, and reports that worktree as `repo_dir` (the script rejects evidence from anywhere else).
+Every Mac card uses the Mac's own clone under the Mac clone root the card names (`HERMES_MAC_REPO_ROOT`; placeholder `/Users/mac-operator/Documents`), never a coordinator path such as `/opt/repos`. The worker never moves that clone's checkout: it fetches the branch, adds a detached worktree at the exact SHA under `/Users/mac-operator/Documents/.hermes-validate/<card>`, confirms `git rev-parse HEAD` and a clean tree, and reports that worktree as `repo_dir` (the script rejects evidence from anywhere else).
 
 A card with `Mobile: ios` is the iOS/iPad lane (docs/mobile-validation.md): build, test, install and launch on an iPhone and an iPad simulator; the script counts a pass only with evidence for both.
 

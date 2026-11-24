@@ -275,15 +275,15 @@ class Runner(unittest.TestCase):
                               env=self.env, timeout=120)
 
     def test_run_sends_the_production_prompt_per_cell_and_records_failures(self):
-        self.stub.fail_model = "gpt-5.6-sol"
+        self.stub.fail_model = "gpt-6.2-sol"
         p = self.run_kb("run", "--rubric", str(self.rubric), "--catalog", str(self.catalog), "--out", str(self.out),
-                        "--models", "gpt-5.6-luna,gpt-5.6-sol", "--efforts", "medium,high", "--repeats", "2",
+                        "--models", "gpt-6.1-terra,gpt-6.2-sol", "--efforts", "medium,high", "--repeats", "2",
                         "--concurrency", "3", "--timeout", "30")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(len(self.stub.requests), 4 * 2 * 2 * 2)
         cells = {(r["model"], r["reasoning_effort"]) for r in self.stub.requests}
-        self.assertEqual(cells, {("gpt-5.6-luna", "medium"), ("gpt-5.6-luna", "high"),
-                                 ("gpt-5.6-sol", "medium"), ("gpt-5.6-sol", "high")})
+        self.assertEqual(cells, {("gpt-6.1-terra", "medium"), ("gpt-6.1-terra", "high"),
+                                 ("gpt-6.2-sol", "medium"), ("gpt-6.2-sol", "high")})
         sysmsgs = {r["messages"][0]["content"] for r in self.stub.requests}
         self.assertEqual(len(sysmsgs), 1)
         kc_spec = importlib.util.spec_from_file_location("kc_for_bench", REPO / "scripts" / "knowledge-classify.py")
@@ -299,21 +299,43 @@ class Runner(unittest.TestCase):
         errs = [r for r in results["results"] if r["status"] == "error"]
         self.assertEqual(len(errs), 16)
         self.assertTrue(all("503" in r["error"] for r in errs))
-        ok = [r for r in results["results"] if r["model"] == "gpt-5.6-luna" and r["source"] == "edu/SQL"]
+        ok = [r for r in results["results"] if r["model"] == "gpt-6.1-terra" and r["source"] == "edu/SQL"]
         self.assertEqual({r["profile"] for r in ok}, {"software-engineering"})
-        self.assertEqual({r["model_served"] for r in ok}, {"gpt-5.6-luna-served"})
+        self.assertEqual({r["model_served"] for r in ok}, {"gpt-6.1-terra-served"})
         self.assertEqual({r["usage"]["completion_tokens"] for r in ok}, {7})
         self.assertTrue(all("excerpt" not in r for r in results["results"]))
         self.assertNotIn("test-key", (self.out / "results.json").read_text())
         self.assertTrue((self.out / "scores.json").is_file())
         self.assertTrue((self.out / "report.md").is_file())
-        self.assertIn("gpt-5.6-luna/medium", (self.out / "report.md").read_text())
+        self.assertIn("gpt-6.1-terra/medium", (self.out / "report.md").read_text())
         self.assertIn("recommend", (self.out / "report.md").read_text().lower())
         self.assertEqual(sorted(x.name for x in self.tmp.iterdir()), ["catalog.json", "out", "rubric.json"])
 
+    def test_below_floor_models_never_run_but_history_still_scores(self):
+        for models in ("gpt-5.6-luna", "gpt-6.1-terra,gpt-5.6-sol", "gpt-6-astra", "gpt-6-1-terra"):
+            with self.subTest(models=models):
+                p = self.run_kb("run", "--rubric", str(self.rubric), "--catalog", str(self.catalog),
+                                "--out", str(self.out), "--models", models, "--efforts", "medium",
+                                "--repeats", "1", "--timeout", "30")
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("below the GPT model floor", p.stderr)
+        self.assertEqual(self.stub.requests, [])
+        # Historical results (a v1-era model) are facts: re-scoring reads them, calls nothing.
+        p = self.run_kb("run", "--rubric", str(self.rubric), "--catalog", str(self.catalog), "--out", str(self.out),
+                        "--models", "gpt-6.1-terra", "--efforts", "medium", "--repeats", "1", "--timeout", "30")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        calls = len(self.stub.requests)
+        results = self.out / "results.json"
+        results.write_text(results.read_text().replace("gpt-6.1-terra", "gpt-5.6-terra"))
+        p = self.run_kb("score", "--rubric", str(self.rubric), "--results", str(results),
+                        "--out", str(self.out / "history"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("gpt-5.6-terra", (self.out / "history" / "scores.json").read_text())
+        self.assertEqual(len(self.stub.requests), calls)
+
     def test_score_only_and_safety(self):
         p = self.run_kb("run", "--rubric", str(self.rubric), "--catalog", str(self.catalog), "--out", str(self.out),
-                        "--models", "gpt-5.6-luna", "--efforts", "medium", "--repeats", "1", "--timeout", "30")
+                        "--models", "gpt-6.1-terra", "--efforts", "medium", "--repeats", "1", "--timeout", "30")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         p = self.run_kb("score", "--rubric", str(self.rubric), "--results", str(self.out / "results.json"),
                         "--out", str(self.out / "rescored"))
@@ -329,7 +351,7 @@ class Runner(unittest.TestCase):
 
     def test_make_target_passes_arguments(self):
         p = subprocess.run(["make", "-n", "-C", str(REPO), "knowledge-benchmark", "RUBRIC=r.json", "OUT=o",
-                            "CATALOG=c.json", "MODELS=gpt-5.6-luna", "EFFORTS=high", "REPEATS=1"],
+                            "CATALOG=c.json", "MODELS=gpt-6.1-terra", "EFFORTS=high", "REPEATS=1"],
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(p.returncode, 0, p.stderr)
         for flag in ("--rubric", "--out", "--catalog", "--models", "--efforts", "--repeats"):
