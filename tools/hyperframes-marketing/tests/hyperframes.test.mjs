@@ -5,6 +5,7 @@ import {mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync} from 'node
 import {join, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
 import {renderHtml, buildProject, safeAssetRel, escapeHtml} from '../scripts/build-composition.mjs';
 import {checkHtmlAssets, loadProjectFiles} from '../scripts/check-html-assets.mjs';
 import {renderEnv, renderTmp, posterTime, MAX_TMPDIR_LEN} from '../scripts/render-campaign.mjs';
@@ -125,10 +126,14 @@ test('unlicensed asset is denied before any render (end to end, exit 1)', () => 
 test('sample passes every gate with --gates-only (no render)', () => {
   const out = tmp();
   const assets = join(out, 'assets');
-  const res = spawnSync(process.execPath, [join(TOOL, 'scripts/render-campaign.mjs'), '--assets', assets, '--out', out, '--gates-only'], {encoding: 'utf8'});
+  // cwd is outside the tool: the vendored font must resolve against the provenance file, not the cwd.
+  const res = spawnSync(process.execPath, [join(TOOL, 'scripts/render-campaign.mjs'), '--assets', assets, '--out', out, '--gates-only'], {encoding: 'utf8', cwd: out});
   assert.equal(res.status, 0, res.stdout + res.stderr);
   assert.match(res.stdout, /Project asset gate 16:9 ==\n {2}✓ passed/);
   assert.ok(existsSync(join(out, 'project.16x9', 'index.html')));
+  for (const f of ['LiberationSans-Regular.ttf', 'LiberationSans-Bold.ttf']) {
+    assert.deepEqual(readFileSync(join(assets, 'fonts', f)), readFileSync(join(TOOL, 'fonts', 'liberation-2.1.5', f)));
+  }
   rmSync(out, {recursive: true, force: true});
 });
 
@@ -188,8 +193,16 @@ test('sample font provenance pins OFL license and sha256', () => {
     const rec = sampleProv.assets.find((a) => a.id === id);
     assert.equal(rec.license, 'ofl-1.1');
     assert.match(rec.sha256, /^[0-9a-f]{64}$/);
-    assert.match(rec.localSource, /^\/usr\/share\/fonts\/truetype\/liberation\//);
+    // Vendored, tracked bytes (not whatever the host's fonts-liberation ships).
+    assert.match(rec.localSource, /^\.\.\/fonts\/liberation-2\.1\.5\/LiberationSans-(Regular|Bold)\.ttf$/);
+    const vendored = join(TOOL, 'props', rec.localSource);
+    assert.equal(createHash('sha256').update(readFileSync(vendored)).digest('hex'), rec.sha256);
   }
+  const notice = readFileSync(join(TOOL, 'fonts', 'liberation-2.1.5', 'COPYRIGHT'), 'utf8');
+  assert.match(notice, /SIL OPEN FONT LICENSE Version 1\.1/);
+  assert.match(notice, /Red Hat, Inc\. with Reserved Font Name Liberation/);
+  const source = readFileSync(join(TOOL, 'fonts', 'liberation-2.1.5', 'SOURCE.md'), 'utf8');
+  for (const id of ['fnt_regular', 'fnt_bold']) assert.ok(source.includes(sampleProv.assets.find((a) => a.id === id).sha256));
 });
 
 test('font files are refused when they do not match the provenance sha256', () => {

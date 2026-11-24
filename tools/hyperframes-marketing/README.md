@@ -24,6 +24,7 @@ scripts/check-html-assets.mjs   pre-render gate over the built/edited project
 scripts/render-campaign.mjs     gates → build → asset gate → render → poster → QA
 scripts/chrome-offline.sh       Chrome launcher: dead proxy for non-loopback, background services off
 props/                          synthetic sample + provenance (generated tone, sha256-pinned OFL Liberation Sans)
+fonts/liberation-2.1.5/         vendored sample font: unmodified TTFs, COPYRIGHT (OFL 1.1), SOURCE.md (origin + sha256)
 tests/                          node:test, incl. an unlicensed-image negative control
 ```
 

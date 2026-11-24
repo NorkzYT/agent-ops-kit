@@ -17,27 +17,27 @@
       "id": "fnt_regular",
       "type": "font",
       "path": "props/assets/fonts/LiberationSans-Regular.ttf",
-      "source": "system-package",
+      "source": "vendored",
       "license": "ofl-1.1",
       "commercialUse": true,
       "rightsHolder": "Red Hat, Inc. and Google Corporation (Liberation Fonts)",
-      "acquiredFrom": "Ubuntu package fonts-liberation 1:2.1.5-3 (/usr/share/doc/fonts-liberation/copyright: SIL-OFL-1.1)",
-      "localSource": "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+      "acquiredFrom": "Ubuntu noble package fonts-liberation 1:2.1.5-3 (fonts-liberation_2.1.5-3_all.deb sha256 065c2ab1abc9108b17d401016dc594b79750904390f095845c93bb06e1153acc), vendored unmodified with its copyright/SIL-OFL-1.1 notice in fonts/liberation-2.1.5/ (see SOURCE.md)",
+      "localSource": "../fonts/liberation-2.1.5/LiberationSans-Regular.ttf",
       "sha256": "4659bc0c58c5028dd488ec928d41d9265db43d9b669fc14ca8b0832daca7b144",
-      "notes": "Embedded unmodified in the render only; OFL forbids selling the font by itself. Copied by render-campaign after sha256 verification."
+      "notes": "Embedded unmodified in the render only; OFL forbids selling the font by itself. Copied by render-campaign after sha256 verification; localSource is relative to this provenance file."
     },
     {
       "id": "fnt_bold",
       "type": "font",
       "path": "props/assets/fonts/LiberationSans-Bold.ttf",
-      "source": "system-package",
+      "source": "vendored",
       "license": "ofl-1.1",
       "commercialUse": true,
       "rightsHolder": "Red Hat, Inc. and Google Corporation (Liberation Fonts)",
-      "acquiredFrom": "Ubuntu package fonts-liberation 1:2.1.5-3 (/usr/share/doc/fonts-liberation/copyright: SIL-OFL-1.1)",
-      "localSource": "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+      "acquiredFrom": "Ubuntu noble package fonts-liberation 1:2.1.5-3 (fonts-liberation_2.1.5-3_all.deb sha256 065c2ab1abc9108b17d401016dc594b79750904390f095845c93bb06e1153acc), vendored unmodified with its copyright/SIL-OFL-1.1 notice in fonts/liberation-2.1.5/ (see SOURCE.md)",
+      "localSource": "../fonts/liberation-2.1.5/LiberationSans-Bold.ttf",
       "sha256": "3973aa5054fb467dd5627245d3dc82e37bf16fe075756156a570455871351582",
-      "notes": "Embedded unmodified in the render only; OFL forbids selling the font by itself. Copied by render-campaign after sha256 verification."
+      "notes": "Embedded unmodified in the render only; OFL forbids selling the font by itself. Copied by render-campaign after sha256 verification; localSource is relative to this provenance file."
     }
   ]
 }

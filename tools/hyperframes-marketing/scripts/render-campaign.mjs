@@ -166,7 +166,9 @@ function main() {
   }
 
   // 3. Font files: copy from the provenance `localSource` only when its sha256
-  // matches the record, and re-verify any file already in place.
+  // matches the record, and re-verify any file already in place. A relative
+  // `localSource` is resolved against the provenance file's directory (the
+  // sample's vendored fonts), never the caller's working directory.
   for (const face of props.typography?.faces ?? []) {
     const rel = props.assetPaths?.[face.assetId];
     const rec = (provenance.assets ?? []).find((a) => a.id === face.assetId);
@@ -174,11 +176,12 @@ function main() {
     let abs = resolveAssetPath(assetsRoot, rel);
     if (!existsSync(abs)) {
       if (!rec.localSource || !rec.sha256) die(`font file missing and provenance has no localSource+sha256: ${abs}`);
-      if (!existsSync(rec.localSource)) die(`font source not found: ${rec.localSource} (install the package named in acquiredFrom or supply the file)`);
-      if (sha256(rec.localSource) !== rec.sha256) die(`font source ${rec.localSource} does not match the provenance sha256`);
+      const src = resolve(dirname(provPath), rec.localSource);
+      if (!existsSync(src)) die(`font source not found: ${src} (supply the file named in acquiredFrom)`);
+      if (sha256(src) !== rec.sha256) die(`font source ${src} does not match the provenance sha256`);
       try { abs = ensureAssetParent(assetsRoot, rel); } catch (e) { die(e.message, 2); }
       // COPYFILE_EXCL: O_EXCL refuses an existing file or a planted symlink.
-      copyFileSync(rec.localSource, abs, fsc.COPYFILE_EXCL);
+      copyFileSync(src, abs, fsc.COPYFILE_EXCL);
       console.log(`\n== Copied font ${face.assetId} (sha256 verified) ==`);
     }
     if (rec.sha256 && sha256(abs) !== rec.sha256) die(`font file ${abs} does not match the provenance sha256`);

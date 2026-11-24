@@ -306,15 +306,18 @@ CDN scripts and uncleared files. The gates check what the records say; they do
 not prove the rights themselves. The video is an artifact only; publishing
 waits for your approval. Limits: Chrome sends non-loopback requests to a dead
 proxy, but this is not network isolation, and no test proves a render makes no
-outbound connection; renders use software GL and take minutes; the sample font
-needs the host's `fonts-liberation` file. Details:
+outbound connection; without `chrome-headless-shell` renders fall back to
+screenshot capture and may use software GL, so they can take minutes. The
+sample font (Liberation Sans 2.1.5, SIL OFL 1.1) is vendored with its license
+and source under `tools/hyperframes-marketing/fonts/`, so a fresh clone needs
+no system font package. Details:
 [docs/marketing-video.md](docs/marketing-video.md).
 
 **UI audits.** Point the pilot at your own built static pages:
 
 ```bash
 make ui-audit-project PROJECT=/abs/path/to/dist PAGES=index.html,pricing/index.html
-make ui-audit                  # owned fixtures; seeded defects make it exit 2 by design
+make ui-audit                  # owned fixtures; seeded findings make it fail by design (the axe/Lighthouse scripts exit 2)
 make test-ui-audit-pilot       # real tools on 127.0.0.1 fixtures; needs the install and Chrome
 ```
 

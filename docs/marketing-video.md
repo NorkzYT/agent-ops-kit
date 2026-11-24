@@ -82,9 +82,14 @@ font file under `assets/` with a cleared provenance record. HyperFrames 0.9.80
 rewrites a generic primary family (`sans-serif`, `system-ui`, ...) to "Inter"
 and downloads Inter from Google Fonts at compile time, and does the same for a
 named family without a local `@font-face`, so the gate refuses both. The
-sample uses Liberation Sans (SIL OFL 1.1, license `ofl-1.1`) copied from the
-host's `fonts-liberation` package only when its sha256 matches the provenance
-record (`localSource` + `sha256`); a mismatched or missing file stops the run.
+sample uses Liberation Sans 2.1.5 (SIL OFL 1.1, license `ofl-1.1`), vendored
+unmodified with its copyright/license notice and source record in
+`tools/hyperframes-marketing/fonts/liberation-2.1.5/` (`SOURCE.md`). The run
+copies it into `assets/fonts/` only when its sha256 matches the provenance
+record (`localSource`, resolved relative to the provenance file, + `sha256`); a
+mismatched or missing file stops the run. Host font packages are never used:
+other builds of the same font (for example a CI runner image's) have different
+bytes and would be refused.
 Upstream HyperFrames skills,
 registry blocks, Studio, cloud render, `publish`/`share` and the plugin are not
 installed or used here.
@@ -98,10 +103,12 @@ ENGINE=remotion make test-marketing-video    # legacy lane unit tests
 
 ## Known limits
 
-- Local renders use screenshot capture with software GL on this host (no
-  `chrome-headless-shell`), so a 9 s 1080p video takes minutes.
-- The sample font comes from the host's `fonts-liberation` package (sha256
-  pinned); a host without it must supply the same file or a cleared font.
+- Without `chrome-headless-shell`, local renders fall back to screenshot
+  capture and may use software GL (as on the host these were measured on), so
+  a 9 s 1080p video can take minutes.
+- The sample font is vendored in the repo (sha256 pinned), so a fresh clone
+  gets a working sample without a system font package; your own campaigns
+  need their own cleared font files and provenance records.
 - Chrome still makes a UDP route probe to a public IPv6 resolver address at
   start; a UDP `connect` sends no packet. TCP traffic was observed only to
   loopback and the dead proxy port in the recorded trace.

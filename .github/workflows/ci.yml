@@ -122,10 +122,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Ensure ffmpeg and Liberation fonts (generated tone + sha256-pinned sample font in the gates-only test)
+      - name: Ensure ffmpeg (generated tone; the sample font is vendored in the repo, not taken from the runner)
         run: |
-          if ! command -v ffmpeg >/dev/null || [ ! -f /usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf ]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-liberation
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
           fi
       - run: make test-marketing-video
       - run: ENGINE=remotion bash scripts/marketing-video.sh test
