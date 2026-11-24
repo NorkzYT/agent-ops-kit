@@ -33,7 +33,7 @@ endef
 	    local-route-status local-models local-route-readback specialist-classify-probe test-local-route test-private-honcho \
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    browseros-neo-check browseros-neo-up browseros-neo-down browseros-neo-status browseros-neo-pause browseros-neo-resume browseros-neo-access browseros-neo-hermes-enable browseros-neo-hermes-disable test-browseros-neo \
-	    marketing-video-install marketing-video-render marketing-video-gates test-marketing-video ui-audit-install ui-audit ui-audit-project test-ui-audit-pilot tool-pilots-check tool-pilots-install test-tool-pilots \
+	    marketing-video-install marketing-video-render marketing-video-gates test-marketing-video test-anatomy ui-audit-install ui-audit ui-audit-project test-ui-audit-pilot tool-pilots-check tool-pilots-install test-tool-pilots \
 	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
@@ -562,6 +562,9 @@ test-tool-pilots: ## Run the tool-pilots setup/check script tests with stub node
 test-marketing-video: ## Run the marketing-video gate/builder tests and the engine dispatcher tests (offline, no render) [ENGINE=hyperframes|remotion]
 	@bash scripts/marketing-video.sh test
 	@bash scripts/test_marketing_video.sh
+
+test-anatomy: ## Run the Anatomy skill tests: closure, workspace no-clobber, full MIT license in built pages/sheets, Chrome flag argv, trusted targets (node 20.10+; 22.18+ for the TS kit checks; Chrome for the print check)
+	@python3 -m unittest discover -s scripts/tests -p 'test_anatomy_skill.py' -v
 
 test-browseros-neo: ## Run the BrowserOS neo pilot config/wrapper/gate tests (offline, starts no containers)
 	@bash scripts/test_browseros_neo.sh

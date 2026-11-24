@@ -57,6 +57,7 @@ flowchart LR
 | **Memory** | Self-hosted Honcho keeps what it learns about you across sessions. |
 | **Desktop + devices** | A Windows worker with computer use, a Mac worker for Xcode and simulators. |
 | **Marketing video** | Videos from screenshots, facts and brand assets, rendered locally with pinned HyperFrames by default; claims and asset-rights gates check the recorded facts and provenance before every render, then ffprobe QA. A pass is not proof of rights beyond those records. Remotion stays as an explicit legacy lane. |
+| **Visual explainers** | Ask Hermes to show how an idea works and the `anatomy` skill builds an interactive isometric SVG/HTML machine whose working is the idea, downloading nothing at run time, with keyboard and reduced-motion support; plain questions still get text. Vendored from [Anatomy](https://github.com/wheresryan22/anatomy) (MIT). |
 | **UI audits** | Opt-in, project-local axe-core, Lighthouse CI and Impeccable (advisory) runs on your own built static pages, with reports kept on disk. |
 | **Browser pilot** | BrowserOS neo in Docker with a noVNC viewer and Hermes MCP; opt-in (`up`, then a separate `hermes-enable`), ports published on loopback only but not isolated from other host processes; real-account login is NO-GO. |
 | **Claude Code kit** | `.claude/` hooks, agents and skills that make Claude Code a careful worker in any repo. |
@@ -242,6 +243,44 @@ Details: [docs/discord-kanban-workflow.md](docs/discord-kanban-workflow.md),
 [docs/mobile-validation.md](docs/mobile-validation.md),
 [docs/engineering-completion.md](docs/engineering-completion.md).
 
+## Visual explainers (Anatomy)
+
+Ask Hermes to show, visualise or illustrate how something works ("make me an
+interactive visual of a token-bucket rate limiter") and the `anatomy` skill
+builds a framed, interactive isometric figure: a real machine whose motion is
+the idea, with a live readout driven by a small true model, keyboard and
+pointer control, reduced-motion stills and light and dark themes. Hermes
+replies with a PNG preview and the standalone HTML as attachments. A plain
+question ("what is a mutex?") still gets a text answer; the skill says when
+not to build a figure, and Hermes picks it from the skill index like any other
+skill, with no keyword router.
+
+The skill vendors [Anatomy](https://github.com/wheresryan22/anatomy) at
+`1482e84` (MIT, notice in `hermes/skills/anatomy/references/upstream-notice.md`):
+the kit, references, checks and example sources. Every generated page and
+printed sheet starts with the full MIT license right after `<!doctype html>`;
+a standalone SVG carries it as the first child of its root `<svg>`. Inlined
+kit scripts, `kit/iso.css` and the React/TS kit files start with it as a `/*!`
+comment, but whether a bundler keeps that comment depends on your toolchain,
+so any bundled or minified distribution of the kit must ship `LICENSE` too.
+Each figure is built in a new directory made with `mktemp -d` inside the named
+project or the scratch directory, so existing files are never overwritten.
+Framework-free figures need Node.js 20.10+ and Chrome for the checks; running
+the React/TS kit directly with Node needs 22.18+/23.6+ (CI runs Node 24 with no
+skips). It installs nothing. Headless Chrome opens only local files or
+loopback URLs the agent built, with flags that reduce network traffic; they
+are not network isolation or a sandbox (no firewall or namespace, Linux runs
+use `--no-sandbox`, loopback services stay reachable), so never point it at
+untrusted pages. The community-gallery publisher is not shipped.
+
+Hermes also has an official optional `creative/anatomy` (older upstream pin,
+not installed by default). Installing both makes the bare name ambiguous;
+keep one. Details in the skill's `references/upstream-notice.md`.
+
+```bash
+make test-anatomy   # closure, workspace no-clobber, license in built output, Chrome flag argv, trusted targets, real print
+```
+
 ## Marketing video and UI audits
 
 **Marketing video.** With the quick start's skills installed and the
@@ -297,7 +336,7 @@ on what the operator ran:
 
 | State | What | How it becomes active |
 |-------|------|-----------------------|
-| Installed by the quick start | Docker stack, both proxies, Hermes config, the model-router plugin, non-capability skills (`kanban-workflow`, `marketing-video-system`, `document-converter`, ...) | `make up`, `make claude-proxy-install`, `make hermes-install` |
+| Installed by the quick start | Docker stack, both proxies, Hermes config, the model-router plugin, non-capability skills (`kanban-workflow`, `marketing-video-system`, `document-converter`, `anatomy`, ...) | `make up`, `make claude-proxy-install`, `make hermes-install` |
 | Configured by the quick start | specialist routing (`ai` mode, `.env.example` ships `MODEL_ROUTER_SPECIALISTS=true`); profiles route only once installed | `make init` copies the setting, `make hermes-install` renders it; `make specialist-install` / `specialist-enable` change it later |
 | Applied on update | changed config, skills and plugins | `make hermes-config-apply`, then `make hermes-restart` |
 | Gated | the twelve gstack/PM capability skills | [docs/capability-activation.md](docs/capability-activation.md) |
@@ -407,7 +446,7 @@ docs/                     guides for every part of the stack
 - Engineering: [docs/discord-kanban-workflow.md](docs/discord-kanban-workflow.md), [docs/mobile-validation.md](docs/mobile-validation.md), [docs/hermes-autonomous-development.md](docs/hermes-autonomous-development.md)
 - Media and pilots: [docs/marketing-video.md](docs/marketing-video.md), [docs/tool-pilots.md](docs/tool-pilots.md), [tools/ui-audit-pilot/README.md](tools/ui-audit-pilot/README.md), [docs/browseros-neo.md](docs/browseros-neo.md)
 - Agents: [docs/profiles-and-teams.md](docs/profiles-and-teams.md), [docs/windows-vm-worker.md](docs/windows-vm-worker.md), [docs/windows-operator-workflows.md](docs/windows-operator-workflows.md)
-- Upstream: [Hermes](https://hermes-agent.nousresearch.com/docs), [Honcho](https://honcho.dev/docs), [Browser Use](https://docs.browser-use.com), [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [claude-max-api-proxy](https://github.com/mattschwen/claude-max-api-proxy), [gstack](https://github.com/garrytan/gstack), [PM Skills](https://github.com/phuryn/pm-skills), [HyperFrames](https://github.com/heygen-com/hyperframes), [axe-core](https://github.com/dequelabs/axe-core), [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci), [Impeccable](https://github.com/pbakaus/impeccable)
+- Upstream: [Hermes](https://hermes-agent.nousresearch.com/docs), [Honcho](https://honcho.dev/docs), [Browser Use](https://docs.browser-use.com), [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), [claude-max-api-proxy](https://github.com/mattschwen/claude-max-api-proxy), [gstack](https://github.com/garrytan/gstack), [PM Skills](https://github.com/phuryn/pm-skills), [HyperFrames](https://github.com/heygen-com/hyperframes), [axe-core](https://github.com/dequelabs/axe-core), [Lighthouse CI](https://github.com/GoogleChrome/lighthouse-ci), [Impeccable](https://github.com/pbakaus/impeccable), [Anatomy](https://github.com/wheresryan22/anatomy)
 
 ## The Claude Code kit
 
@@ -436,4 +475,4 @@ Thanks to [@Breadfishman](https://github.com/Breadfishman) for close collaborati
 
 ## License
 
-GPL-3.0. See [LICENSE](LICENSE). Adapted gstack and PM Skills methods keep their MIT notices inside each skill.
+GPL-3.0. See [LICENSE](LICENSE). Adapted gstack and PM Skills methods and the vendored Anatomy kit keep their MIT notices inside each skill.

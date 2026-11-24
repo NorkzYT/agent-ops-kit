@@ -115,7 +115,7 @@ jobs:
         run: cd vendor/claude-max-api-proxy && npm test
 
   media-and-tool-pilots:
-    name: Marketing-video gates + tool-pilot setup tests (offline, no render)
+    name: Marketing-video gates + tool-pilot setup + Anatomy skill tests (offline, no render)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,6 +130,16 @@ jobs:
       - run: make test-marketing-video
       - run: ENGINE=remotion bash scripts/marketing-video.sh test
       - run: make test-tool-pilots
+      - name: Anatomy skill (Node 24 from setup-node; example builds, TS kit, fake-Chrome argv and a real print can't skip)
+        env:
+          ANATOMY_REQUIRE_NODE: "1"
+          ANATOMY_REQUIRE_CHROME: "1"
+        run: |
+          set -o pipefail
+          node --version
+          command -v google-chrome || command -v chromium || command -v chromium-browser
+          make test-anatomy 2>&1 | tee "$RUNNER_TEMP/anatomy.log"
+          if grep -Eq 'skipped|skip(s|ped)?=' "$RUNNER_TEMP/anatomy.log"; then echo "Anatomy tests skipped on CI" >&2; exit 1; fi
 
   shellcheck:
     name: ShellCheck (touched operator scripts)
