@@ -1,0 +1,2102 @@
+From 57a36ef6a0720c30a80573cd40e8274f8cc81c36 Mon Sep 17 00:00:00 2001
+From: NorkzYT <richard@pcscorp.dev>
+Date: Tue, 24 Nov 2026 15:21:14 -0500
+Subject: [PATCH] fix: enforce auxiliary model floor before dispatch
+
+---
+ agent/aux_model_floor.py             |  237 ++++++
+ agent/auxiliary_client.py            |  135 ++-
+ agent/auxiliary_fallback_recovery.py |   10 +-
+ agent/background_review.py           |   19 +-
+ agent/chat_completion_helpers.py     |   15 +-
+ agent/codex_runtime.py               |   29 +
+ agent/context_compressor.py          |    6 +
+ agent/curator.py                     |    4 +-
+ agent/error_classifier.py            |   11 +-
+ agent/relay_llm.py                   |   12 +-
+ agent/side_question_request.py       |   19 +-
+ agent/turn_api_call.py               |    5 +
+ hermes_cli/config_defaults.py        |    9 +
+ tests/agent/test_aux_model_floor.py  | 1128 ++++++++++++++++++++++++++
+ 14 files changed, 1602 insertions(+), 37 deletions(-)
+ create mode 100644 agent/aux_model_floor.py
+ create mode 100644 tests/agent/test_aux_model_floor.py
+
+diff --git a/agent/aux_model_floor.py b/agent/aux_model_floor.py
+new file mode 100644
+index 0000000000..70994b0010
+--- /dev/null
++++ b/agent/aux_model_floor.py
+@@ -0,0 +1,237 @@
++"""Opt-in GPT model floor for auxiliary and side-channel provider attempts.
++
++Off by default (``auxiliary.gpt_model_floor: false``). When a profile's
++``config.yaml`` sets it to ``true``, every guarded provider attempt calls
++:func:`enforce_model_floor` with the exact model id that is about to go on
++the wire, immediately before dispatch. A refused attempt raises
++:class:`AuxiliaryModelFloorRefused`, a permanent error: no same-provider
++retry, no parameter rung, no provider fallback, and no request is sent.
++
++Grammar (kept identical to agent-ops-kit ``scripts/lib/model_floor.py``):
++
++* ``eligible`` -- GPT family id ``gpt-<major>[.<minor>]-<family>`` with
++  family Terra, Sol or Astra and version >= 6.1, bare or behind plain
++  provider wrappers (``openai/``, ``openrouter/openai/``, ``azure:``).
++  Passed through unchanged: the id is never rewritten or upgraded.
++* ``below`` -- strict GPT id older than 6.1, or Luna (or bare ``luna``).
++* ``unknown`` -- names a GPT model but is not a strict family id
++  (``gpt-4o``, ``GPT-6.1-terra``, ``gpt-6.1-terra:latest``, ``chatgpt-4o``).
++* ``other`` -- not an OpenAI GPT id (Claude, Ollama/OSS such as
++  ``gpt-oss:20b``, ``gpt4all``, ``qwen3:8b``): outside the floor.
++
++``below`` and ``unknown`` are refused; so is a missing/empty/non-string
++attempt model while the floor is on (the attempt cannot be classified).
++
++Where the check runs: on the request the provider callback actually
++receives -- after Relay interception and LLM execution middleware may have
++rewritten it -- never only on the pre-interception request. Auxiliary and
++iteration-summary callbacks are wrapped with :func:`guard_dispatch`;
++full-agent forks that consume auxiliary config (background review, curator,
++plugin side questions) run under :func:`floor_scope`, which
++:func:`check_scoped_dispatch` (called from every ``relay_llm`` dispatch
++point and the agent's own provider callback) enforces. A fork whose turn runs
++in the ``codex app-server`` subprocess (no Hermes provider request) is checked
++by :func:`check_scoped_runtime_model` on the exact model id handed to codex,
++before the subprocess is spawned and again at ``turn/start``. The on/off
++decision is taken once, in the caller's profile scope, and carried to the dispatch.
++"""
++
++from __future__ import annotations
++
++import contextlib
++import contextvars
++import logging
++import re
++from typing import Any, Callable, Iterator, Optional
++
++logger = logging.getLogger(__name__)
++
++CONFIG_KEY = "gpt_model_floor"  # auxiliary.gpt_model_floor
++MIN_VERSION = (6, 1)
++ELIGIBLE_FAMILIES = ("terra", "sol", "astra")
++
++_ID_RE = re.compile(r"gpt-(0|[1-9][0-9]{0,2})(?:\.(0|[1-9][0-9]{0,2}))?-(luna|terra|sol|astra)")
++_GPT_LIKE_RE = re.compile(
++    r"gpt[-_. ]?[0-9](?!all)|gpt[-_](?:luna|terra|sol|astra|latest|turbo|default|mini|nano|pro)(?![a-z])",
++    re.IGNORECASE)
++_SEGMENT_SPLIT_RE = re.compile(r"[/:]")
++_WRAPPER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
++_BELOW_FLOOR_ALIASES = frozenset({"luna"})
++_OFF_STRINGS = frozenset({"", "false", "off", "no", "0"})
++
++
++class AuxiliaryModelFloorRefused(RuntimeError):
++    """Permanent refusal of one provider attempt by the opt-in GPT model floor.
++
++    Never transient: recovery paths re-raise it instead of retrying or
++    falling back. ``reason`` is ``below``, ``unknown`` or ``missing_model``."""
++
++    permanent = True
++
++    def __init__(self, model: Any, reason: str, site: str):
++        self.model = model
++        self.reason = reason
++        self.site = site
++        super().__init__(
++            f"model floor refused {site} attempt: model={model!r} ({reason}); "
++            "requires GPT 6.1+ Terra/Sol/Astra or a non-GPT model")
++
++
++def _parse(model_id: str) -> Optional[tuple[str, tuple[int, int]]]:
++    m = _ID_RE.fullmatch(model_id)
++    if m is None:
++        return None
++    return m.group(3), (int(m.group(1)), int(m.group(2) or 0))
++
++
++def floor_status(model_id: object) -> str:
++    """``eligible`` | ``below`` | ``unknown`` | ``other`` (see module doc)."""
++    if not isinstance(model_id, str) or not model_id.strip():
++        return "other"
++    stripped = model_id.strip()
++    if model_id != stripped:
++        shaped = _GPT_LIKE_RE.search(stripped) or stripped.lower() in _BELOW_FLOOR_ALIASES
++        return "unknown" if shaped else "other"
++    if model_id.lower() in _BELOW_FLOOR_ALIASES:
++        return "below"
++    segments = _SEGMENT_SPLIT_RE.split(model_id)
++    if not any(_GPT_LIKE_RE.search(s) for s in segments):
++        return "other"
++    *wrappers, bare = segments
++    parsed = _parse(bare)
++    if parsed is None or not all(_WRAPPER_RE.fullmatch(w) and not _GPT_LIKE_RE.search(w) for w in wrappers):
++        return "unknown"
++    return "eligible" if parsed[0] in ELIGIBLE_FAMILIES and parsed[1] >= MIN_VERSION else "below"
++
++
++def floor_enabled() -> bool:
++    """Read ``auxiliary.gpt_model_floor`` from the active profile's config at call time.
++
++    Reading per attempt (not per turn) covers turnless callers (cron, gateway
++    background work) and follows the context-local ``HERMES_HOME`` override.
++    A successfully read config with the key missing/``false``/``null`` is off
++    (upstream default). Any other value -- ``true`` or a malformed value
++    someone wrote on purpose -- is on. A config that could NOT be read (the
++    reader raised, or served its ``FailedConfigRead`` defaults stand-in) is
++    treated as on: the policy cannot be shown to be disabled, so it fails
++    closed (non-GPT and eligible ids still pass)."""
++    try:
++        from hermes_cli.config import cfg_get, load_config_readonly
++        cfg = load_config_readonly()
++    except Exception:
++        logger.warning("model floor: config read failed; enforcing the floor (fail closed)", exc_info=True)
++        return True
++    if _is_failed_read(cfg):
++        logger.warning("model floor: config.yaml unreadable (defaults stand-in); enforcing the floor (fail closed)")
++        return True
++    value = cfg_get(cfg, "auxiliary", CONFIG_KEY)
++    if value is None or value is False:
++        return False
++    if isinstance(value, str) and value.strip().lower() in _OFF_STRINGS:
++        return False
++    return True
++
++
++def _is_failed_read(cfg: Any) -> bool:
++    try:
++        from hermes_cli.config_read_errors import FailedConfigRead
++    except Exception:  # pragma: no cover - import guard
++        return False
++    return isinstance(cfg, FailedConfigRead)
++
++
++def request_model(request: Any) -> Any:
++    """The wire model id of one provider request (``model``; Bedrock Converse ``modelId``)."""
++    if not isinstance(request, dict):
++        return None
++    return request["model"] if "model" in request else request.get("modelId")
++
++
++def _check(model: Any, site: str) -> None:
++    if not isinstance(model, str) or not model.strip():
++        raise AuxiliaryModelFloorRefused(model, "missing_model", site)
++    status = floor_status(model)
++    if status in ("below", "unknown"):
++        raise AuxiliaryModelFloorRefused(model, status, site)
++
++
++def refuses(model: Any) -> bool:
++    """True when the floor is on and would refuse ``model`` (pre-selection filter for fallbacks)."""
++    if not floor_enabled():
++        return False
++    try:
++        _check(model, "selection")
++    except AuxiliaryModelFloorRefused:
++        return True
++    return False
++
++
++def enforce_model_floor(model: Any, *, site: str) -> None:
++    """Check one attempt's wire model id now (reads the profile config);
++    raises :class:`AuxiliaryModelFloorRefused`. Only for call sites with no
++    later interception between this check and the provider."""
++    if floor_enabled():
++        _check(model, site)
++
++
++def guard_dispatch(callback: Callable[[Any], Any], *, site: str) -> Callable[[Any], Any]:
++    """Wrap a provider callback so the floor checks the request it actually receives.
++
++    The on/off decision is read NOW, in the caller's profile scope; the model
++    check runs at dispatch on the (possibly Relay-rewritten) request. Works
++    for sync callbacks and for callbacks returning an awaitable (the check
++    raises before the coroutine is created)."""
++    if not floor_enabled():
++        return callback
++
++    def guarded(request: Any, *args: Any, **kwargs: Any) -> Any:
++        _check(request_model(request), site)
++        return callback(request, *args, **kwargs)
++
++    return guarded
++
++
++_SCOPE: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("aux_model_floor_scope", default=None)
++
++
++@contextlib.contextmanager
++def floor_scope(site: str) -> Iterator[bool]:
++    """Run a full-agent fork (background review, curator, side question) under the floor.
++
++    Decides on/off once in the caller's profile scope; while active, every
++    provider dispatch that reaches :func:`check_scoped_dispatch` in this
++    context (and context-copying worker threads) is checked. Yields whether
++    the floor is on."""
++    enabled = floor_enabled()
++    token = _SCOPE.set(site if enabled else None)
++    try:
++        yield enabled
++    finally:
++        _SCOPE.reset(token)
++
++
++def check_scoped_dispatch(request: Any) -> None:
++    """Enforce the floor on ``request`` iff a :func:`floor_scope` is active. No-op otherwise."""
++    site = _SCOPE.get()
++    if site is not None:
++        _check(request_model(request), site)
++
++
++def check_scoped_runtime_model(model: Any, *, runtime: str) -> None:
++    """Enforce the floor on a bare wire ``model`` iff a :func:`floor_scope` is active. No-op otherwise.
++
++    For runtimes that never build a provider request in Hermes (the ``codex app-server`` subprocess
++    owns its own dispatch): ``model`` must be the exact id handed to that runtime. A missing id means
++    the runtime would pick its own default, which Hermes cannot inspect, so it is refused."""
++    site = _SCOPE.get()
++    if site is not None:
++        _check(model, f"{site}:{runtime}")
++
++
++def scoped_floor_active() -> bool:
++    """True when the current context runs under an enabled :func:`floor_scope`."""
++    return _SCOPE.get() is not None
++
++
++def is_floor_refusal(exc: BaseException) -> bool:
++    return isinstance(exc, AuxiliaryModelFloorRefused)
+diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
+index ac2566dea2..aa163cb04b 100644
+--- a/agent/auxiliary_client.py
++++ b/agent/auxiliary_client.py
+@@ -37,6 +37,7 @@ from agent.auxiliary_error_shapes import (
+     _botocore_error, _exc_http_status, _is_invalid_aux_response_error, _is_statusless_structured_provider_error,
+ )
+ from agent.auxiliary_managed_local import _is_managed_local_endpoint
++from agent.aux_model_floor import enforce_model_floor, guard_dispatch, is_floor_refusal, refuses as _floor_refuses
+ from agent.auxiliary_reasoning_floor import remember_reasoning_floor, with_reasoning_floor
+ from agent.auxiliary_structured_output import _route_key, _without_structured_output_format, remember_structured_output_rejection
+ from agent.codex_headers import (
+@@ -2623,7 +2624,8 @@ def _relay_sync_completion(
+     relay_context = _RELAY_AUX_CALL_CONTEXT.get() or {}
+     task = relay_context.get("task")
+     relay_context["stream_provider"] = provider or relay_context.get("provider")
+-    callback = create or (lambda request: _create_with_progress(client, request, task))
++    # Opt-in model floor: checked on the request the provider callback receives (after Relay).
++    callback = guard_dispatch(create or (lambda request: _create_with_progress(client, request, task)), site="auxiliary")
+     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
+     # Isolate only the provider callback so the owning thread can unwind its lease/DB
+     # transaction on hard cancel without touching the shared client.
+@@ -2656,7 +2658,7 @@ async def _relay_async_completion(
+ 
+     kwargs = prepare_chat_messages(client, kwargs)
+     # Async twin of the seam default above (#98466).
+-    callback = create or (lambda request: _acreate_with_progress(client, request))
++    callback = guard_dispatch(create or (lambda request: _acreate_with_progress(client, request)), site="auxiliary")
+     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
+     if route is None:
+         return await callback(kwargs)
+@@ -2686,7 +2688,10 @@ def _relay_sync_stream(
+     kwargs = prepare_chat_messages(client, kwargs)
+     # The bypass runs inside the provider callback, AFTER Relay has seen (and possibly
+     # rewritten) the real conversation; applying it to `kwargs` would hand Relay an empty one.
+-    create = lambda request: client.chat.completions.create(**bypass_chat_sdk_request_transform(request, client))
++    # The opt-in model floor is checked there too, on the post-Relay request.
++    create = guard_dispatch(
++        lambda request: client.chat.completions.create(**bypass_chat_sdk_request_transform(request, client)),
++        site="auxiliary_stream")
+     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
+     if route is None:
+         return create(kwargs)
+@@ -4016,6 +4021,34 @@ def _plan_fallback_auth_retry(
+     return fb_provider, None
+ 
+ 
++# Candidates the opt-in model floor refused at dispatch during the current provider-fallback walk,
++# by chain label (``fallback_chain[i](p)`` / ``fallback_providers[i](p)``, unique per entry) and by
++# the model the candidate was dispatched with: the ordered re-walk skips them even when the entry's
++# configured model differs from its resolved one (or is absent), so later entries stay reachable.
++_FLOOR_SKIPPED_IN_WALK: contextvars.ContextVar[Optional[set]] = contextvars.ContextVar(
++    "aux_floor_skipped_in_walk", default=None)
++
++
++def _floor_skips(model: Any, label: Optional[str] = None) -> bool:
++    """Selection filter: the floor refuses ``model``, or refused this entry/model at dispatch in this walk."""
++    skipped = _FLOOR_SKIPPED_IN_WALK.get()
++    if skipped is not None and (model in skipped or (label is not None and ("label", label) in skipped)):
++        return True
++    return _floor_refuses(model)
++
++
++def _skip_floor_refused_candidate(task: Optional[str], fb_label: str, err: Exception, fb_model: Any) -> None:
++    """A fallback candidate the opt-in model floor refused at dispatch: skip it for THIS walk only.
++    Not quarantined (the provider is healthy; another task/model on it may be eligible) and never
++    re-sent; the walk moves on, and on exhaustion the caller raises the primary error."""
++    skipped = _FLOOR_SKIPPED_IN_WALK.get()
++    if skipped is not None:
++        skipped.add(fb_model)
++        skipped.add(("label", fb_label))
++    logger.warning("Auxiliary %s: fallback candidate %s refused by the model floor (%s) — skipping",
++                   task or "call", fb_label, err)
++
++
+ def _call_fallback_candidate_sync(
+     fb_client: Any, fb_model: Optional[str], fb_label: str, *, task: Optional[str], messages: list,
+     temperature: Optional[float], max_tokens: Optional[int], tools: Optional[list],
+@@ -4057,6 +4090,8 @@ def _call_fallback_candidate_sync(
+     try:
+         return _send_recovering(fb_client, fb_kwargs, destination)
+     except Exception as fb_err:
++        if is_floor_refusal(fb_err):
++            return _skip_floor_refused_candidate(task, fb_label, fb_err, fb_model)
+         if not _is_auth_error(fb_err):
+             capacity = fallback_candidate_unavailable_reason(fb_err)
+             if capacity is None:
+@@ -4073,6 +4108,8 @@ def _call_fallback_candidate_sync(
+             try:
+                 return _send_recovering(*retry)
+             except Exception as retry_err:
++                if is_floor_refusal(retry_err):
++                    return _skip_floor_refused_candidate(task, fb_label, retry_err, fb_model)
+                 if not _is_auth_error(retry_err) and fallback_candidate_unavailable_reason(retry_err) is None:
+                     raise
+         _quarantine_fallback_candidate(
+@@ -4109,6 +4146,8 @@ async def _call_fallback_candidate_async(
+     try:
+         return await _send_recovering(fb_client, fb_kwargs, destination)
+     except Exception as fb_err:
++        if is_floor_refusal(fb_err):
++            return _skip_floor_refused_candidate(task, fb_label, fb_err, fb_model)
+         if not _is_auth_error(fb_err):
+             capacity = fallback_candidate_unavailable_reason(fb_err)
+             if capacity is None:
+@@ -4125,6 +4164,8 @@ async def _call_fallback_candidate_async(
+             try:
+                 return await _send_recovering(*retry)
+             except Exception as retry_err:
++                if is_floor_refusal(retry_err):
++                    return _skip_floor_refused_candidate(task, fb_label, retry_err, fb_model)
+                 if not _is_auth_error(retry_err) and fallback_candidate_unavailable_reason(retry_err) is None:
+                     raise
+         _quarantine_fallback_candidate(
+@@ -4315,16 +4356,26 @@ def _try_configured_fallback_chain(
+         fb_base_url = _custom_health_base_url(fb_provider, entry.get("base_url"))
+         if skip(fb_provider, fb_model_raw, fb_base_url):
+             continue
++        label = f"fallback_chain[{i}]({fb_provider})"
++        # Opt-in model floor, pre-resolution: only a configured model can be judged here. An entry
++        # without ``model`` means the provider's default, judged below on the resolved id.
++        if fb_model_raw and _floor_skips(fb_model_raw, label):
++            tried.append(f"{label} (model floor)")
++            continue
+         if _is_provider_unhealthy(fb_provider, fb_base_url):
+             _log_skip_unhealthy(fb_provider, task, base_url=fb_base_url)
+-            tried.append(f"fallback_chain[{i}]({fb_provider}) (unhealthy)")
++            tried.append(f"{label} (unhealthy)")
+             continue
+         fb_model = fb_model_raw or None
+-        label = f"fallback_chain[{i}]({fb_provider})"
+         try:
+             fb_client, resolved_model = _resolve_fallback_entry(entry)
+         except Exception:
+             fb_client, resolved_model = None, None
++        if fb_client is not None and _floor_skips(resolved_model or fb_model, label):
++            # The model this candidate would actually be dispatched with (the dispatch guard re-checks
++            # the post-Relay request); an unresolvable default cannot be classified and is refused.
++            tried.append(f"{label} (model floor)")
++            continue
+         if fb_client is not None:
+             too_small = _context_too_small(
+                 entry, fb_provider, resolved_model, min_ctx, task=task, label=label, name_model=True,
+@@ -4408,6 +4459,9 @@ def _try_main_fallback_chain(
+         if fb_norm == "auto" or skip(fb_provider, fb_model, fb_base_url):
+             tried.append(f"{label} (skipped)")
+             continue
++        if _floor_skips(fb_model, label):
++            tried.append(f"{label} (model floor)")
++            continue
+         if _is_provider_unhealthy(fb_norm, fb_base_url):
+             _log_skip_unhealthy(fb_norm, task, base_url=fb_base_url)
+             tried.append(f"{label} (unhealthy)")
+@@ -4417,6 +4471,11 @@ def _try_main_fallback_chain(
+         except Exception as exc:
+             logger.debug("Auxiliary %s: main fallback %s failed to resolve: %s", task or "call", label, exc)
+             fb_client, resolved_model = None, None
++        if fb_client is not None and _floor_skips(resolved_model or fb_model):
++            # The resolved id is what this candidate is dispatched with (and what a dispatch-time
++            # refusal in this walk recorded); the dispatch guard re-checks the post-Relay request.
++            tried.append(f"{label} (model floor)")
++            continue
+         if fb_client is not None:
+             too_small = _context_too_small(
+                 entry, fb_provider, resolved_model or fb_model, min_ctx, task=task, label=label,
+@@ -7694,6 +7753,7 @@ def _ladder_credential_rungs(
+ def _next_fallback_after_quarantine(
+     task: Optional[str], resolved_provider: str, is_auto: bool, route: _LadderRoute,
+     failed_model: Optional[str], failure_scope: Any, *, task_chain_only: bool = False,
++    configured_only: bool = False,
+ ) -> tuple[Optional[Any], Optional[str], str]:
+     """Next candidate after a fallback entry was quarantined mid-request (dead credential or a
+     capacity error): remaining configured entries (task chain, then main chain on auto) before the
+@@ -7709,7 +7769,7 @@ def _next_fallback_after_quarantine(
+         fb = _try_main_fallback_chain(
+             task, resolved_provider or "auto", reason=reason, failed_model=failed_model,
+             failed_base_url=route.base_info, failure_scope=failure_scope)
+-    if fb[0] is None:
++    if fb[0] is None and not configured_only:
+         fb = _try_payment_fallback(
+             resolved_provider, task, reason=reason, failed_base_url=route.base_info,
+             failure_scope=failure_scope, main_runtime=route.main_runtime)
+@@ -7717,6 +7777,16 @@ def _next_fallback_after_quarantine(
+ 
+ 
+ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
++    """Provider-fallback rung with a walk-local record of floor-refused candidates (see below)."""
++    token = _FLOOR_SKIPPED_IN_WALK.set(set())
++    try:
++        return (yield from _ladder_provider_fallback_walk(first_err, route))
++    finally:
++        with contextlib.suppress(ValueError):  # closed from another context (GC): nothing to undo there
++            _FLOOR_SKIPPED_IN_WALK.reset(token)
++
++
++def _ladder_provider_fallback_walk(first_err: Exception, route: _LadderRoute):
+     """Last rung: other providers (per-task chain; then auto: main fallback chain + discovery
+     chain, explicit: main-agent-model net). Returns the response or None.
+     Capacity errors (payment/quota, connection, exhausted 429, model incompatible, malformed
+@@ -7728,8 +7798,12 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
+     # the provider cannot serve due to capacity: payment/quota exhaustion (a daily-token 429 like a 402, #26803),
+     # connection failures, and a 429 after retries are exhausted (#52228) are not request constraints.
+     is_auto = resolved_provider in {"auto", "", None}
+-    reason = next((label for predicate, label in _FALLBACK_REASONS if predicate(first_err)), None)
+-    is_capacity_error = any(
++    floor_refused = is_floor_refusal(first_err)
++    # A floor refusal is a route the policy cannot serve (capacity-like), never an auth/payment
++    # signal, whatever its text: no provider health is touched.
++    reason = "model floor refused" if floor_refused else next(
++        (label for predicate, label in _FALLBACK_REASONS if predicate(first_err)), None)
++    is_capacity_error = floor_refused or any(
+         predicate(first_err) for predicate, label in _FALLBACK_REASONS if label != "auth error")
+     task_chain = _get_auxiliary_task_config(task).get("fallback_chain") if task else None
+     has_task_fallback_chain = isinstance(task_chain, list) and bool(task_chain)
+@@ -7772,11 +7846,13 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
+         fb_client, fb_model, fb_label = _try_main_fallback_chain(
+             task, resolved_provider or "auto", reason=reason, failed_model=_chain_failed_model,
+             failed_base_url=route.base_info, failure_scope=_chain_failure_scope)
+-        if fb_client is None:
++        if fb_client is None and not floor_refused:
+             fb_client, fb_model, fb_label = _try_payment_fallback(
+                 resolved_provider, task, reason=reason, failed_base_url=route.base_info,
+                 failure_scope=_chain_failure_scope, main_runtime=route.main_runtime)
+-    elif fb_client is None and not explicit_auth_with_task_chain:
++    elif fb_client is None and not explicit_auth_with_task_chain and not floor_refused:
++        # A floor refusal only re-routes to operator-configured fallback entries, never to the
++        # main-agent-model net or provider discovery.
+         fb_client, fb_model, fb_label = _try_main_agent_model_fallback(
+             resolved_provider, task, reason=reason, failed_model=_chain_failed_model,
+             failed_base_url=route.base_info, failure_scope=_chain_failure_scope)
+@@ -7801,7 +7877,7 @@ def _ladder_provider_fallback(first_err: Exception, route: _LadderRoute):
+             return fb_resp
+         fb_client, fb_model, fb_label = _next_fallback_after_quarantine(
+             task, resolved_provider, is_auto, route, _chain_failed_model, _chain_failure_scope,
+-            task_chain_only=explicit_auth_with_task_chain)
++            task_chain_only=explicit_auth_with_task_chain, configured_only=floor_refused)
+     # All fallback layers exhausted: one user-visible warning (#26882), then the caller re-raises.
+     logger.warning("Auxiliary %s%s: %s on %s and all fallbacks exhausted "
+                    "(fallback_chain + main agent model). Raising the primary error.",
+@@ -7827,6 +7903,13 @@ def _aux_recovery_ladder(
+         client, task, tag, async_mode, base_info, resolved_provider, resolved_model,
+         resolved_base_url, resolved_api_key, resolved_api_mode, final_model, main_runtime, route_info,
+         kwargs.get("timeout"))
++    if is_floor_refusal(first_err):
++        # The model floor refused this route before dispatch: no parameter/credential rung may
++        # re-send it; only other (floor-checked) providers may answer. Exhausted -> the refusal.
++        resp = yield from _ladder_provider_fallback(first_err, route)
++        if resp is not None:
++            return resp
++        raise first_err
+     resp, first_err, kwargs = yield from _ladder_parameter_rungs(first_err, route, kwargs, max_tokens)
+     if first_err is None:
+         return resp
+@@ -7859,14 +7942,27 @@ def _aux_recovery_ladder(
+     raise first_err
+ 
+ 
+-def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
+-    """Run a ladder generator, feeding each step's result (or exception) back in; a ``wait`` step sleeps."""
++def _floor_refused_rung(ladder, exc: Exception, original: Optional[Exception]) -> Exception:
++    """A recovery rung's re-send was refused by the model floor: never feed the refusal back into
++    the ladder (no rung may retry or re-route it). End recovery with the error that started it."""
++    ladder.close()
++    if original is None or original is exc:
++        return exc
++    original.__context__ = exc
++    return original
++
++
++def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any], *, original: Optional[Exception] = None) -> Any:
++    """Run a ladder generator, feeding each step's result (or exception) back in; a ``wait`` step sleeps.
++    ``original`` is the error that started recovery (raised if a rung is refused by the model floor)."""
+     try:
+         step = next(ladder)
+         while True:
+             try:
+                 result = time.sleep(step.args[0]) if step.kind == "wait" else perform(step)
+             except Exception as exc:
++                if is_floor_refusal(exc):
++                    raise _floor_refused_rung(ladder, exc, original)
+                 step = ladder.throw(exc)
+             else:
+                 step = ladder.send(result)
+@@ -7874,7 +7970,9 @@ def _drive_ladder(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
+         return stop.value
+ 
+ 
+-async def _drive_ladder_async(ladder, perform: Callable[[_LadderStep], Any]) -> Any:
++async def _drive_ladder_async(
++    ladder, perform: Callable[[_LadderStep], Any], *, original: Optional[Exception] = None,
++) -> Any:
+     """Async twin of :func:`_drive_ladder` (``perform`` is awaited)."""
+     import asyncio
+     try:
+@@ -7883,6 +7981,8 @@ async def _drive_ladder_async(ladder, perform: Callable[[_LadderStep], Any]) ->
+             try:
+                 result = await (asyncio.sleep(step.args[0]) if step.kind == "wait" else perform(step))
+             except Exception as exc:
++                if is_floor_refusal(exc):
++                    raise _floor_refused_rung(ladder, exc, original)
+                 step = ladder.throw(exc)
+             else:
+                 step = ladder.send(result)
+@@ -8002,7 +8102,7 @@ def _should_retry_same_provider(task: Optional[str], exc: Exception, tag: str) -
+     """True when ``exc`` is a transient transport blip worth a same-provider retry; critical-path
+     tasks skip it on a full-budget timeout (``_should_skip_same_provider_retry``) and go straight
+     to fallback."""
+-    if not _is_transient_transport_error(exc):
++    if is_floor_refusal(exc) or not _is_transient_transport_error(exc):
+         return False
+     if _should_skip_same_provider_retry(task, exc):
+         logger.info("Auxiliary %s%s: timeout on the critical path; "
+@@ -8067,6 +8167,7 @@ def _call_llm_impl(
+         if task == "moa_aggregator" and isinstance(client, CodexAuxiliaryClient):
+             # Responses-shim clients consume the stream internally and return a completed
+             # object Relay's managed stream would iterate; the MoA facade wraps it as one chunk.
++            enforce_model_floor(kwargs.get("model"), site="moa_aggregator_codex_stream")
+             return client.chat.completions.create(**kwargs)
+         return _relay_sync_stream(client, kwargs, provider=request_provider, api_mode=req.resolved_api_mode)
+ 
+@@ -8127,7 +8228,7 @@ def _call_llm_impl(
+             return _call_fallback_candidate_sync(*args, **kw)
+         return _drive_ladder(
+             _start_recovery_ladder(first_err, req, retry_kwargs, task=task, async_mode=False, route_info=route_info),
+-            _perform)
++            _perform, original=first_err)
+ 
+ 
+ def _coerce_llm_message(response):
+@@ -8278,4 +8379,4 @@ async def _async_call_llm_impl(
+             return await _call_fallback_candidate_async(fb_client, fb_model, fb_label, **kw)
+         return await _drive_ladder_async(
+             _start_recovery_ladder(first_err, req, retry_kwargs, task=task, async_mode=True, route_info=route_info),
+-            _perform)
++            _perform, original=first_err)
+diff --git a/agent/auxiliary_fallback_recovery.py b/agent/auxiliary_fallback_recovery.py
+index d479845e53..81a78321c6 100644
+--- a/agent/auxiliary_fallback_recovery.py
++++ b/agent/auxiliary_fallback_recovery.py
+@@ -8,6 +8,8 @@ This module runs those rungs — and only those — around a candidate's request
+ """
+ from typing import Any, Awaitable, Callable, Dict, Optional
+ 
++from agent.aux_model_floor import is_floor_refusal
++
+ 
+ def _parameter_ladder(first_err: Exception, client: Any, kwargs: dict[str, Any], *,
+                       task: Optional[str], tag: str):
+@@ -33,8 +35,10 @@ def send_with_parameter_rungs(
+     try:
+         return send(client, kwargs)
+     except Exception as first_err:
++        if is_floor_refusal(first_err):  # opt-in model floor: never re-send a refused route
++            raise
+         ladder = _parameter_ladder(first_err, client, kwargs, task=task, tag="")
+-        return _drive_ladder(ladder, lambda step: send(*step.args))
++        return _drive_ladder(ladder, lambda step: send(*step.args), original=first_err)
+ 
+ 
+ async def send_with_parameter_rungs_async(
+@@ -46,5 +50,7 @@ async def send_with_parameter_rungs_async(
+     try:
+         return await send(client, kwargs)
+     except Exception as first_err:
++        if is_floor_refusal(first_err):  # opt-in model floor: never re-send a refused route
++            raise
+         ladder = _parameter_ladder(first_err, client, kwargs, task=task, tag=" (async)")
+-        return await _drive_ladder_async(ladder, lambda step: send(*step.args))
++        return await _drive_ladder_async(ladder, lambda step: send(*step.args), original=first_err)
+diff --git a/agent/background_review.py b/agent/background_review.py
+index f53ad53282..00708480ca 100644
+--- a/agent/background_review.py
++++ b/agent/background_review.py
+@@ -1224,15 +1224,18 @@ def _run_review_fork(
+         _reset_background_review_read_marks()
+     try:
+         if review_run is None or review_run.begin_request(st.review_agent):
++            from agent.aux_model_floor import floor_scope
+             # Routed -> digest (cache cold anyway); same model -> full snapshot (warm cache reads).
+-            st.review_agent.run_conversation(
+-                user_message=(
+-                    prompt + "\n\nYou can only call " + memory_phrase_prompt +
+-                    "management tools. Other tools will be denied "
+-                    "at runtime — do not attempt them." + prompt_extra
+-                ),
+-                conversation_history=_digest_history(messages_snapshot) if _routed else messages_snapshot,
+-            )
++            # The fork's provider attempts (incl. its fallback chain) run under the opt-in model floor.
++            with floor_scope("background_review"):
++                st.review_agent.run_conversation(
++                    user_message=(
++                        prompt + "\n\nYou can only call " + memory_phrase_prompt +
++                        "management tools. Other tools will be denied "
++                        "at runtime — do not attempt them." + prompt_extra
++                    ),
++                    conversation_history=_digest_history(messages_snapshot) if _routed else messages_snapshot,
++                )
+     finally:
+         clear_thread_tool_whitelist()
+         # Attribute usage to the PARENT session. Snapshot BEFORE unregister/close so counters
+diff --git a/agent/chat_completion_helpers.py b/agent/chat_completion_helpers.py
+index 5b8b74ebee..b4e68b93f5 100644
+--- a/agent/chat_completion_helpers.py
++++ b/agent/chat_completion_helpers.py
+@@ -2200,6 +2200,8 @@ def _iteration_summary_api_messages(agent, messages: list) -> list:
+ 
+ def _managed_summary_call(agent, api_request_id: str, request, callback, *, retry_count: int):
+     from agent import relay_llm
++    # Runs under handle_max_iterations' floor_scope: relay_llm checks the opt-in model floor on the
++    # request it hands the provider (after any Relay rewrite).
+     return relay_llm.execute_current(
+         request, callback,
+         name=str(getattr(agent, "provider", "") or "provider"), model_name=str(getattr(agent, "model", "") or ""),
+@@ -2230,6 +2232,8 @@ def _codex_summary_attempt(agent, api_messages: list, api_request_id: str):
+         codex_kwargs.pop("tools", None)
+         codex_kwargs.pop("tool_choice", None)
+         codex_kwargs.pop("parallel_tool_calls", None)
++        from agent.aux_model_floor import check_scoped_dispatch
++        check_scoped_dispatch(codex_kwargs)  # handle_max_iterations' floor_scope; Relay re-checks inside
+         # Route through the same seam as normal Codex turns: a direct _run_codex_stream
+         # bypasses the stale/TTFB watchdogs, interrupt handling and client cleanup, so an
+         # unattended cron summary could wedge forever (#70943).
+@@ -2301,8 +2305,11 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
+ 
+         # One retry on an empty summary; a summary empty once its <think> block is stripped is NOT retried.
+         final_response = _EMPTY_SUMMARY_RESPONSE
++        from agent.aux_model_floor import floor_scope
+         for retry_count in (0, 1):
+-            text = attempt(retry_count)
++            # Opt-in model floor: a refusal raises out of this loop (never the empty-summary retry).
++            with floor_scope("iteration_summary"):
++                text = attempt(retry_count)
+             if not text:
+                 continue
+             if "<think>" in text:
+@@ -3571,6 +3578,12 @@ class _StreamingCall(StreamingWaitMonitor):
+         if self._request_cancelled["value"]:
+             logger.debug("Streaming worker caught %s after request cancellation — exiting without retry.", type(e).__name__)
+             return False
++        from agent.aux_model_floor import is_floor_refusal
++        if is_floor_refusal(e):
++            # Opt-in model floor refused the attempt before dispatch (e.g. a MoA aggregator): a policy
++            # verdict, not a stream fault — no reconnect, no non-streaming re-send of the same route.
++            self.result["error"] = e
++            return False
+         e = self._as_lifetime_error(e)  # a cap kill: transient, and its copy names the setting
+         _is_timeout = isinstance(e, (_httpx.ReadTimeout, _httpx.ConnectTimeout, _httpx.PoolTimeout, StreamLifetimeExceeded))
+         # ReadError: abort/reset mid-body (stale-kill shutdown under a parked reader, ECONNRESET) — retry loop owns it.
+diff --git a/agent/codex_runtime.py b/agent/codex_runtime.py
+index cfc3b9c64d..5a0195a263 100644
+--- a/agent/codex_runtime.py
++++ b/agent/codex_runtime.py
+@@ -756,15 +756,34 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
+         from agent.conversation_compression_checkpoint import _checkpoint_blocked
+         raise _checkpoint_blocked("codex_app_server owns the authoritative thread and compacts it "
+                                   "without a truthful pre-compaction transcript boundary")
++    # Opt-in auxiliary model floor (curator / background review forks under ``floor_scope``): the
++    # subprocess dispatches itself, so the floor judges the exact id handed to codex, BEFORE any
++    # subprocess is spawned. No-op outside a scope (ordinary turns, floor off).
++    from agent.aux_model_floor import check_scoped_runtime_model, is_floor_refusal, scoped_floor_active
++    if scoped_floor_active():
++        try:
++            try:
++                planned_model = _codex_wire_model(agent, _codex_model_provider(agent))
++            except Exception:  # the id codex would run cannot be computed: not inspectable, fail closed
++                logger.warning("model floor: codex app-server wire model not computable", exc_info=True)
++                planned_model = None
++            check_scoped_runtime_model(planned_model, runtime="codex_app_server")
++        except Exception as refusal:
++            return _floor_refused_codex_turn(agent, messages, refusal)
+     _ensure_codex_session(agent, messages)
+     try:
+         _start_codex_thread(agent)
+         wire_model = _codex_wire_model(agent, getattr(agent, "_codex_session_model_provider", None))
++        # Re-checked on the exact ``turn/start`` model (a kept session may carry another provider id).
++        if scoped_floor_active():
++            check_scoped_runtime_model(wire_model, runtime="codex_app_server")
+         turn = agent._codex_session.run_turn(
+             user_input=user_message,
+             model=wire_model, reasoning_effort=_codex_turn_effort(agent, wire_model),
+             service_tier=_codex_turn_service_tier(agent))
+     except Exception as exc:
++        if is_floor_refusal(exc):
++            return _floor_refused_codex_turn(agent, messages, exc)
+         logger.exception("codex app-server turn failed")
+         _close_codex_session(agent)
+         return _turn_result(
+@@ -793,6 +812,16 @@ def run_codex_app_server_turn(agent, *, user_message: str, original_user_message
+     )
+ 
+ 
++def _floor_refused_codex_turn(agent, messages: list[dict[str, Any]], refusal: BaseException) -> dict[str, Any]:
++    """A codex app-server turn the opt-in model floor refused: nothing was sent to codex. Same failed-turn
++    shape as a codex failure (no projected rows, zero API calls); the live session is left untouched."""
++    logger.warning("codex app-server turn refused by the model floor: %s", refusal)
++    return _turn_result(
++        _consume_user_interrupt(agent), messages, api_calls=0, completed=False, error=str(refusal),
++        final_response=None, model_floor_refused=True,
++    )
++
++
+ def _turn_result(interrupt: tuple[bool, Any], messages: list[dict[str, Any]], *, api_calls: int, completed: bool,
+                  error: Any, final_response: Any, **extra: Any) -> dict[str, Any]:
+     """Result shape shared with the chat_completions path (``partial`` == ``not completed``)."""
+diff --git a/agent/context_compressor.py b/agent/context_compressor.py
+index fa3466e432..e4c96813a3 100644
+--- a/agent/context_compressor.py
++++ b/agent/context_compressor.py
+@@ -236,6 +236,12 @@ def _is_summary_access_or_quota_error(exc: Exception) -> bool:
+         UnscopedSecretError = ()  # type: ignore[assignment]
+     if UnscopedSecretError and isinstance(exc, UnscopedSecretError):
+         return True
++    # The opt-in auxiliary model floor refused every summary route it was offered (primary and any
++    # fallback): a policy/permission denial, so compress() preserves the session unchanged instead
++    # of committing a placeholder that drops the middle window.
++    from agent.aux_model_floor import is_floor_refusal
++    if is_floor_refusal(exc):
++        return True
+     reason = classify_api_error(exc).reason
+     if reason is FailoverReason.rate_limit:
+         return False
+diff --git a/agent/curator.py b/agent/curator.py
+index 8318854425..7e96708304 100644
+--- a/agent/curator.py
++++ b/agent/curator.py
+@@ -1141,8 +1141,10 @@ def _run_llm_review(prompt: str) -> dict[str, Any]:
+ 
+             _reset_background_review_read_marks()
+         # Silence the fork's tool-call chatter (CLI synchronous foreground runs).
++        from agent.aux_model_floor import floor_scope
++        # The fork's provider attempts (incl. its fallback chain) run under the opt-in model floor.
+         with open(os.devnull, "w", encoding="utf-8") as devnull, \
+-             contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
++             contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull), floor_scope("curator"):
+             conv_result = review_agent.run_conversation(user_message=prompt)
+         final = str(conv_result.get("final_response") or "").strip() if isinstance(conv_result, dict) else ""
+         result_meta["final"] = final
+diff --git a/agent/error_classifier.py b/agent/error_classifier.py
+index 9694ae005c..8c73300534 100644
+--- a/agent/error_classifier.py
++++ b/agent/error_classifier.py
+@@ -1059,8 +1059,17 @@ def _by_status(c: _Ctx) -> Optional[Verdict]:
+ # Stage order: plugin hooks → the provider's own profile hook → provider-specific special cases →
+ # HTTP status → MoA shapes → structured error code → message patterns → SSL → disconnect +
+ # large session → transport types → unknown (retryable with backoff).
++def _model_floor_verdict(c: _Ctx) -> Optional[Verdict]:
++    """Opt-in auxiliary model floor refusal (agent/aux_model_floor.py): a local policy decision taken
++    before dispatch. Never retryable on the same route (it would be refused again, whatever its text
++    says); a configured fallback whose model passes the floor may still serve. First stage, so no
++    plugin/profile/message rule can turn it into a retry."""
++    from agent.aux_model_floor import is_floor_refusal
++    return _V_POLICY_BLOCKED if is_floor_refusal(c.error) else None
++
++
+ _STAGES: Sequence[Callable[[_Ctx], Optional[Verdict]]] = (
+-    _plugin_verdict, _profile_verdict, _provider_special_cases, _by_status, _moa_special_cases,
++    _model_floor_verdict, _plugin_verdict, _profile_verdict, _provider_special_cases, _by_status, _moa_special_cases,
+     _by_error_code, _by_message, _by_transport,
+ )
+ 
+diff --git a/agent/relay_llm.py b/agent/relay_llm.py
+index e52f0b8917..b7317e99ac 100644
+--- a/agent/relay_llm.py
++++ b/agent/relay_llm.py
+@@ -14,6 +14,7 @@ from types import SimpleNamespace
+ from typing import Any
+ 
+ from agent import relay_runtime
++from agent.aux_model_floor import check_scoped_dispatch
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -92,10 +93,15 @@ class _ManagedAttempt:
+         self.context = contextvars.copy_context()
+ 
+     def provider_request(self, next_request: Any) -> dict[str, Any]:
+-        return _provider_request(
++        final = _provider_request(
+             self.request, next_request, relay_request_body=self.body,
+             codec_baseline_body=self.codec_baseline, metadata=self.metadata,
+         )
++        # Opt-in model floor (agent/aux_model_floor.py): checked on the request AFTER Relay
++        # interception, immediately before the provider callback; no-op outside a floor scope.
++        # Evaluated in the attempt's captured context: Relay may call this from its own loop thread.
++        self.context.copy().run(check_scoped_dispatch, final)
++        return final
+ 
+     def run_callback(self, callback: Callable[..., Any], *args: Any) -> Any:
+         """Run a Hermes callback in a fresh copy of the captured context.
+@@ -186,6 +192,7 @@ def execute(
+     ``session_id`` defaults to the inherited Hermes turn's session (unmanaged when there is none)."""
+     attempt = _ManagedAttempt.resolve(session_id, request, metadata, name=name, model_name=model_name)
+     if attempt is None:
++        check_scoped_dispatch(request)
+         return callback(request)
+     try:
+         managed = _run_awaitable(attempt.run_managed(
+@@ -203,6 +210,7 @@ async def execute_async(
+     """Async ``execute``."""
+     attempt = _ManagedAttempt.resolve(session_id, request, metadata, name=name, model_name=model_name)
+     if attempt is None:
++        check_scoped_dispatch(request)
+         return await callback(request)
+     try:
+         managed = await attempt.run_managed(attempt.runtime.relay.llm.execute, partial(attempt.invoke_async, callback))
+@@ -243,6 +251,7 @@ def stream_current(
+     # Inside a managed callback (on the Relay session's loop) a nested ManagedLlmStream would be
+     # iterated synchronously on that loop, which asyncio forbids; the outer stream tracks this attempt.
+     if session_id is None or _has_running_event_loop():
++        check_scoped_dispatch(request)
+         return stream_factory(request)
+     managed = stream(
+         request, stream_factory, session_id=session_id, name=name, model_name=model_name,
+@@ -334,6 +343,7 @@ class ManagedLlmStream(Iterator[Any]):
+         self._start_managed(attempt)
+ 
+     def _start_unmanaged(self, request: dict[str, Any]) -> None:
++        check_scoped_dispatch(request)
+         raw_stream = self._stream_factory(request)
+         predicate = self._completed_response_predicate
+         if predicate is not None and predicate(raw_stream):
+diff --git a/agent/side_question_request.py b/agent/side_question_request.py
+index dc5ce6e1a6..57f99f2457 100644
+--- a/agent/side_question_request.py
++++ b/agent/side_question_request.py
+@@ -162,6 +162,7 @@ def _send(fork: Any, capture: SideQuestionCapture, prompt: str, audit: _Audit) -
+     if has_server_side_tools(built.api_kwargs):
+         audit.outcome = "refused:server_side_tools"
+         return None
++    from agent.aux_model_floor import floor_scope, is_floor_refusal
+     hooks = start_aux_call_hooks(
+         aux_task=PLUGIN_SIDE_QUESTION_TASK, metadata={"api_request_id": api_request_id, "plugin_id": audit.plugin_id},
+         client=fork.client,
+@@ -172,12 +173,15 @@ def _send(fork: Any, capture: SideQuestionCapture, prompt: str, audit: _Audit) -
+     # One hook bracket around the whole attempt: a reply that fails after the provider returned
+     # (accounting, normalization) still closes the observer's pre_auxiliary_call with its error.
+     try:
+-        verdict = perform_api_call(
+-            fork, api_kwargs=built.api_kwargs, _original_api_kwargs=built._original_api_kwargs,
+-            _llm_middleware_trace=built._llm_middleware_trace, _moa_prepared_request=None,
+-            _retry=TurnRetryState(), thinking_spinner=None, retry_count=0, api_call_count=1,
+-            api_request_id=api_request_id, effective_task_id=task_id, turn_id=turn_id, interrupted=False,
+-        )
++        # Opt-in model floor: checked on the request execution middleware and Relay actually hand
++        # the provider (a middleware ``next_call`` payload may swap the model), not on ``built``.
++        with floor_scope("side_question"):
++            verdict = perform_api_call(
++                fork, api_kwargs=built.api_kwargs, _original_api_kwargs=built._original_api_kwargs,
++                _llm_middleware_trace=built._llm_middleware_trace, _moa_prepared_request=None,
++                _retry=TurnRetryState(), thinking_spinner=None, retry_count=0, api_call_count=1,
++                api_request_id=api_request_id, effective_task_id=task_id, turn_id=turn_id, interrupted=False,
++            )
+         response = None if verdict.action == "break" else verdict.response
+         if response is not None:
+             record_response_usage(
+@@ -191,6 +195,9 @@ def _send(fork: Any, capture: SideQuestionCapture, prompt: str, audit: _Audit) -
+     except BaseException as exc:
+         finish_aux_call_hooks(hooks, error=exc)
+         relay_llm.complete_logical_call(api_request_id, outcome="failed")
++        if is_floor_refusal(exc):
++            audit.outcome = "refused:model_floor"
++            return None
+         raise
+     if response is None:
+         finish_aux_call_hooks(hooks, error=InterruptedError("side question cancelled"))
+diff --git a/agent/turn_api_call.py b/agent/turn_api_call.py
+index c2f5c802b0..7c6fd7312a 100644
+--- a/agent/turn_api_call.py
++++ b/agent/turn_api_call.py
+@@ -98,6 +98,11 @@ def perform_api_call(
+                 next_api_kwargs, allow_stream=False, drop_replay_item_ids=drops_replay_item_ids(agent.base_url),
+                 sanitize_harmony_tokens=agent._is_codex_backend(),
+             )
++        # Opt-in model floor for full-agent forks running under ``floor_scope`` (side question,
++        # background review, curator): the post-middleware request, before any transport; Relay
++        # re-checks its own rewrite at dispatch. No-op for ordinary turns.
++        from agent.aux_model_floor import check_scoped_dispatch
++        check_scoped_dispatch(next_api_kwargs)
+         if _use_streaming:
+             return agent._interruptible_streaming_api_call(
+                 next_api_kwargs, on_first_delta=_stop_spinner
+diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
+index 50117f6fb1..117c56a2af 100644
+--- a/hermes_cli/config_defaults.py
++++ b/hermes_cli/config_defaults.py
+@@ -727,6 +727,15 @@ DEFAULT_CONFIG = {
+         # falling back; clamped [0,6]. Matters for pinned calls (MoA advisors) where provider
+         # fallback is not meaningful recovery.
+         "transient_retries": 2,
++        # Opt-in GPT model floor (agent/aux_model_floor.py). When true, auxiliary calls,
++        # iteration summaries, plugin side questions and the background-review / curator forks
++        # refuse, on the request actually handed to the provider (after Relay / middleware
++        # rewrites), any OpenAI GPT id below 6.1 Terra/Sol/Astra or not a strict family id, and
++        # any attempt with no model. A refused route is never retried or re-sent; other
++        # configured fallbacks whose model passes may answer, else the original error surfaces.
++        # Non-GPT ids (Claude, Ollama, OSS) and eligible ids pass unchanged. An unreadable
++        # config.yaml enforces the floor (fail closed). The main agent loop is NOT guarded.
++        "gpt_model_floor": False,
+         # When true, the auto-chain's OpenRouter step is skipped unless the fallback model ends in
+         # ":free" — a PAID lane is never used for background aux traffic even with
+         # OPENROUTER_API_KEY set.
+diff --git a/tests/agent/test_aux_model_floor.py b/tests/agent/test_aux_model_floor.py
+new file mode 100644
+index 0000000000..ec418f6d0b
+--- /dev/null
++++ b/tests/agent/test_aux_model_floor.py
+@@ -0,0 +1,1128 @@
++"""Opt-in GPT model floor (``auxiliary.gpt_model_floor``) at the real provider-attempt seams.
++
++Every dispatch goes to a local HTTP endpoint (or a counting fake transport for the agent-level
++paths) so a refusal is proven by *zero* recorded requests, and an allowed id by the exact wire
++``model`` field. No real model is called.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import copy
++import json
++import threading
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from types import SimpleNamespace
++from unittest.mock import patch
++
++import pytest
++import hermes_yaml as yaml
++
++from agent.aux_model_floor import AuxiliaryModelFloorRefused, floor_status
++
++MESSAGES = [{"role": "user", "content": "say ok"}]
++
++REFUSED = [
++    "gpt-4o", "gpt-4.1-mini", "gpt-5.5", "gpt-6.0-terra", "gpt-6-terra", "gpt-6.1-luna", "gpt-6.2-luna",
++    "GPT-6.1-terra", "gpt-6.1-terra:latest", "gpt-6-1-terra", "chatgpt-4o-latest", "openai/gpt-5.5",
++    "openrouter/openai/gpt-6.0-sol", "azure-gpt-4o", "gpt-latest", "luna", " gpt-6.1-terra",
++]
++ALLOWED_GPT = ["gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.3-astra", "gpt-7-terra", "openai/gpt-6.1-terra",
++               "openrouter/openai/gpt-6.2-sol", "azure:gpt-6.1-terra"]
++ALLOWED_OTHER = ["claude-sonnet-5-5", "anthropic/claude-opus-5-5", "gpt-oss:20b", "gpt4all-j", "qwen3:8b",
++                 "llama3.1:8b", "ollama/luna", "mistral-small"]
++
++
++# ── grammar ───────────────────────────────────────────────────────────────────────────────
++
++
++@pytest.mark.parametrize("model", REFUSED)
++def test_grammar_refuses_below_and_unknown(model):
++    assert floor_status(model) in ("below", "unknown")
++
++
++@pytest.mark.parametrize("model", ALLOWED_GPT)
++def test_grammar_eligible(model):
++    assert floor_status(model) == "eligible"
++
++
++@pytest.mark.parametrize("model", ALLOWED_OTHER)
++def test_grammar_non_gpt_is_outside_floor(model):
++    assert floor_status(model) == "other"
++
++
++def test_default_config_ships_floor_off():
++    from hermes_cli.config import DEFAULT_CONFIG
++    assert DEFAULT_CONFIG["auxiliary"]["gpt_model_floor"] is False
++
++
++# ── local endpoint ────────────────────────────────────────────────────────────────────────
++
++
++@pytest.fixture
++def endpoint(monkeypatch):
++    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
++    from agent.auxiliary_client import _reset_aux_unhealthy_cache, shutdown_cached_clients
++
++    shutdown_cached_clients()
++    _reset_aux_unhealthy_cache()
++    requests: list = []
++
++    class Handler(BaseHTTPRequestHandler):
++        def do_POST(self):
++            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
++            requests.append((self.path, payload))
++            if not self.path.endswith("/chat/completions"):
++                self.send_error(404)
++                return
++            if payload.get("model") == "no-credit":
++                body = json.dumps({"error": {"message": "Insufficient credits", "type": "payment_required",
++                                             "code": "insufficient_credits"}}).encode()
++                self.send_response(402)
++                self.send_header("Content-Type", "application/json")
++                self.send_header("Content-Length", str(len(body)))
++                self.end_headers()
++                self.wfile.write(body)
++                return
++            response = {
++                "id": "chatcmpl-floor", "created": 1, "model": payload["model"], "object": "chat.completion",
++                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"},
++                             "finish_reason": "stop"}],
++                "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
++            }
++            if payload.get("stream"):
++                response["object"] = "chat.completion.chunk"
++                response["choices"][0]["delta"] = response["choices"][0].pop("message")
++                body = f"data: {json.dumps(response)}\n\ndata: [DONE]\n\n".encode()
++                ctype = "text/event-stream"
++            else:
++                body = json.dumps(response).encode()
++                ctype = "application/json"
++            self.send_response(200)
++            self.send_header("Content-Type", ctype)
++            self.send_header("Content-Length", str(len(body)))
++            self.end_headers()
++            self.wfile.write(body)
++
++        def log_message(self, *_args):
++            pass
++
++    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
++    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
++    thread.start()
++    try:
++        yield f"http://127.0.0.1:{server.server_port}", requests
++    finally:
++        shutdown_cached_clients()
++        server.shutdown()
++        server.server_close()
++        thread.join(timeout=5)
++
++
++TASK = "title_generation"
++
++
++def _write_profile(home, base_url, *, floor, model, task=TASK, fallback=None, api_mode=None, retries=0):
++    task_cfg = {"provider": "custom", "model": model, "base_url": base_url + "/v1"}
++    if api_mode:
++        task_cfg["api_mode"] = api_mode
++        task_cfg["base_url"] = base_url
++    if fallback is not None:
++        # ``None`` = an entry without ``model``: the provider's default model.
++        task_cfg["fallback_chain"] = [
++            {"provider": "custom", **({"model": m} if m is not None else {}),
++             "base_url": base_url.replace("127.0.0.1", "localhost") + "/v1"}
++            for m in fallback]
++    auxiliary = {"transient_retries": retries, task: task_cfg}
++    if floor is not None:
++        auxiliary["gpt_model_floor"] = floor
++    config = {"model": {"provider": "custom", "default": "main-model", "base_url": base_url + "/v1"},
++              "auxiliary": auxiliary}
++    home.mkdir(parents=True, exist_ok=True)
++    (home / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
++
++
++@pytest.fixture
++def profile(tmp_path, monkeypatch, endpoint):
++    base_url, requests = endpoint
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
++
++    def _configure(**kw):
++        _write_profile(tmp_path / "home", base_url, **kw)
++        from agent.auxiliary_client import _reset_aux_unhealthy_cache, shutdown_cached_clients
++        shutdown_cached_clients()
++        _reset_aux_unhealthy_cache()
++    return _configure, requests, base_url
++
++
++def _call(task=TASK, **kw):
++    from agent.auxiliary_client import call_llm
++    return call_llm(task, messages=copy.deepcopy(MESSAGES), timeout=5, **kw)
++
++
++def _acall(task=TASK, **kw):
++    from agent.auxiliary_client import async_call_llm
++    return asyncio.run(async_call_llm(task, messages=copy.deepcopy(MESSAGES), timeout=5, **kw))
++
++
++# ── default off: upstream behaviour unchanged ─────────────────────────────────────────────
++
++
++@pytest.mark.parametrize("floor", [None, False, "false"])
++def test_floor_off_dispatches_old_gpt_unchanged(profile, floor):
++    configure, requests, _ = profile
++    configure(floor=floor, model="gpt-4o")
++    _call()
++    assert [p["model"] for _, p in requests] == ["gpt-4o"]
++
++
++# ── sync / async / stream refusal at the attempt: zero dispatch ───────────────────────────
++
++
++@pytest.mark.parametrize("floor", [True, "yes", 1])
++@pytest.mark.parametrize("model", ["gpt-4o", "gpt-6.0-terra", "gpt-6.1-luna", "GPT-6.1-terra",
++                                   "gpt-6.1-terra:latest", "openai/gpt-5.5"])
++def test_sync_refusal_sends_nothing(profile, model, floor):
++    configure, requests, _ = profile
++    configure(floor=floor, model=model)
++    with pytest.raises(AuxiliaryModelFloorRefused) as info:
++        _call()
++    assert info.value.model == model
++    assert requests == []
++
++
++@pytest.mark.parametrize("model", ALLOWED_GPT[:4] + ["claude-sonnet-5-5", "gpt-oss:20b", "qwen3:8b", "llama3.1:8b"])
++def test_sync_allowed_model_goes_out_exactly(profile, model):
++    configure, requests, _ = profile
++    configure(floor=True, model=model)
++    _call()
++    assert [p["model"] for _, p in requests] == [model]
++
++
++@pytest.mark.parametrize("model", ["gpt-4o", "gpt-6.0-sol"])
++def test_async_refusal_sends_nothing(profile, model):
++    configure, requests, _ = profile
++    configure(floor=True, model=model)
++    with pytest.raises(AuxiliaryModelFloorRefused):
++        _acall()
++    assert requests == []
++
++
++@pytest.mark.parametrize("model", ["gpt-6.1-terra", "qwen3:8b"])
++def test_async_allowed(profile, model):
++    configure, requests, _ = profile
++    configure(floor=True, model=model)
++    _acall()
++    assert [p["model"] for _, p in requests] == [model]
++
++
++def test_stream_refusal_sends_nothing(profile):
++    configure, requests, _ = profile
++    configure(floor=True, model="gpt-4o")
++    with pytest.raises(AuxiliaryModelFloorRefused):
++        stream = _call(stream=True)
++        list(stream)
++    assert requests == []
++
++
++def test_stream_allowed(profile):
++    configure, requests, _ = profile
++    configure(floor=True, model="gpt-6.1-terra")
++    list(_call(stream=True))
++    assert [(p["model"], p.get("stream")) for _, p in requests] == [("gpt-6.1-terra", True)]
++
++
++def test_codex_moa_aggregator_direct_stream_refused(profile):
++    configure, requests, _ = profile
++    configure(floor=True, model="gpt-5.5", task="moa_aggregator", api_mode="codex_responses")
++    with pytest.raises(AuxiliaryModelFloorRefused):
++        _call(task="moa_aggregator", stream=True)
++    assert requests == []
++
++
++def test_codex_moa_aggregator_direct_stream_allowed_reaches_wire(profile):
++    configure, requests, _ = profile
++    configure(floor=True, model="gpt-6.2-sol", task="moa_aggregator", api_mode="codex_responses")
++    try:
++        _call(task="moa_aggregator", stream=True)
++    except AuxiliaryModelFloorRefused:  # pragma: no cover - the assertion below reports it
++        raise
++    except Exception:
++        pass  # the local endpoint 404s the Responses route; reaching it is the point
++    assert requests and all(p.get("model") == "gpt-6.2-sol" for _, p in requests)
++    assert all("responses" in path for path, _ in requests)
++
++
++# ── retry / fallback: refusal is permanent ────────────────────────────────────────────────
++
++
++def test_refusal_is_not_transient_and_skips_retries(profile):
++    from agent.auxiliary_client import _should_retry_same_provider
++    configure, requests, _ = profile
++    configure(floor=True, model="gpt-4o", retries=6)
++    with patch("time.sleep") as slept:
++        with pytest.raises(AuxiliaryModelFloorRefused):
++            _call()
++    slept.assert_not_called()
++    assert requests == []
++    assert not _should_retry_same_provider(TASK, AuxiliaryModelFloorRefused("gpt-4o", "unknown", "x"), "")
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++@pytest.mark.parametrize("fallback,landed", [
++    (["qwen3:8b"], "qwen3:8b"), (["claude-sonnet-5-5"], "claude-sonnet-5-5"),
++    (["gpt-4.1-mini", "qwen3:8b"], "qwen3:8b"), (["gpt-6.1-terra", "qwen3:8b"], "gpt-6.1-terra"),
++])
++def test_refused_primary_falls_back_to_approved_candidate_only(profile, asynchronous, fallback, landed):
++    configure, requests, _ = profile
++    configure(floor=True, model="gpt-4o", fallback=fallback, retries=6)
++    with patch("time.sleep") as slept, patch("asyncio.sleep") as aslept:
++        _acall() if asynchronous else _call()
++    slept.assert_not_called()
++    aslept.assert_not_called()
++    # the refused primary is never sent; ineligible candidates are skipped, not sent
++    assert [p["model"] for _, p in requests] == [landed]
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_refused_primary_with_only_refused_fallbacks_raises_the_refusal(profile, asynchronous):
++    configure, requests, _ = profile
++    configure(floor=True, model="gpt-4o", fallback=["gpt-4.1-mini", "gpt-6.0-sol"])
++    with pytest.raises(AuxiliaryModelFloorRefused) as info:
++        _acall() if asynchronous else _call()
++    assert info.value.model == "gpt-4o"
++    assert requests == []
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_refused_fallback_candidate_is_skipped_for_next_eligible(profile, asynchronous):
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=["gpt-4o", "gpt-6.1-terra"])
++    _acall() if asynchronous else _call()
++    assert "gpt-4o" not in [p["model"] for _, p in requests]
++    assert requests[-1][1]["model"] == "gpt-6.1-terra"
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_all_candidates_refused_preserves_original_provider_error(profile, asynchronous):
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=["gpt-4o", "gpt-5.5"])
++    with pytest.raises(Exception) as info:
++        _acall() if asynchronous else _call()
++    assert not isinstance(info.value, AuxiliaryModelFloorRefused)
++    assert getattr(info.value, "status_code", None) == 402
++    assert {p["model"] for _, p in requests} == {"no-credit"}
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_dispatch_time_candidate_refusal_walks_on_to_next_entry(profile, asynchronous, monkeypatch):
++    from agent import auxiliary_client as ac
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=["gpt-4o", "qwen3:8b"])
++    monkeypatch.setattr(ac, "_floor_refuses", lambda model: False)  # only the dispatch check refuses
++    _acall() if asynchronous else _call()
++    assert [p["model"] for _, p in requests] == ["no-credit", "qwen3:8b"]
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_dispatch_time_candidate_refusal_skips_without_quarantine(profile, asynchronous, monkeypatch):
++    """A candidate that only the dispatch check refuses (e.g. a Relay rewrite after selection):
++    skipped, never sent, provider not marked unhealthy, primary error preserved."""
++    from agent import auxiliary_client as ac
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=["gpt-4o"])
++    monkeypatch.setattr(ac, "_floor_refuses", lambda model: False)  # bypass pre-selection only
++    marked = []
++    monkeypatch.setattr(ac, "_mark_provider_unhealthy", lambda *a, **k: marked.append((a, k)))
++    with pytest.raises(Exception) as info:
++        _acall() if asynchronous else _call()
++    assert getattr(info.value, "status_code", None) == 402
++    assert {p["model"] for _, p in requests} == {"no-credit"}
++    # the candidate (served from "localhost") was skipped, not quarantined
++    assert not any("localhost" in str(k.get("base_url", "")) for _, k in marked), marked
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_fallback_to_eligible_still_works(profile, asynchronous):
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=["gpt-6.1-terra"])
++    _acall() if asynchronous else _call()
++    assert requests[-1][1]["model"] == "gpt-6.1-terra"
++    assert {p["model"] for _, p in requests} == {"no-credit", "gpt-6.1-terra"}
++
++
++# ── per-profile, turnless ─────────────────────────────────────────────────────────────────
++
++
++def test_per_profile_and_turnless_background_thread(tmp_path, monkeypatch, endpoint):
++    from agent.auxiliary_client import shutdown_cached_clients
++    base_url, requests = endpoint
++    on, off = tmp_path / "profile-on", tmp_path / "profile-off"
++    _write_profile(on, base_url, floor=True, model="gpt-4o")
++    _write_profile(off, base_url, floor=False, model="gpt-4o")
++    outcome = {}
++
++    def _turnless(home, key):
++        # No main_runtime, no agent/turn context: a cron-style background call.
++        monkeypatch.setenv("HERMES_HOME", str(home))
++        shutdown_cached_clients()
++        try:
++            _call()
++            outcome[key] = "sent"
++        except AuxiliaryModelFloorRefused:
++            outcome[key] = "refused"
++
++    for home, key in ((on, "on"), (off, "off"), (on, "on-again")):
++        t = threading.Thread(target=_turnless, args=(home, key))
++        t.start()
++        t.join(30)
++    assert outcome == {"on": "refused", "off": "sent", "on-again": "refused"}
++    assert [p["model"] for _, p in requests] == ["gpt-4o"]
++
++
++# ── missing attempt model fails closed at each relay seam ─────────────────────────────────
++
++
++class _CountingClient:
++    def __init__(self):
++        self.calls = 0
++        self.base_url = "http://127.0.0.1:9/v1"
++        self.api_key = "k"
++        outer = self
++
++        class _Completions:
++            def create(self, **kwargs):
++                outer.calls += 1
++                raise AssertionError("dispatched")
++        self.chat = SimpleNamespace(completions=_Completions())
++
++
++@pytest.mark.parametrize("kwargs", [{}, {"model": ""}, {"model": None}, {"model": "   "}])
++def test_missing_model_refused_at_every_relay_seam(profile, kwargs):
++    from agent import auxiliary_client as ac
++    configure, _, _ = profile
++    configure(floor=True, model="qwen3:8b")
++    request = {"messages": copy.deepcopy(MESSAGES), **kwargs}
++    client = _CountingClient()
++
++    with pytest.raises(AuxiliaryModelFloorRefused) as info:
++        ac._relay_sync_completion(client, dict(request), create=lambda r: client.chat.completions.create(**r))
++    assert info.value.reason == "missing_model"
++    with pytest.raises(AuxiliaryModelFloorRefused):
++        ac._relay_sync_stream(client, dict(request))
++
++    async def _acreate(r):
++        return client.chat.completions.create(**r)
++    with pytest.raises(AuxiliaryModelFloorRefused):
++        asyncio.run(ac._relay_async_completion(client, dict(request), create=_acreate))
++    assert client.calls == 0
++
++
++def test_missing_model_allowed_when_floor_off(profile):
++    from agent import auxiliary_client as ac
++    configure, _, _ = profile
++    configure(floor=False, model="qwen3:8b")
++    client = _CountingClient()
++    with pytest.raises(AssertionError, match="dispatched"):
++        ac._relay_sync_completion(client, {"messages": copy.deepcopy(MESSAGES)},
++                                  create=lambda r: client.chat.completions.create(**r))
++    assert client.calls == 1
++
++
++# ── iteration summary (_managed_summary_call / codex summary) ─────────────────────────────
++
++
++def _floor_home(tmp_path, monkeypatch, floor):
++    home = tmp_path / "agent-home"
++    home.mkdir(exist_ok=True)
++    (home / "config.yaml").write_text(yaml.safe_dump({"auxiliary": {"gpt_model_floor": floor}}), encoding="utf-8")
++    monkeypatch.setenv("HERMES_HOME", str(home))
++
++
++def _summary_agent(model):
++    from run_agent import AIAgent
++    agent = AIAgent(api_key="test-key", base_url="https://openrouter.ai/api/v1", model=model, quiet_mode=True,
++                    skip_context_files=True, skip_memory=True, enabled_toolsets=[])
++    agent.api_mode = "chat_completions"
++    agent._cached_system_prompt = "You are helpful."
++    done = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="Real summary.", tool_calls=None),
++                                                    finish_reason="stop")],
++                           usage=SimpleNamespace(completion_tokens=3), model="m")
++    agent.client.chat.completions.create.side_effect = lambda **kw: done
++    return agent
++
++
++@patch("agent.process_bootstrap.OpenAI")
++@pytest.mark.parametrize("model,floor,sent", [
++    ("openai/gpt-4o", True, False), ("openai/gpt-6.1-terra", True, True),
++    ("anthropic/claude-sonnet-5-5", True, True), ("openai/gpt-4o", False, True),
++])
++def test_iteration_summary_floor(_openai, tmp_path, monkeypatch, model, floor, sent):
++    _floor_home(tmp_path, monkeypatch, floor)
++    agent = _summary_agent(model)
++    result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
++    assert agent.client.chat.completions.create.call_count == (1 if sent else 0)
++    assert (result == "Real summary.") is sent
++
++
++@patch("agent.process_bootstrap.OpenAI")
++@pytest.mark.parametrize("model,sent", [("gpt-5.5", False), ("gpt-6.2-sol", True), ("claude-opus-5-5", True)])
++def test_codex_iteration_summary_floor(_openai, tmp_path, monkeypatch, model, sent):
++    _floor_home(tmp_path, monkeypatch, True)
++    agent = _summary_agent(model)
++    agent.api_mode = "codex_responses"
++    calls = []
++    agent._build_api_kwargs = lambda msgs: {"model": model, "input": msgs, "tools": []}
++    agent._interruptible_api_call = lambda kw: calls.append(kw) or SimpleNamespace()
++    monkeypatch.setattr("agent.chat_completion_helpers._summary_text", lambda *a, **k: "Real summary.")
++    result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
++    assert len(calls) == (1 if sent else 0)  # refused: no send and no empty-summary retry
++    assert (result == "Real summary.") is sent
++
++
++@patch("agent.process_bootstrap.OpenAI")
++def test_iteration_summary_checks_relay_rewritten_model(_openai, tmp_path, monkeypatch):
++    """Relay interception between the summary request and the provider: the floor judges the
++    rewritten request the callback receives."""
++    from agent import relay_llm
++    _floor_home(tmp_path, monkeypatch, True)
++    agent = _summary_agent("openai/gpt-6.1-terra")
++
++    seen = []
++
++    def intercept(request, callback, **_kw):
++        # A real managed attempt whose Relay intercept rewrote the model; the production
++        # dispatch check (provider_request) must judge the rewritten request.
++        attempt = _managed_attempt(request)
++        seen.append(request["model"])
++        return attempt.invoke(callback, SimpleNamespace(content={**attempt.body, "model": "openai/gpt-4o"}))
++    monkeypatch.setattr(relay_llm, "execute_current", intercept)
++    result = agent._handle_max_iterations([{"role": "user", "content": "do stuff"}], 60)
++    assert seen == ["openai/gpt-6.1-terra"]  # the pre-interception request passed
++    assert agent.client.chat.completions.create.call_count == 0
++    assert result != "Real summary."
++
++
++# ── plugin side question ──────────────────────────────────────────────────────────────────
++
++
++@pytest.mark.parametrize("model,floor,sent", [
++    ("openai/gpt-4o", True, False), ("openai/gpt-6.1-terra", True, True), ("openai/gpt-4o", False, True),
++])
++def test_side_question_floor(tmp_path, monkeypatch, model, floor, sent):
++    from tests.agent import test_side_question_request as sq
++    from agent import side_question_lease
++    from agent.side_question_lease import redeem_side_question
++
++    _floor_home(tmp_path, monkeypatch, floor)
++    fake = sq._FakeProvider()
++    monkeypatch.setattr("agent.title_generator.maybe_auto_title", lambda *a, **k: None)
++    tokens = []
++    real_issue = side_question_lease.issue_side_question_token
++    monkeypatch.setattr(side_question_lease, "issue_side_question_token",
++                        lambda *a, **k: tokens.append(real_issue(*a, **k)) or tokens[-1])
++    patches = [
++        patch("model_tools.get_tool_definitions", return_value=sq._tool_defs("web_search")),
++        patch("model_tools.check_toolset_requirements", return_value={}),
++        patch("agent.process_bootstrap.OpenAI", return_value=fake.client),
++        patch("agent.model_metadata.fetch_model_metadata", return_value={}),
++        patch.object(side_question_lease, "_consented_plugin_loaded", return_value=True),
++    ]
++    for p in patches:
++        p.start()
++    try:
++        parent = sq._make_parent(model=model)
++        # The main turn is outside this patch's scope (unguarded) and runs either way.
++        sq._run_parent_turn(parent, fake, tool_round=False)
++        before = len(fake.requests)
++        fake.replies.append(sq._response("Ask: why?", usage=sq._usage()))
++        answer = redeem_side_question(tokens[-1], sq.SIDE_PROMPT, plugin_id="next-prompt")
++        assert len(fake.requests) - before == (1 if sent else 0)
++        assert (answer == "Ask: why?") is sent
++    finally:
++        for p in reversed(patches):
++            p.stop()
++        side_question_lease._leases.clear()
++
++
++@pytest.mark.parametrize("parent_model,rewritten,sent", [
++    ("openai/gpt-6.1-terra", "openai/gpt-4o", False),   # middleware downgrades: refused
++    ("openai/gpt-4o", "openai/gpt-6.1-terra", True),    # middleware upgrades: the wire id passes
++])
++def test_side_question_checks_execution_middleware_payload(tmp_path, monkeypatch, parent_model, rewritten, sent):
++    from tests.agent import test_side_question_request as sq
++    from agent import side_question_lease
++    from agent.side_question_lease import redeem_side_question
++    from hermes_cli.middleware import LLM_EXECUTION_MIDDLEWARE
++    from hermes_cli.plugins import get_plugin_manager
++
++    _floor_home(tmp_path, monkeypatch, True)
++    fake = sq._FakeProvider()
++    monkeypatch.setattr("agent.title_generator.maybe_auto_title", lambda *a, **k: None)
++    tokens = []
++    real_issue = side_question_lease.issue_side_question_token
++    monkeypatch.setattr(side_question_lease, "issue_side_question_token",
++                        lambda *a, **k: tokens.append(real_issue(*a, **k)) or tokens[-1])
++    patches = [
++        patch("model_tools.get_tool_definitions", return_value=sq._tool_defs("web_search")),
++        patch("model_tools.check_toolset_requirements", return_value={}),
++        patch("agent.process_bootstrap.OpenAI", return_value=fake.client),
++        patch("agent.model_metadata.fetch_model_metadata", return_value={}),
++        patch.object(side_question_lease, "_consented_plugin_loaded", return_value=True),
++    ]
++    for p in patches:
++        p.start()
++    try:
++        parent = sq._make_parent(model=parent_model)
++        sq._run_parent_turn(parent, fake, tool_round=False)
++        before = len(fake.requests)
++        swapped = []
++
++        def swap_model(request, next_call):
++            swapped.append(request.get("model"))
++            return next_call({**request, "model": rewritten})
++        manager = get_plugin_manager()
++        monkeypatch.setitem(manager._middleware, LLM_EXECUTION_MIDDLEWARE, [swap_model])
++        fake.replies.append(sq._response("Ask: why?", usage=sq._usage()))
++        answer = redeem_side_question(tokens[-1], sq.SIDE_PROMPT, plugin_id="next-prompt")
++        assert swapped, "execution middleware did not run"
++        sent_models = [r.get("model") for r in fake.requests[before:]]
++        assert sent_models == ([rewritten] if sent else [])
++        assert (answer == "Ask: why?") is sent
++    finally:
++        for p in reversed(patches):
++            p.stop()
++        side_question_lease._leases.clear()
++
++
++# ── relay_llm dispatch points (managed + unmanaged) under a floor scope ────────────────────
++
++
++def _managed_attempt(request):
++    import contextvars
++    from agent import relay_llm
++    attempt = object.__new__(relay_llm._ManagedAttempt)
++    attempt.request, attempt.metadata = request, None
++    attempt.body = relay_llm._relay_request_body(request, None)
++    attempt.codec_baseline = copy.deepcopy(attempt.body)
++    attempt.raw_response = {}
++    attempt.context = contextvars.copy_context()
++    return attempt
++
++
++@pytest.mark.parametrize("floor", [True, False])
++def test_relay_managed_attempt_checks_intercepted_request(tmp_path, monkeypatch, floor):
++    from agent.aux_model_floor import floor_scope
++    _floor_home(tmp_path, monkeypatch, floor)
++    sent = []
++    with floor_scope("background_review"):
++        attempt = _managed_attempt({"model": "gpt-6.1-terra", "messages": copy.deepcopy(MESSAGES)})
++    # Relay intercept rewrote the model; the provider callback would receive gpt-4o.
++    rewritten = SimpleNamespace(content={"model": "gpt-4o", "messages": copy.deepcopy(MESSAGES)})
++    if floor:
++        with pytest.raises(AuxiliaryModelFloorRefused) as info:
++            attempt.invoke(lambda r: sent.append(r) or {"ok": True}, rewritten)
++        assert info.value.site == "background_review"
++        assert attempt.raw_response["error"] is info.value  # resolve_failure re-raises it as the callback error
++        assert sent == []
++    else:
++        attempt.invoke(lambda r: sent.append(r) or {"ok": True}, rewritten)
++        assert [r["model"] for r in sent] == ["gpt-4o"]
++
++
++def test_relay_unmanaged_dispatch_points_respect_scope(tmp_path, monkeypatch):
++    from agent import relay_llm
++    from agent.aux_model_floor import floor_scope
++    _floor_home(tmp_path, monkeypatch, True)
++    sent = []
++    cb = lambda r: sent.append(r) or {"ok": True}
++
++    async def acb(r):
++        return cb(r)
++    # Outside any scope the agent's own dispatch is unguarded (main loop untouched).
++    relay_llm.execute({"model": "gpt-4o"}, cb, name="p", model_name="gpt-4o")
++    with floor_scope("curator"):
++        with pytest.raises(AuxiliaryModelFloorRefused):
++            relay_llm.execute({"model": "gpt-4o"}, cb, name="p", model_name="gpt-4o")
++        with pytest.raises(AuxiliaryModelFloorRefused):
++            asyncio.run(relay_llm.execute_async({"model": "gpt-4o"}, acb, name="p", model_name="gpt-4o"))
++        with pytest.raises(AuxiliaryModelFloorRefused):
++            relay_llm.stream_current({"model": "gpt-4o"}, cb, name="p", model_name="gpt-4o", finalizer=dict)
++        with pytest.raises(AuxiliaryModelFloorRefused):
++            relay_llm.execute({"modelId": "gpt-4o"}, cb, name="bedrock", model_name="gpt-4o")
++        relay_llm.execute({"model": "claude-opus-5-5"}, cb, name="p", model_name="m")
++        relay_llm.execute({"modelId": "anthropic.claude-opus-5-5"}, cb, name="bedrock", model_name="m")
++    assert [r.get("model") or r.get("modelId") for r in sent] == ["gpt-4o", "claude-opus-5-5",
++                                                                  "anthropic.claude-opus-5-5"]
++
++
++def test_scope_carries_caller_profile_decision_into_worker_threads(tmp_path, monkeypatch):
++    """The on/off decision is taken in the caller's profile scope and follows copied contexts."""
++    import contextvars
++    from agent import relay_llm
++    from agent.aux_model_floor import floor_scope
++    _floor_home(tmp_path, monkeypatch, True)
++    outcome = {}
++    with floor_scope("background_review"):
++        ctx = contextvars.copy_context()
++    off = tmp_path / "off-home"
++    off.mkdir()
++    (off / "config.yaml").write_text(yaml.safe_dump({"auxiliary": {"gpt_model_floor": False}}), encoding="utf-8")
++    monkeypatch.setenv("HERMES_HOME", str(off))  # the process env moved on; the scoped decision did not
++
++    def worker():
++        try:
++            relay_llm.execute({"model": "gpt-4o"}, lambda r: r, name="p", model_name="m")
++            outcome["r"] = "sent"
++        except AuxiliaryModelFloorRefused:
++            outcome["r"] = "refused"
++    t = threading.Thread(target=lambda: ctx.run(worker))
++    t.start()
++    t.join(10)
++    assert outcome == {"r": "refused"}
++
++
++# ── aux relay seams check the post-interception request ────────────────────────────────────
++
++
++@pytest.mark.parametrize("original,rewritten,sent", [
++    ("gpt-6.1-terra", "gpt-4o", False), ("gpt-4o", "gpt-6.1-terra", True), ("qwen3:8b", "gpt-5.5", False),
++])
++def test_aux_relay_completion_checks_rewritten_request(profile, monkeypatch, original, rewritten, sent):
++    from agent import auxiliary_client as ac, relay_llm
++    configure, _, _ = profile
++    configure(floor=True, model="qwen3:8b")
++    monkeypatch.setattr(ac, "_relay_auxiliary_metadata", lambda **kw: (
++        "custom", original, {"api_mode": "chat_completions", "api_request_id": "r", "auxiliary_task": TASK,
++                             "call_role": "auxiliary:" + TASK, "retry_count": 0}))
++
++    def intercept(request, callback, **_kw):
++        return callback({**request, "model": rewritten})
++
++    async def aintercept(request, callback, **_kw):
++        return await callback({**request, "model": rewritten})
++
++    def sintercept(request, factory, **_kw):
++        return factory({**request, "model": rewritten})
++    monkeypatch.setattr(relay_llm, "execute_current", intercept)
++    monkeypatch.setattr(relay_llm, "execute_current_async", aintercept)
++    monkeypatch.setattr(relay_llm, "stream_current", sintercept)
++    calls = []
++
++    def create(r):
++        calls.append(r["model"])
++        return {"ok": True}
++
++    async def acreate(r):
++        return create(r)
++    request = {"model": original, "messages": copy.deepcopy(MESSAGES)}
++    client = _CountingClient()
++    client.chat.completions.create = lambda **r: create(r)
++    if sent:
++        ac._relay_sync_completion(client, dict(request), create=create)
++        asyncio.run(ac._relay_async_completion(client, dict(request), create=acreate))
++        ac._relay_sync_stream(client, dict(request))
++        assert calls == [rewritten] * 3
++    else:
++        with pytest.raises(AuxiliaryModelFloorRefused):
++            ac._relay_sync_completion(client, dict(request), create=create)
++        with pytest.raises(AuxiliaryModelFloorRefused):
++            asyncio.run(ac._relay_async_completion(client, dict(request), create=acreate))
++        with pytest.raises(AuxiliaryModelFloorRefused):
++            ac._relay_sync_stream(client, dict(request))
++        assert calls == []
++
++
++# ── full-agent forks that consume auxiliary config run under the floor scope ───────────────
++
++
++def _scoped_dispatch_probe(record):
++    from agent import relay_llm
++
++    def run_conversation(*_a, **_k):
++        try:
++            relay_llm.execute({"model": "gpt-4o"}, lambda r: record.append(("sent", r["model"])),
++                              name="p", model_name="gpt-4o")
++        except AuxiliaryModelFloorRefused as exc:
++            record.append(("refused", exc.site))
++        return {"final_response": ""}
++    return run_conversation
++
++
++@pytest.mark.parametrize("floor,expected", [(True, ("refused", "background_review")), (False, ("sent", "gpt-4o"))])
++def test_background_review_fork_runs_under_floor_scope(tmp_path, monkeypatch, floor, expected):
++    from agent import background_review as br
++    _floor_home(tmp_path, monkeypatch, floor)
++    record = []
++    fork = SimpleNamespace(run_conversation=_scoped_dispatch_probe(record), _session_messages=[],
++                           release_clients=lambda: None)
++    monkeypatch.setattr(br, "build_cache_parity_fork", lambda *a, **k: (fork, {}, False))
++    monkeypatch.setattr(br, "_review_tool_whitelist", lambda *a, **k: ({"skill_view"}, set()))
++    monkeypatch.setattr(br, "_snapshot_review_usage", lambda *a, **k: {})
++    monkeypatch.setattr(br, "_record_review_usage_to_parent", lambda *a, **k: None)
++    br._run_review_fork(SimpleNamespace(), [], "review", None, None, br._ReviewForkState())
++    assert record == [expected]
++
++
++@pytest.mark.parametrize("floor,expected", [(True, ("refused", "curator")), (False, ("sent", "gpt-4o"))])
++def test_curator_fork_runs_under_floor_scope(tmp_path, monkeypatch, floor, expected):
++    import run_agent
++    from agent import curator
++    _floor_home(tmp_path, monkeypatch, floor)
++    record = []
++
++    class _Fork:
++        def __init__(self, **_kw):
++            self._session_messages = []
++            self.run_conversation = _scoped_dispatch_probe(record)
++
++        def __getattr__(self, name):
++            return lambda *a, **k: None
++    monkeypatch.setattr(run_agent, "AIAgent", _Fork)
++    monkeypatch.setattr(curator, "_resolve_review_provider", lambda: ({}, "gpt-4o", "custom", {}))
++    meta = curator._run_llm_review("curate")
++    assert record == [expected], meta
++
++
++# ── typed refusal is never a retryable generic error (MoA / main-loop classifier / stream) ─
++
++
++@pytest.mark.parametrize("provider", ["moa", "openrouter", "custom", ""])
++@pytest.mark.parametrize("model", ["gpt-4o"] + [
++    "gpt-4o Connection reset by peer", "gpt-4o 503 Service Unavailable timed out",
++    "gpt-4o insufficient credits 402", "gpt-4o 429 rate limit quota exceeded"])
++def test_classifier_marks_refusal_non_retryable_with_fallback(provider, model):
++    from agent.error_classifier import RETRYABLE_CLIENT_REASONS, classify_api_error
++    verdict = classify_api_error(AuxiliaryModelFloorRefused(model, "below", "moa_aggregator"), provider=provider,
++                                 model=model)
++    assert verdict.retryable is False
++    assert verdict.should_fallback is True
++    assert verdict.should_compress is False and verdict.should_rotate_credential is False
++    assert verdict.reason not in RETRYABLE_CLIENT_REASONS
++
++
++def test_moa_aggregator_refusal_is_not_a_role_alternation_retry():
++    """The MoA aggregator re-sends once with merged messages on a role-alternation 400; a floor
++    refusal whose model id carries that text must not take that same-route retry."""
++    from agent.moa_alternation import is_role_alternation_rejection
++    exc = AuxiliaryModelFloorRefused("gpt-4o roles must alternate", "unknown", "auxiliary")
++    assert is_role_alternation_rejection(exc, {"provider": "custom", "model": "gpt-4o"}) is False
++
++
++def test_stream_error_handler_never_retries_a_refusal():
++    from agent.chat_completion_helpers import _StreamingCall
++    call = object.__new__(_StreamingCall)
++    call._request_cancelled = {"value": False}
++    call.result = {}
++    exc = AuxiliaryModelFloorRefused("gpt-4o Connection reset by peer", "below", "moa_aggregator")
++    assert call._handle_stream_error(exc, 0, 3) is False
++    assert call.result["error"] is exc
++
++
++# ── compression keeps history when every summary route is refused ─────────────────────────
++
++
++def test_compression_preserves_history_when_floor_refuses_summary(tmp_path, monkeypatch):
++    from agent.context_compressor import ContextCompressor
++    _floor_home(tmp_path, monkeypatch, True)
++    err = AuxiliaryModelFloorRefused("gpt-4o", "below", "auxiliary")
++    with patch("agent.context_compressor.get_model_context_length", return_value=100000):
++        c = ContextCompressor(model="test", quiet_mode=True, protect_first_n=2, protect_last_n=2,
++                              abort_on_summary_failure=False)
++    msgs = [{"role": "user" if i % 2 == 0 else "assistant", "content": f"message {i} " + "x" * 200}
++            for i in range(12)]
++    with patch("agent.context_compressor.call_llm", side_effect=err) as called:
++        result = c.compress(copy.deepcopy(msgs), current_tokens=999999, force=True)
++    assert result == msgs
++    assert c._last_compress_aborted is True
++    assert c._last_summary_fallback_used is False
++    assert c._last_summary_dropped_count == 0
++    assert called.call_count >= 1
++
++
++# ── config read failure vs explicit disable ───────────────────────────────────────────────
++
++
++def test_config_read_failure_fails_closed_but_explicit_off_is_off(tmp_path, monkeypatch):
++    from agent import aux_model_floor
++    from hermes_cli.config_read_errors import FailedConfigRead
++    _floor_home(tmp_path, monkeypatch, False)
++    assert aux_model_floor.floor_enabled() is False
++    with patch("hermes_cli.config.load_config_readonly", return_value=FailedConfigRead({}, error=OSError("EIO"))):
++        assert aux_model_floor.floor_enabled() is True
++    with patch("hermes_cli.config.load_config_readonly", side_effect=OSError("EMFILE")):
++        assert aux_model_floor.floor_enabled() is True
++    with patch("hermes_cli.config.load_config_readonly", return_value={"auxiliary": {}}):
++        assert aux_model_floor.floor_enabled() is False
++
++
++def test_unparseable_config_file_fails_closed(tmp_path, monkeypatch):
++    from agent import aux_model_floor
++    home = tmp_path / "broken-home"
++    home.mkdir()
++    (home / "config.yaml").write_text("auxiliary: [unclosed\n  gpt_model_floor: false\n", encoding="utf-8")
++    monkeypatch.setenv("HERMES_HOME", str(home))
++    assert aux_model_floor.floor_enabled() is True
++
++
++# ── known active routes / aliases are untouched ──────────────────────────────────────────
++
++
++@pytest.mark.parametrize("model", [
++    "opus", "sonnet", "haiku", "fable", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
++    "claude-fable-5-2", "anthropic/claude-opus-5-5", "openrouter/anthropic/claude-sonnet-5-5",
++    "moa", "default", "main-model", "qwen3:8b", "gpt-oss:20b", "openai.gpt-oss-120b-1:0",
++    "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.3-astra", "openai/gpt-6.2-sol",
++])
++def test_known_active_route_ids_pass(tmp_path, monkeypatch, model):
++    from agent import aux_model_floor
++    _floor_home(tmp_path, monkeypatch, True)
++    assert aux_model_floor.refuses(model) is False
++    aux_model_floor.enforce_model_floor(model, site="t")
++
++
++# ── refusal text never classified as transient/capacity (guards are load-bearing) ─────────
++
++ADVERSARIAL = ["gpt-4o Connection reset by peer", "gpt-4o 503 Service Unavailable timed out",
++               "gpt-4o insufficient credits 402", "gpt-4o 429 rate limit quota exceeded"]
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++@pytest.mark.parametrize("model", ADVERSARIAL)
++def test_error_lookalike_refusal_has_no_retry_and_marks_no_provider(profile, model, asynchronous, monkeypatch):
++    from agent import auxiliary_client as ac
++    configure, requests, _ = profile
++    configure(floor=True, model=model, retries=6, fallback=["gpt-6.1-terra"])
++    marked = []
++    monkeypatch.setattr(ac, "_mark_provider_unhealthy", lambda *a, **k: marked.append((a, k)))
++    with patch("time.sleep") as slept, patch("asyncio.sleep") as aslept:
++        _acall() if asynchronous else _call()
++    slept.assert_not_called()
++    aslept.assert_not_called()
++    assert marked == []
++    assert [p["model"] for _, p in requests] == ["gpt-6.1-terra"]
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++@pytest.mark.parametrize("model", ADVERSARIAL)
++def test_error_lookalike_fallback_candidate_is_skipped_never_sent(profile, model, asynchronous):
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=[model, "gpt-6.1-terra"])
++    _acall() if asynchronous else _call()
++    assert [p["model"] for _, p in requests] == ["no-credit", "gpt-6.1-terra"]
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_drive_ladder_never_feeds_refusal_back_into_recovery(asynchronous):
++    from agent.auxiliary_client import _LadderStep, _drive_ladder, _drive_ladder_async
++    seen = []
++
++    def ladder():
++        try:
++            yield _LadderStep("call", ())
++        except Exception as exc:  # a recovery rung that would swallow and try another route
++            seen.append(exc)
++            yield _LadderStep("call", ())
++        return "recovered"
++
++    def perform(step):
++        raise AuxiliaryModelFloorRefused("gpt-4o", "unknown", "test")
++
++    async def aperform(step):
++        perform(step)
++
++    original = RuntimeError("HTTP 400 unsupported_parameter temperature")
++    with pytest.raises(RuntimeError) as info:
++        if asynchronous:
++            asyncio.run(_drive_ladder_async(ladder(), aperform, original=original))
++        else:
++            _drive_ladder(ladder(), perform, original=original)
++    assert seen == []
++    # the rung's refusal ends recovery with the error that started it
++    assert info.value is original
++    assert isinstance(info.value.__context__, AuxiliaryModelFloorRefused)
++
++
++# ── configured fallback entry without ``model`` = the provider's default ─────────────────
++
++
++def _provider_default(monkeypatch, default):
++    """The entry names no model, so the route serves its provider default (``default``): resolved
++    by the real ``resolve_provider_client`` against the local endpoint, dispatched for real."""
++    from agent import auxiliary_client as ac
++    real = ac._resolve_fallback_entry
++
++    def resolve(entry):
++        if not str(entry.get("model") or "").strip():
++            return real({**entry, "model": default})
++        return real(entry)
++    monkeypatch.setattr(ac, "_resolve_fallback_entry", resolve)
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++@pytest.mark.parametrize("default", ["gpt-6.1-terra", "qwen3:8b"])
++def test_modelless_fallback_entry_serves_eligible_provider_default(profile, monkeypatch, asynchronous, default):
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=[None])
++    _provider_default(monkeypatch, default)
++    _acall() if asynchronous else _call()
++    assert [p["model"] for _, p in requests] == ["no-credit", default]
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_modelless_fallback_entry_with_below_floor_default_is_never_sent(profile, monkeypatch, asynchronous):
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=[None, "qwen3:8b"])
++    _provider_default(monkeypatch, "gpt-4o")
++    _acall() if asynchronous else _call()
++    assert [p["model"] for _, p in requests] == ["no-credit", "qwen3:8b"]
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_modelless_fallback_entry_floor_off_unchanged(profile, monkeypatch, asynchronous):
++    configure, requests, _ = profile
++    configure(floor=False, model="no-credit", fallback=[None])
++    _provider_default(monkeypatch, "gpt-4o")
++    _acall() if asynchronous else _call()
++    assert [p["model"] for _, p in requests] == ["no-credit", "gpt-4o"]
++
++
++@pytest.mark.parametrize("asynchronous", [False, True])
++def test_dispatch_refused_modelless_entry_is_not_reselected(profile, monkeypatch, asynchronous):
++    """Walk identity: the dispatch-time refusal recorded the resolved id while the entry's configured
++    model is empty; the re-walk must still skip that entry and reach the next one (not re-select the
++    same lane and end the walk early)."""
++    from agent import auxiliary_client as ac
++    configure, requests, _ = profile
++    configure(floor=True, model="no-credit", fallback=[None, "qwen3:8b"])
++    _provider_default(monkeypatch, "gpt-4o")
++    monkeypatch.setattr(ac, "_floor_refuses", lambda model: False)  # only the dispatch check refuses
++    _acall() if asynchronous else _call()
++    assert [p["model"] for _, p in requests] == ["no-credit", "qwen3:8b"]
++
++
++# ── codex app-server runtime (subprocess dispatch, no Hermes provider request) ───────────
++
++
++@pytest.fixture
++def codex_app_server(monkeypatch):
++    """Replaces only the codex subprocess: records each spawn (session construction) and each
++    ``turn/start`` model, then fails the turn so nothing else runs."""
++    from agent.transports import codex_app_server_session as sess_mod
++    calls: list = []
++
++    class _Session:
++        def __init__(self, **kw):
++            calls.append(("spawn", kw.get("model")))
++
++        def ensure_started(self):
++            return "thread-1"
++
++        def run_turn(self, **kw):
++            calls.append(("turn", kw.get("model")))
++            raise RuntimeError("stop after turn/start")
++
++        def close(self):
++            pass
++    monkeypatch.setattr(sess_mod, "CodexAppServerSession", _Session)
++    return calls
++
++
++def _codex_agent(model):
++    from run_agent import AIAgent
++    agent = AIAgent(model=model, provider="openai-codex", api_key="test-key",
++                    base_url="https://chatgpt.com/backend-api/codex", api_mode="codex_app_server",
++                    quiet_mode=True, skip_memory=True, skip_context_files=True, enabled_toolsets=["skills"],
++                    max_iterations=2)
++    assert agent.api_mode == "codex_app_server"
++    return agent
++
++
++@pytest.mark.parametrize("model,floor,sent", [
++    ("gpt-5.5", True, None), ("openai/gpt-5.5", True, None), ("gpt-6.1-luna", True, None),
++    ("gpt-6.1-terra", True, "gpt-6.1-terra"), ("openai/gpt-6.2-sol", True, "gpt-6.2-sol"),
++    ("gpt-5.5", False, "gpt-5.5"),
++])
++def test_scoped_codex_app_server_turn_checks_wire_model_before_spawn(
++        tmp_path, monkeypatch, codex_app_server, model, floor, sent):
++    from agent.aux_model_floor import floor_scope
++    _floor_home(tmp_path, monkeypatch, floor)
++    agent = _codex_agent(model)
++    with floor_scope("curator"):
++        result = agent.run_conversation(user_message="curate")
++    if sent is None:
++        assert codex_app_server == []  # no subprocess, no turn/start
++        assert result.get("model_floor_refused") is True
++        assert "curator:codex_app_server" in str(result.get("error"))
++    else:
++        assert codex_app_server == [("spawn", sent), ("turn", sent)]
++        assert not result.get("model_floor_refused")
++
++
++def test_unscoped_codex_app_server_turn_is_untouched_with_floor_on(tmp_path, monkeypatch, codex_app_server):
++    _floor_home(tmp_path, monkeypatch, True)
++    _codex_agent("gpt-5.5").run_conversation(user_message="hi")
++    assert codex_app_server == [("spawn", "gpt-5.5"), ("turn", "gpt-5.5")]
++
++
++def test_scoped_codex_app_server_fails_closed_when_wire_model_not_inspectable(
++        tmp_path, monkeypatch, codex_app_server):
++    from agent import codex_runtime
++    from agent.aux_model_floor import floor_scope
++    _floor_home(tmp_path, monkeypatch, True)
++    agent = _codex_agent("gpt-6.1-terra")
++
++    def boom(*_a, **_k):
++        raise RuntimeError("catalog unavailable")
++    monkeypatch.setattr(codex_runtime, "_codex_wire_model", boom)
++    with floor_scope("background_review"):
++        result = agent.run_conversation(user_message="review")
++    assert codex_app_server == []
++    assert "missing_model" in str(result.get("error"))
++
++
++def test_scoped_codex_app_server_rechecks_exact_turn_model(tmp_path, monkeypatch, codex_app_server):
++    """A kept session whose recorded provider differs: the exact ``turn/start`` id is re-checked."""
++    from agent import codex_runtime
++    from agent.aux_model_floor import floor_scope
++    _floor_home(tmp_path, monkeypatch, True)
++    agent = _codex_agent("gpt-6.1-terra")
++    real = codex_runtime._codex_wire_model
++    monkeypatch.setattr(codex_runtime, "_codex_wire_model",
++                        lambda a, mp: real(a, mp) if mp is None else "gpt-4o")
++    monkeypatch.setattr(codex_runtime, "_codex_model_provider", lambda a: None)
++    with floor_scope("curator"):
++        codex_runtime._ensure_codex_session(agent, [])
++        # attached without a recorded composition: kept as-is, so its provider id drives turn/start
++        agent._codex_session_prompt, agent._codex_session_model_provider = None, "kept-provider"
++        result = agent.run_conversation(user_message="curate")
++    assert codex_app_server == [("spawn", "gpt-6.1-terra")]  # pre-spawn check passed; turn/start never sent
++    assert result.get("model_floor_refused") is True
++
++
++@pytest.mark.parametrize("floor,model,sent", [(True, "gpt-5.5", None), (True, "gpt-6.1-terra", "gpt-6.1-terra"),
++                                              (False, "gpt-5.5", "gpt-5.5")])
++def test_routed_curator_on_codex_app_server_is_floor_checked(tmp_path, monkeypatch, codex_app_server,
++                                                             floor, model, sent):
++    from agent import curator
++    _floor_home(tmp_path, monkeypatch, floor)
++    rp = {"provider": "openai-codex", "api_mode": "codex_app_server", "api_key": "test-key",
++          "base_url": "https://chatgpt.com/backend-api/codex"}
++    monkeypatch.setattr(curator, "_resolve_review_provider", lambda: (rp, model, "openai-codex", {}))
++    curator._run_llm_review("curate")
++    assert codex_app_server == ([] if sent is None else [("spawn", sent), ("turn", sent)])
++
++
++@pytest.mark.parametrize("floor,model,sent", [(True, "gpt-5.5", None), (True, "gpt-6.1-terra", "gpt-6.1-terra"),
++                                              (False, "gpt-5.5", "gpt-5.5")])
++def test_routed_background_review_on_codex_app_server_is_floor_checked(
++        tmp_path, monkeypatch, codex_app_server, floor, model, sent):
++    from agent import background_review as br
++    _floor_home(tmp_path, monkeypatch, floor)
++    fork = _codex_agent(model)
++    monkeypatch.setattr(br, "build_cache_parity_fork", lambda *a, **k: (fork, {}, True))
++    monkeypatch.setattr(br, "_review_tool_whitelist", lambda *a, **k: ({"skill_view"}, set()))
++    monkeypatch.setattr(br, "_snapshot_review_usage", lambda *a, **k: {})
++    monkeypatch.setattr(br, "_record_review_usage_to_parent", lambda *a, **k: None)
++    br._run_review_fork(SimpleNamespace(), [], "review", None, None, br._ReviewForkState())
++    assert codex_app_server == ([] if sent is None else [("spawn", sent), ("turn", sent)])

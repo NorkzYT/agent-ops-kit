@@ -34,7 +34,7 @@ endef
 	    windows-vm-network windows-vm-network-status windows-vm-network-off \
 	    browseros-neo-check browseros-neo-up browseros-neo-down browseros-neo-status browseros-neo-pause browseros-neo-resume browseros-neo-access browseros-neo-hermes-enable browseros-neo-hermes-disable test-browseros-neo \
 	    marketing-video-install marketing-video-render marketing-video-gates test-marketing-video test-anatomy ui-audit-install ui-audit ui-audit-project test-ui-audit-pilot tool-pilots-check tool-pilots-install test-tool-pilots \
-	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
+	    hermes-install hermes-config-apply hermes-dev-workflow-plan hermes-dev-workflow-apply hermes-profile knowledge-convert knowledge-stage knowledge-refresh knowledge-inventory knowledge-classify knowledge-benchmark knowledge-apply knowledge-legacy-report knowledge-reconcile knowledge-learn knowledge-learn-status test-knowledge-learn test-knowledge-stage test-knowledge-refresh test-knowledge-classify test-knowledge-apply test-document-converter hermes-restart hermes-logs hermes-ui hermes-ui-status hermes-ui-stop workflow-status workflow-gate test-kanban-workflow test-apply-dev-workflow hermes-runtime-patch-status hermes-runtime-patch-apply test-hermes-runtime-patch hermes-native-patch-verify test-hermes-native-patch hermes-devtest-status hermes-devtest-install test-devtest-runner capability-validate capability-plan capability-select capability-compat capability-activation-check test-capabilities clean
 
 # Rendered by scripts/make-help.py: `##@ Title` starts a section, `##> text`
 # is a section note (one paragraph per line), `##| text` lines just above a
@@ -146,6 +146,12 @@ hermes-runtime-patch-status: ## Per kit runtime patch (hermes/runtime-patches): 
 
 hermes-runtime-patch-apply: ## Apply the applicable kit runtime patches to an ISOLATED checkout SRC=<dir> (installed runtime refused; unexplained local changes on targets refused; a partly applied set resumes)
 	@bash scripts/hermes-runtime-patch.sh apply $(if $(SRC),--src "$(SRC)",)
+
+hermes-native-patch-verify: ## Offline, read-only check of the disabled native patch candidate (hermes/native-patches/aux-model-floor): manifest gates + exact SHA-256 + patch shape; no checkout, no git, no writes, nothing applied
+	@python3 scripts/hermes-native-patch.py verify
+
+test-hermes-native-patch: ## Run the native-patch artifact + read-only verifier tests (in-memory; no temp files, git repos or ~/.hermes)
+	@python3 -m unittest discover -s scripts/tests -p 'test_native_patch.py'
 
 hermes-devtest-status: ## Trusted Go/PostgreSQL dev-test runner: installed vs kit digest, root ownership, pinned SHA-256 (docs/dev-test-runner.md)
 	@bash scripts/install-hermes-devtest.sh status

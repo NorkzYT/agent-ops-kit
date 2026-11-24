@@ -1,0 +1,47 @@
+{
+  "schema": "hermes-native-patch/v1",
+  "name": "aux-model-floor",
+  "status": "candidate-disabled",
+  "enabled": false,
+  "auto_apply": false,
+  "upstream": {
+    "repository": "https://github.com/NousResearch/hermes-agent.git",
+    "base": "6b21d0564de0492e2ebd0d8f63fca86c03b5c892",
+    "base_tree": "31134041c2353045891fd394da206bac911e5002"
+  },
+  "patch": {
+    "file": "0001-fix-enforce-auxiliary-model-floor-before-dispatch.patch",
+    "sha256": "283bcb722a82934ba0ec769239d6be284f2a8cc867ab93efb214486d1fb6b935",
+    "generated_by": "git format-patch -1 --no-signature --stdout 57a36ef6a0720c30a80573cd40e8274f8cc81c36 (git 2.43.0); author, date and message are the reviewed commit's own",
+    "result_tree": "3075a8f13ae6fb983be150abfd0cb31a8773768d"
+  },
+  "reviewed_source": {
+    "commit": "57a36ef6a0720c30a80573cd40e8274f8cc81c36",
+    "tree": "3075a8f13ae6fb983be150abfd0cb31a8773768d",
+    "parent": "6b21d0564de0492e2ebd0d8f63fca86c03b5c892",
+    "note": "A local, unpushed commit in an isolated checkout cut from a fresh clone of the upstream base; not fetchable from any remote. The patch file is the portable copy: base + patch must yield result_tree."
+  },
+  "review": {
+    "status": "independently-reviewed-source",
+    "scope": "The source commit/tree above, reviewed before packaging (2026-11-24). The kit ships no copy of the reviewer's record and no signature; this field is self-asserted plain JSON. Packaging into the kit is not a deployment approval.",
+    "deployment_approved": false
+  },
+  "runtime_config": {
+    "key": "auxiliary.gpt_model_floor",
+    "native_default": false,
+    "kit_template_sets_it": false,
+    "note": "The key exists only in a Hermes built with this patch. The kit's config.yaml.tmpl does not render it, so no kit-managed install claims native auxiliary floor coverage; the restart preflight (model-floor-migrate.py --check) stays the enforced control."
+  },
+  "verification": {
+    "date": "2026-11-24",
+    "tree_compare": "Independent shallow fetch of upstream base 6b21d056 over https into a fresh scratch clone (no objects borrowed from the source checkout): base tree 31134041 confirmed; git apply --check then git apply --cached on a temporary index from the base tree; git write-tree = 3075a8f1 (equal to the reviewed tree). Not re-derived by the kit: scripts/hermes-native-patch.py is offline and read-only (manifest gates + exact SHA-256 + patch shape only).",
+    "tests": "tests/agent/test_aux_model_floor.py in a second independent upstream fetch outside every Hermes home: 209 passed (source checkout's uv dev/test venv; imports resolved to the independent checkout). The same file run from a fetch under ~/.hermes/cache/scratch had 115 failed / 94 passed, all from upstream conftest refusing I/O under the real Hermes home (environment, not the patch). Broader upstream tests at exact source commit 57a36ef6 via the supported per-file runner: 155 files selected, 154 passed (1859 tests); test_run_agent hit the 300 s per-file timeout, then run alone at the same exact commit: 277 passed. A separate earlier grouped run of 6 chunks: 5 passed, 1 failed, caused by a fixture home path in the test environment. Full upstream suite (beyond that 155-file selection), live runtime, real providers and macOS not run. The helper subcommands used for those runs (apply/test) have since been removed from the kit."
+  },
+  "limitations": [
+    "Not applied to, installed in or tested against the live runtime; the kit ships no apply, install, restart or config path for it, only an offline read-only verifier.",
+    "Pinned to upstream base 6b21d056 only; any other base needs a fresh rebase plus a new review. The installed runtime was observed (2026-11-24) at this same commit and tree, but it is still never a patch, build or test target: the kit applies to no checkout, and building or deploying a patched Hermes there needs separate operator authorization.",
+    "Off by default; even when built in, it guards auxiliary calls, the iteration-limit summary, plugin side questions and the background-review/curator forks only. The main agent loop is not guarded by it (the model-router plugin's execution seam covers that).",
+    "Clients that do not go through Hermes' auxiliary dispatch bypass it: the Claude proxy (claude-max-proxy) and its plugin, and standalone kit clients (knowledge-classify, knowledge-benchmark, the Windows worker) keep their own checks.",
+    "Independent of the legacy hermes/runtime-patches set (0001-0004): different base, not in that manifest or series, never applied together with it."
+  ]
+}

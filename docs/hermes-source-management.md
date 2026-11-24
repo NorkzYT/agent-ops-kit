@@ -93,6 +93,22 @@ Hermes; it is not a workspace.
    the files the patches name.
 7. Prepare the install and rollback plan (below) and ask for authorization.
 
+### Native patch candidates (separate from the legacy set)
+
+`hermes/native-patches/<name>/` holds single-patch candidates pinned to an
+official upstream base: one `git format-patch` file of the reviewed commit plus
+a `hermes-native-patch/v1` manifest (base and base tree, patch SHA-256, the
+reviewed commit and the tree base + patch must yield, `enabled: false`,
+`auto_apply: false`). They are not in the legacy manifest or series and are
+never combined with 0001–0004. The kit ships only an offline, read-only verifier:
+`make hermes-native-patch-verify` (`scripts/hermes-native-patch.py verify`) checks the
+manifest gates, the exact patch SHA-256 and the patch shape, and takes no checkout, runs no
+git and writes nothing. Nothing applies, builds, installs, enables or restarts. Reproducing
+the tree is reviewer-only, in a brand-new clone outside every Hermes home (README recipe);
+any build, deployment or activation needs separate operator authorization.
+Current: `aux-model-floor`
+(`hermes/native-patches/aux-model-floor/README.md`).
+
 ### Pinned upstream vs patch ancestry
 
 These are different facts. Keep both.

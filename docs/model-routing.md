@@ -237,7 +237,11 @@ router never upgrades a task to Astra on its own.
   `model-floor-migrate.py --check` against the saved config (home, every
   profile, kit `.env`) and refuse to (re)start while anything is below the
   floor or unclear. Settings changed by hand after a restart are not seen until
-  the next one.
+  the next one. A reviewed native fix that enforces the floor on these paths
+  at dispatch exists only as a disabled, source-only kit candidate
+  (`hermes/native-patches/aux-model-floor/README.md`): it is not in the
+  installed runtime, the kit does not render its `auxiliary.gpt_model_floor`
+  key, and even when built in, the Claude proxy and standalone clients bypass it.
 - Claude coding routes and private Ollama routes are unaffected.
 
 **Existing installs.** Profiles cloned before the floor keep their old

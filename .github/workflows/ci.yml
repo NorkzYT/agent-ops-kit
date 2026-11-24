@@ -184,6 +184,7 @@ jobs:
       - run: python3 -m unittest discover -s scripts/tests -p 'test_model_catalog.py' -v
       - run: python3 -m unittest discover -s scripts/tests -p 'test_model_router.py' -v
       - run: python3 -m unittest discover -s scripts/tests -p 'test_model_floor.py' -v
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_native_patch.py' -v
       - run: bash scripts/test_hermes_profile.sh
       - run: bash scripts/test_windows_worker_install.sh
       - run: bash scripts/test_windows_chrome_devtools_mcp.sh
